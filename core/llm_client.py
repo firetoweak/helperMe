@@ -3,7 +3,7 @@
 
 from typing import Any
 from openai import OpenAI
-from messages import LLMResponse, ToolCall
+from core.messages import LLMResponse, ToolCall
 
 class LLMClient:
     def __init__(self):

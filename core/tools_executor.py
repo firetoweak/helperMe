@@ -1,6 +1,6 @@
 import json
 from pydantic import ValidationError
-from tool_registry import TOOL_SPECS
+from core.tool_registry import TOOL_SPECS
 
 
 

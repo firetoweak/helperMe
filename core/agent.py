@@ -1,8 +1,10 @@
 # agent 的调用核心 loop循环 
-from messages import Conversation
-from llm_client import LLMClient
-from tool_registry import TOOLS
-from tools_executor import execute_tool
+from core.messages import Conversation
+from core.llm_client import LLMClient
+# 注册
+import tools
+from core.tool_registry import get_tools
+from core.tools_executor import execute_tool
 
 
 class Agent:
@@ -18,7 +20,7 @@ class Agent:
             response = self.llm_client.chat(
                 self.conversation.messages, 
                 self.model, 
-                TOOLS)
+                get_tools())
 
             self.conversation.add_assistant(response)
             if response.type == "text":
