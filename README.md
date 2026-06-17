@@ -22,3 +22,24 @@
 
 能碰真实文件系统 agent,需要agent自己看环境，操纵文件
 
+**找到当前所在目录**
+get_workspace_info()  
+
+**检索目录结构**
+list_files(path)
+
+**读**
+read_file(path)
+
+**从文件中找关键字段**
+search_text(query, path)
+
+**写/改**
+write_file(path)
+
+
+需要的：
+1. 安全边界
+2. 返回格式统一 dict + json
+3. System prompt 写清楚策略
+4. 限制，避免 agent「瞎翻」

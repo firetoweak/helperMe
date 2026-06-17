@@ -16,7 +16,7 @@ class AddInput(BaseModel):
     """,
 )
 def get_today_date(_: EmptyInput) -> str:
-    return date.today().isoformat()
+    return {"today": date.today().isoformat()}
 
 
 @register_tool(
