@@ -30,16 +30,18 @@ list_files(path)
 
 **读**
 read_file(path)
+1. 仅支持文本文件
 
 **从文件中找关键字段**
-search_text(query, path)
+search_texts(query, path)
+1. 底层使用 ripgrep (rg)，python-ripgrep
 
 **写/改**
 write_file(path)
 
 
 需要的：
-1. 安全边界
+1. 安全边界————先不做，优化时做
 2. 返回格式统一 dict + json
 3. System prompt 写清楚策略
 4. 限制，避免 agent「瞎翻」

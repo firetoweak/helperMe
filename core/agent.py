@@ -1,10 +1,32 @@
 # agent 的调用核心 loop循环 
+import json
+from datetime import datetime
+from pathlib import Path
+
 from core.messages import Conversation
 from core.llm_client import LLMClient
 # 注册
 import tools
 from core.tool_registry import get_tools
 from core.tools_executor import execute_tool
+
+RUN_LOG = Path(__file__).resolve().parent.parent / "run.log"
+
+
+def _format_message(msg: dict) -> str:
+    role = msg["role"]
+    if msg.get("tool_calls"):
+        body = json.dumps(msg["tool_calls"], ensure_ascii=False, indent=2)
+        return f"{role}:\n{body}"
+    content = msg.get("content")
+    if content is None:
+        return f"{role}: (no content)"
+    return f"{role}: {content}"
+
+
+def _write_run_log(lines: list[str]) -> None:
+    with RUN_LOG.open("a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 class Agent:
@@ -48,20 +70,23 @@ if __name__ == "__main__":
     # print(agent.run("今天是几号？"))
     # agent.conversation.reset()
     agent.conversation.set_system_prompt(
-        "你是一个助手。"
-        "需要什么工具就调用啥工具。"
-        "不要自己编造，要用工具。"
+        "你是一个智能体助手，你可以帮助用户分析问题，并给出解决方案。用户可能提出模糊的请求。"
+        "你需要根据用户提问和上下文，选择最合适的工具来解决问题。"
+        "工具对于用户的提问来说是隐藏的。"
     )
     print("\n=== 测试 工具集合 ===")
-    print(agent.run("你知道我agent咋写的吗？"))
-    print("\n=== messages 完整链路 ===")
-    round_no = 0
+    question = "[用户提问] 分析这个项目的启动入口、主要模块和 Agent Loop 调用链。"
+    answer = agent.run(question)
+
+    log_lines = [
+        f"=== run @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===",
+        f"Q: {question}",
+        f"A: {answer}",
+        "--- trace ---",
+    ]
     for i, msg in enumerate(agent.conversation.messages):
-        if msg["role"] == "assistant":
-            round_no += 1
-            print(f"\n--- 第 {round_no} 轮 assistant ---")
-        print(f"  [{i}] {msg['role']}: ", end="")
-        if msg.get("tool_calls"):
-            print(msg["tool_calls"])
-        else:
-            print(msg.get("content", ""))
+        log_lines.append(f"  [{i}] {_format_message(msg)}")
+    _write_run_log(log_lines)
+
+    print(answer)
+    print(f"(完整日志已写入 {RUN_LOG})")

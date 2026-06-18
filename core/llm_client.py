@@ -4,12 +4,18 @@
 from typing import Any
 from openai import OpenAI
 from core.messages import LLMResponse, ToolCall
+import httpx
 
 class LLMClient:
     def __init__(self):
+        http_client = httpx.Client(
+            trust_env=False,   # 关键：不读系统代理
+            timeout=120.0,
+        )
         self.client = OpenAI(
             base_url="http://60.13.232.228:3553/v1",
             api_key="EMPTY",
+            http_client=http_client,
         )
 
     def chat(self, messages, model, tools=None) -> LLMResponse:

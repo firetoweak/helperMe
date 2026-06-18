@@ -5,12 +5,12 @@ from core.tool_registry import TOOL_SPECS
 
 
 def execute_tool(tool_name: str, tool_arguments: str) -> str:
-    spec = TOOL_SPECS[tool_name]
-
+    spec = TOOL_SPECS.get(tool_name)
     if spec is None:
-        return json.dumps({
-            "error": f"Tool {tool_name} not found"
-        })
+        return json.dumps(
+            {"error": f"Tool {tool_name} not found"},
+            ensure_ascii=False,
+    )
 
     try:
         payload = json.loads(tool_arguments or "{}")
