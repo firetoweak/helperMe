@@ -53,7 +53,7 @@ if __name__ == "__main__":
         "不要自己编造，要用工具。"
     )
     print("\n=== 测试 工具集合 ===")
-    print(agent.run("你知道当前的工作区core目录下有啥吗？"))
+    print(agent.run("你知道我agent咋写的吗？"))
     print("\n=== messages 完整链路 ===")
     round_no = 0
     for i, msg in enumerate(agent.conversation.messages):
