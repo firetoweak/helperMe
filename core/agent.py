@@ -72,10 +72,11 @@ if __name__ == "__main__":
     agent.conversation.set_system_prompt(
         "你是一个智能体助手，你可以帮助用户分析问题，并给出解决方案。用户可能提出模糊的请求。"
         "你需要根据用户提问和上下文，选择最合适的工具来解决问题。"
+        "问题涉及到关键文件内容的话，必须读取关键实现文件，信息不足时继续调用工具。"
         "工具对于用户的提问来说是隐藏的。"
     )
     print("\n=== 测试 工具集合 ===")
-    question = "[用户提问] 分析这个项目的启动入口、主要模块和 Agent Loop 调用链。"
+    question = "[用户提问] ToolSpec 在哪里定义、在哪里被实例化、最终如何生成 OpenAI tools schema？"
     answer = agent.run(question)
 
     log_lines = [

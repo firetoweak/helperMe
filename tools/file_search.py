@@ -21,10 +21,10 @@ class SearchTextsInput(BaseModel):
     query: str = Field(description="搜索关键词或正则表达式")
     path: str = Field(description="搜索目录路径，相对路径或绝对路径")
     max_results: int = Field(default=10, description="最多返回结果数")
-    context: int = Field(default=2, description="每个匹配前后各返回多少行上下文")
+    context_lines: int = Field(default=2, description="每个匹配前后各返回多少行上下文")
 
 @register_tool("""
-获取当前工作区的绝对路径和系统平台。
+获取当前agent所在的工作区的绝对路径和系统平台。
 
 适用场景：用户询问当前的目录或者你需要了解当前的工作环境。
 输入：无参数，传 {} 即可。
@@ -150,7 +150,7 @@ def _parse_rg_line(line: str) -> dict | None:
     query，搜索关键词或正则表达式。
     path，搜索目录路径，相对路径或绝对路径，默认 "."。
     max_results，最多返回结果数，默认 10。
-    context，每个匹配前后各返回多少行上下文，默认 2；需要看函数定义/类结构时建议 3~5。
+    context_lines，每个匹配前后各返回多少行上下文，默认 2；需要看函数定义/类结构时建议 3~5。
 
 输出 hits 中每项：
     file — 文件路径
@@ -167,6 +167,8 @@ def search_texts(raw: SearchTextsInput) -> dict[str, Any]:
         paths=[str(p)],
         line_number=True,
         max_count=raw.max_results,
+        before_context=raw.context_lines,
+        after_context=raw.context_lines,
     )
 
     hits = []
@@ -191,7 +193,7 @@ def search_texts(raw: SearchTextsInput) -> dict[str, Any]:
     return {
         "path": p.as_posix(),
         "query": raw.query,
-        "context": raw.context,
+        "context_lines": raw.context_lines,
         "hits": hits,
         "total_hits": len(hits),
         "truncated": len(hits) >= raw.max_results,
