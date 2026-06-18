@@ -45,3 +45,11 @@ write_file(path)
 2. 返回格式统一 dict + json
 3. System prompt 写清楚策略
 4. 限制，避免 agent「瞎翻」
+
+
+## 第三期
+
+解决当前工具产生的一些bug:
+1. 空响应没有单独状态，模型策略prompt不足
+2. workspace 安全边界还没实现
+3. search_texts 还有很大问题，agent几乎不用search
