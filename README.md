@@ -60,7 +60,12 @@ write_file(path)
 
 list_dir        查看目录结构
 find_files      查文件名，根据目录查文件
+上边总结为 GROP
+---
+下边总结为 GREP
 search_text     根据关键词找到位置
+由于文件类型很多，处理方式也很多，可能需要再分工具（以后再做）
+---
 read_file       读文件片段
 apply_patch     局部修改/新增/删除
 
