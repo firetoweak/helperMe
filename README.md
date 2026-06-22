@@ -53,3 +53,17 @@ write_file(path)
 1. 空响应没有单独状态，模型策略prompt不足
 2. workspace 安全边界还没实现
 3. search_texts 还有很大问题，agent几乎不用search
+
+
+整体设计有些问题：根本没想清楚完整的file tools loop
+文件处理应该按照意图来:
+
+list_dir        查看目录结构
+find_files      查文件名，根据目录查文件
+search_text     根据关键词找到位置
+read_file       读文件片段
+apply_patch     局部修改/新增/删除
+
+可选：
+get_diff        检查改动
+run_command     执行测试/检查；带白名单的可选的human in the loop
