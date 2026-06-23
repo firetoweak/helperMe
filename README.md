@@ -58,9 +58,8 @@ write_file(path)
 整体设计有些问题：根本没想清楚完整的file tools loop
 文件处理应该按照意图来:
 
-list_dir        查看目录结构
-find_files      查文件名，根据目录查文件
-上边总结为 GROP
+
+GROP  查看目录结构  查文件名，根据目录查文件
 fd 命令 固定-g
 在 workspace 内，按文件名/路径 pattern 找文件或目录，返回路径列表。
 第一版不加 --hidden：默认不搜 .git 等隐藏项（和 fd 默认一致）
@@ -70,7 +69,7 @@ fd 命令 固定-g
 下边总结为 GREP
 search_text     根据关键词找到位置
 由于文件类型很多，处理方式也很多，可能需要再分工具（以后再做）
-
+v1 不加：-i 大小写、-F 固定字符串、glob 过滤（以后再说）。
 ---
 
 read_file       读文件片段

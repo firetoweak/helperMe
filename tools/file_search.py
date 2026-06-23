@@ -3,9 +3,9 @@ from core.tool_registry import register_tool, EmptyInput
 from typing import Any, Literal
 from pathlib import Path
 import sys
-from python_ripgrep import search
 import subprocess
 import shutil
+import json
 
 # 简单的worksplace
 WORKSPACE = Path(__file__).resolve().parent.parent
@@ -23,12 +23,92 @@ class ReadFileInput(BaseModel):
     offset: int = Field(default=1, description="读取起始行号，从 1 开始")
     limit: int = Field(default=200, description="最多读取行数")
 
-class SearchTextsInput(BaseModel):
+class GrepInput(BaseModel):
     query: str = Field(description="搜索关键词或正则表达式")
-    path: str = Field(description="搜索目录路径，相对路径或绝对路径")
-    max_results: int = Field(default=10, description="最多返回结果数")
+    path: str = Field(default=".", description="搜索目录路径(必须是目录)，相对worksplace的路径")
     context_lines: int = Field(default=2, description="每个匹配前后各返回多少行上下文")
+    max_results: int = Field(default=10, description="最多返回 match 条数")
 
+def _to_workspace_relative(path: str) -> str:
+    p = Path(path).resolve()
+    try:
+        return p.relative_to(WORKSPACE).as_posix()
+    except ValueError:
+        return p.as_posix()
+
+@register_tool("""
+在 workspace 内按内容搜索文本（正则）。底层使用 rg --json。
+不要用本工具找文件名；找文件请用 glob。
+
+适用场景：
+- 找类/函数定义 → query="class ToolSpec"
+- 找符号引用 → query="register_tool"
+- 需要看上下文 → context_lines=3~5
+
+输入：query（必填）, path（默认 "."）, context_lines（默认 2）, max_results（默认 10）
+输出：hits[{file, line, snippet}]，file 为相对 workspace 路径
+无匹配时 hits=[]，不是 error
+""", input_model=GrepInput)
+def grep(raw: GrepInput) -> dict[str, Any]:
+    if shutil.which("rg") is None:
+        # 后续版本扩展成python 兜底方式
+        return {"error": "未找到 rg，请先安装: winget install BurntSushi.ripgrep.MSVC"}
+
+    root, err = _resolve_in_workspace(raw.path)
+    if err:
+        return err
+    cmd = ["rg", "--json", "-C", str(raw.context_lines), raw.query, str(root)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+
+    if proc.returncode == 2:
+        return {"error": proc.stderr.strip() or "rg 执行失败"}
+    
+    hits = []
+    current_file = None
+    snippet = []
+    match_line = None
+
+    for raw_line in proc.stdout.splitlines():
+        if not raw_line.strip():
+            continue
+        obj = json.loads(raw_line)
+
+        event_type = obj.get("type")
+        data = obj.get("data") or {}
+
+        if event_type == "begin":
+            current_file = data["path"]["text"]
+            snippet = []
+            match_line = None
+        elif event_type in {"context", "match"}:
+            line_number = data["line_number"]
+            content = data["lines"]["text"].rstrip("\r\n")
+
+            if event_type == "match" and match_line is None:
+                match_line = line_number
+            snippet.append({
+                "line": line_number,
+                "content": content,
+                "kind": event_type,
+            })
+        elif event_type == "end":
+            if snippet and match_line is not None:
+                hits.append({
+                    "file": _to_workspace_relative(current_file),
+                    "line": match_line,
+                    "snippet": snippet,
+                })
+                if len(hits) >= raw.max_results:
+                    break
+
+    return {
+        "path": raw.path,
+        "query": raw.query,
+        "context_lines": raw.context_lines,
+        "hits": hits[:raw.max_results],
+        "total_hits": len(hits[:raw.max_results]),
+        "truncated": len(hits) >= raw.max_results,
+    }
     
 def _resolve_in_workspace(path: str) -> tuple[Path | None, dict[str, Any] | None]:
     """
@@ -59,7 +139,7 @@ def _resolve_in_workspace(path: str) -> tuple[Path | None, dict[str, Any] | None
 
 @register_tool("""
 按文件名/路径 glob 模式在 workspace 内查找文件或目录。底层使用 fd。
-不要用本工具搜索文件内容；搜内容请用 grep/search_texts。
+不要用本工具搜索文件内容；搜内容请用 grep。
 
 适用场景：
 - 浏览某层目录 → pattern="*", path=".", max_depth=1
@@ -203,73 +283,3 @@ def read_file(raw: ReadFileInput) -> dict[str, Any]:
         return {"error": f"无法以文本读取（可能是二进制文件）: {p.as_posix()}"}
     except OSError as e:
         return {"error": f"文件系统错误: {e}"}
-
-
-def _parse_rg_line(line: str) -> dict | None:
-    line = line.rstrip("\r\n")
-    for sep, kind in ((":", "match"), ("-", "context")):
-        parts = line.rsplit(sep, 2)
-        if len(parts) == 3 and parts[1].isdigit():
-            return {
-                "file": parts[0],
-                "line": int(parts[1]),
-                "content": parts[2],
-                "kind": kind,
-            }
-    return None
-
-@register_tool("""
-根据关键词或正则表达式搜索文件内容。
-适用场景：用户或agent需要根据关键词或正则表达式搜索文件内容。
-输入：
-    query，搜索关键词或正则表达式。
-    path，搜索目录路径，相对路径或绝对路径，默认 "."。
-    max_results，最多返回结果数，默认 10。
-    context_lines，每个匹配前后各返回多少行上下文，默认 2；需要看函数定义/类结构时建议 3~5。
-
-输出 hits 中每项：
-    file — 文件路径
-    line — 匹配行号
-    snippet — 按行序排列的片段，kind 为 "match" 或 "context"    
-""", input_model=SearchTextsInput)
-def search_texts(raw: SearchTextsInput) -> dict[str, Any]:
-    p = Path(raw.path)
-    if not p.is_absolute():
-        p = WORKSPACE / p
-
-    raw_results = search(
-        patterns=[raw.query],
-        paths=[str(p)],
-        line_number=True,
-        max_count=raw.max_results,
-        before_context=raw.context_lines,
-        after_context=raw.context_lines,
-    )
-
-    hits = []
-    for block in raw_results:
-        lines = []
-        match_line = None
-        for line in block.splitlines():
-            parsed = _parse_rg_line(line)
-            if not parsed:
-                continue
-            lines.append(parsed)
-            if parsed["kind"] == "match":
-                match_line = parsed["line"]
-
-        if lines:
-            hits.append({
-                "file": lines[0]["file"],
-                "line": match_line,
-                "snippet": lines,  # 含 match + context，按行序排列
-            })
-
-    return {
-        "path": p.as_posix(),
-        "query": raw.query,
-        "context_lines": raw.context_lines,
-        "hits": hits,
-        "total_hits": len(hits),
-        "truncated": len(hits) >= raw.max_results,
-    }
