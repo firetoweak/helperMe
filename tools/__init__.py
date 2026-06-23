@@ -1,2 +1,2 @@
-from tools.demo import get_today_date, add
+from tools.demo import *
 from tools.file_search import *

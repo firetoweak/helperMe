@@ -1,16 +1,22 @@
 from pydantic import BaseModel, Field
 from core.tool_registry import register_tool, EmptyInput
-from typing import Any
+from typing import Any, Literal
 from pathlib import Path
 import sys
 from python_ripgrep import search
+import subprocess
+import shutil
 
 # 简单的worksplace
 WORKSPACE = Path(__file__).resolve().parent.parent
 # tools/file_search.py → tools/ → helperMe/
 
-class ListFilesInput(BaseModel):
-    path: str = Field(description="目录路径，相对路径或绝对路径")
+class GlobInput(BaseModel):
+    pattern: str = Field(description="作用模式，glob,对应 -g 参数")
+    path: str = Field(default=".", description="搜索目录路径，相对worksplace的路径")
+    kind: Literal["file", "directory", "any"] = Field(default="any", description="搜索类型，文件或目录或都要")
+    max_depth: int | None = Field(default=None, description="最大搜索深度，默认null，递归查找")
+    max_results: int = Field(default=10, description="最多返回结果数")
 
 class ReadFileInput(BaseModel):
     path: str = Field(description="文件路径，相对路径或绝对路径")
@@ -22,6 +28,97 @@ class SearchTextsInput(BaseModel):
     path: str = Field(description="搜索目录路径，相对路径或绝对路径")
     max_results: int = Field(default=10, description="最多返回结果数")
     context_lines: int = Field(default=2, description="每个匹配前后各返回多少行上下文")
+
+    
+def _resolve_in_workspace(path: str) -> tuple[Path | None, dict[str, Any] | None]:
+    """
+    返回 (resolved_path, None) 或 (None, error_dict)
+    """
+    p = Path(path)
+    if not p.is_absolute():
+        p = WORKSPACE / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return None, {"error": f"路径无法解析: {path}, {e}"}
+
+    ws = WORKSPACE.resolve()
+    if p != ws and ws not in p.parents and p not in ws.parents:
+        # 更稳的写法：try p.relative_to(ws)
+        try:
+            p.relative_to(ws)
+        except ValueError:
+            return None, {"error": f"路径越界 workspace: {p.as_posix()}"}
+
+    if not p.exists():
+        return None, {"error": f"路径不存在: {p.as_posix()}"}
+    if not p.is_dir():
+        return None, {"error": f"不是目录: {p.as_posix()}"}
+
+    return p, None
+
+@register_tool("""
+按文件名/路径 glob 模式在 workspace 内查找文件或目录。底层使用 fd。
+不要用本工具搜索文件内容；搜内容请用 grep/search_texts。
+
+适用场景：
+- 浏览某层目录 → pattern="*", path=".", max_depth=1
+- 只看子目录 → pattern="*", kind="directory", max_depth=1
+- 找所有 Python 文件 → pattern="*.py", path="."
+- 找指定文件名 → pattern="tool_registry.py", path="."
+
+输入：
+  pattern  glob 模式（必填），如 *、*.py、**/main.py
+  path     搜索起始目录，相对 workspace，默认 "."
+  kind     file | directory | any，默认 any
+  max_depth  最大深度；null=递归；1=只看 path 下直接一层
+  max_results  最多返回条数，默认 10
+
+输出：
+  pattern, path, matches[{path, kind}], total, truncated
+  path 为相对 workspace 的路径，便于 read_file 直接使用
+  error 字段表示路径不存在或越界 workspace
+""", input_model=GlobInput)
+def glob(raw: GlobInput) -> dict[str, Any]:
+    if shutil.which("fd") is None:
+        return {"error": "未找到 fd，请先安装: winget install sharkdp.fd"}
+
+    root, err = _resolve_in_workspace(raw.path)
+    if err:
+        return err
+
+    cmd = ["fd", "-g", raw.pattern, "-a", str(root)]
+    if raw.max_depth is not None:
+        cmd.extend(["--max-depth", str(raw.max_depth)])
+    if raw.kind == "directory":
+        cmd.extend(["-t", "d"])
+    elif raw.kind == "file":
+        cmd.extend(["-t", "f"])
+    
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+
+    if proc.returncode == 2:
+        return {"error": proc.stderr.strip() or "fd 执行失败"}
+
+    ws = WORKSPACE.resolve()
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    total = len(lines)
+    truncated = total > raw.max_results
+    lines = lines[:raw.max_results]
+    matches = []
+    for line in lines:
+        abs_path = Path(line).resolve()
+        rel = abs_path.relative_to(ws).as_posix()
+        entry_kind = "directory" if abs_path.is_dir() else "file"
+        matches.append({"path": rel, "kind": entry_kind})
+    return {
+        "pattern": raw.pattern,
+        "path": raw.path,
+        "matches": matches,
+        "total": total,
+        "truncated": truncated, 
+    }
+
 
 @register_tool("""
 获取当前agent所在的工作区的绝对路径和系统平台。
@@ -38,28 +135,6 @@ def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
         "platform": sys.platform,
     }
 
-
-@register_tool("""
-列出指定目录下的所有文件。
-
-适用场景：用户或agent需要了解当前目录下的文件列表。
-输入：path，目录路径。
-输出：JSON 字符串，字段含义如下：
-      - path: 目录路径
-      - entries: 目录下的所有文件和目录，以相对路径的形式列出
-""", input_model=ListFilesInput)
-def list_files(raw: ListFilesInput) -> dict[str, Any]:
-    p = Path(raw.path)
-    if not p.is_absolute():
-        p = WORKSPACE / p
-    res = {"path": p.as_posix(), "entries": []}
-    for entry in p.iterdir():
-        res["entries"].append({
-            "name": entry.name,
-            "type": "file" if entry.is_file() else "directory",
-            "path": entry.relative_to(p).as_posix(),
-        })
-    return res
 
 # 读文件的工具的话，需要限制读的长度，不能读太长
 @register_tool("""

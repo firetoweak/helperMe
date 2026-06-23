@@ -61,14 +61,24 @@ write_file(path)
 list_dir        查看目录结构
 find_files      查文件名，根据目录查文件
 上边总结为 GROP
+fd 命令 固定-g
+在 workspace 内，按文件名/路径 pattern 找文件或目录，返回路径列表。
+第一版不加 --hidden：默认不搜 .git 等隐藏项（和 fd 默认一致）
+
 ---
+
 下边总结为 GREP
 search_text     根据关键词找到位置
 由于文件类型很多，处理方式也很多，可能需要再分工具（以后再做）
+
 ---
+
 read_file       读文件片段
 apply_patch     局部修改/新增/删除
 
 可选：
 get_diff        检查改动
 run_command     执行测试/检查；带白名单的可选的human in the loop
+
+
+**安装工具：ripgrep，fd**
