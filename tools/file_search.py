@@ -16,7 +16,7 @@ class GlobInput(BaseModel):
     max_results: int = Field(default=10, description="最多返回结果数")
 
 class ReadFileInput(BaseModel):
-    path: str = Field(description="文件路径，相对路径或绝对路径")
+    path: str = Field(description="文件路径，相对worksplace的路径")
     offset: int = Field(default=1, description="读取起始行号，从 1 开始")
     limit: int = Field(default=200, description="最多读取行数")
 
@@ -26,8 +26,15 @@ class GrepInput(BaseModel):
     context_lines: int = Field(default=2, description="每个匹配前后各返回多少行上下文")
     max_results: int = Field(default=10, description="最多返回 match 条数")
 
+class ApplyPatchInput(BaseModel):
+    path: str = Field(description="文件路径，相对worksplace的路径")
+    old_string: str = Field(description="要被修改替换的部分")
+    new_string: str = Field(description="替换后的部分")
+    
+
+
 @register_tool("""
-获取当前agent所在的工作区的绝对路径和系统平台。
+获取当前agent所在的workspace的绝对路径和系统平台。
 
 适用场景：用户询问当前的目录或者你需要了解当前的工作环境。
 输入：无参数，传 {} 即可。
