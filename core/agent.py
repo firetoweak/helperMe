@@ -76,7 +76,7 @@ if __name__ == "__main__":
         "工具对于用户的提问来说是隐藏的。"
     )
     print("\n=== 测试 工具集合 ===")
-    question = "[用户提问]  ToolSpec 在哪里定义、在哪里被实例化、最终如何生成 OpenAI tools schema？"
+    question = "[用户提问] 帮我分析一下 tests 目录下的俩文件夹里面都是啥"
     answer = agent.run(question)
 
     log_lines = [
