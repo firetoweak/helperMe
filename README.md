@@ -79,7 +79,10 @@ read_file       读文件片段
 
 apply_patch     **局部**修改/新增/删除  不做整体删除
 
+---
 
+文件 新建/删除  有了就可以同时支持全文重写
+write_file  delete_file
 
 可选：
 get_diff        检查改动

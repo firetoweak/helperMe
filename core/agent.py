@@ -61,14 +61,6 @@ class Agent:
 
 if __name__ == "__main__":
     agent = Agent(model="qwen27b")
-    # agent.conversation.set_system_prompt(
-    #     "你是一个助手。"
-    #     "需要日期时调用 get_today_date；需要计算时调用 add。"
-    #     "不要自己编造，要用工具。"
-    # )
-    # print("=== 测试 get_today_date ===")
-    # print(agent.run("今天是几号？"))
-    # agent.conversation.reset()
     agent.conversation.set_system_prompt(
         "你是一个智能体助手，你可以帮助用户分析问题，并给出解决方案。用户可能提出模糊的请求。"
         "你需要根据用户提问和上下文，选择最合适的工具来解决问题。"
@@ -76,7 +68,7 @@ if __name__ == "__main__":
         "工具对于用户的提问来说是隐藏的。"
     )
     print("\n=== 测试 工具集合 ===")
-    question = "[用户提问] 帮我分析一下 tests 目录下的俩文件夹里面都是啥"
+    question = "[用户提问] 帮我改一下tests/core目录下的测试文件，foo 都改成ssd"
     answer = agent.run(question)
 
     log_lines = [
