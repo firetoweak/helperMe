@@ -128,7 +128,7 @@ def grep(raw: GrepInput) -> dict[str, Any]:
         # 后续版本扩展成python 兜底方式
         return {"error": "未找到 rg，请先安装: winget install BurntSushi.ripgrep.MSVC"}
 
-    p, err = _resolve_in_workspace(raw.path, expect="dir")
+    p, err = _resolve_in_workspace(raw.path, expect="any")
 
     if err:
         return err

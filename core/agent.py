@@ -68,7 +68,7 @@ if __name__ == "__main__":
         "工具对于用户的提问来说是隐藏的。"
     )
     print("\n=== 测试 工具集合 ===")
-    question = "[用户提问] 帮我新建一个config.yaml 先填model和key，我之后再统一修改调用模型链路"
+    question = "[用户提问] 你觉得哥们的描述是不是有点像一个code agent？我需要你帮我优化一下描述，让它更像一个通用智能体。"
     answer = agent.run(question)
 
     log_lines = [
