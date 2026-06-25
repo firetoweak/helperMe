@@ -28,12 +28,13 @@ class GrepInput(BaseModel):
 
 
 @register_tool("""
-获取当前agent所在的workspace（工作区）的绝对路径和系统平台。
+获取当前工作区的绝对路径和系统平台信息。
 
 适用场景：
-- 用户询问项目存放在哪里，或需要了解当前工作目录的绝对路径。
-- 整理、归档文件，或需要在特定目录下执行操作。
-- 识别当前操作系统平台（如 Windows、Linux、macOS），以便执行平台特定的操作（如文件路径分隔符、命令差异）。
+- 用户询问文件存放在哪里，或需要了解当前工作目录的位置
+- 整理、归档文件，或需要在特定目录下执行操作
+- 识别当前操作系统平台（如 Windows、Linux、macOS），以便执行平台特定的操作
+- 创建文档或报告时需要引用项目路径信息
 
 输入：无参数，传 {} 即可。
 输出：JSON 对象，字段含义如下：
@@ -48,26 +49,25 @@ def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
 
 
 @register_tool("""
-按文件名/路径 glob 模式在 workspace 内查找文件或目录。底层使用 fd。
-不要用本工具搜索文件内容；搜内容请用 grep。
+根据名称或扩展名在 workspace 中查找文件或目录。
+注意：本工具仅用于查找文件路径；如果需要在文件内容中搜索关键词，请使用 grep。
 
 适用场景：
-- 浏览某层目录结构 → pattern="*", path=".", max_depth=1
-- 查找特定类型的文件 → pattern="*.pdf", pattern="*.docx" 等
-- 查找特定名称的项目/配置/文档 → pattern="README*", pattern="*report*"
-- 只找子目录 → pattern="*", kind="dir", max_depth=1
+- 浏览目录结构，查看有哪些文件
+- 查找特定类型的文件（如图片、文档、表格等）
+- 寻找特定名称的文件或文件夹
+- 快速定位资源位置
 
 输入：
-  pattern  glob 模式（必填），如 *、*.pdf、**/config.yaml
+  pattern  查找模式（必填），例如使用 * 代表任意字符，*.pdf 查找PDF文件
   path     搜索起始目录，相对 workspace，默认 "."
-  kind     file | dir | any，默认 any
-  max_depth  最大搜索深度；null=递归；1=只看 path 下直接一层
-  max_results  最多返回条数，默认 10
+  kind     查找类型：file（仅文件）、dir（仅文件夹）、any（都要）
+  max_depth  搜索深度限制；默认无限制（递归查找）；设为 1 则只看当前目录
+  max_results  最多返回结果数量，默认 10
 
 输出：
-  pattern, path, matches[{path, kind}], total, truncated
-  path 为相对 workspace 的路径，便于 read_file 直接使用
-  error 字段表示路径不存在或越界 workspace
+  包含匹配结果列表的 JSON 对象
+  path 为相对 workspace 的路径，可直接用于读取文件
 """, input_model=GlobInput)
 def glob(raw: GlobInput) -> dict[str, Any]:
     if shutil.which("fd") is None:
