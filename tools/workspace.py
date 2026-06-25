@@ -18,6 +18,7 @@ def _resolve_in_workspace(
     *,
     must_exist: bool = True,
     expect: Expect = "any", # 期望的类型，file, dir, any
+    create_parents: bool = False
 ) -> tuple[Path | None, dict[str, Any] | None]:
     """
     将外部传入路径解析为 workspace 内的安全路径。
@@ -48,11 +49,18 @@ def _resolve_in_workspace(
 
     if not must_exist:
         parent = p.parent
-        if not parent.exists():
-            return None, {"error": f"父目录不存在: {parent.as_posix()}", "code": "PARENT_NOT_FOUND"}
-        if not parent.is_dir():
-            return None, {"error": f"父路径不是目录: {parent.as_posix()}", "code": "PARENT_NOT_DIR"}
-        return p, None
+        if not create_parents :
+            if not parent.exists():
+                return None, {"error": f"父目录不存在: {parent.as_posix()}", "code": "PARENT_NOT_FOUND"}
+            if not parent.is_dir():
+                return None, {"error": f"父路径不是目录: {parent.as_posix()}", "code": "PARENT_NOT_DIR"}
+            return p, None
+        else:
+            try:
+                parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                return None, {"error": f"无法创建父目录: {e}", "code": "MKDIR_FAILED"}
+            return p, None
 
     if not p.exists():
         return None, {"error": f"路径不存在: {p.as_posix()}", "code": "NOT_FOUND"}

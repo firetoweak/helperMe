@@ -28,13 +28,17 @@ class GrepInput(BaseModel):
 
 
 @register_tool("""
-获取当前agent所在的workspace的绝对路径和系统平台。
+获取当前agent所在的workspace（工作区）的绝对路径和系统平台。
 
-适用场景：用户询问当前的目录或者你需要了解当前的工作环境。
+适用场景：
+- 用户询问项目存放在哪里，或需要了解当前工作目录的绝对路径。
+- 整理、归档文件，或需要在特定目录下执行操作。
+- 识别当前操作系统平台（如 Windows、Linux、macOS），以便执行平台特定的操作（如文件路径分隔符、命令差异）。
+
 输入：无参数，传 {} 即可。
-输出：JSON 字符串，字段含义如下：
-      - workspace: 工作区的绝对路径
-      - platform: 系统平台
+输出：JSON 对象，字段含义如下：
+      - workspace_root: 工作区的绝对路径
+      - platform: 系统平台标识（如 'linux', 'win32' 等）
 """)
 def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
     return {
@@ -48,16 +52,16 @@ def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
 不要用本工具搜索文件内容；搜内容请用 grep。
 
 适用场景：
-- 浏览某层目录 → pattern="*", path=".", max_depth=1
-- 只看子目录 → pattern="*", kind="dir", max_depth=1
-- 找所有 Python 文件 → pattern="*.py", path="."
-- 找指定文件名 → pattern="tool_registry.py", path="."
+- 浏览某层目录结构 → pattern="*", path=".", max_depth=1
+- 查找特定类型的文件 → pattern="*.pdf", pattern="*.docx" 等
+- 查找特定名称的项目/配置/文档 → pattern="README*", pattern="*report*"
+- 只找子目录 → pattern="*", kind="dir", max_depth=1
 
 输入：
-  pattern  glob 模式（必填），如 *、*.py、**/main.py
+  pattern  glob 模式（必填），如 *、*.pdf、**/config.yaml
   path     搜索起始目录，相对 workspace，默认 "."
   kind     file | dir | any，默认 any
-  max_depth  最大深度；null=递归；1=只看 path 下直接一层
+  max_depth  最大搜索深度；null=递归；1=只看 path 下直接一层
   max_results  最多返回条数，默认 10
 
 输出：
@@ -124,11 +128,11 @@ def grep(raw: GrepInput) -> dict[str, Any]:
         # 后续版本扩展成python 兜底方式
         return {"error": "未找到 rg，请先安装: winget install BurntSushi.ripgrep.MSVC"}
 
-    root, err = _resolve_in_workspace(raw.path, expect="dir")
+    p, err = _resolve_in_workspace(raw.path, expect="dir")
 
     if err:
         return err
-    cmd = ["rg", "--json", "-C", str(raw.context_lines), raw.query, str(root)]
+    cmd = ["rg", "--json", "-C", str(raw.context_lines), raw.query, str(p)]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
 
     if proc.returncode == 2:
@@ -173,7 +177,7 @@ def grep(raw: GrepInput) -> dict[str, Any]:
                     break
 
     return {
-        "path": raw.path,
+        "path": _to_workspace_relative(p),
         "query": raw.query,
         "context_lines": raw.context_lines,
         "hits": hits[:raw.max_results],

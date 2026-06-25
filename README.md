@@ -81,12 +81,17 @@ apply_patch     **局部**修改/新增/删除  不做整体删除
 
 ---
 
-文件 新建/删除  有了就可以同时支持全文重写
-write_file  delete_file
+文件 新建  有了就可以同时支持全文重写
+write_file  
+delete_file     做run_command时统一做
 
 可选：
 get_diff        检查改动
 run_command     执行测试/检查；带白名单的可选的human in the loop
+
+---
+
+优化agent做成多轮对话，并解决当前设置轮次导致失败问题
 
 
 **安装工具：ripgrep，fd**
