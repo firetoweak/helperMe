@@ -34,7 +34,7 @@ class GrepInput(BaseModel):
 - 用户询问文件存放在哪里，或需要了解当前工作目录的位置
 - 整理、归档文件，或需要在特定目录下执行操作
 - 识别当前操作系统平台（如 Windows、Linux、macOS），以便执行平台特定的操作
-- 创建文档或报告时需要引用项目路径信息
+- 编写报告、整理资源时需要引用项目路径信息
 
 输入：无参数，传 {} 即可。
 输出：JSON 对象，字段含义如下：
@@ -53,7 +53,7 @@ def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
 注意：本工具仅用于查找文件路径；如果需要在文件内容中搜索关键词，请使用 grep。
 
 适用场景：
-- 浏览目录结构，查看有哪些文件
+- 浏览目录结构，查看项目资料
 - 查找特定类型的文件（如图片、文档、表格等）
 - 寻找特定名称的文件或文件夹
 - 快速定位资源位置
@@ -115,8 +115,9 @@ def glob(raw: GlobInput) -> dict[str, Any]:
 不要用本工具找文件名；找文件请用 glob。
 
 适用场景：
-- 找类/函数定义 → query="class ToolSpec"
-- 找符号引用 → query="register_tool"
+- 在大量文档中查找特定关键词或短语
+- 定位文章或报告中的特定段落
+- 查找对某人或某事的引用
 - 需要看上下文 → context_lines=3~5
 
 输入：query（必填）, path（默认 "."）, context_lines（默认 2）, max_results（默认 10）
@@ -188,8 +189,8 @@ def grep(raw: GrepInput) -> dict[str, Any]:
 
 # 读文件的工具的话，需要限制读的长度，不能读太长
 @register_tool("""
-读文件内容，
-适用场景：用户或agent需要读取文件内容，适用于文本文件（.py .md .json .txt .yaml 等）。
+读文件内容。
+适用场景：阅读文章、查看笔记、分析文本内容。适用于文本文件（.py .md .json .txt .yaml 等）。
 输入：
     path，文件路径。
     offset，读取起始行号，从 1 开始。

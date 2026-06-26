@@ -29,9 +29,9 @@ class ReplaceAllInput(BaseModel):
 本工具不支持批量替换；如需全部替换，应使用 replace_all。
 
 适用场景：
-- 修改某个函数、类、配置块中的一小段内容
-- 根据 read_file 或 grep 读取到的原文片段，替换为新片段
-- 修复一处明确位置的代码或文本
+- 修正文档中的笔误、错误或过时信息
+- 替换特定句子或段落
+- 微调内容，更新具体细节
 
 不适用场景：
 - 全文件重写 → 用 write_file
@@ -49,9 +49,6 @@ class ReplaceAllInput(BaseModel):
   ok            是否修改成功
   code          结果码
   path          修改文件路径
-  match_type    exact | newline_nfkc
-  start_line    匹配起始行
-  end_line      匹配结束行
   replacements  替换次数，成功时固定为 1
   candidate     精确匹配失败但归一化后找到候选时返回，包含 original_block
 
@@ -91,16 +88,10 @@ def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
                     "error": str(e),
                     "path": _to_workspace_relative(p),
                 }
-            idx = content.find(raw.old_block)
-            start_line = content[:idx].count("\n") + 1
-            end_line = start_line + raw.old_block.count("\n") - 1
             return {
                 "ok": True,
-                "match_type": "exact",
                 "code": "PATCH_APPLIED",
                 "path": _to_workspace_relative(p),
-                "start_line": start_line,
-                "end_line": end_line,
                 "replacements": 1,
             }
         if count > 1:
@@ -121,8 +112,6 @@ def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
             original_block = "".join(content_lines[i:i + window_size])
             if normalize_for_match(original_block) == norm_old:
                 candidates.append({
-                    "start_line": i + 1,
-                    "end_line": i + window_size,
                     "original_block": original_block,
                     "path": _to_workspace_relative(p),
                 })
@@ -160,9 +149,10 @@ def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
 ⚠️ 仅当你明确希望【所有出现位置】都修改时使用本工具。
 只改一处请用 apply_patch。
 适用场景：
-- 重命名变量/函数名（确认全文件都应改）
-- 批量替换同一配置项、同一 import 路径
-- 全文统一替换某个固定字符串
+- 全文统一修改术语、人名或地名
+- 批量替换特定词汇
+- 统一格式或规范
+
 不适用场景：
 - 只改一处 → 用 apply_patch
 - old_block 在文件中出现 0 次
