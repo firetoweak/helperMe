@@ -93,5 +93,7 @@ run_command     执行测试/检查；带白名单的可选的human in the loop
 
 优化agent做成多轮对话，并解决当前设置轮次导致失败问题
 
+**分阶段学习计划**（打基础 → 类似 OpenClaw 的自主助手）：见 [docs/自主Agent学习计划.md](docs/自主Agent学习计划.md)
+
 
 **安装工具：ripgrep，fd**

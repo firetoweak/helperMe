@@ -1,5 +1,5 @@
 __pycache__/
 .vscode/
+# run_*.log
 run.log
-
-tests/
+tests/.parallel_logs/

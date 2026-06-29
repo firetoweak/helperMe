@@ -3,8 +3,7 @@ from typing import Literal, Any
 Expect = Literal["file", "dir", "any"]
 
 # 简单的worksplace
-WORKSPACE = Path(__file__).resolve().parent.parent
-
+WORKSPACE = Path(r"E:\myCard\Helper\helperMe-test1")
 
 def _to_workspace_relative(path: str) -> str:
     p = Path(path).resolve()
