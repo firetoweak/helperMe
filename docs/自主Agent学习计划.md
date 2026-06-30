@@ -280,10 +280,10 @@ path: 可选，限制查看某个文件或目录的 diff
 
 | 项 | 当前值 |
 |----|--------|
-| **当前阶段** | 4：benchmark 已首次跑通 `read_file → patch → get_changes → 基于 diff 总结`，进入最小 system prompt 收敛 |
-| **本轮优先** | 收敛通用 system prompt；保留 Plan Gate、读全/续读、失败恢复、get_changes 验证这些通用策略 |
+| **当前阶段** | 4：单文件与完整任务都已跑通 `read_file → patch → get_changes → 基于 diff 总结`，进入 Plan Gate 与最小 system prompt 收敛 |
+| **本轮优先** | 收敛通用 system prompt，重点压住两件事：无目标 workspace 扫描、最终总结夸大 diff |
 | **本轮禁止** | 未经用户授权的多层同时改（executor + prompt + 批量 docstring）；效率优化、多轮 REPL；把 benchmark 细节写进 system prompt |
-| **下一验收** | 重跑 benchmark 至少 2 次：trace 稳定出现 `read_file → apply_patch/replace_all → get_changes`，最终总结只陈述 diff 中真实改动 |
+| **下一验收** | 重跑完整任务：trace 先限定目标文件范围，再 `read_file → apply_patch/replace_all → get_changes`；最终总结不使用“所有/全部/完全统一”等超出 diff 的表述 |
 | **用户触发词** | 「好/直接改」= 可写代码；「建议/为什么」= 只教不改 |
 
 > AI 动手前须读本表；与用户请求冲突时，先指出冲突并让用户选择，不擅自跳阶段。
@@ -297,8 +297,8 @@ path: 可选，限制查看某个文件或目录的 diff
 | 0 | 复盘两次 run | 进行中 | `docs/优化.txt`、`run.log` | 用证据判断瓶颈 |
 | 1 | 实现 `get_changes` | 已完成 | `tools/get_changes.py` | 改后验证闭环 |
 | 2 | prompt 增加验证规则 | 已完成 | `core/agent.py` | 总结必须基于事实 |
-| 3 | 重跑 benchmark | 已首次跑通 | `run_2026-06-30.log` | 验证“诚实总结” |
-| 4 | 收敛最小 system prompt | **当前重点** | `core/agent.py` | 通用策略 vs 任务知识 |
+| 3 | 重跑 benchmark | 单文件与完整任务均已首次跑通 | `run_2026-06-30.log` | 验证“诚实总结” |
+| 4 | 收敛最小 system prompt | **当前重点** | `core/agent.py` | Plan Gate、通用策略 vs 任务知识 |
 | 5 | 工具 hint | 观察后再定 | `tools/file_read.py`、`tools/file_write.py` | 工具返回值作为 teaching signal |
 | 6 | 效率优化 | 后置 | `core/agent.py` | 少轮次但不牺牲可信度 |
 | 7 | 多轮对话 | 后置 | `core/agent.py` / `main.py` | 会话状态 |
@@ -312,8 +312,10 @@ path: 可选，限制查看某个文件或目录的 diff
 背景判断：
 
 - `get_changes` 已经承担原计划中 `get_diff` 的职责。
-- 2026-06-30 的 benchmark 已出现 `read_file -> apply_patch -> get_changes -> 基于 diff 总结`。
+- 2026-06-30 的单文件 benchmark 已出现 `read_file -> apply_patch -> get_changes -> 基于 diff 总结`。
+- 2026-06-30 的完整任务 benchmark 也能多文件修改并调用 `get_changes`，但开头仍有 `config.yaml`、`**/*` 等偏宽泛探索。
 - `read_file` 的分页元信息、`glob` 的路径语义、核心 docstring 已做过一轮收敛。
+- 最终总结仍有轻微夸大风险，例如说“所有工具都采用统一结构”，但 diff 里并非所有工具都完全统一。
 - 空响应仍存在，但目前更像模型噪声；只要能恢复到闭环，暂不作为主线问题。
 
 建议先自己回答这三个问题，再改 prompt：
@@ -321,16 +323,18 @@ path: 可选，限制查看某个文件或目录的 diff
 1. 哪些规则是通用 agent 行为策略，适合放 system prompt？
 2. 哪些规则只是本项目 benchmark 知识，不能写进 system prompt？
 3. Plan Gate 应该阻止“探索本身”，还是阻止“没有目标和退出条件的探索”？
+4. 最终总结里哪些词会天然导致夸大，比如“全部”“所有”“完全统一”？
 
 推荐第一版保留的通用策略：
 
 ```text
 1. 文件修改前先形成最小文件操作计划。
-2. 目标文件未知时，先用 glob/grep 定位；定位后只读相关文件和片段。
+2. 目标文件未知时，先根据用户意图推断候选目录；优先用窄范围 glob/grep 定位，避免先扫整个 workspace。
 3. read_file 返回 truncated=true 时，用 next_offset 续读目标片段。
 4. old_block 必须来自 read_file/grep 返回的真实原文。
 5. patch 失败后根据 code/hint 恢复，不能假装成功。
 6. 修改后必须调用 get_changes，最终总结只基于 diff/status。
+7. 最终总结避免使用超出 diff 证据的绝对化表述；如果只是部分工具/部分文件改了，就说“部分”。
 ```
 
 ---
@@ -351,12 +355,15 @@ path: 可选，限制查看某个文件或目录的 diff
 - [x] 实现 `get_changes`（原计划的 get_diff）
 - [x] system prompt 增加“修改后必须 get_changes”
 - [x] benchmark 首次跑通 `patch -> get_changes -> 诚实总结`
+- [x] 完整任务首次跑通多文件修改并调用 `get_changes`
 - [x] `read_file` 返回元信息修正：不截半行，`end_line/next_offset/truncated_by` 与实际内容一致
 - [x] `glob` 路径语义修正：支持 `glob(path="tools", pattern="file_read.py")`
 
 ### 后续稳定性
 
 - [ ] 收敛最小通用 system prompt
+- [ ] Plan Gate 收敛：完整任务开头不再先读配置文件或宽泛扫描 `**/*`
+- [ ] 总结口径收敛：最终回答只说 diff 证明的范围，避免“所有工具/全部完成”等夸大表述
 - [ ] benchmark 连续跑 2 次，确认闭环稳定而不是偶然成功
 - [ ] 评估是否需要 `read_file` hint
 - [ ] 评估是否需要 `apply_patch` hint
