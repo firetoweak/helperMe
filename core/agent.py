@@ -28,6 +28,18 @@ DEFAULT_SYSTEM_PROMPT = (
     "如果计划修改了某处但 diff 中没有出现，必须说明「未完成」，不能声称已经修改。"
 )
 
+FILE_RULE = """涉及文件修改时，先形成最小文件操作计划，再开始修改。
+计划只需要服务工具调用顺序，不需要长篇解释。
+计划应包含：
+1. 如何定位目标文件
+2. 需要读取哪些目标片段
+3. 使用哪种写入工具修改
+4. 修改后调用 get_changes 验证
+
+禁止无目标地泛泛浏览 workspace。
+如果目标文件未知，先用 glob/grep 定位；定位后只读取与任务相关的文件和片段。
+"""
+
 
 def get_default_run_log_path() -> Path:
     today = datetime.now().strftime("%Y-%m-%d")
@@ -86,7 +98,7 @@ class Agent:
 
 if __name__ == "__main__":
     agent = Agent(model="qwen27b")
-    agent.conversation.set_system_prompt(DEFAULT_SYSTEM_PROMPT)
+    agent.conversation.set_system_prompt(DEFAULT_SYSTEM_PROMPT+FILE_RULE)
     print("\n=== 测试 工具集合 ===")
     question = "[用户提问] 你觉得项目的工具描述是不是有点像一个code agent？你帮我优化一下描述，让它更像一个通用智能体。注意，只改 tools/file_read.py，我先看看结果！"
     answer = agent.run(question)

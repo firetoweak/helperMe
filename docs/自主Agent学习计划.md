@@ -280,10 +280,10 @@ path: 可选，限制查看某个文件或目录的 diff
 
 | 项 | 当前值 |
 |----|--------|
-| **当前阶段** | 1→3：改后验证闭环已具备（`get_changes` + prompt 规则），**待 benchmark 验收** |
-| **本轮优先** | 重跑 benchmark，检查 trace：`patch → get_changes → 总结与 diff 一致` |
-| **本轮禁止** | 未经用户授权的多层同时改（executor + prompt + 批量 docstring）；效率优化、多轮 REPL |
-| **下一验收** | `run.log` 出现 get_changes；最终回答不夸大未出现在 diff 中的改动 |
+| **当前阶段** | 4：benchmark 已首次跑通 `read_file → patch → get_changes → 基于 diff 总结`，进入最小 system prompt 收敛 |
+| **本轮优先** | 收敛通用 system prompt；保留 Plan Gate、读全/续读、失败恢复、get_changes 验证这些通用策略 |
+| **本轮禁止** | 未经用户授权的多层同时改（executor + prompt + 批量 docstring）；效率优化、多轮 REPL；把 benchmark 细节写进 system prompt |
+| **下一验收** | 重跑 benchmark 至少 2 次：trace 稳定出现 `read_file → apply_patch/replace_all → get_changes`，最终总结只陈述 diff 中真实改动 |
 | **用户触发词** | 「好/直接改」= 可写代码；「建议/为什么」= 只教不改 |
 
 > AI 动手前须读本表；与用户请求冲突时，先指出冲突并让用户选择，不擅自跳阶段。
@@ -297,9 +297,9 @@ path: 可选，限制查看某个文件或目录的 diff
 | 0 | 复盘两次 run | 进行中 | `docs/优化.txt`、`run.log` | 用证据判断瓶颈 |
 | 1 | 实现 `get_changes` | 已完成 | `tools/get_changes.py` | 改后验证闭环 |
 | 2 | prompt 增加验证规则 | 已完成 | `core/agent.py` | 总结必须基于事实 |
-| 3 | 重跑 benchmark | **当前重点** | `run.log` | 验证“诚实总结” |
-| 4 | 收敛最小 system prompt | 待做 | `core/agent.py` | 通用策略 vs 任务知识 |
-| 5 | 工具 hint | 可选 | `tools/file_read.py`、`tools/file_write.py` | 工具返回值作为 teaching signal |
+| 3 | 重跑 benchmark | 已首次跑通 | `run_2026-06-30.log` | 验证“诚实总结” |
+| 4 | 收敛最小 system prompt | **当前重点** | `core/agent.py` | 通用策略 vs 任务知识 |
+| 5 | 工具 hint | 观察后再定 | `tools/file_read.py`、`tools/file_write.py` | 工具返回值作为 teaching signal |
 | 6 | 效率优化 | 后置 | `core/agent.py` | 少轮次但不牺牲可信度 |
 | 7 | 多轮对话 | 后置 | `core/agent.py` / `main.py` | 会话状态 |
 
@@ -307,30 +307,30 @@ path: 可选，限制查看某个文件或目录的 diff
 
 ## 五、下一次动手建议
 
-下一步只做一件事：实现 `get_diff`。
+下一步只做一件事：收敛最小通用 system prompt。
 
-建议你先自己回答这三个问题，再写代码：
+背景判断：
 
-1. `get_diff` 应该返回字符串，还是结构化 dict？
-2. 如果当前目录不是 git 仓库，它应该报错还是返回空 diff？
-3. 最终总结为什么必须依赖 `get_diff`，而不是依赖“刚才哪些 patch 返回成功”？
+- `get_changes` 已经承担原计划中 `get_diff` 的职责。
+- 2026-06-30 的 benchmark 已出现 `read_file -> apply_patch -> get_changes -> 基于 diff 总结`。
+- `read_file` 的分页元信息、`glob` 的路径语义、核心 docstring 已做过一轮收敛。
+- 空响应仍存在，但目前更像模型噪声；只要能恢复到闭环，暂不作为主线问题。
 
-推荐第一版设计：
+建议先自己回答这三个问题，再改 prompt：
 
-```text
-工具名：get_diff
-输入：path 可选
-输出：
-  ok: bool
-  diff: str
-  truncated: bool
-  message/error: str
-```
+1. 哪些规则是通用 agent 行为策略，适合放 system prompt？
+2. 哪些规则只是本项目 benchmark 知识，不能写进 system prompt？
+3. Plan Gate 应该阻止“探索本身”，还是阻止“没有目标和退出条件的探索”？
 
-第一版先不要做复杂功能。目标是让 agent 能完成：
+推荐第一版保留的通用策略：
 
 ```text
-read_file -> apply_patch -> get_diff -> 根据 diff 总结
+1. 文件修改前先形成最小文件操作计划。
+2. 目标文件未知时，先用 glob/grep 定位；定位后只读相关文件和片段。
+3. read_file 返回 truncated=true 时，用 next_offset 续读目标片段。
+4. old_block 必须来自 read_file/grep 返回的真实原文。
+5. patch 失败后根据 code/hint 恢复，不能假装成功。
+6. 修改后必须调用 get_changes，最终总结只基于 diff/status。
 ```
 
 ---
@@ -350,14 +350,18 @@ read_file -> apply_patch -> get_diff -> 根据 diff 总结
 - [x] system prompt 已有 `truncated=true` 续读规则
 - [x] 实现 `get_changes`（原计划的 get_diff）
 - [x] system prompt 增加“修改后必须 get_changes”
-- [ ] benchmark 跑通 `patch -> get_changes -> 诚实总结`
+- [x] benchmark 首次跑通 `patch -> get_changes -> 诚实总结`
+- [x] `read_file` 返回元信息修正：不截半行，`end_line/next_offset/truncated_by` 与实际内容一致
+- [x] `glob` 路径语义修正：支持 `glob(path="tools", pattern="file_read.py")`
 
 ### 后续稳定性
 
 - [ ] 收敛最小通用 system prompt
+- [ ] benchmark 连续跑 2 次，确认闭环稳定而不是偶然成功
 - [ ] 评估是否需要 `read_file` hint
 - [ ] 评估是否需要 `apply_patch` hint
 - [ ] 在可信基础上优化轮次
+- [ ] 记录空响应为模型噪声，后续只做轻量统计或兜底，不作为当前主线
 
 ### 远期
 
@@ -397,4 +401,4 @@ read_file -> apply_patch -> get_diff -> 根据 diff 总结
 
 ---
 
-*文档版本：2026-06-29 晚 · 根据上周 `docs/优化.txt` 与今天 `run.log` 重订*
+*文档版本：2026-06-30 晚 · 根据 `run_2026-06-29.log` 与 `run_2026-06-30.log` 对照更新*

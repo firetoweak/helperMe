@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 
 class GlobInput(BaseModel):
-    pattern: str = Field(description="文件名匹配模式，例如 *.py、docs/*.md")
-    path: str = Field(default=".", description="搜索起始目录，相对 workspace，默认.")
+    pattern: str = Field(description="文件名或相对 path 的 glob 模式，例如 file_read.py、*.py、tools/file_read.py")
+    path: str = Field(default=".", description="搜索起始目录，相对 workspace，默认当前 workspace")
     kind: Literal["file", "dir", "any"] = Field(default="any", description="查找类型：file（仅文件）、dir（仅文件夹）、any（都要）")
     max_depth: int | None = Field(default=None, description="搜索深度限制；默认（递归查找）；设为 1 则只看当前目录")
     max_results: int = Field(default=10, description="最多返回结果数量")
@@ -57,41 +57,45 @@ def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
 - 搜索文件内容；用 grep
 - 读取文件内容；用 read_file
 使用提示：
-- pattern 是文件名 glob 模式，例如 *.py、README.md、docs/*.md
+- path 是搜索起点，pattern 是在该起点下匹配的名称或相对路径
+- 推荐写法：glob(path="tools", pattern="file_read.py")
+- pattern 也可以包含相对路径，例如 tools/file_read.py
 - 结果过多时，缩小 path、kind、max_depth 或 max_results
 """, input_model=GlobInput)
 def glob(raw: GlobInput) -> dict[str, Any]:
-    if shutil.which("fd") is None:
-        return {"error": "未找到 fd，请先安装: winget install sharkdp.fd"}
-
     root, err = _resolve_in_workspace(raw.path, expect="dir")
     if err:
         return err
 
-    cmd = ["fd", "-g", raw.pattern, "-a", str(root)]
-    if raw.max_depth is not None:
-        cmd.extend(["--max-depth", str(raw.max_depth)])
-    if raw.kind == "dir":
-        cmd.extend(["-t", "d"])
-    elif raw.kind == "file":
-        cmd.extend(["-t", "f"])
-    
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
-
-    if proc.returncode == 2:
-        return {"error": proc.stderr.strip() or "fd 执行失败"}
+    pattern = raw.pattern.replace("\\", "/")
+    if Path(pattern).is_absolute():
+        return {"error": "pattern 必须是相对 path 的匹配模式，不能是绝对路径", "code": "ABSOLUTE_PATTERN"}
+    if not pattern.strip():
+        return {"error": "pattern 不能为空", "code": "EMPTY_PATTERN"}
 
     ws = WORKSPACE.resolve()
-    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
-    total = len(lines)
-    truncated = total > raw.max_results
-    lines = lines[:raw.max_results]
+    root = root.resolve()
+    has_path_part = "/" in pattern
+    candidates = root.glob(pattern) if has_path_part else root.rglob(pattern)
+
     matches = []
-    for line in lines:
-        abs_path = Path(line).resolve()
+    for abs_path in sorted((p.resolve() for p in candidates), key=lambda p: p.as_posix()):
+        if raw.kind == "dir" and not abs_path.is_dir():
+            continue
+        if raw.kind == "file" and not abs_path.is_file():
+            continue
+
+        rel_from_root = abs_path.relative_to(root)
+        if raw.max_depth is not None and len(rel_from_root.parts) > raw.max_depth:
+            continue
+
         rel = abs_path.relative_to(ws).as_posix()
         entry_kind = "dir" if abs_path.is_dir() else "file"
         matches.append({"path": rel, "kind": entry_kind})
+
+    total = len(matches)
+    truncated = total > raw.max_results
+    matches = matches[:raw.max_results]
     return {
         "pattern": raw.pattern,
         "path": raw.path,
@@ -197,14 +201,18 @@ def grep(raw: GrepInput) -> dict[str, Any]:
 - offset 从 1 开始，用于指定读取起始行
 - limit 控制最多读取多少行，但单次内容过长仍会被截断
 - 返回 truncated=true 时，必须使用 next_offset 继续读取后续内容
+- truncated_by 标记截断原因：lines 表示行数限制，chars 表示字符预算限制，null 表示未截断
 - 修改文件前，old_block 应来自 read_file 或 grep 返回的真实原文
 """, input_model=ReadFileInput)
 def read_file(raw: ReadFileInput) -> dict[str, Any]:
     max_length= 3000 # 默认最大读取字符数，超出会截断
-    truncated = False
     p, err = _resolve_in_workspace(raw.path, expect="file")
     if err:
         return err
+    if raw.offset < 1:
+        return {"error": "offset 必须大于等于 1", "path": _to_workspace_relative(p)}
+    if raw.limit < 1:
+        return {"error": "limit 必须大于等于 1", "path": _to_workspace_relative(p)}
 
     try:    
         with open(p, "r", encoding="utf-8") as f:
@@ -216,16 +224,32 @@ def read_file(raw: ReadFileInput) -> dict[str, Any]:
                     "total_lines": total_lines,
                     "path":_to_workspace_relative(p),
                 }
-            start_line = raw.offset - 1
-            end_line = min(start_line + raw.limit, total_lines)
-            selected_lines = lines[start_line:end_line]
-            end_line = start_line + len(selected_lines)
+            start_index = raw.offset - 1
+            selected_lines = []
+            content_length = 0
+            stopped_by_chars = False
+
+            for line in lines[start_index:]:
+                if len(selected_lines) >= raw.limit:
+                    break
+
+                next_length = content_length + len(line)
+                if next_length > max_length and selected_lines:
+                    stopped_by_chars = True
+                    break
+
+                selected_lines.append(line)
+                content_length = next_length
 
             content = "".join(selected_lines)
+            end_line = start_index + len(selected_lines)
 
-            if len(content) > max_length:
-                content = content[:max_length]
-                truncated = True
+            if stopped_by_chars:
+                truncated_by = "chars"
+            elif end_line < total_lines:
+                truncated_by = "lines"
+            else:
+                truncated_by = None
 
             if end_line < total_lines:
                 next_offset = end_line + 1
@@ -234,11 +258,12 @@ def read_file(raw: ReadFileInput) -> dict[str, Any]:
             return {
                 "path": _to_workspace_relative(p),
                 "content": content,
-                "start_line": start_line + 1,
+                "start_line": raw.offset,
                 "end_line": end_line,
                 "total_lines": total_lines,
                 "next_offset": next_offset,
-                "truncated": truncated,
+                "truncated": truncated_by is not None,
+                "truncated_by": truncated_by,
             }
     except UnicodeDecodeError:
         return {"error": f"无法以文本读取（可能是二进制文件）: {_to_workspace_relative(p)}"}
