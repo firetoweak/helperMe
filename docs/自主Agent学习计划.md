@@ -276,14 +276,28 @@ path: 可选，限制查看某个文件或目录的 diff
 
 ---
 
+## Rule 同步区（给 Cursor 看，阶段推进时只改本节）
+
+| 项 | 当前值 |
+|----|--------|
+| **当前阶段** | 1→3：改后验证闭环已具备（`get_changes` + prompt 规则），**待 benchmark 验收** |
+| **本轮优先** | 重跑 benchmark，检查 trace：`patch → get_changes → 总结与 diff 一致` |
+| **本轮禁止** | 未经用户授权的多层同时改（executor + prompt + 批量 docstring）；效率优化、多轮 REPL |
+| **下一验收** | `run.log` 出现 get_changes；最终回答不夸大未出现在 diff 中的改动 |
+| **用户触发词** | 「好/直接改」= 可写代码；「建议/为什么」= 只教不改 |
+
+> AI 动手前须读本表；与用户请求冲突时，先指出冲突并让用户选择，不擅自跳阶段。
+
+---
+
 ## 四、当前推荐顺序
 
 | 顺序 | 任务 | 状态 | 主要文件 | 学到什么 |
 |:----:|------|:----:|----------|----------|
 | 0 | 复盘两次 run | 进行中 | `docs/优化.txt`、`run.log` | 用证据判断瓶颈 |
-| 1 | 实现 `get_diff` | 当前重点 | `tools/file_diff.py`、`tools/__init__.py` | 改后验证闭环 |
-| 2 | prompt 增加 diff 验证规则 | 待做 | `core/agent.py` | 总结必须基于事实 |
-| 3 | 重跑 benchmark | 待做 | `run.log` | 验证“诚实总结” |
+| 1 | 实现 `get_changes` | 已完成 | `tools/get_changes.py` | 改后验证闭环 |
+| 2 | prompt 增加验证规则 | 已完成 | `core/agent.py` | 总结必须基于事实 |
+| 3 | 重跑 benchmark | **当前重点** | `run.log` | 验证“诚实总结” |
 | 4 | 收敛最小 system prompt | 待做 | `core/agent.py` | 通用策略 vs 任务知识 |
 | 5 | 工具 hint | 可选 | `tools/file_read.py`、`tools/file_write.py` | 工具返回值作为 teaching signal |
 | 6 | 效率优化 | 后置 | `core/agent.py` | 少轮次但不牺牲可信度 |
@@ -334,9 +348,9 @@ read_file -> apply_patch -> get_diff -> 根据 diff 总结
 
 - [x] `max_rounds` 默认值已从 10 调到 20
 - [x] system prompt 已有 `truncated=true` 续读规则
-- [ ] 实现 `get_diff`
-- [ ] system prompt 增加“修改后必须 get_diff”
-- [ ] benchmark 跑通 `patch -> diff -> 诚实总结`
+- [x] 实现 `get_changes`（原计划的 get_diff）
+- [x] system prompt 增加“修改后必须 get_changes”
+- [ ] benchmark 跑通 `patch -> get_changes -> 诚实总结`
 
 ### 后续稳定性
 

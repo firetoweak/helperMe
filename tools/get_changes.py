@@ -6,23 +6,22 @@ import subprocess
 
 
 class GetChangesInput(BaseModel):
-    path: str | None = Field(default=None, description="可选，只查看某个文件或目录的改动")
+    path: str | None = Field(default=None, description="可选，要查看改动的文件或目录路径；不传则查看整个 workspace")
 
 
 @register_tool("""
-查看当前工作区的实际文件改动。
+查看当前 workspace 的实际文件改动，用于修改后的验证和最终总结前核对。
 适用场景：
-- 修改文件后，确认磁盘上到底发生了哪些变化
-- 最终回复用户前，核对总结是否与真实改动一致
-- 避免把计划中的修改误说成已经完成的修改
-输入：
-- path：可选，只查看某个文件或目录的改动；不传则查看整个工作区
-输出：
-- ok：工具是否正常执行
-- source：变更来源，第一版仅支持使用 git
-- changed：是否检测到改动
-- status：文件变更列表
-- diff：具体文本差异
+- 修改文件后，确认磁盘上真实发生了哪些变化
+- 最终回复用户前，核对总结是否与实际改动一致
+- 发现计划修改和实际 diff 不一致时，诚实说明未完成部分
+不适用场景：
+- 修改文件；用 apply_patch、replace_all 或 write_file
+- 查找文件或内容；用 glob、grep 或 read_file
+使用提示：
+- 不传 path 时查看整个 workspace 的改动
+- 传 path 时只查看某个文件或目录的改动
+- 总结修改内容时，只能基于 status 和 diff 中真实出现的变化
 """, input_model=GetChangesInput)
 def get_changes(raw: GetChangesInput) -> dict[str, Any]:
     target = None

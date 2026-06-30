@@ -9,14 +9,14 @@ import json
 from pathlib import Path
 
 class GlobInput(BaseModel):
-    pattern: str = Field(description="作用模式，glob,对应 -g 参数")
-    path: str = Field(default=".", description="搜索目录路径，相对worksplace的路径")
-    kind: Literal["file", "dir", "any"] = Field(default="any", description="搜索类型，文件或目录或都要")
-    max_depth: int | None = Field(default=None, description="最大搜索深度，默认null，递归查找")
-    max_results: int = Field(default=10, description="最多返回结果数")
+    pattern: str = Field(description="文件名匹配模式，例如 *.py、docs/*.md")
+    path: str = Field(default=".", description="搜索起始目录，相对 workspace，默认.")
+    kind: Literal["file", "dir", "any"] = Field(default="any", description="查找类型：file（仅文件）、dir（仅文件夹）、any（都要）")
+    max_depth: int | None = Field(default=None, description="搜索深度限制；默认（递归查找）；设为 1 则只看当前目录")
+    max_results: int = Field(default=10, description="最多返回结果数量")
 
 class ReadFileInput(BaseModel):
-    path: str = Field(description="文件路径，相对worksplace的路径")
+    path: str = Field(description="要读取的文件路径，相对 workspace 的路径")
     offset: int = Field(default=1, description="读取起始行号，从 1 开始")
     limit: int = Field(default=200, description="最多读取行数")
 
@@ -49,25 +49,16 @@ def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
 
 
 @register_tool("""
-根据名称或扩展名在 workspace 中查找文件或目录。
-注意：本工具仅用于查找文件路径；如果需要在文件内容中搜索关键词，请使用 grep。
-
+在 workspace 中按文件名模式查找文件或目录，返回可继续传给 read_file/grep/write_file 的相对路径。
 适用场景：
-- 浏览目录结构，查看项目资料
-- 查找特定类型的文件（如图片、文档、表格等）
-- 寻找特定名称的文件或文件夹
-- 快速定位资源位置
-
-输入：
-  pattern  查找模式（必填），例如使用 * 代表任意字符，*.pdf 查找PDF文件
-  path     搜索起始目录，相对 workspace，默认 "."
-  kind     查找类型：file（仅文件）、dir（仅文件夹）、any（都要）
-  max_depth  搜索深度限制；默认无限制（递归查找）；设为 1 则只看当前目录
-  max_results  最多返回结果数量，默认 10
-
-输出：
-  包含匹配结果列表的 JSON 对象
-  path 为相对 workspace 的路径，可直接用于读取文件
+- 不确定目标文件在哪里
+- 需要按扩展名、文件名片段或目录层级定位资源
+不适用场景：
+- 搜索文件内容；用 grep
+- 读取文件内容；用 read_file
+使用提示：
+- pattern 是文件名 glob 模式，例如 *.py、README.md、docs/*.md
+- 结果过多时，缩小 path、kind、max_depth 或 max_results
 """, input_model=GlobInput)
 def glob(raw: GlobInput) -> dict[str, Any]:
     if shutil.which("fd") is None:
@@ -111,18 +102,20 @@ def glob(raw: GlobInput) -> dict[str, Any]:
 
 
 @register_tool("""
-在 workspace 内按内容搜索文本（正则）。底层使用 rg --json。
+在 workspace 内按关键词或正则搜索文本内容，返回匹配位置及少量上下文。
 不要用本工具找文件名；找文件请用 glob。
-
 适用场景：
-- 在大量文档中查找特定关键词或短语
-- 定位文章或报告中的特定段落
-- 查找对某人或某事的引用
-- 需要看上下文 → context_lines=3~5
-
-输入：query（必填）, path（默认 "."）, context_lines（默认 2）, max_results（默认 10）
-输出：hits[{file, line, snippet}]，file 为相对 workspace 路径
-无匹配时 hits=[]，不是 error
+- 不确定关键词出现在哪个文件
+- 定位文章、代码或报告中的特定段落
+- 修改前先找到包含目标内容的位置
+- 需要少量上下文判断是否值得继续 read_file
+不适用场景：
+- 按文件名、扩展名或目录查找路径；用 glob
+- 阅读已知文件的大段内容；用 read_file
+使用提示：
+- query 可以是关键词或正则表达式
+- context_lines 用于控制每个匹配前后的上下文行数
+- grep 只能定位；需要完整理解或修改前，应再用 read_file 读取目标区域
 """, input_model=GrepInput)
 def grep(raw: GrepInput) -> dict[str, Any]:
     if shutil.which("rg") is None:
@@ -187,24 +180,24 @@ def grep(raw: GrepInput) -> dict[str, Any]:
     }
 
 
-# 读文件的工具的话，需要限制读的长度，不能读太长
 @register_tool("""
-读文件内容。
-适用场景：阅读文章、查看笔记、分析文本内容。适用于文本文件（.py .md .json .txt .yaml 等）。
-输入：
-    path，文件路径。
-    offset，读取起始行号，从 1 开始。
-    limit，最多读取行数。
-输出：JSON 字符串，字段含义如下：
-      - path: 文件路径
-      - content: 文件内容
-      - start_line: 读取起始行号
-      - end_line: 读取结束行号
-      - total_lines: 文件总行数
-      - next_offset: 下一页的读取起始行号
-      - truncated: 是否截断
-限制：
-    最多读取 3000 字符，超出会截断
+读取 workspace 内已知文本文件的指定行范围，返回内容和分页信息。
+
+适用场景：
+- 已经知道目标文件路径，需要阅读文件内容
+- 根据 grep 命中的文件和行号，继续读取更完整的上下文
+- 修改文件前，获取将要替换的真实原文片段
+
+不适用场景：
+- 不知道文件在哪里；先用 glob 查找路径
+- 不知道关键词在哪个文件；先用 grep 定位
+- 读取二进制文件、图片、压缩包等非文本内容
+
+使用提示：
+- offset 从 1 开始，用于指定读取起始行
+- limit 控制最多读取多少行，但单次内容过长仍会被截断
+- 返回 truncated=true 时，必须使用 next_offset 继续读取后续内容
+- 修改文件前，old_block 应来自 read_file 或 grep 返回的真实原文
 """, input_model=ReadFileInput)
 def read_file(raw: ReadFileInput) -> dict[str, Any]:
     max_length= 3000 # 默认最大读取字符数，超出会截断

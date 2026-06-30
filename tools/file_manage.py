@@ -4,24 +4,20 @@ from core.tool_registry import register_tool
 from typing import Any
 
 class WriteFileInput(BaseModel):
-    path: str = Field(description="要写入的文件路径，相对worksplace的路径，例如 notes/todo.txt")
+    path: str = Field(description="要写入的文件路径，相对workspace的路径，必须包含文件名，例如 notes/todo.txt")
     content: str = Field(default="", description="要写入的完整文件内容；为空字符串表示创建空文件")
     overwrite: bool = Field(default=False, description="文件已存在时是否覆盖。false=拒绝覆盖，true=整体覆盖")
 
 @register_tool("""
-在 workspace 内创建或整体写入文本文件。
+在 workspace 内创建文本文件，或在明确允许时整体覆盖已有文件。
 
 适用场景：
-- 撰写文章、计划、草稿或报告
-- 保存搜索到的资料或记录笔记
-- 将完整内容写入一个新文件
-- 明确需要整体覆盖已有文件
+- 新建文章、计划、草稿、报告、笔记等文本文件
+- 用户明确要求“重写/覆盖整个文件”
 
 不适用场景：
-- 只修改已有文件的一小段内容；这种情况请用 apply_patch
-- 搜索文件名；请用 glob
-- 搜索文件内容；请用 grep
-- 读取文件内容；请用 read_file
+- 只改文件局部内容；用 apply_patch
+- 查找/读取文件；用 glob/read_file/grep
 
 行为：
 - path 是相对 workspace 的文件路径，必须包含文件名，例如 docs/plan.md
@@ -32,21 +28,14 @@ class WriteFileInput(BaseModel):
 - 只能写入 workspace 内路径，禁止写到 workspace 外
 
 输入：
-  path       相对 workspace 的文件路径，包含文件名
-  content    要写入的完整文本内容，默认空字符串
-  overwrite  是否允许覆盖已有文件，默认 false
+- path: workspace 相对路径，必须包含文件名，如 docs/plan.md
+- content: 要写入的完整文本，默认空字符串
+- overwrite: 是否允许覆盖已有文件，默认 false
 
-输出：
-  ok         是否修改成功
-  code       结果码
-  path       修改文件路径
-
-结果码：
-FILE_CREATED        新建成功
-FILE_OVERWRITTEN    覆盖成功
-FILE_EXISTS         已存在且 overwrite=false
-IS_A_DIR            路径是目录
-WRITE_FAILED        写入失败
+失败处理：
+- FILE_EXISTS: 文件已存在。除非用户明确要求覆盖，否则不要重试 overwrite=true
+- IS_A_DIR: path 指向目录，应补充文件名
+- PATH_OUTSIDE_WORKSPACE: 路径越界，改用 workspace 相对路径
 """, input_model=WriteFileInput)
 def write_file(raw: WriteFileInput) -> dict[str, Any]:
     p, err = _resolve_in_workspace(path=raw.path, must_exist=False, create_parents=True)

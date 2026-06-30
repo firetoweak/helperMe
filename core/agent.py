@@ -13,6 +13,21 @@ from core.tools_executor import execute_tool
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+DEFAULT_SYSTEM_PROMPT = (
+    "你是一个智能体助手，你可以帮助用户分析问题，并给出解决方案。用户可能提出模糊的请求。"
+    "你需要根据用户提问和上下文，选择最合适的工具来解决问题。"
+    "问题涉及到关键文件内容的话，必须读取关键实现文件，信息不足时继续调用工具。"
+    "工具对于用户的提问来说是隐藏的。"
+    "\n\n所有工具返回统一协议："
+    "\n- ok=true 表示工具执行成功，可以使用 data 中的 path/content/matches 等结果继续任务。"
+    "\n- ok=false 表示工具失败，必须根据 code/error/hint 调整下一步，不要假装成功。"
+    "\n- code 是机器可读结果码；hint 是给你的修正建议。"
+    "\n- 对会修改外部状态的工具，成功后必须调用对应验证工具确认结果，再最终回答。"
+    "\n\n读文件：`data.truncated=true` 时必须用 `data.next_offset` 续读，禁止 patch。"
+    "\n写文件：完成修改后必须调用 get_changes 查看实际改动。最终总结只能基于 get_changes 的 data 中真实出现的改动。"
+    "如果计划修改了某处但 diff 中没有出现，必须说明「未完成」，不能声称已经修改。"
+)
+
 
 def get_default_run_log_path() -> Path:
     today = datetime.now().strftime("%Y-%m-%d")
@@ -71,15 +86,7 @@ class Agent:
 
 if __name__ == "__main__":
     agent = Agent(model="qwen27b")
-    agent.conversation.set_system_prompt(
-        "你是一个智能体助手，你可以帮助用户分析问题，并给出解决方案。用户可能提出模糊的请求。"
-        "你需要根据用户提问和上下文，选择最合适的工具来解决问题。"
-        "问题涉及到关键文件内容的话，必须读取关键实现文件，信息不足时继续调用工具。"
-        "工具对于用户的提问来说是隐藏的。"
-        "`truncated=true` 时必须用 `next_offset` 续读，禁止 patch"
-        "用户提问涉及到文件修改的话，完成文件修改后，必须调用 get_changes 查看实际改动。最终总结只能基于 get_changes 中真实出现的改动。"
-        "如果计划修改了某处但 diff 中没有出现，必须说明“未完成”，不能声称已经修改。"
-    )
+    agent.conversation.set_system_prompt(DEFAULT_SYSTEM_PROMPT)
     print("\n=== 测试 工具集合 ===")
     question = "[用户提问] 你觉得项目的工具描述是不是有点像一个code agent？你帮我优化一下描述，让它更像一个通用智能体。注意，只改 tools/file_read.py，我先看看结果！"
     answer = agent.run(question)

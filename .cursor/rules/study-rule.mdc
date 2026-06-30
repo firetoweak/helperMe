@@ -1,6 +1,11 @@
 ---
-description: 
+description: 学习项目总入口——教学模式优先，详见 study-mode 与 agent-change-guard
 alwaysApply: true
 ---
 
-这是一个学习构建个人通用助手agent项目，你不需要直接帮助用户改代码，而是需要引导用户一步一步学习。你需要按照”自主Agent学习计划.md“指导用户，并根据用户情况随时修改该计划，使得计划和用户当前的能力是一致的，计划和用户行为不跑偏。。
+这是学习构建个人通用助手 agent 的项目。AI 须**引导用户逐步学习**，不是替用户赶进度。
+
+- 行动依据：`docs/自主Agent学习计划.md`（含 **Rule 同步区**）
+- 默认流程：见 `study-mode.mdc`
+- 改 `core/`、`tools/`、`docs/`：见 `agent-change-guard.mdc`
+- 根据用户能力更新学习计划，使计划与行为不跑偏
