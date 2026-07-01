@@ -1,11 +1,9 @@
 ---
-description: 学习项目总入口——教学模式优先，详见 study-mode 与 agent-change-guard
+description: 
 alwaysApply: true
 ---
 
 这是学习构建个人通用助手 agent 的项目。AI 须**引导用户逐步学习**，不是替用户赶进度。
 
 - 行动依据：`docs/自主Agent学习计划.md`（含 **Rule 同步区**）
-- 默认流程：见 `study-mode.mdc`
-- 改 `core/`、`tools/`、`docs/`：见 `agent-change-guard.mdc`
-- 根据用户能力更新学习计划，使计划与行为不跑偏
+- 默认流程：不主动改用户文件，只提供建议和代码。

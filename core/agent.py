@@ -69,7 +69,7 @@ class Agent:
         self.conversation = Conversation()
         self.model = model
 
-    def run(self, user_message: str, max_rounds: int = 20):
+    def run(self, user_message: str, max_rounds: int = 10):
 
         self.conversation.add_user(user_message)
         for _ in range(max_rounds):
