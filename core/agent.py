@@ -3,13 +3,13 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from core.messages import Conversation
 from core.llm_client import LLMClient
 # 注册
 import tools
-from core.tool_registry import get_tools
-from core.tools_executor import execute_tool
+from core.tools_runner import RunResult, ToolsRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -46,21 +46,155 @@ def get_default_run_log_path() -> Path:
     return PROJECT_ROOT / f"run_{today}.log"
 
 
-def _format_message(msg: dict) -> str:
-    role = msg["role"]
-    if msg.get("tool_calls"):
-        body = json.dumps(msg["tool_calls"], ensure_ascii=False, indent=2)
-        return f"{role}:\n{body}"
-    content = msg.get("content")
-    if content is None:
-        return f"{role}: (no content)"
-    return f"{role}: {content}"
+def _parse_json_maybe(value: str | None) -> Any:
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
 
-def _write_run_log(lines: list[str], path: Path | None = None) -> None:
+def _preview_text(value: Any, limit: int = 240) -> str | None:
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"...[省略 {len(text) - limit} 字符]"
+
+
+def _compact_value(value: Any, *, depth: int = 0, limit: int = 240) -> Any:
+    """保留结构和规模信息，避免日志记录大段正文。"""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return {
+            "type": "str",
+            "length": len(value),
+            "preview": _preview_text(value, limit),
+        }
+    if isinstance(value, list):
+        return {
+            "type": "list",
+            "length": len(value),
+            "items_preview": [
+                _compact_value(item, depth=depth + 1, limit=limit)
+                for item in value[:3]
+            ],
+        }
+    if isinstance(value, dict):
+        if depth >= 2:
+            return {
+                "type": "dict",
+                "keys": list(value.keys()),
+            }
+        return {
+            key: _compact_value(item, depth=depth + 1, limit=limit)
+            for key, item in value.items()
+        }
+    return _preview_text(value, limit)
+
+
+def _message_metrics(messages: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "messages": len(messages),
+        "tool_calls": sum(len(msg.get("tool_calls") or []) for msg in messages),
+        "tool_results": sum(1 for msg in messages if msg.get("role") == "tool"),
+    }
+
+
+def _tool_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    tool_names: dict[str, str] = {}
+    for index, msg in enumerate(messages):
+        if msg.get("tool_calls"):
+            for call in msg["tool_calls"]:
+                call_id = call["id"]
+                tool_names[call_id] = call["function"]["name"]
+                events.append(
+                    {
+                        "message_index": index,
+                        "event": "tool_call",
+                        "id": call_id,
+                        "name": call["function"]["name"],
+                        "arguments": _compact_value(
+                            _parse_json_maybe(call["function"]["arguments"]),
+                            limit=180,
+                        ),
+                    }
+                )
+            continue
+
+        if msg.get("role") == "tool":
+            result = _parse_json_maybe(msg.get("content"))
+            event = {
+                "message_index": index,
+                "event": "tool_result",
+                "id": msg["tool_call_id"],
+                "name": tool_names.get(msg["tool_call_id"]),
+            }
+            if isinstance(result, dict):
+                event.update(
+                    {
+                        "ok": result.get("ok"),
+                        "code": result.get("code"),
+                        "error": _preview_text(result.get("error"), 180),
+                        "hint": _preview_text(result.get("hint"), 180),
+                        "data": _compact_value(result.get("data"), limit=180),
+                    }
+                )
+            else:
+                event["result"] = _compact_value(result, limit=180)
+            events.append(event)
+    return events
+
+
+def _compact_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": checkpoint["kind"],
+        "reason": checkpoint["reason"],
+        "message": checkpoint["message"],
+        "data": _compact_value(checkpoint.get("data"), limit=160),
+    }
+
+
+def _build_run_trace(
+    *,
+    started_at: str,
+    question: str,
+    answer: str,
+    agent: "Agent",
+) -> dict[str, Any]:
+    ended_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    checkpoints = agent.tools_runner.checkpoint_records()
+    return {
+        "type": "agent_run",
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "model": agent.model,
+        "question": question,
+        "answer": answer,
+        "status": agent.last_result.status if agent.last_result else None,
+        "error": agent.last_result.error if agent.last_result else None,
+        "metrics": {
+            "answer_length": len(answer),
+            "checkpoints": len(checkpoints),
+            **_message_metrics(agent.conversation.messages),
+        },
+        "checkpoints": [
+            _compact_checkpoint(checkpoint)
+            for checkpoint in checkpoints
+        ],
+        "tool_events": _tool_events(agent.conversation.messages),
+    }
+
+
+def _write_run_trace(trace: dict[str, Any], path: Path | None = None) -> None:
     log_path = path if path is not None else get_default_run_log_path()
     with log_path.open("a", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+        f.write(json.dumps(trace, ensure_ascii=False) + "\n")
 
 
 class Agent:
@@ -68,55 +202,33 @@ class Agent:
         self.llm_client = LLMClient()
         self.conversation = Conversation()
         self.model = model
+        self.tools_runner = ToolsRunner(self.llm_client, self.model)
+        self.last_result: RunResult | None = None
 
-    def run(self, user_message: str, max_rounds: int = 10):
-
-        self.conversation.add_user(user_message)
-        for _ in range(max_rounds):
-            response = self.llm_client.chat(
-                self.conversation.messages, 
-                self.model, 
-                get_tools())
-
-            self.conversation.add_assistant(response)
-            if response.type == "text":
-                if not response.content:
-                    self.conversation.add_user("你刚才返回了空内容。请继续完成任务：如果需要修改就调用工具；如果已完成就给出总结。")
-                    continue
-                return response.content
-            else:
-                # 添加工具列表
-                tool_results = []
-                for call in response.calls:
-                    tool_result = execute_tool(call.name, call.arguments)
-                    tool_results.append({
-                        "tool_call_id": call.id,
-                        "content": tool_result
-                    })
-                self.conversation.add_tools_result(tool_results)
-        return "工具调用次数过多，已停止。"
+    def run(self, user_message: str, max_rounds: int = 20):
+        self.last_result = self.tools_runner.run(self.conversation, user_message, max_rounds)
+        return self.last_result.answer
 
 if __name__ == "__main__":
     agent = Agent(model="qwen27b")
     agent.conversation.set_system_prompt(DEFAULT_SYSTEM_PROMPT+FILE_RULE)
     print("\n=== 测试 工具集合 ===")
     question = "[用户提问] 你觉得项目的工具描述是不是有点像一个code agent？你帮我优化一下描述，让它更像一个通用智能体。"
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     answer = agent.run(question)
 
-    log_lines = [
-        f"=== run @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===",
-        f"Q: {question}",
-        f"A: {answer}",
-        "--- trace ---",
-    ]
-    for i, msg in enumerate(agent.conversation.messages):
-        log_lines.append(f"  [{i}] {_format_message(msg)}")
     log_path = (
         Path(os.environ["HELPER_RUN_LOG_PATH"])
         if "HELPER_RUN_LOG_PATH" in os.environ
         else get_default_run_log_path()
     )
-    _write_run_log(log_lines, log_path)
+    trace = _build_run_trace(
+        started_at=started_at,
+        question=question,
+        answer=answer,
+        agent=agent,
+    )
+    _write_run_trace(trace, log_path)
 
     print(answer)
-    print(f"(完整日志已写入 {log_path})")
+    print(f"(简要日志已写入 {log_path})")

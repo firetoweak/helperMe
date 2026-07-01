@@ -67,14 +67,14 @@ def normalize_tool_result(result: Any) -> dict[str, Any]:
     }
 
 
-def _encode_result(result: Any) -> str:
-    return json.dumps(normalize_tool_result(result), ensure_ascii=False)
+def encode_tool_result(result: dict[str, Any]) -> str:
+    return json.dumps(result, ensure_ascii=False)
 
 
-def execute_tool(tool_name: str, tool_arguments: str) -> str:
+def execute_tool(tool_name: str, tool_arguments: str) -> dict[str, Any]:
     spec = TOOL_SPECS.get(tool_name)
     if spec is None:
-        return _encode_result(
+        return normalize_tool_result(
             {
                 "ok": False,
                 "code": "TOOL_NOT_FOUND",
@@ -88,9 +88,9 @@ def execute_tool(tool_name: str, tool_arguments: str) -> str:
         payload = json.loads(tool_arguments or "{}")
         data = spec.input_model.model_validate(payload)
         result = spec.handler(data)
-        return _encode_result(result)
+        return normalize_tool_result(result)
     except json.JSONDecodeError as exc:
-        return _encode_result(
+        return normalize_tool_result(
             {
                 "ok": False,
                 "code": "INVALID_JSON",
@@ -99,7 +99,7 @@ def execute_tool(tool_name: str, tool_arguments: str) -> str:
             }
         )
     except ValidationError as exc:
-        return _encode_result(
+        return normalize_tool_result(
             {
                 "ok": False,
                 "code": "VALIDATION_ERROR",
@@ -108,7 +108,7 @@ def execute_tool(tool_name: str, tool_arguments: str) -> str:
             }
         )
     except Exception as exc:
-        return _encode_result(
+        return normalize_tool_result(
             {
                 "ok": False,
                 "code": "UNHANDLED_ERROR",
