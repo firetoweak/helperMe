@@ -105,7 +105,7 @@ class ToolsRunner:
                     error="llm_error",
                 )
 
-    def run(self, conversation: Conversation, user_message: str, max_rounds: int = 10) -> RunResult:
+    def run(self, conversation: Conversation, user_message: str, max_rounds: int = 20) -> RunResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
         checkpoints.append(run_started_checkpoint(max_rounds))
