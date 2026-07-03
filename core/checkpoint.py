@@ -103,6 +103,19 @@ def message_chain_invalid_checkpoint(validation: dict[str, Any]) -> Checkpoint:
     )
 
 
+def context_length_exceeded_checkpoint(*, round_index: int, error: str) -> Checkpoint:
+    return Checkpoint(
+        kind="terminate",
+        reason="context_length_exceeded",
+        message="运行已停止：上下文超过模型限制，当前阶段暂不做自动裁剪。",
+        data={
+            "round_index": round_index,
+            "error": error,
+            "hint": "上下文压缩会在后续 ContextCompactor 阶段实现。",
+        },
+    )
+
+
 def budget_stop_checkpoint(max_rounds: int, tools_state: ToolsState) -> Checkpoint:
     tools_status = tools_state.status()
     verify_status = verification_status(tools_state)
@@ -132,6 +145,14 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             checkpoint.message,
             f"轮次：{checkpoint.data['round_index']}，重试次数：{checkpoint.data['attempts']}。",
             f"错误：{checkpoint.data['error']}",
+        ])
+
+    if checkpoint.reason == "context_length_exceeded":
+        return "\n".join([
+            checkpoint.message,
+            f"轮次：{checkpoint.data['round_index']}。",
+            f"错误：{checkpoint.data['error']}",
+            f"提示：{checkpoint.data['hint']}",
         ])
 
     tools = checkpoint.data["tools"]

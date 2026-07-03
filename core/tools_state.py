@@ -173,24 +173,6 @@ class ToolsState:
             repaired.append(step)
         return repaired
 
-    def compact_completed(self, keep_last: int) -> list[ToolStep]:
-        """
-        截断，历史 tool_call + tool_result 太长
-        - 成对删除或成对摘要
-        - 保证删除后 messages 协议仍完整
-        """
-        if keep_last < 0:
-            raise ValueError("keep_last must be >= 0")
-        completed = [step for step in self.steps if step.result is not None]
-        remove_count = len(completed) - keep_last
-        if remove_count <= 0:
-            return []
-
-        removable_ids = {step.call_id for step in completed[:remove_count]}
-        removed = [step for step in self.steps if step.call_id in removable_ids]
-        self.steps = [step for step in self.steps if step.call_id not in removable_ids]
-        return removed
-
     def to_tool_messages(
         self,
         encoder: Callable[[dict[str, Any]], str],

@@ -7,6 +7,7 @@ from core.checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
     checkpoint_to_record,
+    context_length_exceeded_checkpoint,
     format_checkpoint,
     llm_error_checkpoint,
     llm_retry_checkpoint,
@@ -15,8 +16,8 @@ from core.checkpoint import (
     run_started_checkpoint,
     tool_batch_completed_checkpoint,
 )
+from core.context_compactor import is_context_limit_error
 from core.messages import Conversation, LLMResponse
-from core.messages import Conversation
 from core.llm_client import LLMClient
 from core.tool_registry import get_tools
 from core.tools_executor import encode_tool_result, execute_tool
@@ -66,6 +67,19 @@ class ToolsRunner:
                 )
             except Exception as exc:
                 last_error = str(exc)
+                if is_context_limit_error(last_error):
+                    checkpoint = context_length_exceeded_checkpoint(
+                        round_index=round_index,
+                        error=last_error,
+                    )
+                    checkpoints.append(checkpoint)
+                    return RunResult(
+                        status="terminated",
+                        answer=format_checkpoint(checkpoint),
+                        checkpoints=checkpoints,
+                        error="context_length_exceeded",
+                    )
+
                 if attempt < max_llm_retries:
                     checkpoints.append(
                         llm_retry_checkpoint(
