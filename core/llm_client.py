@@ -10,12 +10,18 @@ class LLMClient:
     def __init__(self):
         http_client = httpx.Client(
             trust_env=False,   # 关键：不读系统代理
-            timeout=120.0,
+            timeout=httpx.Timeout(
+                connect=10.0,   # 连不上尽快失败
+                read=120.0,     # 模型推理可以慢，读超时保留
+                write=30.0,
+                pool=10.0,
+            )
         )
         self.client = OpenAI(
             base_url="http://60.13.232.228:3553/v1",
             api_key="EMPTY",
             http_client=http_client,
+            max_retries=0,  # retry 交给 ToolsRunner，避免双层叠加
         )
 
     def chat(self, messages, model, tools=None) -> LLMResponse:

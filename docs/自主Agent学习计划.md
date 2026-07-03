@@ -62,8 +62,9 @@ ToolsState 是账本。ToolsRunner 是执行控制者，Checkpoint/RunResult 是
 
 基础的runtime已经有了。
 
-抽出 ToolsRunner
-短任务 runtime
+抽出 ToolsRunner，作为整个agent的心脏，最小运行内核
+短任务 runtime，保持其生命周期在一轮text-tools-text，一次多轮的工具调用。不持久的化状态。
+异常捕获缺了 模型异常
 
 定义 ToolsState
 ToolsState.compact_completed() 目前只是状态层截断，还没有和 conversation.messages 的上下文压缩真正打通

@@ -2,17 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-
+import time
 from core.checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
     checkpoint_to_record,
     format_checkpoint,
+    llm_error_checkpoint,
+    llm_retry_checkpoint,
     message_chain_invalid_checkpoint,
     run_completed_checkpoint,
     run_started_checkpoint,
     tool_batch_completed_checkpoint,
 )
+from core.messages import Conversation, LLMResponse
 from core.messages import Conversation
 from core.llm_client import LLMClient
 from core.tool_registry import get_tools
@@ -46,6 +49,48 @@ class ToolsRunner:
         self.llm_client = llm_client
         self.model = model
 
+    def _call_llm_with_retry(
+        self,
+        conversation: Conversation,
+        round_index: int,
+        checkpoints: list[Checkpoint],
+        max_llm_retries: int = 3,
+    ) -> LLMResponse | RunResult:
+        last_error = ""
+        for attempt in range(1, max_llm_retries + 1):
+            try:
+                return self.llm_client.chat(
+                    conversation.messages,
+                    self.model,
+                    get_tools(),
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < max_llm_retries:
+                    checkpoints.append(
+                        llm_retry_checkpoint(
+                            round_index=round_index,
+                            attempt=attempt,
+                            max_attempts=max_llm_retries,
+                            error=last_error,
+                        )
+                    )
+                    time.sleep(min(attempt, 3))  # 1s, 2s, 3s...
+                    continue
+
+                checkpoint = llm_error_checkpoint(
+                    round_index=round_index,
+                    attempts=max_llm_retries,
+                    error=last_error,
+                )
+                checkpoints.append(checkpoint)
+                return RunResult(
+                    status="terminated",
+                    answer=format_checkpoint(checkpoint),
+                    checkpoints=checkpoints,
+                    error="llm_error",
+                )
+
     def run(self, conversation: Conversation, user_message: str, max_rounds: int = 10) -> RunResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
@@ -64,11 +109,14 @@ class ToolsRunner:
                     error="message_chain_invalid",
                 )
 
-            response = self.llm_client.chat(
-                conversation.messages,
-                self.model,
-                get_tools(),
+            llm_outcome = self._call_llm_with_retry(
+                conversation,
+                round_index,
+                checkpoints,
             )
+            if isinstance(llm_outcome, RunResult):
+                return llm_outcome
+            response = llm_outcome
 
             conversation.add_assistant(response)
             if response.type == "text":

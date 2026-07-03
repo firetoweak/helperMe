@@ -127,6 +127,13 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             lines.append(f"- {error}")
         return "\n".join(lines)
 
+    if checkpoint.reason == "llm_error":
+        return "\n".join([
+            checkpoint.message,
+            f"轮次：{checkpoint.data['round_index']}，重试次数：{checkpoint.data['attempts']}。",
+            f"错误：{checkpoint.data['error']}",
+        ])
+
     tools = checkpoint.data["tools"]
     verification = checkpoint.data["verification"]
     lines = [
@@ -137,3 +144,36 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
         lines.append("注意：本次运行中已有写入类工具成功执行，但还没有在最后一次写入后完成 get_changes 验证。")
     lines.append("这不是任务成功完成，而是预算耗尽后的安全停止。")
     return "\n".join(lines)
+
+
+def llm_retry_checkpoint(
+    *,
+    round_index: int,
+    attempt: int,
+    max_attempts: int,
+    error: str,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="llm",
+        reason="llm_retry",
+        message=f"第 {round_index} 轮 LLM 调用失败，准备重试 ({attempt}/{max_attempts})。",
+        data={
+            "round_index": round_index,
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            "error": error,
+        },
+    )
+
+
+def llm_error_checkpoint(*, round_index: int, attempts: int, error: str) -> Checkpoint:
+    return Checkpoint(
+        kind="terminate",
+        reason="llm_error",
+        message="运行已停止：LLM 调用失败，重试已耗尽。",
+        data={
+            "round_index": round_index,
+            "attempts": attempts,
+            "error": error,
+        },
+    )
