@@ -45,23 +45,22 @@ class ToolsRunner:
     def __init__(self, llm_client: LLMClient, model: str):
         self.llm_client = llm_client
         self.model = model
-        self.checkpoints: list[Checkpoint] = []
 
     def run(self, conversation: Conversation, user_message: str, max_rounds: int = 10) -> RunResult:
-        self.checkpoints = []
+        checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
-        self.checkpoints.append(run_started_checkpoint(max_rounds))
+        checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
 
         for round_index in range(1, max_rounds + 1):
             validation = tools_state.validate_messages(conversation.messages)
             if not validation.ok:
                 checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
-                self.checkpoints.append(checkpoint)
+                checkpoints.append(checkpoint)
                 return RunResult(
                     status="terminated",
                     answer=format_checkpoint(checkpoint),
-                    checkpoints=self.checkpoints,
+                    checkpoints=checkpoints,
                     error="message_chain_invalid",
                 )
 
@@ -76,11 +75,11 @@ class ToolsRunner:
                 if not response.content:
                     conversation.add_user("你刚才返回了空内容。请继续完成任务：如果需要修改就调用工具；如果已完成就给出总结。")
                     continue
-                self.checkpoints.append(run_completed_checkpoint(response.content))
+                checkpoints.append(run_completed_checkpoint(response.content))
                 return RunResult(
                     status="completed",
                     answer=response.content,
-                    checkpoints=self.checkpoints,
+                    checkpoints=checkpoints,
                 )
 
             calls = response.calls or []
@@ -101,7 +100,7 @@ class ToolsRunner:
 
             tool_results = tools_state.to_tool_messages(encode_tool_result, batch_steps)
             conversation.add_tools_result(tool_results)
-            self.checkpoints.append(
+            checkpoints.append(
                 tool_batch_completed_checkpoint(round_index, tools_state, len(calls))
             )
 
@@ -112,13 +111,10 @@ class ToolsRunner:
                 hint="已补齐错误结果以保持工具调用链路完整。",
             )
         checkpoint = budget_stop_checkpoint(max_rounds, tools_state)
-        self.checkpoints.append(checkpoint)
+        checkpoints.append(checkpoint)
         return RunResult(
             status="terminated",
             answer=format_checkpoint(checkpoint),
-            checkpoints=self.checkpoints,
+            checkpoints=checkpoints,
             error="max_rounds_exceeded",
         )
-
-    def checkpoint_records(self) -> list[dict[str, Any]]:
-        return [checkpoint_to_record(checkpoint) for checkpoint in self.checkpoints]

@@ -9,6 +9,7 @@ from core.messages import Conversation
 from core.llm_client import LLMClient
 # 注册
 import tools
+from core.checkpoint import checkpoint_to_record
 from core.tools_runner import RunResult, ToolsRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -168,7 +169,10 @@ def _build_run_trace(
     agent: "Agent",
 ) -> dict[str, Any]:
     ended_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    checkpoints = agent.tools_runner.checkpoint_records()
+    checkpoints = [
+        checkpoint_to_record(checkpoint)
+        for checkpoint in (agent.last_result.checkpoints if agent.last_result else [])
+    ]
     return {
         "type": "agent_run",
         "started_at": started_at,
