@@ -115,11 +115,12 @@ class ToolsRunner:
         tools_state = ToolsState()
 
         plan = create_plan(user_message, conversation)
-        plan_text = format_plan_for_model(plan)
-
+        plan.mark_doing(1, "开始执行任务")
 
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
+
+        reflection_requested = False
 
         for round_index in range(1, max_rounds + 1):
             validation = tools_state.validate_messages(conversation.messages)
@@ -137,7 +138,7 @@ class ToolsRunner:
                 conversation,
                 round_index,
                 checkpoints,
-                plan_text=plan_text
+                plan_text=format_plan_for_model(plan)
             )
             if isinstance(llm_outcome, RunResult):
                 return llm_outcome
@@ -148,6 +149,17 @@ class ToolsRunner:
                 if not response.content:
                     conversation.add_user("你刚才返回了空内容。请继续完成任务：如果需要修改就调用工具；如果已完成就给出总结。")
                     continue
+
+                if not reflection_requested:
+                    reflection_requested = True
+                    conversation.add_user(
+                        "请在最终回答前根据当前执行计划做一次简短检查："
+                        "哪些步骤已完成？是否还有未完成步骤？"
+                        "如果有未完成步骤，最终回答必须明确说明。"
+                        "检查后再给出最终回答。"
+                    )
+                    continue
+
                 checkpoints.append(run_completed_checkpoint(response.content))
                 return RunResult(
                     status="completed",
@@ -156,6 +168,9 @@ class ToolsRunner:
                 )
 
             calls = response.calls or []
+            if calls:
+                plan.mark_done(1, "模型已开始基于计划选择工具")
+                plan.mark_doing(2, "正在通过工具收集信息或执行操作")
             batch_steps = tools_state.add_calls(calls)
 
             for call in calls:
@@ -173,6 +188,11 @@ class ToolsRunner:
 
             tool_results = tools_state.to_tool_messages(encode_tool_result, batch_steps)
             conversation.add_tools_result(tool_results)
+            if any(step.ok is False for step in batch_steps):
+                conversation.add_user(
+                    "刚才有工具调用失败。请根据工具返回的 code/error/hint 调整下一步。"
+                    "如果原计划不再适用，请先说明调整后的计划，再继续执行。"
+                )
             checkpoints.append(
                 tool_batch_completed_checkpoint(round_index, tools_state, len(calls), plan)
             )

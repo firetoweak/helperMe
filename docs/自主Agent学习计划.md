@@ -110,7 +110,7 @@ Benchmark：
 
 
 Task Decomposition
-把用户请求拆成少量意图阶段
+模型自主把用户请求拆成少量意图阶段
 
 Execution Plan
 把计划注入模型上下文

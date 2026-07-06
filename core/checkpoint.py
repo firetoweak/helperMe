@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from core.tools_state import ToolStep, ToolsState
+from core.plan import Plan
 
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}
 VERIFY_TOOL_NAMES = {"get_changes"}
@@ -78,7 +79,7 @@ def run_completed_checkpoint(answer: str) -> Checkpoint:
     )
 
 
-def tool_batch_completed_checkpoint(round_index: int, tools_state: ToolsState, batch_size: int, plan: Any) -> Checkpoint:
+def tool_batch_completed_checkpoint(round_index: int, tools_state: ToolsState, batch_size: int, plan: Plan) -> Checkpoint:
     return Checkpoint(
         kind="tool_batch",
         reason="tool_batch_completed",
@@ -88,7 +89,7 @@ def tool_batch_completed_checkpoint(round_index: int, tools_state: ToolsState, b
             "batch_size": batch_size,
             "tools": tools_state.status(),
             "verification": verification_status(tools_state),
-            "plan": plan.to_dict()
+            "plan": plan.to_dict(),
         },
     )
 

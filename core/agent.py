@@ -329,6 +329,33 @@ def _format_checkpoints(checkpoints: list[dict[str, Any]]) -> str:
         reason = checkpoint.get("reason", "?")
         message = checkpoint.get("message", "")
         lines.append(f"  [{kind}/{reason}] {message}")
+        data = checkpoint.get("data") or {}
+        plan = data.get("plan")
+        if not isinstance(plan, dict):
+            continue
+
+        steps = plan.get("steps") or []
+        current_step = None
+        for step in steps:
+            if isinstance(step, dict) and step.get("status") == "doing":
+                current_step = step
+                break
+        if current_step is None:
+            for step in steps:
+                if isinstance(step, dict) and step.get("status") == "pending":
+                    current_step = step
+                    break
+        if current_step is None:
+            continue
+
+        step_id = current_step.get("id", "?")
+        status = current_step.get("status", "?")
+        text = current_step.get("text", "")
+        note = current_step.get("note")
+        line = f"    plan: step {step_id} [{status}] {text}"
+        if note:
+            line += f"（{note}）"
+        lines.append(line)
     return "\n".join(lines)
 
 
