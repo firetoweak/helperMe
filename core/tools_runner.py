@@ -22,6 +22,7 @@ from core.llm_client import LLMClient
 from core.tool_registry import get_tools
 from core.tools_executor import encode_tool_result, execute_tool
 from core.tools_state import ToolsState
+from core.planner import build_runtime_messages, create_plan, format_plan_for_model
 
 
 @dataclass
@@ -56,12 +57,16 @@ class ToolsRunner:
         round_index: int,
         checkpoints: list[Checkpoint],
         max_llm_retries: int = 3,
+        plan_text: str | None = None
     ) -> LLMResponse | RunResult:
         last_error = ""
         for attempt in range(1, max_llm_retries + 1):
             try:
+                messages = conversation.messages
+                if plan_text:
+                    messages = build_runtime_messages(messages, plan_text)
                 return self.llm_client.chat(
-                    conversation.messages,
+                    messages,
                     self.model,
                     get_tools(),
                 )
@@ -108,6 +113,11 @@ class ToolsRunner:
     def run(self, conversation: Conversation, user_message: str, max_rounds: int = 20) -> RunResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
+
+        plan = create_plan(user_message, conversation)
+        plan_text = format_plan_for_model(plan)
+
+
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
 
@@ -127,6 +137,7 @@ class ToolsRunner:
                 conversation,
                 round_index,
                 checkpoints,
+                plan_text=plan_text
             )
             if isinstance(llm_outcome, RunResult):
                 return llm_outcome
@@ -163,7 +174,7 @@ class ToolsRunner:
             tool_results = tools_state.to_tool_messages(encode_tool_result, batch_steps)
             conversation.add_tools_result(tool_results)
             checkpoints.append(
-                tool_batch_completed_checkpoint(round_index, tools_state, len(calls))
+                tool_batch_completed_checkpoint(round_index, tools_state, len(calls), plan)
             )
 
         if tools_state.has_pending():

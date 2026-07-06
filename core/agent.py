@@ -173,6 +173,10 @@ def _build_run_trace(
         checkpoint_to_record(checkpoint)
         for checkpoint in (agent.last_result.checkpoints if agent.last_result else [])
     ]
+    compact_checkpoints = [
+        _compact_checkpoint(checkpoint)
+        for checkpoint in checkpoints
+    ]
     return {
         "type": "agent_run",
         "started_at": started_at,
@@ -187,18 +191,269 @@ def _build_run_trace(
             "checkpoints": len(checkpoints),
             **_message_metrics(agent.conversation.messages),
         },
-        "checkpoints": [
-            _compact_checkpoint(checkpoint)
-            for checkpoint in checkpoints
-        ],
+        "checkpoints": compact_checkpoints,
         "tool_events": _tool_events(agent.conversation.messages),
+        "_messages": agent.conversation.messages,
     }
 
 
-def _write_run_trace(trace: dict[str, Any], path: Path | None = None) -> None:
+def _indent(text: str, prefix: str = "  ") -> str:
+    return "\n".join(prefix + line if line else prefix.rstrip() for line in text.splitlines())
+
+
+def _truncate_str(text: Any, limit: int) -> str:
+    if text is None:
+        return "<None>"
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... [省略 {len(text) - limit} 字符]"
+
+
+def _format_json_block(value: Any, *, limit: int = 600) -> str:
+    if isinstance(value, str):
+        parsed = _parse_json_maybe(value)
+        value = parsed if parsed is not value else value
+    if isinstance(value, str):
+        return _truncate_str(value, limit)
+    try:
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+    except TypeError:
+        text = str(value)
+    return _truncate_str(text, limit)
+
+
+def _format_tool_result(result: Any) -> str:
+    if not isinstance(result, dict):
+        return _format_json_block(result, limit=400)
+
+    lines: list[str] = []
+    ok = result.get("ok")
+    if ok is not None:
+        lines.append(f"状态: {'成功' if ok else '失败'} (ok={ok})")
+    if result.get("code"):
+        lines.append(f"代码: {result['code']}")
+    if result.get("error"):
+        lines.append(f"错误: {result['error']}")
+    if result.get("hint"):
+        lines.append(f"提示: {result['hint']}")
+
+    data = result.get("data")
+    if data is not None:
+        lines.append("数据:")
+        lines.append(_indent(_format_json_block(data, limit=800)))
+
+    return "\n".join(lines) if lines else _format_json_block(result, limit=400)
+
+
+def _extract_prompts(messages: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    system_prompt: str | None = None
+    user_question: str | None = None
+    for msg in messages:
+        role = msg.get("role")
+        if role == "system" and system_prompt is None:
+            system_prompt = msg.get("content")
+        elif role == "user" and user_question is None:
+            user_question = msg.get("content")
+            break
+    return system_prompt, user_question
+
+
+def _extract_rounds(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 assistant(tool_calls) → tool* 分组，便于人类阅读多轮调用。"""
+    rounds: list[dict[str, Any]] = []
+    round_index = 0
+    index = 0
+    while index < len(messages):
+        msg = messages[index]
+        role = msg.get("role")
+
+        if role == "user" and user_question_seen(messages, index):
+            rounds.append({"kind": "user_nudge", "content": msg.get("content", "")})
+            index += 1
+            continue
+
+        if role == "assistant" and msg.get("tool_calls"):
+            round_index += 1
+            calls_by_id = {
+                call["id"]: call
+                for call in msg["tool_calls"]
+            }
+            tool_pairs: list[dict[str, Any]] = []
+            index += 1
+            while index < len(messages) and messages[index].get("role") == "tool":
+                tool_msg = messages[index]
+                call_id = tool_msg.get("tool_call_id")
+                call = calls_by_id.get(call_id)
+                tool_pairs.append(
+                    {
+                        "name": call["function"]["name"] if call else None,
+                        "arguments": call["function"]["arguments"] if call else None,
+                        "result": _parse_json_maybe(tool_msg.get("content")),
+                    }
+                )
+                index += 1
+            rounds.append(
+                {
+                    "kind": "tool_round",
+                    "round": round_index,
+                    "tool_pairs": tool_pairs,
+                }
+            )
+            continue
+
+        if role == "assistant" and not msg.get("tool_calls"):
+            rounds.append({"kind": "final_answer", "content": msg.get("content", "")})
+            index += 1
+            continue
+
+        index += 1
+    return rounds
+
+
+def user_question_seen(messages: list[dict[str, Any]], index: int) -> bool:
+    """跳过第一条 user（初始提问），其余 user 视为中途 nudge。"""
+    for prior in messages[:index]:
+        if prior.get("role") == "user":
+            return True
+    return False
+
+
+def _format_checkpoints(checkpoints: list[dict[str, Any]]) -> str:
+    if not checkpoints:
+        return "  (无)"
+    lines: list[str] = []
+    for checkpoint in checkpoints:
+        kind = checkpoint.get("kind", "?")
+        reason = checkpoint.get("reason", "?")
+        message = checkpoint.get("message", "")
+        lines.append(f"  [{kind}/{reason}] {message}")
+    return "\n".join(lines)
+
+
+def _format_run_log(
+    *,
+    started_at: str,
+    ended_at: str,
+    model: str,
+    question: str,
+    answer: str,
+    status: str | None,
+    error: str | None,
+    messages: list[dict[str, Any]],
+    checkpoints: list[dict[str, Any]],
+    metrics: dict[str, int],
+) -> str:
+    width = 76
+    sep = "=" * width
+    thin = "-" * width
+    lines: list[str] = [
+        "",
+        sep,
+        f" Agent Run  |  {started_at}  →  {ended_at}",
+        f" Model: {model}  |  Status: {status or 'unknown'}",
+    ]
+    if error:
+        lines.append(f" Error: {error}")
+    lines.extend([sep, ""])
+
+    system_prompt, user_question = _extract_prompts(messages)
+    lines.extend(["## Prompt", ""])
+    if system_prompt:
+        lines.extend(["### System", _indent(_truncate_str(system_prompt, 2000)), ""])
+    lines.extend(
+        [
+            "### User",
+            _indent(_truncate_str(user_question or question, 2000)),
+            "",
+            "## Execution",
+            "",
+        ]
+    )
+
+    rounds = _extract_rounds(messages)
+    if not rounds:
+        lines.append("  (无工具调用轮次)")
+        lines.append("")
+    else:
+        for item in rounds:
+            if item["kind"] == "user_nudge":
+                lines.extend(
+                    [
+                        thin,
+                        "### User (中途提示)",
+                        _indent(_truncate_str(item["content"], 800)),
+                        "",
+                    ]
+                )
+                continue
+
+            if item["kind"] == "final_answer":
+                lines.extend(
+                    [
+                        thin,
+                        "## Answer",
+                        "",
+                        _truncate_str(item["content"], 4000),
+                        "",
+                    ]
+                )
+                continue
+
+            round_no = item["round"]
+            pairs = item["tool_pairs"]
+            lines.extend([thin, f"### Round {round_no}  ({len(pairs)} 个工具)", ""])
+            for idx, pair in enumerate(pairs, start=1):
+                name = pair.get("name") or "unknown"
+                lines.append(f"  [{idx}] 调用  {name}")
+                if pair.get("arguments") is not None:
+                    lines.append("      参数:")
+                    lines.append(_indent(_format_json_block(pair["arguments"], limit=500), prefix="      "))
+                lines.append("      结果:")
+                lines.append(_indent(_format_tool_result(pair["result"]), prefix="      "))
+                lines.append("")
+
+    if not any(item["kind"] == "final_answer" for item in rounds):
+        lines.extend([thin, "## Answer", "", _truncate_str(answer, 4000), ""])
+
+    lines.extend(
+        [
+            thin,
+            "## Summary",
+            "",
+            f"  消息数: {metrics.get('messages', 0)}",
+            f"  工具调用: {metrics.get('tool_calls', 0)}",
+            f"  工具结果: {metrics.get('tool_results', 0)}",
+            f"  检查点: {metrics.get('checkpoints', 0)}",
+            f"  回答长度: {metrics.get('answer_length', len(answer))}",
+            "",
+            "### Checkpoints",
+            _format_checkpoints(checkpoints),
+            "",
+            sep,
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _write_run_log(trace: dict[str, Any], path: Path | None = None) -> None:
     log_path = path if path is not None else get_default_run_log_path()
+    text = _format_run_log(
+        started_at=trace["started_at"],
+        ended_at=trace["ended_at"],
+        model=trace["model"],
+        question=trace["question"],
+        answer=trace["answer"],
+        status=trace.get("status"),
+        error=trace.get("error"),
+        messages=trace.get("_messages") or [],
+        checkpoints=trace.get("checkpoints") or [],
+        metrics=trace.get("metrics") or {},
+    )
     with log_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(trace, ensure_ascii=False) + "\n")
+        f.write(text)
 
 
 class Agent:
@@ -232,7 +487,7 @@ if __name__ == "__main__":
         answer=answer,
         agent=agent,
     )
-    _write_run_trace(trace, log_path)
+    _write_run_log(trace, log_path)
 
     print(answer)
-    print(f"(简要日志已写入 {log_path})")
+    print(f"(运行日志已写入 {log_path})")

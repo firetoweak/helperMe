@@ -78,7 +78,7 @@ def run_completed_checkpoint(answer: str) -> Checkpoint:
     )
 
 
-def tool_batch_completed_checkpoint(round_index: int, tools_state: ToolsState, batch_size: int) -> Checkpoint:
+def tool_batch_completed_checkpoint(round_index: int, tools_state: ToolsState, batch_size: int, plan: Any) -> Checkpoint:
     return Checkpoint(
         kind="tool_batch",
         reason="tool_batch_completed",
@@ -88,6 +88,7 @@ def tool_batch_completed_checkpoint(round_index: int, tools_state: ToolsState, b
             "batch_size": batch_size,
             "tools": tools_state.status(),
             "verification": verification_status(tools_state),
+            "plan": plan.to_dict()
         },
     )
 
