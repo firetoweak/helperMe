@@ -134,6 +134,37 @@ Benchmark：
 遗留问题：
 用户 **只读/禁止修改** 约束跟随，当前的agent并不能很好的跟随。
 更稳定的工具失败动态重规划测试。
+====================
+
+Phase 2.5
+Console Multi-turn Harness
+
+目标：为 Phase 3 Session Runtime 提供最小多轮观察入口。
+====================
+
+把当前单轮 Agent.run 测试方式，补成一个同进程内的多轮控制台对话入口，用于观察 conversation 累积、session 状态流和 human feedback 注入。
+
+Session 不是从 Agent 派生出来的；
+Session 是 Runtime 管理的状态对象；
+Agent 是 Runtime 用来推进 Session 的执行器。
+
+只做：
+- 启动时创建一个 session
+- 多轮读取用户输入
+- 每轮复用同一个 session/conversation
+- 打印 assistant 输出
+- 依赖现有日志观察状态变化
+
+不做：
+- 命令系统
+- 多 session 切换
+- 持久化恢复
+- 后台任务
+- 复杂 TUI
+
+校验
+第二轮输入时，模型“记得上一轮”
+
 
 ====================
 

@@ -536,26 +536,26 @@ class Agent:
         self.last_result = self.tools_runner.run(self.conversation, user_message, max_rounds)
         return self.last_result.answer
 
-if __name__ == "__main__":
-    agent = Agent(model="qwen27b")
-    agent.conversation.set_system_prompt(DEFAULT_SYSTEM_PROMPT+FILE_RULE)
-    print("\n=== 测试 工具集合 ===")
-    question = "[用户提问] 我现在agent连接模型部分，没有写连不上的报错兜底，帮我加上吧"
-    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    answer = agent.run(question)
+# if __name__ == "__main__":
+#     agent = Agent(model="qwen27b")
+#     agent.conversation.set_system_prompt(DEFAULT_SYSTEM_PROMPT+FILE_RULE)
+#     print("\n=== 测试 工具集合 ===")
+#     question = "[用户提问] 我现在agent连接模型部分，没有写连不上的报错兜底，帮我加上吧"
+#     started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#     answer = agent.run(question)
 
-    log_path = (
-        Path(os.environ["HELPER_RUN_LOG_PATH"])
-        if "HELPER_RUN_LOG_PATH" in os.environ
-        else get_default_run_log_path()
-    )
-    trace = _build_run_trace(
-        started_at=started_at,
-        question=question,
-        answer=answer,
-        agent=agent,
-    )
-    _write_run_log(trace, log_path)
+#     log_path = (
+#         Path(os.environ["HELPER_RUN_LOG_PATH"])
+#         if "HELPER_RUN_LOG_PATH" in os.environ
+#         else get_default_run_log_path()
+#     )
+#     trace = _build_run_trace(
+#         started_at=started_at,
+#         question=question,
+#         answer=answer,
+#         agent=agent,
+#     )
+#     _write_run_log(trace, log_path)
 
-    print(answer)
-    print(f"(运行日志已写入 {log_path})")
+#     print(answer)
+#     print(f"(运行日志已写入 {log_path})")
