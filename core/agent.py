@@ -10,6 +10,7 @@ from core.llm_client import LLMClient
 # 注册
 import tools
 from core.checkpoint import checkpoint_to_record
+from core.runtime_modes import RuntimeMode
 from core.tools_runner import RunResult, ToolsRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -153,11 +154,43 @@ def _tool_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _compact_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    data = checkpoint.get("data") or {}
+    compact_data = _compact_value(data, limit=160)
+    if isinstance(data, dict) and isinstance(data.get("plan"), dict):
+        compact_data["plan"] = _compact_plan_for_log(data["plan"])
     return {
         "kind": checkpoint["kind"],
         "reason": checkpoint["reason"],
         "message": checkpoint["message"],
-        "data": _compact_value(checkpoint.get("data"), limit=160),
+        "data": compact_data,
+    }
+
+
+def _compact_plan_for_log(plan: dict[str, Any]) -> dict[str, Any]:
+    steps = plan.get("steps") or []
+    current_step = None
+    for step in steps:
+        if isinstance(step, dict) and step.get("status") == "doing":
+            current_step = step
+            break
+    if current_step is None:
+        for step in steps:
+            if isinstance(step, dict) and step.get("status") == "pending":
+                current_step = step
+                break
+
+    status_counts: dict[str, int] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        status = str(step.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "goal": plan.get("goal"),
+        "current_step": current_step,
+        "status_counts": status_counts,
+        "total_steps": len(steps),
     }
 
 
@@ -334,17 +367,18 @@ def _format_checkpoints(checkpoints: list[dict[str, Any]]) -> str:
         if not isinstance(plan, dict):
             continue
 
-        steps = plan.get("steps") or []
-        current_step = None
-        for step in steps:
-            if isinstance(step, dict) and step.get("status") == "doing":
-                current_step = step
-                break
+        current_step = plan.get("current_step")
         if current_step is None:
+            steps = plan.get("steps") or []
             for step in steps:
-                if isinstance(step, dict) and step.get("status") == "pending":
+                if isinstance(step, dict) and step.get("status") == "doing":
                     current_step = step
                     break
+            if current_step is None:
+                for step in steps:
+                    if isinstance(step, dict) and step.get("status") == "pending":
+                        current_step = step
+                        break
         if current_step is None:
             continue
 
@@ -355,6 +389,13 @@ def _format_checkpoints(checkpoints: list[dict[str, Any]]) -> str:
         line = f"    plan: step {step_id} [{status}] {text}"
         if note:
             line += f"（{note}）"
+        status_counts = plan.get("status_counts")
+        if isinstance(status_counts, dict) and status_counts:
+            counts = ", ".join(
+                f"{status}={count}"
+                for status, count in sorted(status_counts.items())
+            )
+            line += f" | {counts}"
         lines.append(line)
     return "\n".join(lines)
 
@@ -484,11 +525,11 @@ def _write_run_log(trace: dict[str, Any], path: Path | None = None) -> None:
 
 
 class Agent:
-    def __init__(self, model: str = "default"):
+    def __init__(self, model: str = "default", runtime_mode: RuntimeMode | None = None):
         self.llm_client = LLMClient()
         self.conversation = Conversation()
         self.model = model
-        self.tools_runner = ToolsRunner(self.llm_client, self.model)
+        self.tools_runner = ToolsRunner(self.llm_client, self.model, runtime_mode=runtime_mode)
         self.last_result: RunResult | None = None
 
     def run(self, user_message: str, max_rounds: int = 20):

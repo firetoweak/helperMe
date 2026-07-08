@@ -1,6 +1,6 @@
 import unittest
 
-from core.plan import Plan, PlanStep
+from core.planning import Plan, PlanStep
 
 
 class PlanTest(unittest.TestCase):

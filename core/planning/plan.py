@@ -6,6 +6,7 @@ from typing import Literal
 
 PlanStepStatus = Literal["pending", "doing", "done", "skipped"]
 
+
 @dataclass
 class PlanStep:
     id: int
@@ -51,6 +52,17 @@ class Plan:
         step.status = "skipped"
         step.note = note
         return step
+
+    def advance_to_next(self, done_note: str | None = None, doing_note: str | None = None) -> None:
+        current = self.current_step()
+        if current and current.status == "doing":
+            current.status = "done"
+            current.note = done_note
+
+        next_step = self.current_step()
+        if next_step and next_step.status == "pending":
+            next_step.status = "doing"
+            next_step.note = doing_note
 
     def to_dict(self) -> dict:
         return {

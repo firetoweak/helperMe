@@ -22,7 +22,7 @@ from core.llm_client import LLMClient
 from core.tool_registry import get_tools
 from core.tools_executor import encode_tool_result, execute_tool
 from core.tools_state import ToolsState
-from core.planner import build_runtime_messages, create_plan, format_plan_for_model
+from core.runtime_modes import PlainMode, RuntimeMode
 
 
 @dataclass
@@ -47,9 +47,15 @@ class RunResult:
 class ToolsRunner:
     """最小 tool-calling 运行内核。"""
 
-    def __init__(self, llm_client: LLMClient, model: str):
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        model: str,
+        runtime_mode: RuntimeMode | None = None,
+    ):
         self.llm_client = llm_client
         self.model = model
+        self.runtime_mode = runtime_mode or PlainMode()
 
     def _call_llm_with_retry(
         self,
@@ -57,14 +63,11 @@ class ToolsRunner:
         round_index: int,
         checkpoints: list[Checkpoint],
         max_llm_retries: int = 3,
-        plan_text: str | None = None
     ) -> LLMResponse | RunResult:
         last_error = ""
         for attempt in range(1, max_llm_retries + 1):
             try:
-                messages = conversation.messages
-                if plan_text:
-                    messages = build_runtime_messages(messages, plan_text)
+                messages = self.runtime_mode.prepare_messages(conversation.messages)
                 return self.llm_client.chat(
                     messages,
                     self.model,
@@ -114,13 +117,10 @@ class ToolsRunner:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
 
-        plan = create_plan(user_message, conversation)
-        plan.mark_doing(1, "开始执行任务")
+        self.runtime_mode.start(user_message, conversation, self.llm_client, self.model)
 
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
-
-        reflection_requested = False
 
         for round_index in range(1, max_rounds + 1):
             validation = tools_state.validate_messages(conversation.messages)
@@ -138,7 +138,6 @@ class ToolsRunner:
                 conversation,
                 round_index,
                 checkpoints,
-                plan_text=format_plan_for_model(plan)
             )
             if isinstance(llm_outcome, RunResult):
                 return llm_outcome
@@ -150,17 +149,15 @@ class ToolsRunner:
                     conversation.add_user("你刚才返回了空内容。请继续完成任务：如果需要修改就调用工具；如果已完成就给出总结。")
                     continue
 
-                if not reflection_requested:
-                    reflection_requested = True
-                    conversation.add_user(
-                        "请在最终回答前根据当前执行计划做一次简短检查："
-                        "哪些步骤已完成？是否还有未完成步骤？"
-                        "如果有未完成步骤，最终回答必须明确说明。"
-                        "检查后再给出最终回答。"
-                    )
+                if self.runtime_mode.on_assistant_text(conversation):
                     continue
 
-                checkpoints.append(run_completed_checkpoint(response.content))
+                checkpoints.append(
+                    run_completed_checkpoint(
+                        response.content,
+                        self.runtime_mode.checkpoint_data(),
+                    )
+                )
                 return RunResult(
                     status="completed",
                     answer=response.content,
@@ -168,9 +165,6 @@ class ToolsRunner:
                 )
 
             calls = response.calls or []
-            if calls:
-                plan.mark_done(1, "模型已开始基于计划选择工具")
-                plan.mark_doing(2, "正在通过工具收集信息或执行操作")
             batch_steps = tools_state.add_calls(calls)
 
             for call in calls:
@@ -188,13 +182,14 @@ class ToolsRunner:
 
             tool_results = tools_state.to_tool_messages(encode_tool_result, batch_steps)
             conversation.add_tools_result(tool_results)
-            if any(step.ok is False for step in batch_steps):
-                conversation.add_user(
-                    "刚才有工具调用失败。请根据工具返回的 code/error/hint 调整下一步。"
-                    "如果原计划不再适用，请先说明调整后的计划，再继续执行。"
-                )
+            self.runtime_mode.after_tool_batch(conversation, tools_state, batch_steps)
             checkpoints.append(
-                tool_batch_completed_checkpoint(round_index, tools_state, len(calls), plan)
+                tool_batch_completed_checkpoint(
+                    round_index,
+                    tools_state,
+                    len(calls),
+                    self.runtime_mode.checkpoint_data(),
+                )
             )
 
         if tools_state.has_pending():

@@ -109,24 +109,30 @@ Benchmark：
 最终回答前能检查计划是否完成。
 
 
-Task Decomposition
+✓ Task Decomposition
 模型自主把用户请求拆成少量意图阶段
 
-Execution Plan
+✓ Execution Plan
 把计划注入模型上下文
 
-Execution Monitoring
+✓ Execution Monitoring
 工具调用后观察当前计划是否推进
 
-Dynamic Replan
-失败、信息不足、目标变化时改计划
+？ Dynamic Replan
+失败、信息不足、目标变化时改计划，计划的修改，好像有点问题。
+我觉得可能是设计的问题，当前是start-text-tools-texts-end，如果修改计划，是需要修改plan后续状态的，当前只做到
 
-Reflection
+✓ Reflection
 最终回答前检查计划是否完成
 
-补强 phase 1 checkpoint：
-- checkpoint 增加 plan 相关观测字段
-- run trace 中记录计划变化
+✓ 补强 phase 1 checkpoint：
+✓ - checkpoint 增加 plan 相关观测字段
+✓ - run trace 中记录计划变化
+
+
+遗留问题：
+用户 **只读/禁止修改** 约束跟随，当前的agent并不能很好的跟随。
+更稳定的工具失败动态重规划测试。
 
 ====================
 

@@ -4,8 +4,6 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from core.tools_state import ToolStep, ToolsState
-from core.plan import Plan
-
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}
 VERIFY_TOOL_NAMES = {"get_changes"}
 
@@ -68,29 +66,39 @@ def run_started_checkpoint(max_rounds: int) -> Checkpoint:
     )
 
 
-def run_completed_checkpoint(answer: str) -> Checkpoint:
+def run_completed_checkpoint(answer: str, extra_data: dict[str, Any] | None = None) -> Checkpoint:
+    data: dict[str, Any] = {
+        "answer_length": len(answer),
+    }
+    if extra_data:
+        data.update(extra_data)
     return Checkpoint(
         kind="run",
         reason="run_completed",
         message="运行完成。",
-        data={
-            "answer_length": len(answer),
-        },
+        data=data,
     )
 
 
-def tool_batch_completed_checkpoint(round_index: int, tools_state: ToolsState, batch_size: int, plan: Plan) -> Checkpoint:
+def tool_batch_completed_checkpoint(
+    round_index: int,
+    tools_state: ToolsState,
+    batch_size: int,
+    extra_data: dict[str, Any] | None = None,
+) -> Checkpoint:
+    data = {
+        "round_index": round_index,
+        "batch_size": batch_size,
+        "tools": tools_state.status(),
+        "verification": verification_status(tools_state),
+    }
+    if extra_data:
+        data.update(extra_data)
     return Checkpoint(
         kind="tool_batch",
         reason="tool_batch_completed",
         message=f"第 {round_index} 轮工具调用已完成。",
-        data={
-            "round_index": round_index,
-            "batch_size": batch_size,
-            "tools": tools_state.status(),
-            "verification": verification_status(tools_state),
-            "plan": plan.to_dict(),
-        },
+        data=data,
     )
 
 
