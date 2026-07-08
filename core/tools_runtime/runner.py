@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import time
-from core.checkpoint import (
+from core.tools_runtime.checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
     checkpoint_to_record,
@@ -20,8 +20,8 @@ from core.context_compactor import is_context_limit_error
 from core.messages import Conversation, LLMResponse
 from core.llm_client import LLMClient
 from core.tool_registry import get_tools
-from core.tools_executor import encode_tool_result, execute_tool
-from core.tools_state import ToolsState
+from core.tools_runtime.executor import encode_tool_result, execute_tool
+from core.tools_runtime.state import ToolsState
 from core.runtime_modes import PlainMode, RuntimeMode
 
 

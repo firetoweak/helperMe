@@ -104,23 +104,24 @@ Planning
 
 Benchmark：
 面对一个需要读文件、分析、修改、验证的任务，agent 能先生成短计划；
-执行过程中能在日志/checkpoint 中看到当前计划进度；
-工具失败或信息不足时能更新计划；
-最终回答前能检查计划是否完成。
+执行过程中能在日志/checkpoint 中看到当前计划进度；（完成）
+工具失败或信息不足时能更新计划；（不行×）
+最终回答前能检查计划是否完成。（完成）
 
 
 ✓ Task Decomposition
-模型自主把用户请求拆成少量意图阶段
+模型自主把用户请求拆成少量意图阶段.
+定义好固定的plan state，plan不仅仅是一段提示也是有状态的。
 
 ✓ Execution Plan
 把计划注入模型上下文
 
 ✓ Execution Monitoring
-工具调用后观察当前计划是否推进
+工具调用后观察当前计划是否推进，根据plan state
 
 ？ Dynamic Replan
 失败、信息不足、目标变化时改计划，计划的修改，好像有点问题。
-我觉得可能是设计的问题，当前是start-text-tools-texts-end，如果修改计划，是需要修改plan后续状态的，当前只做到
+我觉得可能是设计的问题，当前是start-text-tools-texts-end，如果修改计划，是需要修改plan后续状态的，当前只做到一次性的plan
 
 ✓ Reflection
 最终回答前检查计划是否完成
@@ -136,20 +137,63 @@ Benchmark：
 
 ====================
 
-
 Phase 3
 Long-running Agent
+
+把一次性 Agent.run 升级成可中断、可继续、可被人类介入的 Session Runtime。
 ====================
 
+Benchmark：
+一个多步骤任务开始后，系统能创建 session；
+执行到安全点时可以 interrupt；
+interrupt 后 messages/tool_call 链路仍然合法；
+用户追加 human feedback 后可以 resume；
+resume 后 agent 能基于原 conversation 继续完成任务；
+日志/checkpoint 能看到 session: running -> interrupted -> running -> completed。
+
+
 Session
+定义好会话状态，一个多步任务/多轮交互的状态。
+持久化到文件中，先搁置。
+
+Session 必须持有：
+1. conversation：恢复上下文
+2. status：运行状态
+3. checkpoints：可观察历史
+4. constraints：用户反馈/约束
+5. progress.last_safe_point：恢复位置
+6. facts：从工具结果提炼出的可信事实摘要
+
+
+重点：
+- conversation 是协议层消息历史；ToolsState 是 runtime 层工具账本。它们互相映射，但不是包含关系。
+- Facts 是为 Phase 4 Context Management 准备的最小语义状态。
+- session checkpoints 应该分层，不直接包含 tools runtime 的全部 checkpoints，只保存 session 层事件和 run 摘要。工具 runtime 的完整 checkpoint 留在 run result / run trace。
+
+本阶段只记录工具结果和用户反馈中明确可信的信息，不做复杂抽取。
+
 
 Interrupt
-
-Resume
+- 运行控制状态，不是具体业务策略
+- 可恢复的中断点：Agent 执行到某个关键节点时，主动暂停，把当前状态交给外部系统或用户，等外部输入后再从原位置继续执行。
+- Interrupt 不能只依赖 tool_call 链路完整，还要检查业务安全点。
+写入类工具成功后，必须完成 get_changes，才允许进入 interrupted/completed。
 
 Human Feedback
+- 中断后，人类可以补充意见，然后 agent 继续。
+- Runtime Feedback 与 Human Feedback 分离。
+- Runtime Feedback 是运行器对模型的控制反馈，例如要求补齐验证；
+- Human Feedback 是用户对目标或约束的反馈。
+二者都可以进入 conversation，但在 session event 中必须保留来源。
+
+Resume
+resume 不是崩溃恢复，也不是持久化恢复；
+只是同一进程内，基于 session 状态继续执行。
 
 Task Queue
+pending session
+active session
+先了解这俩状态
 
 ====================
 

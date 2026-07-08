@@ -3,7 +3,7 @@ import unittest
 from core.messages import Conversation, LLMResponse, ToolCall
 from core.planning import PlanningMode
 from core.runtime_modes import PlainMode
-from core.tools_runner import ToolsRunner
+from core.tools_runtime.runner import ToolsRunner
 
 
 class RecordingLLMClient:

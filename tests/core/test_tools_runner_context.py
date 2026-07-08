@@ -1,7 +1,7 @@
 import unittest
 
 from core.messages import Conversation
-from core.tools_runner import ToolsRunner
+from core.tools_runtime.runner import ToolsRunner
 
 
 class ContextLimitLLMClient:

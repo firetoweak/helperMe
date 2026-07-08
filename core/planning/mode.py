@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.messages import Conversation
-from core.tools_state import ToolStep, ToolsState
+from core.tools_runtime.state import ToolStep, ToolsState
 from core.planning.planner import build_runtime_messages, create_plan, format_plan_for_model
 
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}

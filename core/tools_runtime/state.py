@@ -193,4 +193,3 @@ class ToolsState:
                 "content": encoder(step.result),
             })
         return messages
-    

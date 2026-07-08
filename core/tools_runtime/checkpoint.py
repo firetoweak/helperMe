@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from core.tools_state import ToolStep, ToolsState
+from core.tools_runtime.state import ToolStep, ToolsState
+
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}
 VERIFY_TOOL_NAMES = {"get_changes"}
 
