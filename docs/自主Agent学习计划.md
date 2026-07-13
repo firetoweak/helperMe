@@ -180,7 +180,7 @@ Benchmark：
 interrupt 后 messages/tool_call 链路仍然合法；
 用户追加 human feedback 后可以 resume；
 resume 后 agent 能基于原 conversation 继续完成任务；
-日志/checkpoint 能看到 session: running -> interrupted -> running -> completed。
+日志/Event 能看到 session: running -> interrupted -> running -> completed。
 
 
 Session
@@ -190,18 +190,25 @@ Session
 Session 必须持有：
 1. conversation：恢复上下文
 2. status：运行状态
-3. checkpoints：可观察历史
+3. event：可观察历史
 4. constraints：用户反馈/约束
 5. progress.last_safe_point：恢复位置
-6. facts：从工具结果提炼出的可信事实摘要
 
 
 重点：
 - conversation 是协议层消息历史；ToolsState 是 runtime 层工具账本。它们互相映射，但不是包含关系。
-- Facts 是为 Phase 4 Context Management 准备的最小语义状态。
-- session checkpoints 应该分层，不直接包含 tools runtime 的全部 checkpoints，只保存 session 层事件和 run 摘要。工具 runtime 的完整 checkpoint 留在 run result / run trace。
+- facts 推迟到 Phase 4 Context Management：Phase 3 复用完整 conversation，没有独立 facts 的实际消费者，不提前复制工具结果或对话摘要。
+- session events 应该分层，不直接包含 tools runtime 的全部 events，只保存 session 层事件和 run 摘要。工具 runtime 的完整 event 留在 run result / run trace。
 
-本阶段只记录工具结果和用户反馈中明确可信的信息，不做复杂抽取。
+Run 摘要边界：
+- `SessionRunRecord` 只记录 run_id、状态、起止时间、结束原因等最小索引信息；
+- verification 是 ToolsRunner 内部的安全检查与 checkpoint/trace 观测数据，不复制到 `RunResult` 或 `SessionRunRecord`；
+- ToolsRunner 保证只有处于业务安全点的 run 才能 completed/interrupted；SessionRuntime 只根据最终 status/final_reason 驱动 Session 状态迁移；
+- 需要验证细节时，通过 run_id 查询 run trace，避免跨层重复保存快照。
+
+
+facts
+本阶段不提炼或保存 facts：工具结果留在 conversation/run trace；用户反馈按用途进入 conversation、event 或 constraints。
 
 
 Interrupt

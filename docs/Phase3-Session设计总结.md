@@ -18,8 +18,7 @@ Session 更关心长期任务状态：
 Session
 - status
 - conversation
-- facts
-- events/checkpoints
+- events
 - run summaries
 - constraints
 - progress
@@ -90,82 +89,42 @@ Session
 最好是完整 run 之后。
 ```
 
-### Facts
+### Facts（Phase 4 再实现）
 
-`facts` 是为 Phase 4 Context Management 做铺垫的语义状态。
+Phase 3 的 resume 复用完整 `conversation`，当前没有消费者需要独立的 facts。
+本阶段不定义 `SessionFact`，也不从 conversation/tool result 复制事实摘要。
 
-它不是完整工具输出，也不是 conversation 摘要全文。
+等 Phase 4 开始压缩或重建上下文时，再由 Context Management 负责事实的
+提取、去重、更新和按需注入，`Session` 只持有最终的唯一事实状态。
 
-它应该保存：
-
-```text
-从可信来源提炼出的、后续继续任务真正需要的最小事实。
-```
-
-不建议把完整工具输出直接塞进 facts。否则 facts 会变成第二份 conversation/tool log，后续仍然臃肿。
-
-适合放入 facts：
+分类边界：
 
 ```text
-- 用户明确要求“不要修改文件”
-- 已读取 core/agent.py
-- 已定位 Agent.run 的实现位置
-- get_changes 显示某文件发生了改动
-- 写入后已经完成验证
+“不要修改文件”                  -> constraint
+“已经读取 core/agent.py”         -> run event
+“已经调用 get_changes”           -> run event
+“配置的模型是 qwen27b”           -> fact
+“目标实现位于 core/agent.py”      -> fact
 ```
 
-不适合放入 facts：
+判断标准：facts 必须是 conversation 被压缩后，Agent 仍需知道的当前有效事实，
+而不是发生过的动作、用户约束、完整工具输出或无来源的模型判断。
 
-```text
-- 大段文件全文
-- 完整 tool result JSON
-- 模型主观判断：“代码整体还不错”
-- 无来源的总结：“这个方案应该可行”
-```
+### Event
 
-一个最小结构可以是：
-
-```python
-@dataclass
-class SessionFact:
-    kind: str
-    data: dict
-    source: str
-    confidence: str = "verified"
-```
-
-关键点是 `source`。以后 conversation 被压缩后，facts 仍然需要能说明自己来自哪里：
-
-```text
-tool:file_read
-tool:get_changes
-human_feedback
-runtime_feedback
-```
-
-判断标准：
-
-```text
-如果信息是为了复现工具调用细节，放 trace。
-如果信息是为了满足 messages 协议，放 conversation。
-如果信息是为了让 agent 压缩后还能继续理解任务，放 facts。
-```
-
-### Checkpoint / Event
-
-Session 层的 checkpoint 不应该直接包含 ToolsRunner 的全部 checkpoints。
+Session 层的 Event 不应该直接包含 ToolsRunner 的全部 Events。
 
 应该分层：
 
 ```text
-ToolsRunner checkpoints:
+ToolsRunner Events:
 记录一次 run 内部发生了什么。
 
-Session events/checkpoints:
+Session events:
 记录长期任务状态如何变化。
 ```
 
-ToolsRunner checkpoint 适合记录：
+ToolsRunner Event 适合记录：
 
 ```text
 - run_started
@@ -178,7 +137,7 @@ ToolsRunner checkpoint 适合记录：
 - max_rounds_exceeded
 ```
 
-Session event/checkpoint 适合记录：
+Session event 适合记录：
 
 ```text
 - session_created
@@ -198,18 +157,22 @@ Session event/checkpoint 适合记录：
 class SessionRunRecord:
     run_id: str
     status: str
-    started_at: str
-    ended_at: str | None
-    checkpoints_count: int
+    started_at: datetime
+    ended_at: datetime | None
     final_reason: str | None
-    verification: dict
-    plan_snapshot: dict | None
 ```
+
+`SessionRunRecord` 只保存连接 Session 与某次 run 所需的最小摘要，不复制
+ToolsRunner 的 checkpoint、工具事件或 verification 状态。
+
+verification 属于 ToolsRunner 的运行内安全检查：每轮结果可写入 checkpoint/trace，
+用于判断是否允许 completed/interrupted。SessionRuntime 只消费最终的
+`status` 与 `final_reason`；需要排查验证细节时，通过 `run_id` 查询对应 run trace。
 
 边界判断：
 
 ```text
-如果信息用于解释某一轮工具调用细节，放 runner checkpoint。
+如果信息用于解释某一轮工具调用细节，放 runner Event。
 如果信息用于解释 session 生命周期变化，放 session event。
 如果信息用于连接 session 与某次 run，放 run summary。
 ```
@@ -348,7 +311,7 @@ running
 -> completed / interrupted / blocked
 ```
 
-`runtime_feedback_injected` 不需要成为 Session.status，它只是一次事件或 checkpoint。
+`runtime_feedback_injected` 不需要成为 Session.status，它只是一次事件或 Event。
 
 ### Interrupt 状态流
 
@@ -429,7 +392,7 @@ resume 的基本流程：
 5. runtime feedback 会要求模型先 get_changes；
 6. 用户追加 human feedback 后可以 resume；
 7. resume 后 agent 能基于原 conversation 继续完成任务；
-8. 日志/checkpoint 能看到 session 状态变化：
+8. 日志/Event 能看到 session 状态变化：
    running -> interrupted -> running -> completed。
 ```
 
@@ -456,4 +419,3 @@ active session
 ```
 
 不要提前进入 Phase 5。
-
