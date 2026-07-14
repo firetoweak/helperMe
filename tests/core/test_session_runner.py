@@ -59,18 +59,21 @@ class SessionRuntimeStartTest(unittest.TestCase):
     def test_start_exposes_control_during_run_and_cleans_it_afterwards(self):
         session = self.runtime.create_session("session-1")
 
-        def run(*, conversation, user_message, control):
+        def run(*, conversation, user_message, max_rounds, control):
             self.assertIs(conversation, session.conversation)
             self.assertEqual(user_message, "完成任务")
+            self.assertEqual(max_rounds, 20)
             self.assertIs(self.runtime.active_controls[session.id], control)
             self.assertEqual(session.status, SessionStatus.RUNNING)
             return Mock(status=RunStatus.COMPLETED, final_reason=None)
 
         self.tools_runner.run.side_effect = run
 
-        record = self.runtime.start("session-1", "run-1", "完成任务")
+        outcome = self.runtime.start("session-1", "run-1", "完成任务")
+        record = outcome.record
 
         self.assertEqual(record.status, RunStatus.COMPLETED.value)
+        self.assertEqual(outcome.result.status, RunStatus.COMPLETED)
         self.assertIsNotNone(record.ended_at)
         self.assertIsNone(record.final_reason)
         self.assertEqual(self.runtime.active_controls, {})
@@ -92,7 +95,8 @@ class SessionRuntimeStartTest(unittest.TestCase):
                     final_reason=reason,
                 )
 
-                record = runtime.start(session.id, f"run-{index}", "完成任务")
+                outcome = runtime.start(session.id, f"run-{index}", "完成任务")
+                record = outcome.record
 
                 self.assertEqual(session.status, session_status)
                 self.assertEqual(session.events[-1].kind, event_kind)
@@ -128,11 +132,12 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
     def test_request_interrupt_marks_active_control_without_early_transition(self):
         session = self.runtime.create_session("session-1")
 
-        def run(*, conversation, user_message, control):
+        def run(*, conversation, user_message, max_rounds, control):
             self.runtime.request_interrupt(session.id, "用户请求暂停")
 
             self.assertTrue(control.interrupt_requested)
             self.assertEqual(control.interrupt_reason, "用户请求暂停")
+            self.assertEqual(max_rounds, 20)
             self.assertEqual(session.status, SessionStatus.RUNNING)
             return Mock(
                 status=RunStatus.INTERRUPTED,
@@ -141,7 +146,8 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
 
         self.tools_runner.run.side_effect = run
 
-        record = self.runtime.start(session.id, "run-1", "完成任务")
+        outcome = self.runtime.start(session.id, "run-1", "完成任务")
+        record = outcome.record
 
         self.assertEqual(session.status, SessionStatus.INTERRUPTED)
         self.assertEqual(record.status, RunStatus.INTERRUPTED.value)
@@ -191,9 +197,10 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         self.tools_runner.reset_mock()
 
     def test_resume_starts_new_run_from_interrupted_session(self):
-        def run(*, conversation, user_message, control):
+        def run(*, conversation, user_message, max_rounds, control):
             self.assertIs(conversation, self.session.conversation)
             self.assertEqual(user_message, "继续完成剩余任务")
+            self.assertEqual(max_rounds, 20)
             self.assertIs(self.runtime.active_controls[self.session.id], control)
             self.assertEqual(self.session.status, SessionStatus.RUNNING)
             self.assertEqual(self.session.events[-1].kind, SessionEventType.RESUMED)
@@ -202,11 +209,12 @@ class SessionRuntimeResumeTest(unittest.TestCase):
 
         self.tools_runner.run.side_effect = run
 
-        record = self.runtime.resume(
+        outcome = self.runtime.resume(
             self.session.id,
             "run-2",
             "继续完成剩余任务",
         )
+        record = outcome.record
 
         self.assertEqual(record.run_id, "run-2")
         self.assertEqual(record.status, RunStatus.COMPLETED.value)

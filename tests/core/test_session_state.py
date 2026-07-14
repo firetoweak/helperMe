@@ -115,6 +115,23 @@ class SessionStateTest(unittest.TestCase):
         self.assertEqual(session.status, SessionStatus.INTERRUPTED)
         self.assertNotIn(event, session.events)
 
+    def test_completed_can_start_new_run_in_same_session(self):
+        session = Session(id="session-1")
+        session.transition_to(
+            SessionStatus.RUNNING,
+            self.make_event(SessionEventType.STARTED, run_id="run-1"),
+        )
+        session.transition_to(
+            SessionStatus.COMPLETED,
+            self.make_event(SessionEventType.COMPLETED, run_id="run-1"),
+        )
+        started = self.make_event(SessionEventType.STARTED, run_id="run-2")
+
+        session.transition_to(SessionStatus.RUNNING, started)
+
+        self.assertEqual(session.status, SessionStatus.RUNNING)
+        self.assertIs(session.events[-1], started)
+
     def test_running_can_transition_to_each_terminal_status_with_matching_event(self):
         cases = (
             (SessionStatus.INTERRUPTED, SessionEventType.INTERRUPTED),

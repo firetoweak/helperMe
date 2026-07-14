@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 
-from core.tools_runtime.tools_runner import RunControl, ToolsRunner, RunStatus
+from dataclasses import dataclass
+
+from core.tools_runtime.tools_runner import (
+    RunControl,
+    RunResult,
+    ToolsRunner,
+    RunStatus,
+)
 from core.session_state import (
     Session,
     SessionEvent,
@@ -30,6 +37,12 @@ RUN_STATUS_MAPPING = {
         SessionEventType.FAILED,
     ),
 }
+
+
+@dataclass(frozen=True)
+class SessionRunOutcome:
+    record: SessionRunRecord
+    result: RunResult
 
 
 
@@ -61,7 +74,8 @@ class SessionRuntime:
         session_id: str,
         run_id: str,
         user_message: str,
-    ) -> SessionRunRecord:
+        max_rounds: int = 20,
+    ) -> SessionRunOutcome:
         if not session_id or not session_id.strip():
             raise ValueError("session_id 不能为空")
         if not run_id or not run_id.strip():
@@ -73,15 +87,20 @@ class SessionRuntime:
             raise KeyError(f"Session 不存在: {session_id}")
 
         session = self.sessions[session_id]
-        if session.status != SessionStatus.PENDING:
+        if session.status not in {
+            SessionStatus.PENDING,
+            SessionStatus.COMPLETED,
+        }:
             raise ValueError(
-                f"Session 状态必须为 pending，当前为: {session.status.value}"
+                "Session 状态必须为 pending 或 completed，"
+                f"当前为: {session.status.value}"
             )
 
         return self._begin_and_execute_run(
             session=session,
             run_id=run_id,
             user_message=user_message,
+            max_rounds=max_rounds,
             event_kind=SessionEventType.STARTED,
             event_reason="Session started",
         )
@@ -114,8 +133,9 @@ class SessionRuntime:
         self,
         session_id: str,
         run_id: str,
-        user_message: str
-    ) -> SessionRunRecord:
+        user_message: str,
+        max_rounds: int = 20,
+    ) -> SessionRunOutcome:
         if not session_id or not session_id.strip():
             raise ValueError("session_id 不能为空")
         if not run_id or not run_id.strip():
@@ -135,6 +155,7 @@ class SessionRuntime:
             session=session,
             run_id=run_id,
             user_message=user_message,
+            max_rounds=max_rounds,
             event_kind=SessionEventType.RESUMED,
             event_reason="Session resumed",
         )
@@ -144,9 +165,10 @@ class SessionRuntime:
         session: Session,
         run_id: str,
         user_message: str,
+        max_rounds: int,
         event_kind: SessionEventType,
         event_reason: str,
-    ) -> SessionRunRecord:
+    ) -> SessionRunOutcome:
         if session.id in self.active_controls:
             raise ValueError(f"Session 已有正在执行的 run: {session.id}")
         if any(record.run_id == run_id for record in session.run_records):
@@ -175,6 +197,7 @@ class SessionRuntime:
                 session=session,
                 run_record=run_record,
                 user_message=user_message,
+                max_rounds=max_rounds,
                 control=run_control,
             )
         finally:
@@ -186,12 +209,14 @@ class SessionRuntime:
         session: Session,
         run_record: SessionRunRecord,
         user_message: str,
+        max_rounds: int,
         control: RunControl,
-    ) -> SessionRunRecord:
+    ) -> SessionRunOutcome:
         try:
             result = self.tools_runner.run(
                 conversation=session.conversation,
                 user_message=user_message,
+                max_rounds=max_rounds,
                 control=control,
             )
         except Exception:
@@ -221,4 +246,4 @@ class SessionRuntime:
         run_record.ended_at = ended_at
         run_record.final_reason = result.final_reason
 
-        return run_record
+        return SessionRunOutcome(record=run_record, result=result)

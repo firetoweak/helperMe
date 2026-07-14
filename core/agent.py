@@ -4,9 +4,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from core.messages import Conversation
 from core.llm_client import LLMClient
+from core.session_runner import SessionRuntime
+from core.session_state import SessionStatus
 # 注册
 import tools
 from core.tools_runtime.tools_checkpoint import checkpoint_to_record
@@ -527,14 +529,50 @@ def _write_run_log(trace: dict[str, Any], path: Path | None = None) -> None:
 class Agent:
     def __init__(self, model: str = "default", runtime_mode: RuntimeMode | None = None):
         self.llm_client = LLMClient()
-        self.conversation = Conversation()
         self.model = model
-        self.tools_runner = ToolsRunner(self.llm_client, self.model, runtime_mode=runtime_mode)
+        tools_runner = ToolsRunner(
+            self.llm_client,
+            self.model,
+            runtime_mode=runtime_mode,
+        )
+        self.session_runtime = SessionRuntime(tools_runner)
+        self.session = self.session_runtime.create_session(
+            f"session-{uuid4().hex}"
+        )
+        self.conversation = self.session.conversation
         self.last_result: RunResult | None = None
 
     def run(self, user_message: str, max_rounds: int = 20):
-        self.last_result = self.tools_runner.run(self.conversation, user_message, max_rounds)
+        run_id = f"run-{uuid4().hex}"
+        if self.session.status in {
+            SessionStatus.PENDING,
+            SessionStatus.COMPLETED,
+        }:
+            outcome = self.session_runtime.start(
+                self.session.id,
+                run_id,
+                user_message,
+                max_rounds,
+            )
+        elif self.session.status == SessionStatus.INTERRUPTED:
+            outcome = self.session_runtime.resume(
+                self.session.id,
+                run_id,
+                user_message,
+                max_rounds,
+            )
+        else:
+            raise ValueError(
+                "Agent.run 仅允许在 pending/completed Session 启动新 run，"
+                "或恢复 interrupted Session，"
+                f"当前状态: {self.session.status.value}"
+            )
+
+        self.last_result = outcome.result
         return self.last_result.answer
+
+    def request_interrupt(self, reason: str | None = None) -> None:
+        self.session_runtime.request_interrupt(self.session.id, reason)
 
 # if __name__ == "__main__":
 #     agent = Agent(model="qwen27b")

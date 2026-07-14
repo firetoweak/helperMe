@@ -267,6 +267,13 @@ resume 不是崩溃恢复，也不是持久化恢复；
 resume 接收新的 user_message，但不判断或复制其语义；消息由 ToolsRunner 写入原 conversation。
 本阶段不设计 Task Queue；active_controls 只管理当前同步 run 的控制信号，不是调度队列。
 
+✓ Agent 接入 SessionRuntime：
+- Agent 不再直接调用或持有 ToolsRunner；ToolsRunner 由 SessionRuntime 编排。
+- Agent 的 conversation 指向当前 Session 持有的 conversation，pending 时 start，interrupted 时 resume。
+- completed 表示当前 run 已完成并等待下一条 user_message；下一轮在同一 Session、同一 conversation 中重新进入 running。interrupted 才使用 resume；blocked、failed 仍是终态。
+- SessionRuntime 使用临时 SessionRunOutcome 向调用方返回 RunResult 与 SessionRunRecord；Outcome 不写入 Session，避免长期状态重复。
+- 跨层测试已验证 Agent -> SessionRuntime -> ToolsRunner 的 interrupt/resume、conversation 协议完整性及完整 Session Event 流。
+
 ====================
 
 
