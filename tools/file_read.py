@@ -43,6 +43,8 @@ class GrepInput(BaseModel):
 """)
 def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
     return {
+        "ok": True,
+        "code": "WORKSPACE_INFO_READ",
         "workspace_root": WORKSPACE.resolve().as_posix(),
         "platform": sys.platform,
     }
@@ -65,13 +67,13 @@ def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
 def glob(raw: GlobInput) -> dict[str, Any]:
     root, err = _resolve_in_workspace(raw.path, expect="dir")
     if err:
-        return err
+        return {"ok": False, **err}
 
     pattern = raw.pattern.replace("\\", "/")
     if Path(pattern).is_absolute():
-        return {"error": "pattern 必须是相对 path 的匹配模式，不能是绝对路径", "code": "ABSOLUTE_PATTERN"}
+        return {"ok": False, "error": "pattern 必须是相对 path 的匹配模式，不能是绝对路径", "code": "ABSOLUTE_PATTERN"}
     if not pattern.strip():
-        return {"error": "pattern 不能为空", "code": "EMPTY_PATTERN"}
+        return {"ok": False, "error": "pattern 不能为空", "code": "EMPTY_PATTERN"}
 
     ws = WORKSPACE.resolve()
     root = root.resolve()
@@ -97,6 +99,8 @@ def glob(raw: GlobInput) -> dict[str, Any]:
     truncated = total > raw.max_results
     matches = matches[:raw.max_results]
     return {
+        "ok": True,
+        "code": "GLOB_COMPLETED",
         "pattern": raw.pattern,
         "path": raw.path,
         "matches": matches,
@@ -123,18 +127,25 @@ def glob(raw: GlobInput) -> dict[str, Any]:
 """, input_model=GrepInput)
 def grep(raw: GrepInput) -> dict[str, Any]:
     if shutil.which("rg") is None:
-        # 后续版本扩展成python 兜底方式
-        return {"error": "未找到 rg，请先安装: winget install BurntSushi.ripgrep.MSVC"}
+        return {
+            "ok": False,
+            "code": "RG_NOT_FOUND",
+            "error": "未找到 rg，请先安装: winget install BurntSushi.ripgrep.MSVC",
+        }
 
     p, err = _resolve_in_workspace(raw.path, expect="any")
 
     if err:
-        return err
+        return {"ok": False, **err}
     cmd = ["rg", "--json", "-C", str(raw.context_lines), raw.query, str(p)]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
 
     if proc.returncode == 2:
-        return {"error": proc.stderr.strip() or "rg 执行失败"}
+        return {
+            "ok": False,
+            "code": "RG_FAILED",
+            "error": proc.stderr.strip() or "rg 执行失败",
+        }
     
     hits = []
     current_file = None
@@ -175,6 +186,8 @@ def grep(raw: GrepInput) -> dict[str, Any]:
                     break
 
     return {
+        "ok": True,
+        "code": "GREP_COMPLETED",
         "path": _to_workspace_relative(p),
         "query": raw.query,
         "context_lines": raw.context_lines,
@@ -208,11 +221,11 @@ def read_file(raw: ReadFileInput) -> dict[str, Any]:
     max_length= 3000 # 默认最大读取字符数，超出会截断
     p, err = _resolve_in_workspace(raw.path, expect="file")
     if err:
-        return err
+        return {"ok": False, **err}
     if raw.offset < 1:
-        return {"error": "offset 必须大于等于 1", "path": _to_workspace_relative(p)}
+        return {"ok": False, "code": "INVALID_OFFSET", "error": "offset 必须大于等于 1", "path": _to_workspace_relative(p)}
     if raw.limit < 1:
-        return {"error": "limit 必须大于等于 1", "path": _to_workspace_relative(p)}
+        return {"ok": False, "code": "INVALID_LIMIT", "error": "limit 必须大于等于 1", "path": _to_workspace_relative(p)}
 
     try:    
         with open(p, "r", encoding="utf-8") as f:
@@ -220,6 +233,8 @@ def read_file(raw: ReadFileInput) -> dict[str, Any]:
             total_lines = len(lines)
             if raw.offset > total_lines:
                 return {
+                    "ok": False,
+                    "code": "OFFSET_OUT_OF_RANGE",
                     "error": f"起始行号超出文件总行数: {_to_workspace_relative(p)}",
                     "total_lines": total_lines,
                     "path":_to_workspace_relative(p),
@@ -256,6 +271,8 @@ def read_file(raw: ReadFileInput) -> dict[str, Any]:
             else:
                 next_offset = None
             return {
+                "ok": True,
+                "code": "FILE_READ",
                 "path": _to_workspace_relative(p),
                 "content": content,
                 "start_line": raw.offset,
@@ -266,6 +283,6 @@ def read_file(raw: ReadFileInput) -> dict[str, Any]:
                 "truncated_by": truncated_by,
             }
     except UnicodeDecodeError:
-        return {"error": f"无法以文本读取（可能是二进制文件）: {_to_workspace_relative(p)}"}
+        return {"ok": False, "code": "NOT_A_TEXT_FILE", "error": f"无法以文本读取（可能是二进制文件）: {_to_workspace_relative(p)}"}
     except OSError as e:
-        return {"error": f"文件系统错误: {e}"}
+        return {"ok": False, "code": "FILE_SYSTEM_ERROR", "error": f"文件系统错误: {e}"}

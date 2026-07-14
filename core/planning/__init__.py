@@ -3,8 +3,8 @@ from core.planning.planner import (
     build_plan_messages,
     build_runtime_messages,
     create_plan,
-    fallback_plan,
     format_plan_for_model,
+    InvalidPlanResponse,
     parse_plan_response,
 )
 from core.planning.mode import PlanningMode
@@ -17,7 +17,7 @@ __all__ = [
     "build_plan_messages",
     "build_runtime_messages",
     "create_plan",
-    "fallback_plan",
     "format_plan_for_model",
+    "InvalidPlanResponse",
     "parse_plan_response",
 ]

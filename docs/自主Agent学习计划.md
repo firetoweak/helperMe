@@ -3,6 +3,11 @@
 每章节 初次只做核心原型，在后续章节做的时候，发现需要继续补充前边的章节的技术的时候，就进行回顾补充。
 如果新 Phase 暴露出旧 Phase 的不足，就回补旧模块。但回补只服务当前 Phase，不做大而全重构。
 
+## Rule 同步区
+
+- 必须遵循 Early Fail 原则：当输入、状态或调用契约不成立时，应在责任边界立即明确失败。
+- 禁止为了跑通当前局部模块而添加静默兜底、隐式默认值或自动生成关键关联数据。兜底不得掩盖上层调用错误，否则会破坏整体设计并显著增加调试成本。
+
 ====================
 
 Phase 0
@@ -78,9 +83,8 @@ ToolsState 是账本。ToolsRunner 是执行控制者，Checkpoint/RunResult 是
 ToolsState.compact_completed() ~~目前只是状态层截断，还没有和 conversation.messages 的上下文压缩真正打通~~
 超上下文直接报错，本期不做上下文压缩截断这些上下文优化操作。
 
-✓ 工具链路检查
-已经有了，toolsState 里
-工具链路修复，还没有
+✓ 工具链路检查（初版）
+初版放在 ToolsState 中；Phase 3 回顾时发现协议校验不属于账本职责，后续已拆出。
 
 ✓ Runner 退出结果
 
@@ -88,6 +92,35 @@ ToolsState.compact_completed() ~~目前只是状态层截断，还没有和 conv
 checkpoint 主要是run内报告，还不是可恢复执行点。
 
 Phase 1 已完成最小可靠 tool-calling runtime：工具调用循环已从 Agent 中抽出，工具链状态可检查、可报告、可在异常/预算耗尽时安全停止。上下文压缩、恢复执行、长期会话不属于本阶段。
+
+### Phase 3 回顾补强记录（2026.07.14）
+
+设计 SessionRuntime 时，上层对 interrupt、resume 和安全停止的需求暴露出 Phase 1 初版边界不清：ToolsState 混入 messages 协议处理，Checkpoint 混入停止安全判断，ToolStep 重复保存 result/ok/code/error，RunResult 使用含糊的 terminated，并且缺少供上层请求安全中断的控制入口。
+
+本次只为 Phase 3 回补 Tools Runtime，不扩展调度、持久化、Context/Facts 或多 Agent：
+
+- ToolsState：仅保存一次 run 内的工具步骤账本；ToolStep.result 是唯一结果源，ok/code/error 改为派生属性；每个 call_id 只能记录一次 result。
+- ToolsProtocol：独立负责 assistant tool_calls 与 tool results 的消息链校验及 tool message 转换。
+- StopGuard：独立判断 protocol_safe 和 business_safe；只有消息链完整，并且最后一次成功写入后完成 get_changes，才允许 completed/interrupted。
+- Checkpoint：只记录 run 内观察点，不再计算安全规则；Session 层生命周期记录统一称为 Event。
+- RunResult：使用 completed/interrupted/blocked/failed 四种 RunStatus；final_reason 从最终 Checkpoint 派生，不重复保存 error。
+- RunControl：提供 interrupt_requested 控制信号；ToolsRunner 只在完整 tool batch 和业务安全点返回 interrupted。
+- ToolsRunner：只负责编排模型调用、工具执行、协议、安全、Checkpoint 和统一 RunResult 出口；ToolsState 不向 SessionRuntime 泄漏。
+
+回补后的职责关系：
+
+```text
+ToolsRunner
+├─ ToolsState：工具账本
+├─ ToolsProtocol：消息协议
+├─ ToolsExecutor：工具执行
+├─ StopGuard：停止安全
+└─ Checkpoint：run 内观测
+
+ToolsRunner -> RunResult -> SessionRuntime
+```
+
+验证：完整测试 41 项通过；未验证写入不能完成或安全中断，中断后的 tool_call/result 消息链保持合法。
 
 ====================
 
@@ -97,6 +130,7 @@ Planning
 「让模型有显式计划」，不是做任务调度系统
 给模型看的plan文本 + 轻量结构化外壳。plan 是“行动前的认知脚手架”，不是“可恢复执行状态”
 为什么做： 当前 agent 执行多步骤任务时，容易直接进入工具调用，缺少显式任务分解和执行进度判断，导致跑偏、漏步骤或过早总结。
+
 ====================
 
 目标：让 agent 在执行任务前形成短计划，并在执行过程中根据工具结果更新计划判断。
@@ -134,12 +168,14 @@ Benchmark：
 遗留问题：
 用户 **只读/禁止修改** 约束跟随，当前的agent并不能很好的跟随。
 更稳定的工具失败动态重规划测试。
+
 ====================
 
 Phase 2.5
 Console Multi-turn Harness
 
 目标：为 Phase 3 Session Runtime 提供最小多轮观察入口。
+
 ====================
 
 把当前单轮 Agent.run 测试方式，补成一个同进程内的多轮控制台对话入口，用于观察 conversation 累积、session 状态流和 human feedback 注入。
@@ -172,6 +208,7 @@ Phase 3
 Long-running Agent
 
 把一次性 Agent.run 升级成可中断、可继续、可被人类介入的 Session Runtime。
+
 ====================
 
 Benchmark：

@@ -95,7 +95,7 @@ def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
             return {
                 "ok": False,
                 "code": "FUZZY_MATCH_ONLY",
-                "message": "old_block 未精确匹配，但找到一个候选。请用 original_block 重新调用 apply_patch。",
+                "hint": "old_block 未精确匹配，但找到一个候选。请用 original_block 重新调用 apply_patch。",
                 "candidate": candidates[0],
                 "path": _to_workspace_relative(p),
             }

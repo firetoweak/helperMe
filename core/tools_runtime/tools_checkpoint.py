@@ -90,6 +90,23 @@ def context_length_exceeded_checkpoint(*, round_index: int, error: str) -> Check
     )
 
 
+def invalid_llm_response_checkpoint(
+    *,
+    round_index: int,
+    reason: str,
+    error: str,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="run",
+        reason=reason,
+        message="运行已停止：LLM 返回了非法响应。",
+        data={
+            "round_index": round_index,
+            "error": error,
+        },
+    )
+
+
 def budget_stop_checkpoint(max_rounds: int, tools_state: ToolsState) -> Checkpoint:
     tools_status = tools_state.summary()
     verify_status = verification_status(tools_state)
@@ -127,6 +144,13 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             f"轮次：{checkpoint.data['round_index']}。",
             f"错误：{checkpoint.data['error']}",
             f"提示：{checkpoint.data['hint']}",
+        ])
+
+    if checkpoint.reason in {"empty_model_response", "invalid_llm_response"}:
+        return "\n".join([
+            checkpoint.message,
+            f"轮次：{checkpoint.data['round_index']}。",
+            f"错误：{checkpoint.data['error']}",
         ])
 
     if checkpoint.reason == "verification_required":

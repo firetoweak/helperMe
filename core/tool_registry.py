@@ -54,6 +54,8 @@ def register_tool(description: str, input_model: type[BaseModel] = EmptyInput):
             input_model=input_model,
             handler=fn,
         )
+        if spec.name in _TOOL_SPECS:
+            raise ValueError(f"duplicate tool registration: {spec.name}")
         _TOOL_SPECS[spec.name] = spec
         return fn
 

@@ -9,6 +9,10 @@ MIN_PLAN_STEPS = 2
 MAX_PLAN_STEPS = 6
 
 
+class InvalidPlanResponse(ValueError):
+    pass
+
+
 def create_plan(
     user_message: str,
     conversation,
@@ -16,32 +20,19 @@ def create_plan(
     model: str | None = None,
 ) -> Plan:
     if llm_client is None or model is None:
-        return fallback_plan(user_message)
+        raise ValueError("create_plan requires llm_client and model")
 
-    try:
-        response = llm_client.chat(
-            build_plan_messages(user_message, conversation),
-            model,
-            tools=None,
-        )
-    except Exception:
-        return fallback_plan(user_message)
+    response = llm_client.chat(
+        build_plan_messages(user_message, conversation),
+        model,
+        tools=None,
+    )
 
     if getattr(response, "type", None) != "text":
-        return fallback_plan(user_message)
+        raise InvalidPlanResponse("planner response type must be text")
+    if not isinstance(response.content, str) or not response.content.strip():
+        raise InvalidPlanResponse("planner response content must be non-empty text")
     return parse_plan_response(user_message, response.content)
-
-
-def fallback_plan(user_message: str) -> Plan:
-    return Plan(
-        goal=user_message,
-        steps=[
-            PlanStep(id=1, text="理解用户目标和上下文"),
-            PlanStep(id=2, text="收集完成任务所需的信息"),
-            PlanStep(id=3, text="执行必要操作"),
-            PlanStep(id=4, text="验证结果并总结"),
-        ],
-    )
 
 
 def format_plan_for_model(plan: Plan) -> str:
@@ -101,34 +92,38 @@ def build_plan_messages(user_message: str, conversation) -> list[dict[str, Any]]
 def parse_plan_response(user_message: str, content: str) -> Plan:
     try:
         payload = json.loads(content)
-    except json.JSONDecodeError:
-        return fallback_plan(user_message)
+    except json.JSONDecodeError as exc:
+        raise InvalidPlanResponse(f"planner returned invalid JSON: {exc}") from exc
 
     if not isinstance(payload, dict):
-        return fallback_plan(user_message)
+        raise InvalidPlanResponse("planner response must be a JSON object")
 
     goal = payload.get("goal")
     if not isinstance(goal, str) or not goal.strip():
-        goal = user_message
-    else:
-        goal = goal.strip()
+        raise InvalidPlanResponse("planner goal must be a non-empty string")
+    goal = goal.strip()
 
     raw_steps = payload.get("steps")
     if not isinstance(raw_steps, list):
-        return fallback_plan(user_message)
+        raise InvalidPlanResponse("planner steps must be a list")
 
     step_texts = []
-    for item in raw_steps:
-        if not isinstance(item, str):
-            continue
+    for index, item in enumerate(raw_steps):
+        if not isinstance(item, str) or not item.strip():
+            raise InvalidPlanResponse(
+                f"planner step[{index}] must be a non-empty string"
+            )
         text = item.strip()
-        if text:
-            step_texts.append(text)
+        step_texts.append(text)
 
     if len(step_texts) < MIN_PLAN_STEPS:
-        return fallback_plan(user_message)
-
-    step_texts = step_texts[:MAX_PLAN_STEPS]
+        raise InvalidPlanResponse(
+            f"planner must return at least {MIN_PLAN_STEPS} steps"
+        )
+    if len(step_texts) > MAX_PLAN_STEPS:
+        raise InvalidPlanResponse(
+            f"planner must return at most {MAX_PLAN_STEPS} steps"
+        )
 
     return Plan(
         goal=goal,
@@ -140,5 +135,4 @@ def parse_plan_response(user_message: str, content: str) -> Plan:
 
 
 if __name__ == "__main__":
-    plan = create_plan("帮我优化工具描述", None)
-    print(format_plan_for_model(plan))
+    raise SystemExit("planner.py is not a standalone entry point")

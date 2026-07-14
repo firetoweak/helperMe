@@ -9,5 +9,9 @@ from datetime import date
     - 撰写记录、规划日程时需要真实时间戳
     """,
 )
-def get_today_date(_: EmptyInput) -> str:
-    return {"today": date.today().isoformat()}
+def get_today_date(_: EmptyInput) -> dict:
+    return {
+        "ok": True,
+        "code": "DATE_READ",
+        "today": date.today().isoformat(),
+    }

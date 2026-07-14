@@ -3,7 +3,7 @@
 
 from typing import Any
 from openai import OpenAI
-from core.messages import LLMResponse, ToolCall
+from core.messages import InvalidLLMResponse, LLMResponse, ToolCall
 import httpx
 
 class LLMClient:
@@ -41,7 +41,7 @@ class LLMClient:
         return response.choices[0].message
 
 
-    def _parse_response(self, response: Any) -> dict[str, Any]:
+    def _parse_response(self, response: Any) -> LLMResponse:
         """
         把 SDK 返回的 response 转成统一格式，并写入 messages。
         """
@@ -58,4 +58,10 @@ class LLMClient:
                 ]
             )
 
-        return LLMResponse(type="text", content=response.content)
+        if isinstance(response.content, str) and response.content.strip():
+            return LLMResponse(type="text", content=response.content)
+
+        raise InvalidLLMResponse(
+            "empty_model_response",
+            "model response contains neither tool calls nor non-empty text",
+        )

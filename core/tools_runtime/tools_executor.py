@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from core.tool_registry import TOOL_SPECS
 
-RESERVED_KEYS = frozenset({"ok", "code", "data", "error", "hint", "message"})
+RESERVED_KEYS = frozenset({"ok", "code", "data", "error", "hint"})
 
 
 def _as_str_error(error: Any) -> str | None:
@@ -17,53 +17,34 @@ def _as_str_error(error: Any) -> str | None:
 
 
 def normalize_tool_result(result: Any) -> dict[str, Any]:
-    """将任意工具 handler 返回值规范为统一协议。"""
-    if isinstance(result, dict) and set(result.keys()) <= RESERVED_KEYS and "ok" in result:
-        ok = bool(result["ok"])
-        return {
-            "ok": ok,
-            "code": str(result.get("code") or ("OK" if ok else "ERROR")),
-            "data": result.get("data"),
-            "error": _as_str_error(result.get("error")),
-            "hint": result.get("hint"),
-        }
+    """校验并规范工具 handler 的显式结果协议。"""
+    if not isinstance(result, dict):
+        return _invalid_tool_result("handler 返回值必须是 dict")
+    if type(result.get("ok")) is not bool:
+        return _invalid_tool_result("handler 必须显式返回布尔字段 ok")
+    if not isinstance(result.get("code"), str) or not result["code"].strip():
+        return _invalid_tool_result("handler 必须显式返回非空字符串字段 code")
 
-    if isinstance(result, dict) and "ok" in result:
-        ok = bool(result["ok"])
-        extra = {k: v for k, v in result.items() if k not in RESERVED_KEYS}
-        return {
-            "ok": ok,
-            "code": str(result.get("code") or ("OK" if ok else "ERROR")),
-            "data": extra or None,
-            "error": _as_str_error(result.get("error")),
-            "hint": result.get("hint") or result.get("message"),
-        }
-
-    if isinstance(result, dict) and "error" in result:
-        extra = {k: v for k, v in result.items() if k not in ("error", "code", "hint", "message")}
-        return {
-            "ok": False,
-            "code": str(result.get("code") or "ERROR"),
-            "data": extra or None,
-            "error": _as_str_error(result["error"]),
-            "hint": result.get("hint") or result.get("message"),
-        }
-
-    if isinstance(result, dict):
-        return {
-            "ok": True,
-            "code": "OK",
-            "data": result,
-            "error": None,
-            "hint": None,
-        }
+    extra = {k: v for k, v in result.items() if k not in RESERVED_KEYS}
+    if "data" in result and extra:
+        return _invalid_tool_result("handler 不能同时返回 data 和顶层扩展字段")
 
     return {
-        "ok": True,
-        "code": "OK",
-        "data": {"value": result},
-        "error": None,
-        "hint": None,
+        "ok": result["ok"],
+        "code": result["code"],
+        "data": result.get("data", extra or None),
+        "error": _as_str_error(result.get("error")),
+        "hint": result.get("hint"),
+    }
+
+
+def _invalid_tool_result(reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "code": "INVALID_TOOL_RESULT",
+        "data": None,
+        "error": reason,
+        "hint": "修正工具 handler，使其显式返回合法的 ok/code 结果协议。",
     }
 
 
@@ -84,8 +65,18 @@ def execute_tool(tool_name: str, tool_arguments: str) -> dict[str, Any]:
             }
         )
 
+    if not tool_arguments or not tool_arguments.strip():
+        return normalize_tool_result(
+            {
+                "ok": False,
+                "code": "INVALID_JSON",
+                "error": "tool arguments 不能为空；无参工具也必须显式传入 {}",
+                "hint": "传入合法的 JSON object。",
+            }
+        )
+
     try:
-        payload = json.loads(tool_arguments or "{}")
+        payload = json.loads(tool_arguments)
         data = spec.input_model.model_validate(payload)
         result = spec.handler(data)
         return normalize_tool_result(result)

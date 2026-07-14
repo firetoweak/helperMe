@@ -8,6 +8,7 @@ from core.tools_runtime.tools_checkpoint import (
     budget_stop_checkpoint,
     context_length_exceeded_checkpoint,
     format_checkpoint,
+    invalid_llm_response_checkpoint,
     llm_error_checkpoint,
     llm_retry_checkpoint,
     message_chain_invalid_checkpoint,
@@ -18,7 +19,7 @@ from core.tools_runtime.tools_checkpoint import (
     verification_required_checkpoint,
 )
 from core.context_compactor import is_context_limit_error
-from core.messages import Conversation, LLMResponse
+from core.messages import Conversation, InvalidLLMResponse, LLMResponse
 from core.llm_client import LLMClient
 from core.tool_registry import get_tools
 from core.tools_runtime.stop_guard import evaluate_stop_safety
@@ -105,6 +106,12 @@ class ToolsRunner:
                     self.model,
                     get_tools(),
                 )
+            except InvalidLLMResponse as exc:
+                return invalid_llm_response_checkpoint(
+                    round_index=round_index,
+                    reason=exc.code,
+                    error=str(exc),
+                )
             except Exception as exc:
                 last_error = str(exc)
                 if is_context_limit_error(last_error):
@@ -181,10 +188,6 @@ class ToolsRunner:
 
             conversation.add_assistant(response)
             if response.type == "text":
-                if not response.content:
-                    conversation.add_user("你刚才返回了空内容。请继续完成任务：如果需要修改就调用工具；如果已完成就给出总结。")
-                    continue
-
                 if self.runtime_mode.on_assistant_text(conversation):
                     continue
 
@@ -219,7 +222,7 @@ class ToolsRunner:
                     checkpoints=checkpoints,
                 )
 
-            calls = response.calls or []
+            calls = response.calls
             batch_steps = tools_state.add_calls(calls)
 
             for call in calls:

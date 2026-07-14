@@ -39,7 +39,8 @@ def get_changes(raw: GetChangesInput) -> dict[str, Any]:
     )
     if repo_check.returncode != 0:
         return {
-            "ok": True,
+            "ok": False,
+            "code": "VERIFICATION_BACKEND_UNAVAILABLE",
             "source": "no_git_backend",
             "changed": None,
             "status": "",
@@ -72,6 +73,11 @@ def get_changes(raw: GetChangesInput) -> dict[str, Any]:
     diff = diff_proc.stdout
     return {
         "ok": status_proc.returncode == 0 and diff_proc.returncode == 0,
+        "code": (
+            "CHANGES_READ"
+            if status_proc.returncode == 0 and diff_proc.returncode == 0
+            else "GIT_CHANGES_FAILED"
+        ),
         "source": "git",
         "changed": bool(status.strip() or diff.strip()),
         "status": status,

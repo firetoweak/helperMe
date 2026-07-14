@@ -1,12 +1,15 @@
 import unittest
+from unittest.mock import Mock
 
 from core.planning import (
     build_plan_messages,
     build_runtime_messages,
     create_plan,
     format_plan_for_model,
+    InvalidPlanResponse,
     parse_plan_response,
 )
+from core.messages import LLMResponse
 
 
 class PlannerTest(unittest.TestCase):
@@ -33,13 +36,30 @@ class PlannerTest(unittest.TestCase):
         self.assertEqual(messages[0]["role"], "user")
 
     def test_create_and_format_plan(self):
-        plan = create_plan("帮我分析项目", None)
+        llm_client = Mock()
+        llm_client.chat.return_value = LLMResponse(
+            type="text",
+            content='{"goal": "帮我分析项目", "steps": ["读取项目", "分析结构"]}',
+        )
+
+        plan = create_plan("帮我分析项目", None, llm_client, "test-model")
         text = format_plan_for_model(plan)
 
         self.assertEqual(plan.goal, "帮我分析项目")
-        self.assertEqual(len(plan.steps), 4)
+        self.assertEqual(len(plan.steps), 2)
         self.assertIn("当前执行计划", text)
         self.assertIn("[pending]", text)
+
+    def test_create_plan_requires_explicit_dependencies(self):
+        with self.assertRaises(ValueError):
+            create_plan("帮我分析项目", None)
+
+    def test_create_plan_propagates_llm_failure(self):
+        llm_client = Mock()
+        llm_client.chat.side_effect = RuntimeError("planner unavailable")
+
+        with self.assertRaisesRegex(RuntimeError, "planner unavailable"):
+            create_plan("帮我分析项目", None, llm_client, "test-model")
 
     def test_build_plan_messages_requires_json_only(self):
         messages = build_plan_messages("帮我分析项目", None)
@@ -62,30 +82,35 @@ class PlannerTest(unittest.TestCase):
         self.assertEqual([step.id for step in plan.steps], [1, 2, 3])
         self.assertTrue(all(step.status == "pending" for step in plan.steps))
 
-    def test_parse_invalid_json_falls_back(self):
-        plan = parse_plan_response("原始请求", "不是 JSON")
+    def test_parse_invalid_json_fails(self):
+        with self.assertRaises(InvalidPlanResponse):
+            parse_plan_response("原始请求", "不是 JSON")
 
-        self.assertEqual(plan.goal, "原始请求")
-        self.assertEqual(len(plan.steps), 4)
+    def test_parse_too_few_steps_fails(self):
+        with self.assertRaises(InvalidPlanResponse):
+            parse_plan_response(
+                "原始请求",
+                '{"goal": "目标", "steps": ["只有一步"]}',
+            )
 
-    def test_parse_too_few_steps_falls_back(self):
-        plan = parse_plan_response(
-            "原始请求",
-            '{"goal": "目标", "steps": ["只有一步"]}',
+    def test_parse_too_many_steps_fails(self):
+        with self.assertRaises(InvalidPlanResponse):
+            parse_plan_response(
+                "原始请求",
+                '{"goal": "目标", "steps": ["1", "2", "3", "4", "5", "6", "7"]}',
+            )
+
+    def test_parse_invalid_goal_or_step_fails(self):
+        invalid_responses = (
+            '{"goal": "", "steps": ["1", "2"]}',
+            '{"goal": "目标", "steps": ["1", null]}',
+            '{"goal": "目标", "steps": ["1", ""]}',
         )
 
-        self.assertEqual(plan.goal, "原始请求")
-        self.assertEqual(len(plan.steps), 4)
-
-    def test_parse_too_many_steps_is_truncated(self):
-        plan = parse_plan_response(
-            "原始请求",
-            '{"goal": "目标", "steps": ["1", "2", "3", "4", "5", "6", "7"]}',
-        )
-
-        self.assertEqual(plan.goal, "目标")
-        self.assertEqual(len(plan.steps), 6)
-        self.assertEqual(plan.steps[-1].text, "6")
+        for content in invalid_responses:
+            with self.subTest(content=content):
+                with self.assertRaises(InvalidPlanResponse):
+                    parse_plan_response("原始请求", content)
 
 
 if __name__ == "__main__":
