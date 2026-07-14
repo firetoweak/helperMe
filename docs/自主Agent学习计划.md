@@ -215,7 +215,7 @@ Benchmark：
 一个多步骤任务开始后，系统能创建 session；
 执行到安全点时可以 interrupt；
 interrupt 后 messages/tool_call 链路仍然合法；
-用户追加 human feedback 后可以 resume；
+用户追加新的 user_message 后可以 resume；
 resume 后 agent 能基于原 conversation 继续完成任务；
 日志/Event 能看到 session: running -> interrupted -> running -> completed。
 
@@ -228,14 +228,17 @@ Session 必须持有：
 1. conversation：恢复上下文
 2. status：运行状态
 3. event：可观察历史
-4. constraints：用户反馈/约束
-5. progress.last_safe_point：恢复位置
+4. run_records：历次 run 的最小摘要
 
 
 重点：
 - conversation 是协议层消息历史；ToolsState 是 runtime 层工具账本。它们互相映射，但不是包含关系。
 - facts 推迟到 Phase 4 Context Management：Phase 3 复用完整 conversation，没有独立 facts 的实际消费者，不提前复制工具结果或对话摘要。
+- constraints 推迟到 Phase 4：Phase 3 将 resume 输入视为新的 user_message，不判断它是继续指令、反馈还是长期约束。没有约束消费者时，提前分类只会复制数据并制造同步责任。
+- 不保存 progress.last_safe_point：ToolsRunner 已保证 completed/interrupted 只发生在安全点，SessionRuntime 基于完整 conversation 继续即可。没有持久化恢复消费者时，再保存一份恢复位置属于重复状态。
 - session events 应该分层，不直接包含 tools runtime 的全部 events，只保存 session 层事件和 run 摘要。工具 runtime 的完整 event 留在 run result / run trace。
+- Session Event 在本阶段只记录生命周期，事件均由 SessionRuntime 产生，因此不设计 event source。等出现真实的多来源事件消费者后再引入来源模型。
+- Session Event 不提供任意 data 字典；当前生命周期字段已明确，提前开放无约束扩展口会弱化事件契约。
 
 ✓ 回补 Phase 1 Tools Runtime：
 SessionRuntime 设计暴露出 ToolsState、协议校验、停止安全和结果状态边界不清；
@@ -248,8 +251,8 @@ Run 摘要边界：
 - 需要验证细节时，通过 run_id 查询 run trace，避免跨层重复保存快照。
 
 
-facts
-本阶段不提炼或保存 facts：工具结果留在 conversation/run trace；用户反馈按用途进入 conversation、event 或 constraints。
+Context 边界
+本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/run trace。分类、提炼和长期约束需要真实消费者，统一留到 Phase 4。
 
 
 Interrupt
@@ -258,21 +261,11 @@ Interrupt
 - Interrupt 不能只依赖 tool_call 链路完整，还要检查业务安全点。
 写入类工具成功后，必须完成 get_changes，才允许进入 interrupted/completed。
 
-Human Feedback
-- 中断后，人类可以补充意见，然后 agent 继续。
-- Runtime Feedback 与 Human Feedback 分离。
-- Runtime Feedback 是运行器对模型的控制反馈，例如要求补齐验证；
-- Human Feedback 是用户对目标或约束的反馈。
-二者都可以进入 conversation，但在 session event 中必须保留来源。
-
 Resume
 resume 不是崩溃恢复，也不是持久化恢复；
 只是同一进程内，基于 session 状态继续执行。
-
-Task Queue
-pending session
-active session
-先了解这俩状态
+resume 接收新的 user_message，但不判断或复制其语义；消息由 ToolsRunner 写入原 conversation。
+本阶段不设计 Task Queue；active_controls 只管理当前同步 run 的控制信号，不是调度队列。
 
 ====================
 

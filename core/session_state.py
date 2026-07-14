@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 from datetime import datetime, timezone
 
 from core.messages import Conversation
@@ -39,27 +38,18 @@ class SessionEventType(str, Enum):
     COMPLETED = "session_completed"
     BLOCKED = "session_blocked"
     FAILED = "session_failed"
-    HUMAN_FEEDBACK_ADDED = "human_feedback_added"
-    RUNTIME_FEEDBACK_ADDED = "runtime_feedback_added"
-
-
-class SessionEventSource(str, Enum):
-    RUNTIME = "runtime"
-    HUMAN = "human"
 
 
 @dataclass
 class SessionEvent:
     kind: SessionEventType
     session_id: str
-    source: SessionEventSource
     reason: str
 
     run_id: str | None = None
     occurred_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -95,8 +85,6 @@ EVENT_KIND_BY_TRANSITION = {
 
 NON_TRANSITION_EVENT_KINDS = {
     SessionEventType.CREATED,
-    SessionEventType.HUMAN_FEEDBACK_ADDED,
-    SessionEventType.RUNTIME_FEEDBACK_ADDED,
 }
 
 @dataclass
@@ -138,6 +126,3 @@ class Session:
                 f"状态事件 {event.kind.value} 必须通过 transition_to 记录"
             )
         self.events.append(event)
-
-    # facts: list[SessionFact] = field(default_factory=list)
-    # progress: SessionProgress = field(default_factory=SessionProgress)

@@ -5,7 +5,6 @@ from core.session_state import (
     InvalidSessionTransition,
     Session,
     SessionEvent,
-    SessionEventSource,
     SessionEventType,
     SessionRunRecord,
     SessionStatus,
@@ -23,7 +22,6 @@ class SessionStateTest(unittest.TestCase):
         return SessionEvent(
             kind=kind,
             session_id=session_id,
-            source=SessionEventSource.RUNTIME,
             reason="test transition",
             run_id=run_id,
         )
@@ -144,7 +142,6 @@ class SessionStateTest(unittest.TestCase):
         event = SessionEvent(
             kind=SessionEventType.CREATED,
             session_id=session.id,
-            source=SessionEventSource.RUNTIME,
             reason="Session 创建完成",
         )
 
@@ -157,7 +154,6 @@ class SessionStateTest(unittest.TestCase):
         event = SessionEvent(
             kind=SessionEventType.CREATED,
             session_id="session-2",
-            source=SessionEventSource.RUNTIME,
             reason="Session 创建完成",
         )
 
@@ -175,22 +171,6 @@ class SessionStateTest(unittest.TestCase):
 
         self.assertEqual(session.status, SessionStatus.PENDING)
         self.assertEqual(session.events, [])
-
-    def test_events_do_not_share_data(self):
-        first = SessionEvent(
-            kind=SessionEventType.CREATED,
-            session_id="session-1",
-            source=SessionEventSource.RUNTIME,
-            reason="创建第一个 Session",
-        )
-        second = SessionEvent(
-            kind=SessionEventType.CREATED,
-            session_id="session-2",
-            source=SessionEventSource.RUNTIME,
-            reason="创建第二个 Session",
-        )
-
-        self.assertIsNot(first.data, second.data)
 
     def test_session_can_hold_run_record(self):
         session = Session(id="session-1")
