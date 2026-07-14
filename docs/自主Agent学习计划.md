@@ -171,39 +171,6 @@ Benchmark：
 
 ====================
 
-Phase 2.5
-Console Multi-turn Harness
-
-目标：为 Phase 3 Session Runtime 提供最小多轮观察入口。
-
-====================
-
-把当前单轮 Agent.run 测试方式，补成一个同进程内的多轮控制台对话入口，用于观察 conversation 累积、session 状态流和 human feedback 注入。
-
-Session 不是从 Agent 派生出来的；
-Session 是 Runtime 管理的状态对象；
-Agent 是 Runtime 用来推进 Session 的执行器。
-
-只做：
-- 启动时创建一个 session
-- 多轮读取用户输入
-- 每轮复用同一个 session/conversation
-- 打印 assistant 输出
-- 依赖现有日志观察状态变化
-
-不做：
-- 命令系统
-- 多 session 切换
-- 持久化恢复
-- 后台任务
-- 复杂 TUI
-
-校验
-✓ 第二轮输入时，模型“记得上一轮” （完成）
-
-
-====================
-
 Phase 3
 Long-running Agent
 
@@ -281,71 +248,47 @@ Phase 4
 Agent Application Layer
 ====================
 
-为什么做：Phase 3 已打通 Agent -> SessionRuntime -> RunRuntime，但当前 Agent 仍与单个 Session 绑定，同时混合默认 Prompt、依赖创建、Session 用例编排、日志构建与格式化。直接进入 Context Management，会让 Memory、Retrieval、Compression 继续堆入 Agent，并让 Agent 实例无法自然服务多个 Session 或多个入口。
+为什么做：Phase 3 后旧 Agent 仍绑定单个 Session，并混合依赖创建、Prompt、用例编排和日志职责，不利于多个入口复用。
 
-目标：把 Agent 重构为不持有“当前 Session”的无状态应用服务 `AgentApplication`。调用方显式传入 session_id，SessionRuntime 负责查找 Session 和执行状态迁移。只做应用层与基础设施边界重构，不改变 Phase 3 的 Run/Session 语义，不实现 Context、Memory、持久化、调度或并发框架。
+目标：建立无状态 `AgentApplication`。Console/API 持有 session_id，应用层通过显式用例操作 SessionRuntime；不改变 Run/Session 语义。
 
 学习内容：
-1. Application Service：AgentApplication 接收 session_id 和明确用例，委托 SessionRuntime，不保存当前 Session。
-2. Explicit Use Case：先保留 start、resume、request_interrupt 三个显式方法，不用统一 AgentCommand 隐藏调用契约。
-3. Composition Root：默认依赖在统一入口组装，AgentApplication 不在内部硬编码创建 LLMClient、RunRuntime、SessionRuntime。
-4. Dependency Injection：测试和未来模块从构造边界注入，不依赖全局替换或内部 patch。
-5. Channel State：Console/API 可以保存当前 session_id，但应用服务本身不与某个 Session 绑定。
-6. Observability Boundary：run trace、日志格式化和写入从应用核心职责中移出。
-7. Prompt Boundary：默认 Prompt 与 AgentApplication 生命周期解耦，由组合入口选择和注入。
+1. Application Service 与显式用例。
+2. Composition Root 与依赖注入。
+3. Channel State、Prompt、Observability 边界。
 
-目标职责关系：
+职责关系：
 
 ```text
-Composition Root / Factory
-├─ LLMClient
-├─ RunRuntime
-├─ SessionRuntime
-├─ Prompt
-└─ AgentApplication
+Console / API -> AgentApplication -> SessionRuntime -> RunRuntime
+                    ↑
+             Composition Root
 
-Console / API
-├─ 当前 session_id
-└─ 调用明确用例
-
-AgentApplication
-├─ start(session_id, run_id, message)
-├─ resume(session_id, run_id, message)
-└─ request_interrupt(session_id, reason)
-
-SessionRuntime
-├─ sessions
-├─ Session 状态迁移
-├─ RunRecord
-└─ active RunControl
-
-RunRuntime
-├─ 单 Run 的 LLM -> Tools -> LLM 循环
-├─ ToolsState / Protocol / StopGuard
-└─ RunResult
-
-Observability
-├─ build run trace
-├─ format run log
-└─ write run log
+Observability <- SessionRunOutcome
 ```
 
+✓ AgentApplication：提供 create_session、start、resume、request_interrupt；不持有当前 Session、conversation 或 last_result。
+
+✓ Composition Root：统一组装 LLMClient、RunRuntime、SessionRuntime、Prompt 和 AgentApplication。
+
+✓ Console：持有 session_id/run_id，根据上次 RunStatus 显式选择 start 或 resume。
+
+✓ Prompt：从应用服务中拆出，由组合入口选择并注入；以后可扩展为外部人格配置。
+
+✓ Observability：只消费 SessionRunOutcome，不为日志或展示向 SessionRuntime 增加查询接口。
+
+✓ 删除旧 core/agent.py，不保留第二套正式 API。
+
 约束：
-- 不提前定义 ContextManager、Memory、Retriever、Compressor 的空接口；等 Phase 5 出现真实消费者后再抽象。
-- 不引入依赖注入容器、插件系统、Event Bus 或通用中间件。
-- 不引入统一 AgentCommand；当前用例数量少，显式方法更符合 Early Fail。
-- 不引入持久化 RunState、revision、checkpoint 恢复、cancel 或 async 并发模型。
-- 不改变 Session、RunRuntime 的既有职责，不把当前 resume 改成“恢复同一个 run_id”。
-- 保持 console_chat 的同 Session 多轮、interrupt/resume 和日志行为不变。
+- 自下而上扩展；不因上层展示需求修改 SessionRuntime 以下的边界。
+- 不引入 AgentCommand、Context/Memory、持久化 RunState、revision、async、调度、插件系统或 Event Bus。
+- start 不隐式创建 Session，错误 session_id/run_id 立即失败。
 
 Benchmark：
-- AgentApplication 不持有 Session/conversation/current_session，只持有 SessionRuntime 等稳定依赖。
-- Console 持有 session_id；同一个 AgentApplication 可以显式操作两个不同 Session，且 conversation 不串线。
-- AgentApplication 不直接创建或调用 LLMClient、RunRuntime；默认依赖由 composition root 组装。
-- AgentApplication 核心模块不包含日志格式化、文件写入和默认 Prompt 常量。
-- 使用注入的 SessionRuntime 可以独立测试 start/resume/interrupt 的参数转发和 Early Fail。
-- 真实 console_chat 仍能完成同 Session 多轮和 interrupt/resume。
-- Phase 3 全量测试保持通过。
+- 同一个 AgentApplication 可操作两个 Session，conversation 不串线。
+- AgentApplication 不直接创建 LLMClient、RunRuntime，不包含 Prompt 常量和日志写入。
+- Console 保持同 Session 多轮与 interrupt/resume。
+- Phase 3/4 全量 91 项测试通过。
 
 ====================
 

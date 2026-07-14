@@ -52,13 +52,20 @@ class SessionRuntime:
         self.sessions: dict[str, Session] = {}
         self.active_controls: dict[str, RunControl] = {}
 
-    def create_session(self, session_id: str) -> Session:
+    def create_session(
+        self,
+        session_id: str,
+        system_prompt: str,
+    ) -> Session:
         if not session_id or not session_id.strip():
             raise ValueError("session_id 不能为空")
         if session_id in self.sessions:
             raise ValueError(f"重复 session_id: {session_id}")
+        if not system_prompt or not system_prompt.strip():
+            raise ValueError("system_prompt 不能为空")
 
         session = Session(id=session_id)
+        session.conversation.set_system_prompt(system_prompt)
         event = SessionEvent(
             kind=SessionEventType.CREATED,
             session_id=session.id,

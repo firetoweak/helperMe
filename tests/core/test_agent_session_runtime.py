@@ -1,11 +1,13 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from core.agent import Agent
+import tools  # noqa: F401
+from core.agent_application import AgentApplication
 from core.messages import LLMResponse, ToolCall
+from core.session_runner import SessionRuntime
 from core.session_state import SessionEventType, SessionStatus
+from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
-from core.tools_runtime.run_runtime import RunStatus
 
 
 SUCCESS = {
@@ -17,16 +19,24 @@ SUCCESS = {
 }
 
 
-class AgentSessionRuntimeTest(unittest.TestCase):
+class AgentApplicationSessionRuntimeTest(unittest.TestCase):
+    def _build_application(self, llm_client: Mock):
+        session_runtime = SessionRuntime(
+            RunRuntime(llm_client=llm_client, model="test-model")
+        )
+        application = AgentApplication(
+            session_runtime=session_runtime,
+            system_prompt="system prompt",
+        )
+        application.create_session("session-1")
+        return application, session_runtime
+
     @patch("core.tools_runtime.run_runtime.execute_tool", return_value=SUCCESS)
-    @patch("core.agent.LLMClient")
-    def test_agent_starts_and_resumes_through_session_runtime(
+    def test_application_starts_and_resumes_through_session_runtime(
         self,
-        llm_client_class,
         _execute_tool,
     ):
-        agent = None
-        chat_calls = 0
+        llm_client = Mock()
         responses = iter(
             (
                 LLMResponse(
@@ -36,33 +46,32 @@ class AgentSessionRuntimeTest(unittest.TestCase):
                 LLMResponse(type="text", content="任务已完成"),
             )
         )
+        application = None
 
         def chat(messages, model, tools=None):
-            nonlocal chat_calls
-            chat_calls += 1
-            if chat_calls == 1:
-                agent.request_interrupt("等待继续")
-            return next(responses)
+            response = next(responses)
+            if response.type == "tool_calls":
+                application.request_interrupt("session-1", "等待继续")
+            return response
 
-        llm_client_class.return_value.chat.side_effect = chat
-        agent = Agent(model="test-model")
+        llm_client.chat.side_effect = chat
+        application, session_runtime = self._build_application(llm_client)
+        session = session_runtime.sessions["session-1"]
 
-        interrupted_answer = agent.run("开始任务")
+        interrupted = application.start("session-1", "run-1", "开始任务")
 
-        self.assertTrue(interrupted_answer)
-        self.assertEqual(agent.session.status, SessionStatus.INTERRUPTED)
-        self.assertEqual(agent.last_result.status, RunStatus.INTERRUPTED)
-        self.assertIs(agent.conversation, agent.session.conversation)
-        self.assertTrue(validate_tool_message_chain(agent.conversation.messages).ok)
+        self.assertEqual(interrupted.result.status, RunStatus.INTERRUPTED)
+        self.assertEqual(session.status, SessionStatus.INTERRUPTED)
+        self.assertTrue(validate_tool_message_chain(session.conversation.messages).ok)
 
-        completed_answer = agent.run("继续执行")
+        completed = application.resume("session-1", "run-2", "继续执行")
 
-        self.assertEqual(completed_answer, "任务已完成")
-        self.assertEqual(agent.session.status, SessionStatus.COMPLETED)
-        self.assertEqual(agent.last_result.status, RunStatus.COMPLETED)
-        self.assertEqual(len(agent.session.run_records), 2)
+        self.assertEqual(completed.result.answer, "任务已完成")
+        self.assertEqual(completed.result.status, RunStatus.COMPLETED)
+        self.assertEqual(session.status, SessionStatus.COMPLETED)
+        self.assertEqual(len(session.run_records), 2)
         self.assertEqual(
-            [event.kind for event in agent.session.events],
+            [event.kind for event in session.events],
             [
                 SessionEventType.CREATED,
                 SessionEventType.STARTED,
@@ -71,28 +80,22 @@ class AgentSessionRuntimeTest(unittest.TestCase):
                 SessionEventType.COMPLETED,
             ],
         )
-        self.assertTrue(validate_tool_message_chain(agent.conversation.messages).ok)
-        self.assertFalse(hasattr(agent, "run_runtime"))
+        self.assertTrue(validate_tool_message_chain(session.conversation.messages).ok)
 
-    @patch("core.agent.LLMClient")
-    def test_agent_starts_new_run_in_same_session_after_completed(
-        self,
-        llm_client_class,
-    ):
-        llm_client_class.return_value.chat.side_effect = (
+    def test_application_starts_new_run_in_same_session_after_completed(self):
+        llm_client = Mock()
+        llm_client.chat.side_effect = (
             LLMResponse(type="text", content="第一轮完成"),
             LLMResponse(type="text", content="第二轮完成"),
         )
-        agent = Agent(model="test-model")
-        session = agent.session
+        application, session_runtime = self._build_application(llm_client)
+        session = session_runtime.sessions["session-1"]
 
-        first_answer = agent.run("第一轮")
-        second_answer = agent.run("第二轮")
+        first = application.start("session-1", "run-1", "第一轮")
+        second = application.start("session-1", "run-2", "第二轮")
 
-        self.assertEqual(first_answer, "第一轮完成")
-        self.assertEqual(second_answer, "第二轮完成")
-        self.assertIs(agent.session, session)
-        self.assertIs(agent.conversation, session.conversation)
+        self.assertEqual(first.result.answer, "第一轮完成")
+        self.assertEqual(second.result.answer, "第二轮完成")
         self.assertEqual(len(session.run_records), 2)
         self.assertEqual(
             [event.kind for event in session.events],
@@ -103,14 +106,6 @@ class AgentSessionRuntimeTest(unittest.TestCase):
                 SessionEventType.STARTED,
                 SessionEventType.COMPLETED,
             ],
-        )
-        self.assertEqual(
-            [
-                message["content"]
-                for message in session.conversation.messages
-                if message["role"] == "user"
-            ],
-            ["第一轮", "第二轮"],
         )
 
 

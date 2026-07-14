@@ -16,9 +16,16 @@ class SessionRuntimeCreateSessionTest(unittest.TestCase):
         self.runtime = SessionRuntime(run_runtime=Mock())
 
     def test_create_session_registers_pending_session_with_created_event(self):
-        session = self.runtime.create_session("session-1")
+        session = self.runtime.create_session(
+            "session-1",
+            system_prompt="system prompt",
+        )
 
         self.assertIs(self.runtime.sessions["session-1"], session)
+        self.assertEqual(
+            session.conversation.messages,
+            [{"role": "system", "content": "system prompt"}],
+        )
         self.assertEqual(session.status, SessionStatus.PENDING)
         self.assertEqual(session.run_records, [])
         self.assertEqual(len(session.events), 1)
@@ -27,10 +34,10 @@ class SessionRuntimeCreateSessionTest(unittest.TestCase):
         self.assertIsNone(session.events[0].run_id)
 
     def test_create_session_rejects_duplicate_id_without_replacing_original(self):
-        original = self.runtime.create_session("session-1")
+        original = self.runtime.create_session("session-1", system_prompt="prompt")
 
         with self.assertRaises(ValueError):
-            self.runtime.create_session("session-1")
+            self.runtime.create_session("session-1", system_prompt="prompt")
 
         self.assertIs(self.runtime.sessions["session-1"], original)
         self.assertEqual(len(self.runtime.sessions), 1)
@@ -39,14 +46,25 @@ class SessionRuntimeCreateSessionTest(unittest.TestCase):
         for session_id in ("", "   "):
             with self.subTest(session_id=session_id):
                 with self.assertRaises(ValueError):
-                    self.runtime.create_session(session_id)
+                    self.runtime.create_session(session_id, system_prompt="prompt")
+
+        self.assertEqual(self.runtime.sessions, {})
+
+    def test_create_session_requires_non_empty_system_prompt(self):
+        for system_prompt in ("", "   "):
+            with self.subTest(system_prompt=system_prompt):
+                with self.assertRaises(ValueError):
+                    self.runtime.create_session(
+                        "session-1",
+                        system_prompt=system_prompt,
+                    )
 
         self.assertEqual(self.runtime.sessions, {})
 
     def test_create_session_does_not_register_session_when_event_recording_fails(self):
         with patch.object(Session, "record_event", side_effect=ValueError("invalid event")):
             with self.assertRaises(ValueError):
-                self.runtime.create_session("session-1")
+                self.runtime.create_session("session-1", system_prompt="prompt")
 
         self.assertNotIn("session-1", self.runtime.sessions)
 
@@ -57,7 +75,7 @@ class SessionRuntimeStartTest(unittest.TestCase):
         self.runtime = SessionRuntime(run_runtime=self.run_runtime)
 
     def test_start_exposes_control_during_run_and_cleans_it_afterwards(self):
-        session = self.runtime.create_session("session-1")
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
 
         def run(*, conversation, user_message, max_rounds, control):
             self.assertIs(conversation, session.conversation)
@@ -89,7 +107,10 @@ class SessionRuntimeStartTest(unittest.TestCase):
         for index, (run_status, session_status, event_kind, reason) in enumerate(cases):
             with self.subTest(run_status=run_status):
                 runtime = SessionRuntime(run_runtime=Mock())
-                session = runtime.create_session(f"session-{index}")
+                session = runtime.create_session(
+                    f"session-{index}",
+                    system_prompt="prompt",
+                )
                 runtime.run_runtime.run.return_value = Mock(
                     status=run_status,
                     final_reason=reason,
@@ -107,7 +128,7 @@ class SessionRuntimeStartTest(unittest.TestCase):
                 self.assertEqual(runtime.active_controls, {})
 
     def test_start_cleans_active_control_when_run_runtime_raises(self):
-        session = self.runtime.create_session("session-1")
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
         self.run_runtime.run.side_effect = RuntimeError("runner crashed")
 
         with self.assertRaisesRegex(RuntimeError, "runner crashed"):
@@ -130,7 +151,7 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
         self.runtime = SessionRuntime(run_runtime=self.run_runtime)
 
     def test_request_interrupt_marks_active_control_without_early_transition(self):
-        session = self.runtime.create_session("session-1")
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
 
         def run(*, conversation, user_message, max_rounds, control):
             self.runtime.request_interrupt(session.id, "用户请求暂停")
@@ -163,13 +184,13 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
             self.runtime.request_interrupt("missing")
 
     def test_request_interrupt_requires_running_session(self):
-        self.runtime.create_session("session-1")
+        self.runtime.create_session("session-1", system_prompt="prompt")
 
         with self.assertRaises(ValueError):
             self.runtime.request_interrupt("session-1")
 
     def test_request_interrupt_fails_when_running_session_has_no_control(self):
-        session = self.runtime.create_session("session-1")
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
         session.transition_to(
             SessionStatus.RUNNING,
             SessionEvent(
@@ -188,7 +209,10 @@ class SessionRuntimeResumeTest(unittest.TestCase):
     def setUp(self):
         self.run_runtime = Mock()
         self.runtime = SessionRuntime(run_runtime=self.run_runtime)
-        self.session = self.runtime.create_session("session-1")
+        self.session = self.runtime.create_session(
+            "session-1",
+            system_prompt="prompt",
+        )
         self.run_runtime.run.return_value = Mock(
             status=RunStatus.INTERRUPTED,
             final_reason="user_requested",
@@ -252,7 +276,7 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         self.run_runtime.run.assert_not_called()
 
     def test_resume_requires_interrupted_session(self):
-        pending = self.runtime.create_session("session-2")
+        pending = self.runtime.create_session("session-2", system_prompt="prompt")
 
         with self.assertRaises(ValueError):
             self.runtime.resume(pending.id, "run-2", "继续")
