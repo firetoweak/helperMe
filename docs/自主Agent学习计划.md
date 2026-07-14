@@ -200,6 +200,10 @@ Session 必须持有：
 - facts 推迟到 Phase 4 Context Management：Phase 3 复用完整 conversation，没有独立 facts 的实际消费者，不提前复制工具结果或对话摘要。
 - session events 应该分层，不直接包含 tools runtime 的全部 events，只保存 session 层事件和 run 摘要。工具 runtime 的完整 event 留在 run result / run trace。
 
+✓ 回补 Phase 1 Tools Runtime：
+SessionRuntime 设计暴露出 ToolsState、协议校验、停止安全和结果状态边界不清；
+已按 Phase 3 的 interrupt/resume 需求完成职责拆分，不扩展无关能力。
+
 Run 摘要边界：
 - `SessionRunRecord` 只记录 run_id、状态、起止时间、结束原因等最小索引信息；
 - verification 是 ToolsRunner 内部的安全检查与 checkpoint/trace 观测数据，不复制到 `RunResult` 或 `SessionRunRecord`；

@@ -88,7 +88,7 @@ class SessionStateTest(unittest.TestCase):
         session = Session(id="session-1")
         record = SessionRunRecord(
             run_id="run-1",
-            status="terminated",
+            status="blocked",
             started_at=datetime.now(timezone.utc),
             final_reason="max_rounds_exceeded",
         )

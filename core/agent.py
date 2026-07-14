@@ -218,7 +218,7 @@ def _build_run_trace(
         "question": question,
         "answer": answer,
         "status": agent.last_result.status if agent.last_result else None,
-        "error": agent.last_result.error if agent.last_result else None,
+        "final_reason": agent.last_result.final_reason if agent.last_result else None,
         "metrics": {
             "answer_length": len(answer),
             "checkpoints": len(checkpoints),
@@ -408,7 +408,7 @@ def _format_run_log(
     question: str,
     answer: str,
     status: str | None,
-    error: str | None,
+    final_reason: str | None,
     messages: list[dict[str, Any]],
     checkpoints: list[dict[str, Any]],
     metrics: dict[str, int],
@@ -422,8 +422,8 @@ def _format_run_log(
         f" Agent Run  |  {started_at}  →  {ended_at}",
         f" Model: {model}  |  Status: {status or 'unknown'}",
     ]
-    if error:
-        lines.append(f" Error: {error}")
+    if final_reason:
+        lines.append(f" Final reason: {final_reason}")
     lines.extend([sep, ""])
 
     system_prompt, user_question = _extract_prompts(messages)
@@ -515,7 +515,7 @@ def _write_run_log(trace: dict[str, Any], path: Path | None = None) -> None:
         question=trace["question"],
         answer=trace["answer"],
         status=trace.get("status"),
-        error=trace.get("error"),
+        final_reason=trace.get("final_reason"),
         messages=trace.get("_messages") or [],
         checkpoints=trace.get("checkpoints") or [],
         metrics=trace.get("metrics") or {},
