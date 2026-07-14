@@ -61,7 +61,7 @@ Reliable Tool-Calling Runtime
 
 为什么做：当前可靠性主要依赖 system prompt 和模型自觉，所有agent运行状态都在一起了，需要拆解
 ====================
-目标是 Phase 1 的目标不是做完整 Runtime，而是把当前 Agent.run 中混杂的 tool calling loop 抽象成可靠的 tools_runner，并用 tools_state 管理当前 run 内的工具调用链路，使工具调用过程可检查、可修复、可截断、可停止。
+目标是 Phase 1 的目标不是做完整 Runtime，而是把当前 Agent.run 中混杂的 tool calling loop 抽象成可靠的 RunRuntime，并用 tools_state 管理当前 run 内的工具调用链路，使工具调用过程可检查、可修复、可截断、可停止。
 
 学习内容：
 
@@ -72,10 +72,10 @@ Benchmark：
 
 
 ✓ 基础的runtime已经有了。
-ToolsState 是账本。ToolsRunner 是执行控制者，Checkpoint/RunResult 是对外报告。
+ToolsState 是账本。RunRuntime 是执行控制者，Checkpoint/RunResult 是对外报告。
 
 
-✓ 抽出 ToolsRunner，作为整个agent的心脏，最小运行内核
+✓ 抽出 RunRuntime，作为整个agent的心脏，最小运行内核
 短任务 runtime，保持其生命周期在一轮text-tools-text，一次多轮的工具调用。不持久的化状态。
 模型异常（完成了）
 
@@ -104,20 +104,20 @@ Phase 1 已完成最小可靠 tool-calling runtime：工具调用循环已从 Ag
 - StopGuard：独立判断 protocol_safe 和 business_safe；只有消息链完整，并且最后一次成功写入后完成 get_changes，才允许 completed/interrupted。
 - Checkpoint：只记录 run 内观察点，不再计算安全规则；Session 层生命周期记录统一称为 Event。
 - RunResult：使用 completed/interrupted/blocked/failed 四种 RunStatus；final_reason 从最终 Checkpoint 派生，不重复保存 error。
-- RunControl：提供 interrupt_requested 控制信号；ToolsRunner 只在完整 tool batch 和业务安全点返回 interrupted。
-- ToolsRunner：只负责编排模型调用、工具执行、协议、安全、Checkpoint 和统一 RunResult 出口；ToolsState 不向 SessionRuntime 泄漏。
+- RunControl：提供 interrupt_requested 控制信号；RunRuntime 只在完整 tool batch 和业务安全点返回 interrupted。
+- RunRuntime：只负责编排模型调用、工具执行、协议、安全、Checkpoint 和统一 RunResult 出口；ToolsState 不向 SessionRuntime 泄漏。
 
 回补后的职责关系：
 
 ```text
-ToolsRunner
+RunRuntime
 ├─ ToolsState：工具账本
 ├─ ToolsProtocol：消息协议
 ├─ ToolsExecutor：工具执行
 ├─ StopGuard：停止安全
 └─ Checkpoint：run 内观测
 
-ToolsRunner -> RunResult -> SessionRuntime
+RunRuntime -> RunResult -> SessionRuntime
 ```
 
 验证：完整测试 41 项通过；未验证写入不能完成或安全中断，中断后的 tool_call/result 消息链保持合法。
@@ -233,9 +233,9 @@ Session 必须持有：
 
 重点：
 - conversation 是协议层消息历史；ToolsState 是 runtime 层工具账本。它们互相映射，但不是包含关系。
-- facts 推迟到 Phase 4 Context Management：Phase 3 复用完整 conversation，没有独立 facts 的实际消费者，不提前复制工具结果或对话摘要。
-- constraints 推迟到 Phase 4：Phase 3 将 resume 输入视为新的 user_message，不判断它是继续指令、反馈还是长期约束。没有约束消费者时，提前分类只会复制数据并制造同步责任。
-- 不保存 progress.last_safe_point：ToolsRunner 已保证 completed/interrupted 只发生在安全点，SessionRuntime 基于完整 conversation 继续即可。没有持久化恢复消费者时，再保存一份恢复位置属于重复状态。
+- facts 推迟到 Phase 5 Context Management：Phase 3 复用完整 conversation，没有独立 facts 的实际消费者，不提前复制工具结果或对话摘要。
+- constraints 推迟到 Phase 5：Phase 3 将 resume 输入视为新的 user_message，不判断它是继续指令、反馈还是长期约束。没有约束消费者时，提前分类只会复制数据并制造同步责任。
+- 不保存 progress.last_safe_point：RunRuntime 已保证 completed/interrupted 只发生在安全点，SessionRuntime 基于完整 conversation 继续即可。没有持久化恢复消费者时，再保存一份恢复位置属于重复状态。
 - session events 应该分层，不直接包含 tools runtime 的全部 events，只保存 session 层事件和 run 摘要。工具 runtime 的完整 event 留在 run result / run trace。
 - Session Event 在本阶段只记录生命周期，事件均由 SessionRuntime 产生，因此不设计 event source。等出现真实的多来源事件消费者后再引入来源模型。
 - Session Event 不提供任意 data 字典；当前生命周期字段已明确，提前开放无约束扩展口会弱化事件契约。
@@ -246,13 +246,13 @@ SessionRuntime 设计暴露出 ToolsState、协议校验、停止安全和结果
 
 Run 摘要边界：
 - `SessionRunRecord` 只记录 run_id、状态、起止时间、结束原因等最小索引信息；
-- verification 是 ToolsRunner 内部的安全检查与 checkpoint/trace 观测数据，不复制到 `RunResult` 或 `SessionRunRecord`；
-- ToolsRunner 保证只有处于业务安全点的 run 才能 completed/interrupted；SessionRuntime 只根据最终 status/final_reason 驱动 Session 状态迁移；
+- verification 是 RunRuntime 内部的安全检查与 checkpoint/trace 观测数据，不复制到 `RunResult` 或 `SessionRunRecord`；
+- RunRuntime 保证只有处于业务安全点的 run 才能 completed/interrupted；SessionRuntime 只根据最终 status/final_reason 驱动 Session 状态迁移；
 - 需要验证细节时，通过 run_id 查询 run trace，避免跨层重复保存快照。
 
 
 Context 边界
-本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/run trace。分类、提炼和长期约束需要真实消费者，统一留到 Phase 4。
+本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/run trace。分类、提炼和长期约束需要真实消费者，统一留到 Phase 5。
 
 
 Interrupt
@@ -264,20 +264,93 @@ Interrupt
 Resume
 resume 不是崩溃恢复，也不是持久化恢复；
 只是同一进程内，基于 session 状态继续执行。
-resume 接收新的 user_message，但不判断或复制其语义；消息由 ToolsRunner 写入原 conversation。
+resume 接收新的 user_message，但不判断或复制其语义；消息由 RunRuntime 写入原 conversation。
 本阶段不设计 Task Queue；active_controls 只管理当前同步 run 的控制信号，不是调度队列。
 
 ✓ Agent 接入 SessionRuntime：
-- Agent 不再直接调用或持有 ToolsRunner；ToolsRunner 由 SessionRuntime 编排。
-- Agent 的 conversation 指向当前 Session 持有的 conversation，pending 时 start，interrupted 时 resume。
+- Agent 不再直接调用或持有 RunRuntime；RunRuntime 由 SessionRuntime 编排。
+- Agent 的 conversation 指向当前 Session 持有的 conversation，pending/completed 时 start，interrupted 时 resume。
 - completed 表示当前 run 已完成并等待下一条 user_message；下一轮在同一 Session、同一 conversation 中重新进入 running。interrupted 才使用 resume；blocked、failed 仍是终态。
 - SessionRuntime 使用临时 SessionRunOutcome 向调用方返回 RunResult 与 SessionRunRecord；Outcome 不写入 Session，避免长期状态重复。
-- 跨层测试已验证 Agent -> SessionRuntime -> ToolsRunner 的 interrupt/resume、conversation 协议完整性及完整 Session Event 流。
+- 跨层测试已验证 Agent -> SessionRuntime -> RunRuntime 的 interrupt/resume、conversation 协议完整性及完整 Session Event 流。
 
 ====================
 
 
 Phase 4
+Agent Application Layer
+====================
+
+为什么做：Phase 3 已打通 Agent -> SessionRuntime -> RunRuntime，但当前 Agent 仍与单个 Session 绑定，同时混合默认 Prompt、依赖创建、Session 用例编排、日志构建与格式化。直接进入 Context Management，会让 Memory、Retrieval、Compression 继续堆入 Agent，并让 Agent 实例无法自然服务多个 Session 或多个入口。
+
+目标：把 Agent 重构为不持有“当前 Session”的无状态应用服务 `AgentApplication`。调用方显式传入 session_id，SessionRuntime 负责查找 Session 和执行状态迁移。只做应用层与基础设施边界重构，不改变 Phase 3 的 Run/Session 语义，不实现 Context、Memory、持久化、调度或并发框架。
+
+学习内容：
+1. Application Service：AgentApplication 接收 session_id 和明确用例，委托 SessionRuntime，不保存当前 Session。
+2. Explicit Use Case：先保留 start、resume、request_interrupt 三个显式方法，不用统一 AgentCommand 隐藏调用契约。
+3. Composition Root：默认依赖在统一入口组装，AgentApplication 不在内部硬编码创建 LLMClient、RunRuntime、SessionRuntime。
+4. Dependency Injection：测试和未来模块从构造边界注入，不依赖全局替换或内部 patch。
+5. Channel State：Console/API 可以保存当前 session_id，但应用服务本身不与某个 Session 绑定。
+6. Observability Boundary：run trace、日志格式化和写入从应用核心职责中移出。
+7. Prompt Boundary：默认 Prompt 与 AgentApplication 生命周期解耦，由组合入口选择和注入。
+
+目标职责关系：
+
+```text
+Composition Root / Factory
+├─ LLMClient
+├─ RunRuntime
+├─ SessionRuntime
+├─ Prompt
+└─ AgentApplication
+
+Console / API
+├─ 当前 session_id
+└─ 调用明确用例
+
+AgentApplication
+├─ start(session_id, run_id, message)
+├─ resume(session_id, run_id, message)
+└─ request_interrupt(session_id, reason)
+
+SessionRuntime
+├─ sessions
+├─ Session 状态迁移
+├─ RunRecord
+└─ active RunControl
+
+RunRuntime
+├─ 单 Run 的 LLM -> Tools -> LLM 循环
+├─ ToolsState / Protocol / StopGuard
+└─ RunResult
+
+Observability
+├─ build run trace
+├─ format run log
+└─ write run log
+```
+
+约束：
+- 不提前定义 ContextManager、Memory、Retriever、Compressor 的空接口；等 Phase 5 出现真实消费者后再抽象。
+- 不引入依赖注入容器、插件系统、Event Bus 或通用中间件。
+- 不引入统一 AgentCommand；当前用例数量少，显式方法更符合 Early Fail。
+- 不引入持久化 RunState、revision、checkpoint 恢复、cancel 或 async 并发模型。
+- 不改变 Session、RunRuntime 的既有职责，不把当前 resume 改成“恢复同一个 run_id”。
+- 保持 console_chat 的同 Session 多轮、interrupt/resume 和日志行为不变。
+
+Benchmark：
+- AgentApplication 不持有 Session/conversation/current_session，只持有 SessionRuntime 等稳定依赖。
+- Console 持有 session_id；同一个 AgentApplication 可以显式操作两个不同 Session，且 conversation 不串线。
+- AgentApplication 不直接创建或调用 LLMClient、RunRuntime；默认依赖由 composition root 组装。
+- AgentApplication 核心模块不包含日志格式化、文件写入和默认 Prompt 常量。
+- 使用注入的 SessionRuntime 可以独立测试 start/resume/interrupt 的参数转发和 Early Fail。
+- 真实 console_chat 仍能完成同 Session 多轮和 interrupt/resume。
+- Phase 3 全量测试保持通过。
+
+====================
+
+
+Phase 5
 Context Management
 ====================
 
@@ -294,7 +367,7 @@ Compression
 ====================
 
 
-Phase 5
+Phase 6
 Goal Management
 ====================
 
@@ -311,7 +384,7 @@ Event
 ====================
 
 
-Phase 6
+Phase 7
 Multi-Agent（最后）
 ====================
 

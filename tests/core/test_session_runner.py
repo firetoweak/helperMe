@@ -8,12 +8,12 @@ from core.session_state import (
     SessionEventType,
     SessionStatus,
 )
-from core.tools_runtime.tools_runner import RunStatus
+from core.tools_runtime.run_runtime import RunStatus
 
 
 class SessionRuntimeCreateSessionTest(unittest.TestCase):
     def setUp(self):
-        self.runtime = SessionRuntime(tools_runner=Mock())
+        self.runtime = SessionRuntime(run_runtime=Mock())
 
     def test_create_session_registers_pending_session_with_created_event(self):
         session = self.runtime.create_session("session-1")
@@ -53,8 +53,8 @@ class SessionRuntimeCreateSessionTest(unittest.TestCase):
 
 class SessionRuntimeStartTest(unittest.TestCase):
     def setUp(self):
-        self.tools_runner = Mock()
-        self.runtime = SessionRuntime(tools_runner=self.tools_runner)
+        self.run_runtime = Mock()
+        self.runtime = SessionRuntime(run_runtime=self.run_runtime)
 
     def test_start_exposes_control_during_run_and_cleans_it_afterwards(self):
         session = self.runtime.create_session("session-1")
@@ -67,7 +67,7 @@ class SessionRuntimeStartTest(unittest.TestCase):
             self.assertEqual(session.status, SessionStatus.RUNNING)
             return Mock(status=RunStatus.COMPLETED, final_reason=None)
 
-        self.tools_runner.run.side_effect = run
+        self.run_runtime.run.side_effect = run
 
         outcome = self.runtime.start("session-1", "run-1", "完成任务")
         record = outcome.record
@@ -88,9 +88,9 @@ class SessionRuntimeStartTest(unittest.TestCase):
 
         for index, (run_status, session_status, event_kind, reason) in enumerate(cases):
             with self.subTest(run_status=run_status):
-                runtime = SessionRuntime(tools_runner=Mock())
+                runtime = SessionRuntime(run_runtime=Mock())
                 session = runtime.create_session(f"session-{index}")
-                runtime.tools_runner.run.return_value = Mock(
+                runtime.run_runtime.run.return_value = Mock(
                     status=run_status,
                     final_reason=reason,
                 )
@@ -106,9 +106,9 @@ class SessionRuntimeStartTest(unittest.TestCase):
                 self.assertIsNotNone(record.ended_at)
                 self.assertEqual(runtime.active_controls, {})
 
-    def test_start_cleans_active_control_when_tools_runner_raises(self):
+    def test_start_cleans_active_control_when_run_runtime_raises(self):
         session = self.runtime.create_session("session-1")
-        self.tools_runner.run.side_effect = RuntimeError("runner crashed")
+        self.run_runtime.run.side_effect = RuntimeError("runner crashed")
 
         with self.assertRaisesRegex(RuntimeError, "runner crashed"):
             self.runtime.start("session-1", "run-1", "完成任务")
@@ -116,18 +116,18 @@ class SessionRuntimeStartTest(unittest.TestCase):
         record = session.run_records[0]
         self.assertEqual(session.status, SessionStatus.FAILED)
         self.assertEqual(session.events[-1].kind, SessionEventType.FAILED)
-        self.assertEqual(session.events[-1].reason, "tools_runner_exception")
+        self.assertEqual(session.events[-1].reason, "run_runtime_exception")
         self.assertEqual(session.events[-1].run_id, record.run_id)
         self.assertEqual(record.status, RunStatus.FAILED.value)
         self.assertIsNotNone(record.ended_at)
-        self.assertEqual(record.final_reason, "tools_runner_exception")
+        self.assertEqual(record.final_reason, "run_runtime_exception")
         self.assertEqual(self.runtime.active_controls, {})
 
 
 class SessionRuntimeRequestInterruptTest(unittest.TestCase):
     def setUp(self):
-        self.tools_runner = Mock()
-        self.runtime = SessionRuntime(tools_runner=self.tools_runner)
+        self.run_runtime = Mock()
+        self.runtime = SessionRuntime(run_runtime=self.run_runtime)
 
     def test_request_interrupt_marks_active_control_without_early_transition(self):
         session = self.runtime.create_session("session-1")
@@ -144,7 +144,7 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
                 final_reason="run_interrupted",
             )
 
-        self.tools_runner.run.side_effect = run
+        self.run_runtime.run.side_effect = run
 
         outcome = self.runtime.start(session.id, "run-1", "完成任务")
         record = outcome.record
@@ -186,15 +186,15 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
 
 class SessionRuntimeResumeTest(unittest.TestCase):
     def setUp(self):
-        self.tools_runner = Mock()
-        self.runtime = SessionRuntime(tools_runner=self.tools_runner)
+        self.run_runtime = Mock()
+        self.runtime = SessionRuntime(run_runtime=self.run_runtime)
         self.session = self.runtime.create_session("session-1")
-        self.tools_runner.run.return_value = Mock(
+        self.run_runtime.run.return_value = Mock(
             status=RunStatus.INTERRUPTED,
             final_reason="user_requested",
         )
         self.runtime.start(self.session.id, "run-1", "开始任务")
-        self.tools_runner.reset_mock()
+        self.run_runtime.reset_mock()
 
     def test_resume_starts_new_run_from_interrupted_session(self):
         def run(*, conversation, user_message, max_rounds, control):
@@ -207,7 +207,7 @@ class SessionRuntimeResumeTest(unittest.TestCase):
             self.assertEqual(self.session.events[-1].run_id, "run-2")
             return Mock(status=RunStatus.COMPLETED, final_reason=None)
 
-        self.tools_runner.run.side_effect = run
+        self.run_runtime.run.side_effect = run
 
         outcome = self.runtime.resume(
             self.session.id,
@@ -241,7 +241,7 @@ class SessionRuntimeResumeTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.runtime.resume(session_id, run_id, user_message)
 
-        self.tools_runner.run.assert_not_called()
+        self.run_runtime.run.assert_not_called()
         self.assertEqual(len(self.session.run_records), 1)
         self.assertEqual(self.session.status, SessionStatus.INTERRUPTED)
 
@@ -249,7 +249,7 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.runtime.resume("missing", "run-2", "继续")
 
-        self.tools_runner.run.assert_not_called()
+        self.run_runtime.run.assert_not_called()
 
     def test_resume_requires_interrupted_session(self):
         pending = self.runtime.create_session("session-2")
@@ -257,7 +257,7 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runtime.resume(pending.id, "run-2", "继续")
 
-        self.tools_runner.run.assert_not_called()
+        self.run_runtime.run.assert_not_called()
         self.assertEqual(pending.status, SessionStatus.PENDING)
         self.assertEqual(pending.run_records, [])
 
@@ -265,7 +265,7 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runtime.resume(self.session.id, "run-1", "继续")
 
-        self.tools_runner.run.assert_not_called()
+        self.run_runtime.run.assert_not_called()
         self.assertEqual(len(self.session.run_records), 1)
         self.assertEqual(self.session.status, SessionStatus.INTERRUPTED)
 
@@ -275,12 +275,12 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runtime.resume(self.session.id, "run-2", "继续")
 
-        self.tools_runner.run.assert_not_called()
+        self.run_runtime.run.assert_not_called()
         self.assertEqual(len(self.session.run_records), 1)
         self.assertEqual(self.session.status, SessionStatus.INTERRUPTED)
 
-    def test_resume_cleans_active_control_when_tools_runner_raises(self):
-        self.tools_runner.run.side_effect = RuntimeError("runner crashed")
+    def test_resume_cleans_active_control_when_run_runtime_raises(self):
+        self.run_runtime.run.side_effect = RuntimeError("runner crashed")
 
         with self.assertRaisesRegex(RuntimeError, "runner crashed"):
             self.runtime.resume(self.session.id, "run-2", "继续")

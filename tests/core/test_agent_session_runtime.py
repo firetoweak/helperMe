@@ -5,7 +5,7 @@ from core.agent import Agent
 from core.messages import LLMResponse, ToolCall
 from core.session_state import SessionEventType, SessionStatus
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
-from core.tools_runtime.tools_runner import RunStatus
+from core.tools_runtime.run_runtime import RunStatus
 
 
 SUCCESS = {
@@ -18,7 +18,7 @@ SUCCESS = {
 
 
 class AgentSessionRuntimeTest(unittest.TestCase):
-    @patch("core.tools_runtime.tools_runner.execute_tool", return_value=SUCCESS)
+    @patch("core.tools_runtime.run_runtime.execute_tool", return_value=SUCCESS)
     @patch("core.agent.LLMClient")
     def test_agent_starts_and_resumes_through_session_runtime(
         self,
@@ -72,7 +72,7 @@ class AgentSessionRuntimeTest(unittest.TestCase):
             ],
         )
         self.assertTrue(validate_tool_message_chain(agent.conversation.messages).ok)
-        self.assertFalse(hasattr(agent, "tools_runner"))
+        self.assertFalse(hasattr(agent, "run_runtime"))
 
     @patch("core.agent.LLMClient")
     def test_agent_starts_new_run_in_same_session_after_completed(

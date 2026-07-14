@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.tools_runtime.tools_runner import (
+from core.tools_runtime.run_runtime import (
     RunControl,
     RunResult,
-    ToolsRunner,
+    RunRuntime,
     RunStatus,
 )
 from core.session_state import (
@@ -47,8 +47,8 @@ class SessionRunOutcome:
 
 
 class SessionRuntime:
-    def __init__(self, tools_runner: ToolsRunner):
-        self.tools_runner = tools_runner
+    def __init__(self, run_runtime: RunRuntime):
+        self.run_runtime = run_runtime
         self.sessions: dict[str, Session] = {}
         self.active_controls: dict[str, RunControl] = {}
 
@@ -213,7 +213,7 @@ class SessionRuntime:
         control: RunControl,
     ) -> SessionRunOutcome:
         try:
-            result = self.tools_runner.run(
+            result = self.run_runtime.run(
                 conversation=session.conversation,
                 user_message=user_message,
                 max_rounds=max_rounds,
@@ -224,13 +224,13 @@ class SessionRuntime:
             event = SessionEvent(
                 kind=SessionEventType.FAILED,
                 session_id=session.id,
-                reason="tools_runner_exception",
+                reason="run_runtime_exception",
                 run_id=run_record.run_id,
             )
             session.transition_to(SessionStatus.FAILED, event)
             run_record.status = RunStatus.FAILED.value
             run_record.ended_at = ended_at
-            run_record.final_reason = "tools_runner_exception"
+            run_record.final_reason = "run_runtime_exception"
             raise
         target_status, event_kind = RUN_STATUS_MAPPING[result.status]
         ended_at = datetime.now(timezone.utc)

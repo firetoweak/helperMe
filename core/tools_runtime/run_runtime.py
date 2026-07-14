@@ -62,7 +62,7 @@ class RunResult:
         return self.checkpoints[-1].reason
 
 
-class ToolsRunner:
+class RunRuntime:
     """最小 tool-calling 运行内核。"""
 
     def __init__(

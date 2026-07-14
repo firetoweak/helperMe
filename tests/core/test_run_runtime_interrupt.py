@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from core.messages import Conversation, LLMResponse, ToolCall
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
-from core.tools_runtime.tools_runner import RunControl, ToolsRunner
+from core.tools_runtime.run_runtime import RunControl, RunRuntime
 
 
 class InterruptingLLMClient:
@@ -28,8 +28,8 @@ SUCCESS = {
 }
 
 
-class ToolsRunnerInterruptTest(unittest.TestCase):
-    @patch("core.tools_runtime.tools_runner.execute_tool", return_value=SUCCESS)
+class RunRuntimeInterruptTest(unittest.TestCase):
+    @patch("core.tools_runtime.run_runtime.execute_tool", return_value=SUCCESS)
     def test_interrupts_after_complete_tool_batch(self, _execute_tool):
         control = RunControl()
         llm = InterruptingLLMClient(
@@ -43,7 +43,7 @@ class ToolsRunnerInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = ToolsRunner(llm, "test-model").run(
+        result = RunRuntime(llm, "test-model").run(
             conversation,
             "执行工具",
             control=control,
@@ -53,7 +53,7 @@ class ToolsRunnerInterruptTest(unittest.TestCase):
         self.assertEqual(result.final_reason, "run_interrupted")
         self.assertTrue(validate_tool_message_chain(conversation.messages).ok)
 
-    @patch("core.tools_runtime.tools_runner.execute_tool", return_value=SUCCESS)
+    @patch("core.tools_runtime.run_runtime.execute_tool", return_value=SUCCESS)
     def test_interrupt_waits_for_verification(self, _execute_tool):
         control = RunControl()
         llm = InterruptingLLMClient(
@@ -71,7 +71,7 @@ class ToolsRunnerInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = ToolsRunner(llm, "test-model").run(
+        result = RunRuntime(llm, "test-model").run(
             conversation,
             "修改文件",
             max_rounds=2,

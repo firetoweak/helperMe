@@ -13,7 +13,7 @@ from core.session_state import SessionStatus
 import tools
 from core.tools_runtime.tools_checkpoint import checkpoint_to_record
 from core.runtime_modes import RuntimeMode
-from core.tools_runtime.tools_runner import RunResult, ToolsRunner
+from core.tools_runtime.run_runtime import RunResult, RunRuntime
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -530,12 +530,12 @@ class Agent:
     def __init__(self, model: str = "default", runtime_mode: RuntimeMode | None = None):
         self.llm_client = LLMClient()
         self.model = model
-        tools_runner = ToolsRunner(
+        run_runtime = RunRuntime(
             self.llm_client,
             self.model,
             runtime_mode=runtime_mode,
         )
-        self.session_runtime = SessionRuntime(tools_runner)
+        self.session_runtime = SessionRuntime(run_runtime)
         self.session = self.session_runtime.create_session(
             f"session-{uuid4().hex}"
         )

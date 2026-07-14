@@ -1,7 +1,7 @@
 import unittest
 
 from core.messages import Conversation
-from core.tools_runtime.tools_runner import ToolsRunner
+from core.tools_runtime.run_runtime import RunRuntime
 
 
 class ContextLimitLLMClient:
@@ -9,9 +9,9 @@ class ContextLimitLLMClient:
         raise RuntimeError("maximum context length exceeded")
 
 
-class ToolsRunnerContextTest(unittest.TestCase):
+class RunRuntimeContextTest(unittest.TestCase):
     def test_context_limit_error_blocks_without_retry(self):
-        runner = ToolsRunner(ContextLimitLLMClient(), "test-model")
+        runner = RunRuntime(ContextLimitLLMClient(), "test-model")
         conversation = Conversation()
 
         result = runner.run(conversation, "hello", max_rounds=3)

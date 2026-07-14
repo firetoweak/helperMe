@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from core.messages import Conversation, LLMResponse, ToolCall
-from core.tools_runtime.tools_runner import ToolsRunner
+from core.tools_runtime.run_runtime import RunRuntime
 
 
 class RecordingLLMClient:
@@ -13,9 +13,9 @@ class RecordingLLMClient:
         return self.responses.pop(0)
 
 
-class ToolsRunnerStopGuardTest(unittest.TestCase):
+class RunRuntimeStopGuardTest(unittest.TestCase):
     @patch(
-        "core.tools_runtime.tools_runner.execute_tool",
+        "core.tools_runtime.run_runtime.execute_tool",
         return_value={
             "ok": True,
             "code": "OK",
@@ -41,7 +41,7 @@ class ToolsRunnerStopGuardTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = ToolsRunner(llm, "test-model").run(
+        result = RunRuntime(llm, "test-model").run(
             conversation,
             "修改文件",
             max_rounds=4,

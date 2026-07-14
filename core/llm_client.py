@@ -21,7 +21,7 @@ class LLMClient:
             base_url="http://60.13.232.228:3553/v1",
             api_key="EMPTY",
             http_client=http_client,
-            max_retries=0,  # retry 交给 ToolsRunner，避免双层叠加
+            max_retries=0,  # retry 交给 RunRuntime，避免双层叠加
         )
 
     def chat(self, messages, model, tools=None) -> LLMResponse:

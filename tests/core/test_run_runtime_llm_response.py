@@ -1,7 +1,7 @@
 import unittest
 
 from core.messages import Conversation, InvalidLLMResponse
-from core.tools_runtime.tools_runner import RunStatus, ToolsRunner
+from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 
 
 class EmptyResponseLLMClient:
@@ -16,10 +16,10 @@ class EmptyResponseLLMClient:
         )
 
 
-class ToolsRunnerInvalidLLMResponseTest(unittest.TestCase):
+class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
     def test_empty_response_fails_without_retry_or_conversation_pollution(self):
         llm_client = EmptyResponseLLMClient()
-        runner = ToolsRunner(llm_client, "test-model")
+        runner = RunRuntime(llm_client, "test-model")
         conversation = Conversation()
 
         result = runner.run(conversation, "hello")

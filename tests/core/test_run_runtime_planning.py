@@ -3,7 +3,7 @@ import unittest
 from core.messages import Conversation, LLMResponse, ToolCall
 from core.planning import PlanningMode
 from core.runtime_modes import PlainMode
-from core.tools_runtime.tools_runner import ToolsRunner
+from core.tools_runtime.run_runtime import RunRuntime
 
 
 class RecordingLLMClient:
@@ -18,7 +18,7 @@ class RecordingLLMClient:
         return self.responses.pop(0)
 
 
-class ToolsRunnerPlanningTest(unittest.TestCase):
+class RunRuntimePlanningTest(unittest.TestCase):
     def test_runtime_plan_is_injected_without_polluting_conversation(self):
         llm = RecordingLLMClient(
             [
@@ -30,7 +30,7 @@ class ToolsRunnerPlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="最终回答"),
             ]
         )
-        runner = ToolsRunner(llm, "test-model", runtime_mode=PlanningMode())
+        runner = RunRuntime(llm, "test-model", runtime_mode=PlanningMode())
         conversation = Conversation()
 
         result = runner.run(conversation, "帮我分析项目", max_rounds=3)
@@ -54,7 +54,7 @@ class ToolsRunnerPlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="复核后的最终回答"),
             ]
         )
-        runner = ToolsRunner(llm, "test-model", runtime_mode=PlanningMode())
+        runner = RunRuntime(llm, "test-model", runtime_mode=PlanningMode())
         conversation = Conversation()
 
         result = runner.run(conversation, "总结一下", max_rounds=3)
@@ -86,7 +86,7 @@ class ToolsRunnerPlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="调整后最终回答"),
             ]
         )
-        runner = ToolsRunner(llm, "test-model", runtime_mode=PlanningMode())
+        runner = RunRuntime(llm, "test-model", runtime_mode=PlanningMode())
         conversation = Conversation()
 
         result = runner.run(conversation, "调用一个不存在的工具", max_rounds=5)
@@ -111,7 +111,7 @@ class ToolsRunnerPlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="直接最终回答"),
             ]
         )
-        runner = ToolsRunner(llm, "test-model", runtime_mode=PlainMode())
+        runner = RunRuntime(llm, "test-model", runtime_mode=PlainMode())
         conversation = Conversation()
 
         result = runner.run(conversation, "直接回答", max_rounds=2)
@@ -133,7 +133,7 @@ class ToolsRunnerPlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="默认直接回答"),
             ]
         )
-        runner = ToolsRunner(llm, "test-model")
+        runner = RunRuntime(llm, "test-model")
         conversation = Conversation()
 
         result = runner.run(conversation, "默认回答", max_rounds=2)
