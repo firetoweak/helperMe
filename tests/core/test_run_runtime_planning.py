@@ -1,5 +1,6 @@
 import unittest
 
+from core.context_manager import ContextManager
 from core.messages import Conversation, LLMResponse, ToolCall
 from core.planning import PlanningMode
 from core.runtime_modes import PlainMode
@@ -36,14 +37,20 @@ class RunRuntimePlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="最终回答"),
             ]
         )
-        runner = RunRuntime(llm, "test-model", runtime_mode=PlanningMode())
+        runner = RunRuntime(
+            llm,
+            "test-model",
+            runtime_mode=PlanningMode(),
+            context_manager=ContextManager(),
+        )
         conversation = self._conversation()
 
         result = runner.run(conversation, "帮我分析项目", max_rounds=3)
 
         self.assertEqual(result.status, "completed")
         self.assertIn("只返回 JSON", llm.seen_messages[0][0]["content"])
-        self.assertIn("当前运行计划", llm.seen_messages[1][0]["content"])
+        self.assertIn("运行时指令", llm.seen_messages[1][0]["content"])
+        self.assertIn("当前执行计划", llm.seen_messages[1][0]["content"])
         self.assertIn("理解目标", llm.seen_messages[1][0]["content"])
         self.assertFalse(
             any("当前运行计划" in str(message.get("content")) for message in conversation.messages)
@@ -60,7 +67,12 @@ class RunRuntimePlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="复核后的最终回答"),
             ]
         )
-        runner = RunRuntime(llm, "test-model", runtime_mode=PlanningMode())
+        runner = RunRuntime(
+            llm,
+            "test-model",
+            runtime_mode=PlanningMode(),
+            context_manager=ContextManager(),
+        )
         conversation = self._conversation()
 
         result = runner.run(conversation, "总结一下", max_rounds=3)
@@ -92,7 +104,12 @@ class RunRuntimePlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="调整后最终回答"),
             ]
         )
-        runner = RunRuntime(llm, "test-model", runtime_mode=PlanningMode())
+        runner = RunRuntime(
+            llm,
+            "test-model",
+            runtime_mode=PlanningMode(),
+            context_manager=ContextManager(),
+        )
         conversation = self._conversation()
 
         result = runner.run(conversation, "调用一个不存在的工具", max_rounds=5)
@@ -117,7 +134,12 @@ class RunRuntimePlanningTest(unittest.TestCase):
                 LLMResponse(type="text", content="直接最终回答"),
             ]
         )
-        runner = RunRuntime(llm, "test-model", runtime_mode=PlainMode())
+        runner = RunRuntime(
+            llm,
+            "test-model",
+            runtime_mode=PlainMode(),
+            context_manager=ContextManager(),
+        )
         conversation = self._conversation()
 
         result = runner.run(conversation, "直接回答", max_rounds=2)

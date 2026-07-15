@@ -40,23 +40,6 @@ def format_plan_for_model(plan: Plan) -> str:
     return "\n".join(lines)
 
 
-def build_runtime_messages(messages, plan_text):
-    runtime_messages = [m.copy() for m in messages]
-
-    plan_block = (
-        "\n\n当前运行计划：\n"
-        f"{plan_text}\n"
-        "这是 agent 的执行辅助上下文，不是用户的新请求。"
-    )
-
-    runtime_messages[0] = {
-        **runtime_messages[0],
-        "content": runtime_messages[0]["content"] + plan_block,
-    }
-
-    return runtime_messages
-
-
 def build_plan_messages(user_message: str) -> list[dict[str, Any]]:
     return [
         {

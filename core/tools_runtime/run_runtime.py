@@ -33,7 +33,7 @@ from core.tools_runtime.tools_protocol import (
 )
 from core.tools_runtime.tools_state import ToolsState
 from core.runtime_modes import RuntimeMode
-
+from core.context_manager import ContextManager, ModelContext, ContextRequest
 
 class RunStatus(str, Enum):
     COMPLETED = "completed"
@@ -73,10 +73,12 @@ class RunRuntime:
         llm_client: LLMClient,
         model: str,
         runtime_mode: RuntimeMode,
+        context_manager: ContextManager,
     ):
         self.llm_client = llm_client
         self.model = model
         self.runtime_mode = runtime_mode
+        self.context_manager = context_manager
 
     @staticmethod
     def _finish(
@@ -95,7 +97,7 @@ class RunRuntime:
 
     def _call_llm_with_retry(
         self,
-        conversation: Conversation,
+        model_context: ModelContext,
         round_index: int,
         checkpoints: list[Checkpoint],
         max_llm_retries: int = 3,
@@ -103,9 +105,8 @@ class RunRuntime:
         last_error = ""
         for attempt in range(1, max_llm_retries + 1):
             try:
-                messages = self.runtime_mode.prepare_messages(conversation.messages)
                 return self.llm_client.chat(
-                    messages,
+                    model_context.messages,
                     self.model,
                     get_tools(),
                 )
@@ -150,7 +151,6 @@ class RunRuntime:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
         run_control = control or RunControl()
-
         self.runtime_mode.start(user_message, conversation, self.llm_client, self.model)
 
         checkpoints.append(run_started_checkpoint(max_rounds))
@@ -166,9 +166,14 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                 )
-
+            context = self.context_manager.build(
+                ContextRequest(
+                    conversation_messages=conversation.messages,
+                    runtime_instructions=self.runtime_mode.runtime_instructions(),
+                )
+            )
             llm_outcome = self._call_llm_with_retry(
-                conversation,
+                context,
                 round_index,
                 checkpoints,
             )

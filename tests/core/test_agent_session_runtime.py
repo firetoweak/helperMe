@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 
 import tools  # noqa: F401
 from core.agent_application import AgentApplication
+from core.context_manager import ContextManager
 from core.messages import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.session_runner import SessionRuntime
@@ -27,6 +28,7 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
                 llm_client=llm_client,
                 model="test-model",
                 runtime_mode=PlainMode(),
+                context_manager=ContextManager(),
             )
         )
         application = AgentApplication(

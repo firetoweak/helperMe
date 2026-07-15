@@ -6,6 +6,7 @@ from core.prompt import DEFAULT_AGENT_PROMPT
 from core.runtime_modes import PlainMode, RuntimeMode
 from core.session_runner import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
+from core.context_manager import ContextManager
 
 # 工具目前通过导入副作用注册；composition root 是唯一组装入口。
 import tools  # noqa: F401
@@ -23,6 +24,7 @@ def create_agent_application(
         llm_client=llm_client,
         model=model,
         runtime_mode=runtime_mode if runtime_mode is not None else PlainMode(),
+        context_manager=ContextManager(),
     )
     session_runtime = SessionRuntime(run_runtime)
     return AgentApplication(

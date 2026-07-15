@@ -10,7 +10,7 @@ class RuntimeMode(Protocol):
     def start(self, user_message: str, conversation: Conversation, llm_client, model: str) -> None:
         ...
 
-    def prepare_messages(self, messages: list[dict]) -> list[dict]:
+    def runtime_instructions(self) -> list[str]:
         ...
 
     def on_assistant_text(self, conversation: Conversation) -> bool:

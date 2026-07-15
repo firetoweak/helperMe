@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from core.context_manager import ContextManager
 from core.llm_client import LLMTransientError
 from core.messages import Conversation, InvalidLLMResponse, LLMResponse
 from core.runtime_modes import PlainMode
@@ -22,7 +23,7 @@ class EmptyResponseLLMClient:
 class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
     def test_empty_response_fails_without_retry_or_conversation_pollution(self):
         llm_client = EmptyResponseLLMClient()
-        runner = RunRuntime(llm_client, "test-model", PlainMode())
+        runner = RunRuntime(llm_client, "test-model", PlainMode(), ContextManager())
         conversation = Conversation()
 
         result = runner.run(conversation, "hello")
@@ -48,7 +49,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
                 raise RuntimeError("client bug")
 
         llm_client = BrokenLLMClient()
-        runner = RunRuntime(llm_client, "test-model", PlainMode())
+        runner = RunRuntime(llm_client, "test-model", PlainMode(), ContextManager())
 
         with self.assertRaisesRegex(RuntimeError, "client bug"):
             runner.run(Conversation(), "hello")
@@ -68,7 +69,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
                 return LLMResponse(type="text", content="done")
 
         llm_client = TransientLLMClient()
-        runner = RunRuntime(llm_client, "test-model", PlainMode())
+        runner = RunRuntime(llm_client, "test-model", PlainMode(), ContextManager())
 
         result = runner.run(Conversation(), "hello")
 

@@ -3,7 +3,6 @@ from unittest.mock import Mock
 
 from core.planning import (
     build_plan_messages,
-    build_runtime_messages,
     create_plan,
     format_plan_for_model,
     InvalidPlanResponse,
@@ -13,19 +12,6 @@ from core.messages import LLMResponse
 
 
 class PlannerTest(unittest.TestCase):
-    def test_build_runtime_messages_adds_plan_to_existing_system(self):
-        messages = [
-            {"role": "system", "content": "基础规则"},
-            {"role": "user", "content": "你好"},
-        ]
-
-        runtime_messages = build_runtime_messages(messages, "计划内容")
-
-        self.assertIn("基础规则", runtime_messages[0]["content"])
-        self.assertIn("当前运行计划", runtime_messages[0]["content"])
-        self.assertIn("计划内容", runtime_messages[0]["content"])
-        self.assertEqual(messages[0]["content"], "基础规则")
-
     def test_create_and_format_plan(self):
         llm_client = Mock()
         llm_client.chat.return_value = LLMResponse(

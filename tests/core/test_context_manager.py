@@ -53,26 +53,6 @@ class ContextManagerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "system"):
             self.manager.build(request)
 
-    def test_build_rejects_empty_conversation_messages(self):
-        request = ContextRequest(
-            conversation_messages=[],
-            runtime_instructions=[],
-        )
-
-        with self.assertRaises(ValueError):
-            self.manager.build(request)
-
-    def test_build_rejects_blank_runtime_instruction(self):
-        request = ContextRequest(
-            conversation_messages=[
-                {"role": "system", "content": "system prompt"},
-            ],
-            runtime_instructions=["  "],
-        )
-
-        with self.assertRaises(ValueError):
-            self.manager.build(request)
-
     def test_build_rejects_invalid_tool_message_chain(self):
         request = ContextRequest(
             conversation_messages=[

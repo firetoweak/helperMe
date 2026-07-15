@@ -3,7 +3,7 @@ from __future__ import annotations
 from core.messages import Conversation
 from core.tools_runtime.tools_state import ToolStep, ToolsState
 from core.planning.plan import Plan
-from core.planning.planner import build_runtime_messages, create_plan, format_plan_for_model
+from core.planning.planner import create_plan, format_plan_for_model
 
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}
 VERIFY_TOOL_NAMES = {"get_changes"}
@@ -25,8 +25,8 @@ class PlanningMode:
         self.plan = create_plan(user_message, llm_client, model)
         self.plan.mark_doing(1, "开始执行任务")
 
-    def prepare_messages(self, messages: list[dict]) -> list[dict]:
-        return build_runtime_messages(messages, format_plan_for_model(self.plan))
+    def runtime_instructions(self) -> list[str]:
+        return [format_plan_for_model(self.plan)]
 
     def on_assistant_text(self, conversation: Conversation) -> bool:
         if self.reflection_requested:
