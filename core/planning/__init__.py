@@ -1,6 +1,5 @@
 from core.planning.plan import Plan, PlanStep, PlanStepStatus
 from core.planning.planner import (
-    build_plan_messages,
     create_plan,
     format_plan_for_model,
     InvalidPlanResponse,
@@ -13,7 +12,6 @@ __all__ = [
     "PlanStep",
     "PlanStepStatus",
     "PlanningMode",
-    "build_plan_messages",
     "create_plan",
     "format_plan_for_model",
     "InvalidPlanResponse",

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from core.context import BudgetAssessment
+from core.model_call.types import LLMUsage
 from core.tools_runtime.stop_guard import verification_status
 from core.tools_runtime.tools_state import ToolsState
 
@@ -77,15 +79,42 @@ def message_chain_invalid_checkpoint(validation: dict[str, Any]) -> Checkpoint:
     )
 
 
-def context_length_exceeded_checkpoint(*, round_index: int, error: str) -> Checkpoint:
+def context_length_exceeded_checkpoint(
+    *,
+    stage: str,
+    error: str,
+    round_index: int | None = None,
+) -> Checkpoint:
     return Checkpoint(
         kind="run",
         reason="context_length_exceeded",
         message="运行已停止：上下文超过模型限制，当前阶段暂不做自动裁剪。",
         data={
+            "stage": stage,
             "round_index": round_index,
             "error": error,
             "hint": "上下文压缩会在后续 ContextCompactor 阶段实现。",
+        },
+    )
+
+
+def context_budget_exceeded_checkpoint(
+    *,
+    stage: str,
+    assessment: BudgetAssessment,
+    round_index: int | None = None,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="run",
+        reason="context_budget_exceeded",
+        message="运行已停止：当前模型输入超过项目上下文预算。",
+        data={
+            "stage": stage,
+            "round_index": round_index,
+            "estimated_input_tokens": assessment.estimated_input_tokens,
+            "input_budget_tokens": assessment.input_budget_tokens,
+            "overflow_tokens": assessment.overflow_tokens,
+            "hint": "上下文压缩会在后续 Safe Compression 阶段实现。",
         },
     )
 
@@ -139,12 +168,37 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
         ])
 
     if checkpoint.reason == "context_length_exceeded":
-        return "\n".join([
+        lines = [
             checkpoint.message,
-            f"轮次：{checkpoint.data['round_index']}。",
+            f"阶段：{checkpoint.data['stage']}。",
+        ]
+        if checkpoint.data["round_index"] is not None:
+            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        lines.extend([
             f"错误：{checkpoint.data['error']}",
             f"提示：{checkpoint.data['hint']}",
         ])
+        return "\n".join(lines)
+
+    if checkpoint.reason == "context_budget_exceeded":
+        lines = [
+            checkpoint.message,
+            f"阶段：{checkpoint.data['stage']}。",
+        ]
+        if checkpoint.data["round_index"] is not None:
+            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        lines.extend([
+            (
+                "估算输入："
+                f"{checkpoint.data['estimated_input_tokens']}，"
+                "项目预算："
+                f"{checkpoint.data['input_budget_tokens']}，"
+                "超出："
+                f"{checkpoint.data['overflow_tokens']}。"
+            ),
+            f"提示：{checkpoint.data['hint']}",
+        ])
+        return "\n".join(lines)
 
     if checkpoint.reason in {"empty_model_response", "invalid_llm_response"}:
         return "\n".join([
@@ -205,6 +259,25 @@ def llm_retry_checkpoint(
             "attempt": attempt,
             "max_attempts": max_attempts,
             "error": error,
+        },
+    )
+
+
+def llm_usage_checkpoint(
+    *,
+    stage: str,
+    usage: LLMUsage,
+    round_index: int | None = None,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="llm",
+        reason="llm_usage",
+        message="已记录模型真实 token 消耗。",
+        data={
+            "stage": stage,
+            "round_index": round_index,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
         },
     )
 

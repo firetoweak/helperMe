@@ -6,11 +6,13 @@ import time
 from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
+    context_budget_exceeded_checkpoint,
     context_length_exceeded_checkpoint,
     format_checkpoint,
     invalid_llm_response_checkpoint,
     llm_error_checkpoint,
     llm_retry_checkpoint,
+    llm_usage_checkpoint,
     message_chain_invalid_checkpoint,
     run_completed_checkpoint,
     run_interrupted_checkpoint,
@@ -19,12 +21,13 @@ from core.tools_runtime.tools_checkpoint import (
     verification_required_checkpoint,
 )
 from core.messages import Conversation
-from core.model_call.client import (
-    LLMClient,
-    LLMContextLengthError,
-    LLMTransientError,
+from core.model_call.client import LLMContextLengthError, LLMTransientError
+from core.model_call.service import (
+    ModelCallBlocked,
+    ModelCallRequest,
+    ModelCallService,
 )
-from core.model_call.types import InvalidLLMResponse, LLMResponse
+from core.model_call.types import InvalidLLMResponse, LLMResponse, LLMUsage
 from core.tool_registry import get_tools
 from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import encode_tool_result, execute_tool
@@ -34,7 +37,7 @@ from core.tools_runtime.tools_protocol import (
 )
 from core.tools_runtime.tools_state import ToolsState
 from core.runtime_modes import RuntimeMode
-from core.context_manager import ContextManager, ModelContext, ContextRequest
+from core.context import ContextManager, ContextRequest, ModelContext
 
 class RunStatus(str, Enum):
     COMPLETED = "completed"
@@ -71,12 +74,12 @@ class RunRuntime:
 
     def __init__(
         self,
-        llm_client: LLMClient,
+        model_calls: ModelCallService,
         model: str,
         runtime_mode: RuntimeMode,
         context_manager: ContextManager,
     ):
-        self.llm_client = llm_client
+        self.model_calls = model_calls
         self.model = model
         self.runtime_mode = runtime_mode
         self.context_manager = context_manager
@@ -99,6 +102,7 @@ class RunRuntime:
     def _call_llm_with_retry(
         self,
         model_context: ModelContext,
+        tools: list[dict],
         round_index: int,
         checkpoints: list[Checkpoint],
         max_llm_retries: int = 3,
@@ -106,12 +110,27 @@ class RunRuntime:
         last_error = ""
         for attempt in range(1, max_llm_retries + 1):
             try:
-                call_result = self.llm_client.chat(
-                    model_context.messages,
+                outcome = self.model_calls.call(
+                    ModelCallRequest(
+                        context=model_context,
+                        tools=tools,
+                    ),
                     self.model,
-                    get_tools(),
                 )
-                return call_result.response
+                if isinstance(outcome, ModelCallBlocked):
+                    return context_budget_exceeded_checkpoint(
+                        stage="agent_round",
+                        round_index=round_index,
+                        assessment=outcome.assessment,
+                    )
+                checkpoints.append(
+                    llm_usage_checkpoint(
+                        stage="agent_round",
+                        round_index=round_index,
+                        usage=outcome.usage,
+                    )
+                )
+                return outcome.response
             except InvalidLLMResponse as exc:
                 return invalid_llm_response_checkpoint(
                     round_index=round_index,
@@ -120,6 +139,7 @@ class RunRuntime:
                 )
             except LLMContextLengthError as exc:
                 return context_length_exceeded_checkpoint(
+                    stage="agent_round",
                     round_index=round_index,
                     error=str(exc),
                 )
@@ -154,10 +174,45 @@ class RunRuntime:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
         run_control = control or RunControl()
-        self.runtime_mode.start(user_message, conversation, self.llm_client, self.model)
-
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
+        try:
+            start_outcome = self.runtime_mode.start(
+                conversation=conversation,
+                model_calls=self.model_calls,
+                model=self.model,
+                context_manager=self.context_manager,
+            )
+        except LLMContextLengthError as exc:
+            checkpoint = context_length_exceeded_checkpoint(
+                stage="planning",
+                error=str(exc),
+            )
+            return self._finish(
+                status=RunStatus.BLOCKED,
+                answer=format_checkpoint(checkpoint),
+                checkpoint=checkpoint,
+                checkpoints=checkpoints,
+            )
+        if isinstance(start_outcome, ModelCallBlocked):
+            checkpoint = context_budget_exceeded_checkpoint(
+                stage="planning",
+                assessment=start_outcome.assessment,
+            )
+            return self._finish(
+                status=RunStatus.BLOCKED,
+                answer=format_checkpoint(checkpoint),
+                checkpoint=checkpoint,
+                checkpoints=checkpoints,
+            )
+        if isinstance(start_outcome, LLMUsage):
+            checkpoints.append(
+                llm_usage_checkpoint(
+                    stage="planning",
+                    usage=start_outcome,
+                )
+            )
+        tools = get_tools()
 
         for round_index in range(1, max_rounds + 1):
             validation = validate_tool_message_chain(conversation.messages)
@@ -177,13 +232,17 @@ class RunRuntime:
             )
             llm_outcome = self._call_llm_with_retry(
                 context,
+                tools,
                 round_index,
                 checkpoints,
             )
             if isinstance(llm_outcome, Checkpoint):
                 status = (
                     RunStatus.BLOCKED
-                    if llm_outcome.reason == "context_length_exceeded"
+                    if llm_outcome.reason in {
+                        "context_budget_exceeded",
+                        "context_length_exceeded",
+                    }
                     else RunStatus.FAILED
                 )
                 return self._finish(

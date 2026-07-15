@@ -1,28 +1,39 @@
 import unittest
 from unittest.mock import Mock
 
+from core.context import ContextManager
+from core.messages import Conversation
 from core.planning import (
-    build_plan_messages,
     create_plan,
     format_plan_for_model,
     InvalidPlanResponse,
     parse_plan_response,
 )
 from core.model_call import LLMResponse
+from core.model_call.service import ModelCallRequest
 from tests.core.llm_test_support import call_result
 
 
 class PlannerTest(unittest.TestCase):
     def test_create_and_format_plan(self):
-        llm_client = Mock()
-        llm_client.chat.return_value = call_result(
+        model_calls = Mock()
+        model_calls.call.return_value = call_result(
             LLMResponse(
                 type="text",
                 content='{"goal": "帮我分析项目", "steps": ["读取项目", "分析结构"]}',
             )
         )
+        conversation = Conversation()
+        conversation.set_system_prompt("system prompt")
+        conversation.add_user("帮我分析项目")
 
-        plan = create_plan("帮我分析项目", llm_client, "test-model")
+        plan_result = create_plan(
+            conversation,
+            ContextManager(),
+            model_calls,
+            "test-model",
+        )
+        plan = plan_result.plan
         text = format_plan_for_model(plan)
 
         self.assertEqual(plan.goal, "帮我分析项目")
@@ -31,18 +42,52 @@ class PlannerTest(unittest.TestCase):
         self.assertIn("[pending]", text)
 
     def test_create_plan_propagates_llm_failure(self):
-        llm_client = Mock()
-        llm_client.chat.side_effect = RuntimeError("planner unavailable")
+        model_calls = Mock()
+        model_calls.call.side_effect = RuntimeError("planner unavailable")
+        conversation = Conversation()
+        conversation.set_system_prompt("system prompt")
+        conversation.add_user("帮我分析项目")
 
         with self.assertRaisesRegex(RuntimeError, "planner unavailable"):
-            create_plan("帮我分析项目", llm_client, "test-model")
+            create_plan(
+                conversation,
+                ContextManager(),
+                model_calls,
+                "test-model",
+            )
 
-    def test_build_plan_messages_requires_json_only(self):
-        messages = build_plan_messages("帮我分析项目")
+    def test_create_plan_projects_full_conversation_without_tools(self):
+        model_calls = Mock()
+        model_calls.call.return_value = call_result(
+            LLMResponse(
+                type="text",
+                content='{"goal": "继续分析", "steps": ["读取历史", "继续任务"]}',
+            )
+        )
+        conversation = Conversation()
+        conversation.set_system_prompt("system prompt")
+        conversation.add_user("第一轮问题")
+        conversation.add_assistant(LLMResponse(type="text", content="第一轮回答"))
+        conversation.add_user("继续分析")
 
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertIn("只返回 JSON", messages[0]["content"])
-        self.assertEqual(messages[1], {"role": "user", "content": "帮我分析项目"})
+        create_plan(
+            conversation,
+            ContextManager(),
+            model_calls,
+            "test-model",
+        )
+
+        request, model = model_calls.call.call_args.args
+
+        self.assertIsInstance(request, ModelCallRequest)
+        self.assertEqual(model, "test-model")
+        self.assertEqual(request.tools, [])
+        self.assertIn("只返回 JSON", request.context.messages[0]["content"])
+        self.assertEqual(
+            request.context.messages[1:],
+            conversation.messages[1:],
+        )
+        self.assertEqual(conversation.messages[0]["content"], "system prompt")
 
     def test_parse_valid_plan_response(self):
         plan = parse_plan_response(

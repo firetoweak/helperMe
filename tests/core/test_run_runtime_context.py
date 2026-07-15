@@ -1,13 +1,14 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from core.context_manager import ContextManager
+from core.context import BudgetAssessment, ContextManager
 from core.messages import Conversation
 from core.model_call import LLMResponse
 from core.model_call.client import LLMContextLengthError, LLMTransientError
+from core.model_call.service import ModelCallBlocked
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
-from tests.core.llm_test_support import call_result
+from tests.core.llm_test_support import call_result, model_call_service
 
 
 class RecordingLLMClient:
@@ -33,7 +34,7 @@ class ChangingInstructionsMode:
         self.instruction = "第一轮指令"
         self.instruction_calls = 0
 
-    def start(self, user_message, conversation, llm_client, model):
+    def start(self, conversation, model_calls, model, context_manager):
         return None
 
     def runtime_instructions(self):
@@ -59,9 +60,34 @@ class StaticInstructionsMode(ChangingInstructionsMode):
 
 
 class RunRuntimeContextTest(unittest.TestCase):
+    def test_project_budget_exceeded_blocks_before_model_call(self):
+        model_calls = Mock()
+        model_calls.call.return_value = ModelCallBlocked(
+            BudgetAssessment(
+                estimated_input_tokens=801,
+                input_budget_tokens=750,
+            )
+        )
+        conversation = Conversation()
+
+        result = RunRuntime(
+            model_calls,
+            "test-model",
+            PlainMode(),
+            ContextManager(),
+        ).run(conversation, "hello")
+
+        self.assertEqual(result.status, RunStatus.BLOCKED)
+        self.assertEqual(result.final_reason, "context_budget_exceeded")
+        self.assertEqual(
+            conversation.messages,
+            [{"role": "user", "content": "hello"}],
+        )
+        self.assertEqual(result.checkpoints[-1].data["overflow_tokens"], 51)
+
     def test_context_limit_error_blocks_without_retry(self):
         runner = RunRuntime(
-            ContextLimitLLMClient(),
+            model_call_service(ContextLimitLLMClient()),
             "test-model",
             PlainMode(),
             ContextManager(),
@@ -90,7 +116,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         conversation.set_system_prompt("system prompt")
 
         result = RunRuntime(
-            llm_client=llm_client,
+            model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,
             context_manager=context_manager,
@@ -116,7 +142,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         conversation.set_system_prompt("system prompt")
 
         result = RunRuntime(
-            llm_client=llm_client,
+            model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,
             context_manager=context_manager,
