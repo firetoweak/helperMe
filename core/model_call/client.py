@@ -1,7 +1,10 @@
-"""Step 5: 工具闭环 + Pydantic 校验执行"""
+"""外部模型 API 客户端。"""
 
+from __future__ import annotations
 
 from typing import Any
+
+import httpx
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -10,9 +13,15 @@ from openai import (
     OpenAIError,
     RateLimitError,
 )
+
 from core.context_compactor import is_context_limit_error
-from core.messages import InvalidLLMResponse, LLMResponse, ToolCall
-import httpx
+from core.model_call.types import (
+    InvalidLLMResponse,
+    LLMCallResult,
+    LLMResponse,
+    LLMUsage,
+    ToolCall,
+)
 
 
 class LLMTransientError(RuntimeError):
@@ -22,27 +31,28 @@ class LLMTransientError(RuntimeError):
 class LLMContextLengthError(RuntimeError):
     pass
 
+
 class LLMClient:
     def __init__(self):
         http_client = httpx.Client(
-            trust_env=False,   # 关键：不读系统代理
+            trust_env=False,
             timeout=httpx.Timeout(
-                connect=10.0,   # 连不上尽快失败
-                read=120.0,     # 模型推理可以慢，读超时保留
+                connect=10.0,
+                read=120.0,
                 write=30.0,
                 pool=10.0,
-            )
+            ),
         )
         self.client = OpenAI(
             base_url="http://60.13.232.228:3553/v1",
             api_key="EMPTY",
             http_client=http_client,
-            max_retries=0,  # retry 交给 RunRuntime，避免双层叠加
+            max_retries=0,
         )
 
-    def chat(self, messages, model, tools=None) -> LLMResponse:
+    def chat(self, messages, model, tools=None) -> LLMCallResult:
         try:
-            response = self.completions_create(model, messages, tools)
+            completion = self.completions_create(model, messages, tools)
         except OpenAIError as exc:
             error = str(exc)
             if is_context_limit_error(error):
@@ -56,28 +66,33 @@ class LLMClient:
             ):
                 raise LLMTransientError(error) from exc
             raise
-        return self._parse_response(response)
 
-    def completions_create(self, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:
-        """
-        只负责发送请求，解析返回，不修改messages
-        """
-        response = self.client.chat.completions.create(
+        return LLMCallResult(
+            response=self._parse_response(completion.choices[0].message),
+            usage=LLMUsage(
+                input_tokens=completion.usage.prompt_tokens,
+                output_tokens=completion.usage.completion_tokens,
+            ),
+        )
+
+    def completions_create(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> Any:
+        """发送一次请求并返回完整 SDK completion，不修改 messages。"""
+        return self.client.chat.completions.create(
             model=model,
             messages=messages,
             tools=tools,
             tool_choice="auto" if tools else None,
         )
-        return response.choices[0].message
-
 
     def _parse_response(self, response: Any) -> LLMResponse:
-        """
-        把 SDK 返回的 response 转成统一格式，并写入 messages。
-        """
         if response.tool_calls:
             return LLMResponse(
-                type="tool_calls", 
+                type="tool_calls",
                 calls=[
                     ToolCall(
                         id=call.id,
@@ -85,7 +100,7 @@ class LLMClient:
                         arguments=call.function.arguments,
                     )
                     for call in response.tool_calls
-                ]
+                ],
             )
 
         if isinstance(response.content, str) and response.content.strip():

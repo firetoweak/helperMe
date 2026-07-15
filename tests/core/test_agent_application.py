@@ -124,7 +124,7 @@ class AgentApplicationContractTest(unittest.TestCase):
             "json",
             "os",
             "pathlib",
-            "core.llm_client",
+            "core.model_call",
             "core.tools_runtime.run_runtime",
         }
         self.assertTrue(

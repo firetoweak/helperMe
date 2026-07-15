@@ -8,15 +8,18 @@ from core.planning import (
     InvalidPlanResponse,
     parse_plan_response,
 )
-from core.messages import LLMResponse
+from core.model_call import LLMResponse
+from tests.core.llm_test_support import call_result
 
 
 class PlannerTest(unittest.TestCase):
     def test_create_and_format_plan(self):
         llm_client = Mock()
-        llm_client.chat.return_value = LLMResponse(
-            type="text",
-            content='{"goal": "帮我分析项目", "steps": ["读取项目", "分析结构"]}',
+        llm_client.chat.return_value = call_result(
+            LLMResponse(
+                type="text",
+                content='{"goal": "帮我分析项目", "steps": ["读取项目", "分析结构"]}',
+            )
         )
 
         plan = create_plan("帮我分析项目", llm_client, "test-model")

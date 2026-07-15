@@ -4,12 +4,13 @@ from unittest.mock import Mock, patch
 import tools  # noqa: F401
 from core.agent_application import AgentApplication
 from core.context_manager import ContextManager
-from core.messages import LLMResponse, ToolCall
+from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.session_runner import SessionRuntime
 from core.session_state import SessionEventType, SessionStatus
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
+from tests.core.llm_test_support import call_result
 
 
 SUCCESS = {
@@ -59,7 +60,7 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
             response = next(responses)
             if response.type == "tool_calls":
                 application.request_interrupt("session-1", "等待继续")
-            return response
+            return call_result(response)
 
         llm_client.chat.side_effect = chat
         application, session_runtime = self._build_application(llm_client)
@@ -92,8 +93,8 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
     def test_application_starts_new_run_in_same_session_after_completed(self):
         llm_client = Mock()
         llm_client.chat.side_effect = (
-            LLMResponse(type="text", content="第一轮完成"),
-            LLMResponse(type="text", content="第二轮完成"),
+            call_result(LLMResponse(type="text", content="第一轮完成")),
+            call_result(LLMResponse(type="text", content="第二轮完成")),
         )
         application, session_runtime = self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]

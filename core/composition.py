@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.agent_application import AgentApplication
-from core.llm_client import LLMClient
+from core.model_call.client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
 from core.runtime_modes import PlainMode, RuntimeMode
 from core.session_runner import SessionRuntime

@@ -2,10 +2,12 @@ import unittest
 from unittest.mock import patch
 
 from core.context_manager import ContextManager
-from core.messages import Conversation, LLMResponse, ToolCall
+from core.messages import Conversation
+from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.run_runtime import RunControl, RunRuntime
+from tests.core.llm_test_support import call_result
 
 
 class InterruptingLLMClient:
@@ -18,7 +20,7 @@ class InterruptingLLMClient:
         self.calls += 1
         if self.calls == 1:
             self.control.request_interrupt("测试中断")
-        return self.responses.pop(0)
+        return call_result(self.responses.pop(0))
 
 
 SUCCESS = {

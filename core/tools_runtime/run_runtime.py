@@ -18,12 +18,13 @@ from core.tools_runtime.tools_checkpoint import (
     tool_batch_completed_checkpoint,
     verification_required_checkpoint,
 )
-from core.messages import Conversation, InvalidLLMResponse, LLMResponse
-from core.llm_client import (
+from core.messages import Conversation
+from core.model_call.client import (
     LLMClient,
     LLMContextLengthError,
     LLMTransientError,
 )
+from core.model_call.types import InvalidLLMResponse, LLMResponse
 from core.tool_registry import get_tools
 from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import encode_tool_result, execute_tool
@@ -105,11 +106,12 @@ class RunRuntime:
         last_error = ""
         for attempt in range(1, max_llm_retries + 1):
             try:
-                return self.llm_client.chat(
+                call_result = self.llm_client.chat(
                     model_context.messages,
                     self.model,
                     get_tools(),
                 )
+                return call_result.response
             except InvalidLLMResponse as exc:
                 return invalid_llm_response_checkpoint(
                     round_index=round_index,
@@ -141,6 +143,7 @@ class RunRuntime:
                     error=last_error,
                 )
                 return checkpoint
+
     def run(
         self,
         conversation: Conversation,

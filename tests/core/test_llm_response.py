@@ -1,8 +1,11 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock
 
-from core.llm_client import LLMClient
-from core.messages import InvalidLLMResponse, LLMResponse, ToolCall
+from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
+from core.model_call.client import (
+    LLMClient,
+)
 
 
 class LLMResponseContractTest(unittest.TestCase):
@@ -37,6 +40,32 @@ class LLMResponseContractTest(unittest.TestCase):
             LLMClient._parse_response(None, response)
 
         self.assertEqual(raised.exception.code, "empty_model_response")
+
+    def test_client_returns_response_with_real_usage(self):
+        client = object.__new__(LLMClient)
+        client.completions_create = Mock(
+            return_value=SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            tool_calls=None,
+                            content="done",
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=120,
+                    completion_tokens=30,
+                ),
+            )
+        )
+
+        result = client.chat([], "test-model", tools=None)
+
+        self.assertEqual(result.response.content, "done")
+        self.assertEqual(result.usage.input_tokens, 120)
+        self.assertEqual(result.usage.output_tokens, 30)
+        self.assertEqual(result.usage.total_tokens, 150)
 
 
 if __name__ == "__main__":

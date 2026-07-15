@@ -18,11 +18,12 @@ def create_plan(
     llm_client,
     model: str,
 ) -> Plan:
-    response = llm_client.chat(
+    call_result = llm_client.chat(
         build_plan_messages(user_message),
         model,
         tools=None,
     )
+    response = call_result.response
 
     if response.type != "text":
         raise InvalidPlanResponse("planner response type must be text")

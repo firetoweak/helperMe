@@ -1,68 +1,6 @@
-# 定义消息结构
-# 管理 messages 列表的增删改
-# messages.py
-# ├── 类型定义     → LLMResponse、ToolCall（给 agent 做判断用）
-# └── Conversation → 管理发给 API 的 messages 列表
-
 from typing import Any
 
-from dataclasses import dataclass
-
-
-class InvalidLLMResponse(ValueError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-@dataclass
-class ToolCall:
-    id: str
-    name: str
-    arguments: str          # 模型返回的是 JSON 字符串，先别 parse
-
-@dataclass
-class LLMResponse:
-    type: str               # "text" 或 "tool_calls"
-    content: str = ""       # type=="text" 时有值
-    calls: list[ToolCall] | None = None   # type=="tool_calls" 时有值
-
-    def __post_init__(self) -> None:
-        if self.type == "text":
-            if not isinstance(self.content, str) or not self.content.strip():
-                raise InvalidLLMResponse(
-                    "empty_model_response",
-                    "text response content must be non-empty",
-                )
-            if self.calls is not None:
-                raise InvalidLLMResponse(
-                    "invalid_llm_response",
-                    "text response cannot contain tool calls",
-                )
-            return
-
-        if self.type == "tool_calls":
-            if not isinstance(self.calls, list) or not self.calls:
-                raise InvalidLLMResponse(
-                    "invalid_llm_response",
-                    "tool_calls response must contain at least one call",
-                )
-            for index, call in enumerate(self.calls):
-                if not isinstance(call, ToolCall):
-                    raise InvalidLLMResponse(
-                        "invalid_llm_response",
-                        f"tool call[{index}] must be ToolCall",
-                    )
-                if not call.id or not call.name or not isinstance(call.arguments, str):
-                    raise InvalidLLMResponse(
-                        "invalid_llm_response",
-                        f"tool call[{index}] has invalid id/name/arguments",
-                    )
-            return
-
-        raise InvalidLLMResponse(
-            "invalid_llm_response",
-            f"unknown LLM response type: {self.type}",
-        )
+from core.model_call import LLMResponse
 
 
 # === 对话状态管理 ===
@@ -90,10 +28,10 @@ class Conversation:
                 "content": result["content"]
             })
 
-    def add_assistant(self, LLMResponse: LLMResponse) -> None:
-        if LLMResponse.type == "text":
-            self.messages.append({"role": "assistant", "content": LLMResponse.content})
-        elif LLMResponse.type == "tool_calls":
+    def add_assistant(self, response: LLMResponse) -> None:
+        if response.type == "text":
+            self.messages.append({"role": "assistant", "content": response.content})
+        elif response.type == "tool_calls":
             self.messages.append({
                 "role": "assistant", 
                 "content": None,
@@ -106,9 +44,9 @@ class Conversation:
                             "arguments": call.arguments,
                         },
                     } 
-                    for call in LLMResponse.calls
+                    for call in response.calls
                 ]
             })
         else:
-            raise ValueError(f"Unknown type: {LLMResponse.type}")
+            raise ValueError(f"Unknown type: {response.type}")
 

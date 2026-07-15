@@ -2,10 +2,12 @@ import unittest
 from unittest.mock import patch
 
 from core.context_manager import ContextManager
-from core.llm_client import LLMTransientError
-from core.messages import Conversation, InvalidLLMResponse, LLMResponse
+from core.messages import Conversation
+from core.model_call import InvalidLLMResponse, LLMResponse
+from core.model_call.client import LLMTransientError
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
+from tests.core.llm_test_support import call_result
 
 
 class EmptyResponseLLMClient:
@@ -66,7 +68,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
                 self.call_count += 1
                 if self.call_count == 1:
                     raise LLMTransientError("temporary unavailable")
-                return LLMResponse(type="text", content="done")
+                return call_result(LLMResponse(type="text", content="done"))
 
         llm_client = TransientLLMClient()
         runner = RunRuntime(llm_client, "test-model", PlainMode(), ContextManager())

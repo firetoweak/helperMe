@@ -2,10 +2,12 @@ import unittest
 from unittest.mock import Mock, patch
 
 from core.context_manager import ContextManager
-from core.llm_client import LLMContextLengthError, LLMTransientError
-from core.messages import Conversation, LLMResponse
+from core.messages import Conversation
+from core.model_call import LLMResponse
+from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
+from tests.core.llm_test_support import call_result
 
 
 class RecordingLLMClient:
@@ -18,7 +20,7 @@ class RecordingLLMClient:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response
+        return call_result(response)
 
 
 class ContextLimitLLMClient:
