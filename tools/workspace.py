@@ -7,10 +7,7 @@ WORKSPACE = Path(r"E:\myCard\Helper\helperMe-test1")
 
 def _to_workspace_relative(path: str) -> str:
     p = Path(path).resolve()
-    try:
-        return p.relative_to(WORKSPACE).as_posix()
-    except ValueError:
-        return p.as_posix()
+    return p.relative_to(WORKSPACE.resolve()).as_posix()
 
 def _resolve_in_workspace(
     path: str,

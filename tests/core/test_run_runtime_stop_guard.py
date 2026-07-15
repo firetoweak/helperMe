@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from core.messages import Conversation, LLMResponse, ToolCall
+from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime
 
 
@@ -41,7 +42,7 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(llm, "test-model").run(
+        result = RunRuntime(llm, "test-model", PlainMode()).run(
             conversation,
             "修改文件",
             max_rounds=4,

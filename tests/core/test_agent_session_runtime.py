@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 import tools  # noqa: F401
 from core.agent_application import AgentApplication
 from core.messages import LLMResponse, ToolCall
+from core.runtime_modes import PlainMode
 from core.session_runner import SessionRuntime
 from core.session_state import SessionEventType, SessionStatus
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
@@ -22,7 +23,11 @@ SUCCESS = {
 class AgentApplicationSessionRuntimeTest(unittest.TestCase):
     def _build_application(self, llm_client: Mock):
         session_runtime = SessionRuntime(
-            RunRuntime(llm_client=llm_client, model="test-model")
+            RunRuntime(
+                llm_client=llm_client,
+                model="test-model",
+                runtime_mode=PlainMode(),
+            )
         )
         application = AgentApplication(
             session_runtime=session_runtime,

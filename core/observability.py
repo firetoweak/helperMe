@@ -61,7 +61,7 @@ def format_run_log(trace: dict[str, Any]) -> str:
             str(trace["answer"]),
             "",
             "Checkpoints:",
-            json.dumps(trace.get("checkpoints", []), ensure_ascii=False, indent=2),
+            json.dumps(trace["checkpoints"], ensure_ascii=False, indent=2),
             "=" * 76,
             "",
         ]

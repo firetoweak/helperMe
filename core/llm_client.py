@@ -2,9 +2,25 @@
 
 
 from typing import Any
-from openai import OpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAI,
+    OpenAIError,
+    RateLimitError,
+)
+from core.context_compactor import is_context_limit_error
 from core.messages import InvalidLLMResponse, LLMResponse, ToolCall
 import httpx
+
+
+class LLMTransientError(RuntimeError):
+    pass
+
+
+class LLMContextLengthError(RuntimeError):
+    pass
 
 class LLMClient:
     def __init__(self):
@@ -25,7 +41,21 @@ class LLMClient:
         )
 
     def chat(self, messages, model, tools=None) -> LLMResponse:
-        response = self.completions_create(model, messages, tools)
+        try:
+            response = self.completions_create(model, messages, tools)
+        except OpenAIError as exc:
+            error = str(exc)
+            if is_context_limit_error(error):
+                raise LLMContextLengthError(error) from exc
+            if isinstance(
+                exc,
+                (APIConnectionError, APITimeoutError, RateLimitError),
+            ) or (
+                isinstance(exc, APIStatusError)
+                and exc.status_code >= 500
+            ):
+                raise LLMTransientError(error) from exc
+            raise
         return self._parse_response(response)
 
     def completions_create(self, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:

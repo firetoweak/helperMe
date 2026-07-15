@@ -18,9 +18,12 @@ from core.tools_runtime.tools_checkpoint import (
     tool_batch_completed_checkpoint,
     verification_required_checkpoint,
 )
-from core.context_compactor import is_context_limit_error
 from core.messages import Conversation, InvalidLLMResponse, LLMResponse
-from core.llm_client import LLMClient
+from core.llm_client import (
+    LLMClient,
+    LLMContextLengthError,
+    LLMTransientError,
+)
 from core.tool_registry import get_tools
 from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import encode_tool_result, execute_tool
@@ -29,7 +32,7 @@ from core.tools_runtime.tools_protocol import (
     validate_tool_message_chain,
 )
 from core.tools_runtime.tools_state import ToolsState
-from core.runtime_modes import PlainMode, RuntimeMode
+from core.runtime_modes import RuntimeMode
 
 
 class RunStatus(str, Enum):
@@ -69,11 +72,11 @@ class RunRuntime:
         self,
         llm_client: LLMClient,
         model: str,
-        runtime_mode: RuntimeMode | None = None,
+        runtime_mode: RuntimeMode,
     ):
         self.llm_client = llm_client
         self.model = model
-        self.runtime_mode = runtime_mode or PlainMode()
+        self.runtime_mode = runtime_mode
 
     @staticmethod
     def _finish(
@@ -112,15 +115,13 @@ class RunRuntime:
                     reason=exc.code,
                     error=str(exc),
                 )
-            except Exception as exc:
+            except LLMContextLengthError as exc:
+                return context_length_exceeded_checkpoint(
+                    round_index=round_index,
+                    error=str(exc),
+                )
+            except LLMTransientError as exc:
                 last_error = str(exc)
-                if is_context_limit_error(last_error):
-                    checkpoint = context_length_exceeded_checkpoint(
-                        round_index=round_index,
-                        error=last_error,
-                    )
-                    return checkpoint
-
                 if attempt < max_llm_retries:
                     checkpoints.append(
                         llm_retry_checkpoint(
@@ -139,7 +140,6 @@ class RunRuntime:
                     error=last_error,
                 )
                 return checkpoint
-
     def run(
         self,
         conversation: Conversation,
@@ -226,21 +226,16 @@ class RunRuntime:
             batch_steps = tools_state.add_calls(calls)
 
             for call in calls:
-                try:
-                    tool_result = execute_tool(call.name, call.arguments)
-                except Exception as exc:
-                    tools_state.mark_failed(
-                        call.id,
-                        code="TOOL_EXECUTION_CRASHED",
-                        error=str(exc),
-                        hint="工具执行过程异常，已补齐错误结果，避免 tool_call 链路断裂。",
-                    )
-                else:
-                    tools_state.add_result(call.id, tool_result)
+                tool_result = execute_tool(call.name, call.arguments)
+                tools_state.add_result(call.id, tool_result)
 
             tool_results = build_tool_messages(batch_steps, encode_tool_result)
             conversation.add_tools_result(tool_results)
-            self.runtime_mode.after_tool_batch(conversation, tools_state, batch_steps)
+            self.runtime_mode.after_tool_batch(
+                conversation,
+                tools_state,
+                batch_steps,
+            )
             checkpoints.append(
                 tool_batch_completed_checkpoint(
                     round_index,

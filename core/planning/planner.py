@@ -15,24 +15,18 @@ class InvalidPlanResponse(ValueError):
 
 def create_plan(
     user_message: str,
-    conversation,
-    llm_client=None,
-    model: str | None = None,
+    llm_client,
+    model: str,
 ) -> Plan:
-    if llm_client is None or model is None:
-        raise ValueError("create_plan requires llm_client and model")
-
     response = llm_client.chat(
-        build_plan_messages(user_message, conversation),
+        build_plan_messages(user_message),
         model,
         tools=None,
     )
 
-    if getattr(response, "type", None) != "text":
+    if response.type != "text":
         raise InvalidPlanResponse("planner response type must be text")
-    if not isinstance(response.content, str) or not response.content.strip():
-        raise InvalidPlanResponse("planner response content must be non-empty text")
-    return parse_plan_response(user_message, response.content)
+    return parse_plan_response(response.content)
 
 
 def format_plan_for_model(plan: Plan) -> str:
@@ -55,21 +49,15 @@ def build_runtime_messages(messages, plan_text):
         "这是 agent 的执行辅助上下文，不是用户的新请求。"
     )
 
-    if runtime_messages and runtime_messages[0].get("role") == "system":
-        runtime_messages[0] = {
-            **runtime_messages[0],
-            "content": (runtime_messages[0].get("content") or "") + plan_block,
-        }
-    else:
-        runtime_messages.insert(0, {
-            "role": "system",
-            "content": plan_block,
-        })
+    runtime_messages[0] = {
+        **runtime_messages[0],
+        "content": runtime_messages[0]["content"] + plan_block,
+    }
 
     return runtime_messages
 
 
-def build_plan_messages(user_message: str, conversation) -> list[dict[str, Any]]:
+def build_plan_messages(user_message: str) -> list[dict[str, Any]]:
     return [
         {
             "role": "system",
@@ -89,7 +77,7 @@ def build_plan_messages(user_message: str, conversation) -> list[dict[str, Any]]
     ]
 
 
-def parse_plan_response(user_message: str, content: str) -> Plan:
+def parse_plan_response(content: str) -> Plan:
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as exc:

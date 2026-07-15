@@ -3,7 +3,7 @@ from __future__ import annotations
 from core.agent_application import AgentApplication
 from core.llm_client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
-from core.runtime_modes import RuntimeMode
+from core.runtime_modes import PlainMode, RuntimeMode
 from core.session_runner import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
 
@@ -22,7 +22,7 @@ def create_agent_application(
     run_runtime = RunRuntime(
         llm_client=llm_client,
         model=model,
-        runtime_mode=runtime_mode,
+        runtime_mode=runtime_mode if runtime_mode is not None else PlainMode(),
     )
     session_runtime = SessionRuntime(run_runtime)
     return AgentApplication(

@@ -297,15 +297,17 @@ Phase 5
 Context Management
 ====================
 
-Workspace
+5.1 Context Projection
 
-Conversation
+5.2 Context Budget
 
-Memory
+5.3 Safe Compression
 
-Retrieval
+5.4 Memory 提炼
 
-Compression
+5.5 Retrieval
+
+5.6 Workspace 上下文接入
 
 ====================
 

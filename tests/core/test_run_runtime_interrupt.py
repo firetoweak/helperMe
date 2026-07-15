@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from core.messages import Conversation, LLMResponse, ToolCall
+from core.runtime_modes import PlainMode
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.run_runtime import RunControl, RunRuntime
 
@@ -43,7 +44,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(llm, "test-model").run(
+        result = RunRuntime(llm, "test-model", PlainMode()).run(
             conversation,
             "执行工具",
             control=control,
@@ -71,7 +72,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(llm, "test-model").run(
+        result = RunRuntime(llm, "test-model", PlainMode()).run(
             conversation,
             "修改文件",
             max_rounds=2,

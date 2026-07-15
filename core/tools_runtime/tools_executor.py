@@ -16,35 +16,16 @@ def _as_str_error(error: Any) -> str | None:
     return json.dumps(error, ensure_ascii=False)
 
 
-def normalize_tool_result(result: Any) -> dict[str, Any]:
-    """校验并规范工具 handler 的显式结果协议。"""
-    if not isinstance(result, dict):
-        return _invalid_tool_result("handler 返回值必须是 dict")
-    if type(result.get("ok")) is not bool:
-        return _invalid_tool_result("handler 必须显式返回布尔字段 ok")
-    if not isinstance(result.get("code"), str) or not result["code"].strip():
-        return _invalid_tool_result("handler 必须显式返回非空字符串字段 code")
-
+def normalize_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    """把内部 tool handler 结果整理为统一输出结构。"""
     extra = {k: v for k, v in result.items() if k not in RESERVED_KEYS}
-    if "data" in result and extra:
-        return _invalid_tool_result("handler 不能同时返回 data 和顶层扩展字段")
 
     return {
         "ok": result["ok"],
         "code": result["code"],
-        "data": result.get("data", extra or None),
+        "data": result["data"] if "data" in result else extra or None,
         "error": _as_str_error(result.get("error")),
         "hint": result.get("hint"),
-    }
-
-
-def _invalid_tool_result(reason: str) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "code": "INVALID_TOOL_RESULT",
-        "data": None,
-        "error": reason,
-        "hint": "修正工具 handler，使其显式返回合法的 ok/code 结果协议。",
     }
 
 
@@ -96,14 +77,5 @@ def execute_tool(tool_name: str, tool_arguments: str) -> dict[str, Any]:
                 "code": "VALIDATION_ERROR",
                 "error": exc.errors(),
                 "hint": "按工具 schema 修正参数后重试。",
-            }
-        )
-    except Exception as exc:
-        return normalize_tool_result(
-            {
-                "ok": False,
-                "code": "UNHANDLED_ERROR",
-                "error": str(exc),
-                "hint": "根据 error 调整策略后重试，或换用其他工具。",
             }
         )

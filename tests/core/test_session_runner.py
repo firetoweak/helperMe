@@ -127,21 +127,13 @@ class SessionRuntimeStartTest(unittest.TestCase):
                 self.assertIsNotNone(record.ended_at)
                 self.assertEqual(runtime.active_controls, {})
 
-    def test_start_cleans_active_control_when_run_runtime_raises(self):
-        session = self.runtime.create_session("session-1", system_prompt="prompt")
+    def test_start_propagates_run_runtime_error_and_releases_control(self):
+        self.runtime.create_session("session-1", system_prompt="prompt")
         self.run_runtime.run.side_effect = RuntimeError("runner crashed")
 
         with self.assertRaisesRegex(RuntimeError, "runner crashed"):
             self.runtime.start("session-1", "run-1", "完成任务")
 
-        record = session.run_records[0]
-        self.assertEqual(session.status, SessionStatus.FAILED)
-        self.assertEqual(session.events[-1].kind, SessionEventType.FAILED)
-        self.assertEqual(session.events[-1].reason, "run_runtime_exception")
-        self.assertEqual(session.events[-1].run_id, record.run_id)
-        self.assertEqual(record.status, RunStatus.FAILED.value)
-        self.assertIsNotNone(record.ended_at)
-        self.assertEqual(record.final_reason, "run_runtime_exception")
         self.assertEqual(self.runtime.active_controls, {})
 
 
@@ -303,16 +295,12 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         self.assertEqual(len(self.session.run_records), 1)
         self.assertEqual(self.session.status, SessionStatus.INTERRUPTED)
 
-    def test_resume_cleans_active_control_when_run_runtime_raises(self):
+    def test_resume_propagates_run_runtime_error_and_releases_control(self):
         self.run_runtime.run.side_effect = RuntimeError("runner crashed")
 
         with self.assertRaisesRegex(RuntimeError, "runner crashed"):
             self.runtime.resume(self.session.id, "run-2", "继续")
 
-        record = self.session.run_records[-1]
-        self.assertEqual(record.run_id, "run-2")
-        self.assertEqual(record.status, RunStatus.FAILED.value)
-        self.assertEqual(self.session.status, SessionStatus.FAILED)
         self.assertEqual(self.runtime.active_controls, {})
 
 

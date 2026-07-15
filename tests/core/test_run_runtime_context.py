@@ -1,17 +1,19 @@
 import unittest
 
 from core.messages import Conversation
+from core.llm_client import LLMContextLengthError
+from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime
 
 
 class ContextLimitLLMClient:
     def chat(self, messages, model, tools=None):
-        raise RuntimeError("maximum context length exceeded")
+        raise LLMContextLengthError("maximum context length exceeded")
 
 
 class RunRuntimeContextTest(unittest.TestCase):
     def test_context_limit_error_blocks_without_retry(self):
-        runner = RunRuntime(ContextLimitLLMClient(), "test-model")
+        runner = RunRuntime(ContextLimitLLMClient(), "test-model", PlainMode())
         conversation = Conversation()
 
         result = runner.run(conversation, "hello", max_rounds=3)

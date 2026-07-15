@@ -219,26 +219,12 @@ class SessionRuntime:
         max_rounds: int,
         control: RunControl,
     ) -> SessionRunOutcome:
-        try:
-            result = self.run_runtime.run(
-                conversation=session.conversation,
-                user_message=user_message,
-                max_rounds=max_rounds,
-                control=control,
-            )
-        except Exception:
-            ended_at = datetime.now(timezone.utc)
-            event = SessionEvent(
-                kind=SessionEventType.FAILED,
-                session_id=session.id,
-                reason="run_runtime_exception",
-                run_id=run_record.run_id,
-            )
-            session.transition_to(SessionStatus.FAILED, event)
-            run_record.status = RunStatus.FAILED.value
-            run_record.ended_at = ended_at
-            run_record.final_reason = "run_runtime_exception"
-            raise
+        result = self.run_runtime.run(
+            conversation=session.conversation,
+            user_message=user_message,
+            max_rounds=max_rounds,
+            control=control,
+        )
         target_status, event_kind = RUN_STATUS_MAPPING[result.status]
         ended_at = datetime.now(timezone.utc)
 

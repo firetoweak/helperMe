@@ -37,14 +37,14 @@ def _run_with_interrupt(
     resume: bool,
 ) -> SessionRunOutcome:
     outcomes: list[SessionRunOutcome] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     finished = threading.Event()
 
     def run() -> None:
         try:
             use_case = application.resume if resume else application.start
             outcomes.append(use_case(session_id, run_id, user_message))
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
         finally:
             finished.set()

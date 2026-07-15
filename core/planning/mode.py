@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from core.messages import Conversation
 from core.tools_runtime.tools_state import ToolStep, ToolsState
+from core.planning.plan import Plan
 from core.planning.planner import build_runtime_messages, create_plan, format_plan_for_model
 
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}
@@ -10,7 +11,7 @@ VERIFY_TOOL_NAMES = {"get_changes"}
 
 class PlanningMode:
     def __init__(self) -> None:
-        self.plan = None
+        self.plan: Plan
         self.reflection_requested = False
         self.tool_phase_started = False
         self.write_phase_started = False
@@ -21,16 +22,14 @@ class PlanningMode:
         self.tool_phase_started = False
         self.write_phase_started = False
         self.verify_phase_started = False
-        self.plan = create_plan(user_message, conversation, llm_client, model)
+        self.plan = create_plan(user_message, llm_client, model)
         self.plan.mark_doing(1, "开始执行任务")
 
     def prepare_messages(self, messages: list[dict]) -> list[dict]:
-        if self.plan is None:
-            return messages
         return build_runtime_messages(messages, format_plan_for_model(self.plan))
 
     def on_assistant_text(self, conversation: Conversation) -> bool:
-        if self.plan is None or self.reflection_requested:
+        if self.reflection_requested:
             return False
 
         self.reflection_requested = True
@@ -52,9 +51,6 @@ class PlanningMode:
         tools_state: ToolsState,
         batch_steps: list[ToolStep],
     ) -> None:
-        if self.plan is None:
-            return None
-
         if batch_steps and not self.tool_phase_started:
             self.tool_phase_started = True
             self.plan.advance_to_next(
@@ -89,6 +85,4 @@ class PlanningMode:
             )
 
     def checkpoint_data(self) -> dict | None:
-        if self.plan is None:
-            return None
         return {"plan": self.plan.to_dict()}
