@@ -1,13 +1,13 @@
 import unittest
 from unittest.mock import patch
 
-from core.context_manager import ContextManager
+from core.context import ContextManager
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.run_runtime import RunControl, RunRuntime
-from tests.core.llm_test_support import call_result
+from tests.core.llm_test_support import call_result, model_call_service
 
 
 class InterruptingLLMClient:
@@ -47,7 +47,12 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(llm, "test-model", PlainMode(), ContextManager()).run(
+        result = RunRuntime(
+            model_call_service(llm),
+            "test-model",
+            PlainMode(),
+            ContextManager(),
+        ).run(
             conversation,
             "执行工具",
             control=control,
@@ -75,7 +80,12 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(llm, "test-model", PlainMode(), ContextManager()).run(
+        result = RunRuntime(
+            model_call_service(llm),
+            "test-model",
+            PlainMode(),
+            ContextManager(),
+        ).run(
             conversation,
             "修改文件",
             max_rounds=2,

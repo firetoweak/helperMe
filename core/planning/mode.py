@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from core.context import ContextManager
 from core.messages import Conversation
+from core.model_call.service import ModelCallBlocked, ModelCallService
+from core.model_call.types import LLMUsage
 from core.tools_runtime.tools_state import ToolStep, ToolsState
 from core.planning.plan import Plan
 from core.planning.planner import create_plan, format_plan_for_model
@@ -17,13 +20,28 @@ class PlanningMode:
         self.write_phase_started = False
         self.verify_phase_started = False
 
-    def start(self, user_message: str, conversation: Conversation, llm_client, model: str) -> None:
+    def start(
+        self,
+        conversation: Conversation,
+        model_calls: ModelCallService,
+        model: str,
+        context_manager: ContextManager,
+    ) -> LLMUsage | ModelCallBlocked | None:
         self.reflection_requested = False
         self.tool_phase_started = False
         self.write_phase_started = False
         self.verify_phase_started = False
-        self.plan = create_plan(user_message, llm_client, model)
+        outcome = create_plan(
+            conversation=conversation,
+            context_manager=context_manager,
+            model_calls=model_calls,
+            model=model,
+        )
+        if isinstance(outcome, ModelCallBlocked):
+            return outcome
+        self.plan = outcome.plan
         self.plan.mark_doing(1, "开始执行任务")
+        return outcome.usage
 
     def runtime_instructions(self) -> list[str]:
         return [format_plan_for_model(self.plan)]

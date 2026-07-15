@@ -22,6 +22,8 @@ TERMINAL_RUN_STATUSES = {
     RunStatus.FAILED,
 }
 
+MODEL_CONTEXT_LIMIT = 32_768
+
 
 def _new_session(application: AgentApplication) -> str:
     session_id = f"session-{uuid4().hex}"
@@ -80,7 +82,10 @@ def main() -> None:
         else get_default_run_log_path()
     )
 
-    application = create_agent_application(model)
+    application = create_agent_application(
+        model,
+        model_context_limit=MODEL_CONTEXT_LIMIT,
+    )
     session_id = _new_session(application)
     last_status: RunStatus | None = None
 

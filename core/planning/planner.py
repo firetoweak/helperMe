@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from dataclasses import dataclass
 
+from core.context import ContextManager, ContextRequest
+from core.messages import Conversation
+from core.model_call.service import (
+    ModelCallBlocked,
+    ModelCallRequest,
+    ModelCallService,
+)
+from core.model_call.types import LLMUsage
 from core.planning.plan import Plan, PlanStep
 
 MIN_PLAN_STEPS = 2
@@ -13,21 +21,51 @@ class InvalidPlanResponse(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class PlanCallResult:
+    plan: Plan
+    usage: LLMUsage
+
+
+PLANNER_INSTRUCTION = (
+    "你是 planner，只负责为 agent 生成执行计划。"
+    "只返回 JSON，不要输出 Markdown，不要解释。"
+    "JSON 格式必须是："
+    '{"goal": "目标", "steps": ["步骤1", "步骤2"]}。'
+    "steps 应该是 2 到 6 个简短的意图阶段，"
+    "不要包含执行结果，不要包含 status/id/note。"
+)
+
+
 def create_plan(
-    user_message: str,
-    llm_client,
+    conversation: Conversation,
+    context_manager: ContextManager,
+    model_calls: ModelCallService,
     model: str,
-) -> Plan:
-    call_result = llm_client.chat(
-        build_plan_messages(user_message),
-        model,
-        tools=None,
+) -> PlanCallResult | ModelCallBlocked:
+    model_context = context_manager.build(
+        ContextRequest(
+            conversation_messages=conversation.messages,
+            runtime_instructions=[PLANNER_INSTRUCTION],
+        )
     )
-    response = call_result.response
+    outcome = model_calls.call(
+        ModelCallRequest(
+            context=model_context,
+            tools=[],
+        ),
+        model,
+    )
+    if isinstance(outcome, ModelCallBlocked):
+        return outcome
+    response = outcome.response
 
     if response.type != "text":
         raise InvalidPlanResponse("planner response type must be text")
-    return parse_plan_response(response.content)
+    return PlanCallResult(
+        plan=parse_plan_response(response.content),
+        usage=outcome.usage,
+    )
 
 
 def format_plan_for_model(plan: Plan) -> str:
@@ -39,26 +77,6 @@ def format_plan_for_model(plan: Plan) -> str:
     for step in plan.steps:
         lines.append(f"{step.id}. [{step.status}] {step.text}")
     return "\n".join(lines)
-
-
-def build_plan_messages(user_message: str) -> list[dict[str, Any]]:
-    return [
-        {
-            "role": "system",
-            "content": (
-                "你是 planner，只负责为 agent 生成执行计划。"
-                "只返回 JSON，不要输出 Markdown，不要解释。"
-                "JSON 格式必须是："
-                '{"goal": "目标", "steps": ["步骤1", "步骤2"]}。'
-                "steps 应该是 2 到 6 个简短的意图阶段，"
-                "不要包含执行结果，不要包含 status/id/note。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": user_message,
-        },
-    ]
 
 
 def parse_plan_response(content: str) -> Plan:

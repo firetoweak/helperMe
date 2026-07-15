@@ -1,6 +1,6 @@
 import unittest
 
-from core.context_manager import ContextManager, ContextRequest
+from core.context import ContextManager, ContextRequest
 
 
 class ContextManagerTest(unittest.TestCase):

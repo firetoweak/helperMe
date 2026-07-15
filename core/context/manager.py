@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-from dataclasses import dataclass
 from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any
 
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
+
 
 @dataclass(frozen=True)
 class ContextRequest:
@@ -18,8 +19,7 @@ class ModelContext:
 
 
 class ContextManager:
-    def build(self, request: ContextRequest) -> ModelContext:  
-
+    def build(self, request: ContextRequest) -> ModelContext:
         messages = deepcopy(request.conversation_messages)
         if request.runtime_instructions:
             first_message = messages[0]
@@ -31,9 +31,9 @@ class ContextManager:
                 for instruction in request.runtime_instructions
             )
             first_message["content"] = system_content + instruction_block
-        
+
         validation = validate_tool_message_chain(messages)
         if not validation.ok:
             raise ValueError(f"工具消息链不合法: {validation.errors}")
-        
+
         return ModelContext(messages=messages)

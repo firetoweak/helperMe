@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from core.context import ContextManager
 from core.messages import Conversation
+from core.model_call.service import ModelCallBlocked, ModelCallService
+from core.model_call.types import LLMUsage
 from core.tools_runtime.tools_state import ToolStep, ToolsState
 
 
 class RuntimeMode(Protocol):
-    def start(self, user_message: str, conversation: Conversation, llm_client, model: str) -> None:
+    def start(
+        self,
+        conversation: Conversation,
+        model_calls: ModelCallService,
+        model: str,
+        context_manager: ContextManager,
+    ) -> LLMUsage | ModelCallBlocked | None:
         ...
 
     def runtime_instructions(self) -> list[str]:

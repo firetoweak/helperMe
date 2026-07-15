@@ -1,12 +1,15 @@
 import unittest
+from unittest.mock import Mock
 
-from core.context_manager import ContextManager
+from core.context import BudgetAssessment, ContextManager
 from core.messages import Conversation
-from core.model_call import LLMResponse, ToolCall
+from core.model_call import LLMCallResult, LLMResponse, ToolCall
+from core.model_call.client import LLMContextLengthError
+from core.model_call.service import ModelCallBlocked
 from core.planning import PlanningMode
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime
-from tests.core.llm_test_support import call_result
+from tests.core.llm_test_support import call_result, model_call_service
 
 
 class RecordingLLMClient:
@@ -18,7 +21,10 @@ class RecordingLLMClient:
         self.seen_messages.append([message.copy() for message in messages])
         if not self.responses:
             raise RuntimeError("no more fake responses")
-        return call_result(self.responses.pop(0))
+        response = self.responses.pop(0)
+        if isinstance(response, LLMCallResult):
+            return response
+        return call_result(response)
 
 
 class RunRuntimePlanningTest(unittest.TestCase):
@@ -31,16 +37,28 @@ class RunRuntimePlanningTest(unittest.TestCase):
     def test_runtime_plan_is_injected_without_polluting_conversation(self):
         llm = RecordingLLMClient(
             [
-                LLMResponse(
-                    type="text",
-                    content='{"goal": "分析项目", "steps": ["理解目标", "检查上下文", "总结"]}',
+                call_result(
+                    LLMResponse(
+                        type="text",
+                        content='{"goal": "分析项目", "steps": ["理解目标", "检查上下文", "总结"]}',
+                    ),
+                    input_tokens=101,
+                    output_tokens=11,
                 ),
-                LLMResponse(type="text", content="初稿"),
-                LLMResponse(type="text", content="最终回答"),
+                call_result(
+                    LLMResponse(type="text", content="初稿"),
+                    input_tokens=202,
+                    output_tokens=22,
+                ),
+                call_result(
+                    LLMResponse(type="text", content="最终回答"),
+                    input_tokens=303,
+                    output_tokens=33,
+                ),
             ]
         )
         runner = RunRuntime(
-            llm,
+            model_call_service(llm),
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
@@ -57,6 +75,63 @@ class RunRuntimePlanningTest(unittest.TestCase):
         self.assertFalse(
             any("当前运行计划" in str(message.get("content")) for message in conversation.messages)
         )
+        usage_checkpoints = [
+            checkpoint
+            for checkpoint in result.checkpoints
+            if checkpoint.reason == "llm_usage"
+        ]
+        self.assertEqual(
+            [checkpoint.data["stage"] for checkpoint in usage_checkpoints],
+            ["planning", "agent_round", "agent_round"],
+        )
+        self.assertEqual(
+            [checkpoint.data["input_tokens"] for checkpoint in usage_checkpoints],
+            [101, 202, 303],
+        )
+        self.assertEqual(
+            [checkpoint.data["output_tokens"] for checkpoint in usage_checkpoints],
+            [11, 22, 33],
+        )
+
+    def test_planning_budget_exceeded_blocks_current_run(self):
+        model_calls = Mock()
+        model_calls.call.return_value = ModelCallBlocked(
+            BudgetAssessment(
+                estimated_input_tokens=820,
+                input_budget_tokens=750,
+            )
+        )
+        conversation = self._conversation()
+
+        result = RunRuntime(
+            model_calls,
+            "test-model",
+            runtime_mode=PlanningMode(),
+            context_manager=ContextManager(),
+        ).run(conversation, "继续处理历史任务")
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.final_reason, "context_budget_exceeded")
+        self.assertEqual(result.checkpoints[-1].data["stage"], "planning")
+        self.assertEqual(conversation.messages[-1]["content"], "继续处理历史任务")
+
+    def test_planning_model_hard_limit_blocks_current_run(self):
+        model_calls = Mock()
+        model_calls.call.side_effect = LLMContextLengthError(
+            "maximum context length exceeded"
+        )
+        conversation = self._conversation()
+
+        result = RunRuntime(
+            model_calls,
+            "test-model",
+            runtime_mode=PlanningMode(),
+            context_manager=ContextManager(),
+        ).run(conversation, "继续处理历史任务")
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.final_reason, "context_length_exceeded")
+        self.assertEqual(result.checkpoints[-1].data["stage"], "planning")
 
     def test_first_text_triggers_reflection_second_text_completes(self):
         llm = RecordingLLMClient(
@@ -70,7 +145,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             ]
         )
         runner = RunRuntime(
-            llm,
+            model_call_service(llm),
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
@@ -107,7 +182,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             ]
         )
         runner = RunRuntime(
-            llm,
+            model_call_service(llm),
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
@@ -137,7 +212,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             ]
         )
         runner = RunRuntime(
-            llm,
+            model_call_service(llm),
             "test-model",
             runtime_mode=PlainMode(),
             context_manager=ContextManager(),
