@@ -11,6 +11,7 @@ from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime
 from tests.core.llm_test_support import (
     call_result,
+    context_preparation_service,
     model_call_service,
     runtime_tool_dependencies,
 )
@@ -65,7 +66,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             model_call_service(llm),
             "test-model",
             runtime_mode=PlanningMode(),
-            context_manager=ContextManager(),
+            context_preparation=context_preparation_service(),
             **runtime_tool_dependencies(),
         )
         conversation = self._conversation()
@@ -115,7 +116,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             model_calls,
             "test-model",
             runtime_mode=PlanningMode(),
-            context_manager=ContextManager(),
+            context_preparation=context_preparation_service(),
             **runtime_tool_dependencies(),
         ).run(conversation, "继续处理历史任务")
 
@@ -138,7 +139,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             model_calls,
             "test-model",
             runtime_mode=PlanningMode(),
-            context_manager=ContextManager(),
+            context_preparation=context_preparation_service(),
             **runtime_tool_dependencies(),
         ).run(conversation, "继续处理历史任务")
 
@@ -161,7 +162,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             model_call_service(llm),
             "test-model",
             runtime_mode=PlanningMode(),
-            context_manager=ContextManager(),
+            context_preparation=context_preparation_service(),
             **runtime_tool_dependencies(),
         )
         conversation = self._conversation()
@@ -202,7 +203,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             model_call_service(llm),
             "test-model",
             runtime_mode=PlanningMode(),
-            context_manager=ContextManager(),
+            context_preparation=context_preparation_service(),
             **runtime_tool_dependencies(),
         )
         conversation = self._conversation()
@@ -236,7 +237,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             model_call_service(llm),
             "test-model",
             runtime_mode=PlainMode(),
-            context_manager=ContextManager(),
+            context_preparation=context_preparation_service(),
             **runtime_tool_dependencies(),
         )
         conversation = self._conversation()

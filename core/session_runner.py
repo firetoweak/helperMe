@@ -224,7 +224,9 @@ class SessionRuntime:
             user_message=user_message,
             max_rounds=max_rounds,
             control=control,
+            context_state=session.context_state,
         )
+        session.context_state = result.context_state
         target_status, event_kind = RUN_STATUS_MAPPING[result.status]
         ended_at = datetime.now(timezone.utc)
 

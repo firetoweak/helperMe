@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from core.context import ContextManager
+from core.context import ContextPreparationService, ContextState
 from core.messages import Conversation
-from core.model_call.service import ModelCallBlocked, ModelCallService
+from core.model_call.service import ModelCallService
+from core.runtime_modes.base import RuntimeModeStartResult
 from core.tools_runtime.tools_state import ToolStep, ToolsState
 
 
@@ -12,9 +13,11 @@ class PlainMode:
         conversation: Conversation,
         model_calls: ModelCallService,
         model: str,
-        context_manager: ContextManager,
-    ) -> ModelCallBlocked | None:
-        return None
+        context_preparation: ContextPreparationService,
+        context_state: ContextState,
+        level2_boundary_message_id: str | None,
+    ) -> RuntimeModeStartResult:
+        return RuntimeModeStartResult(context_state=context_state)
 
     def runtime_instructions(self) -> list[str]:
         return []

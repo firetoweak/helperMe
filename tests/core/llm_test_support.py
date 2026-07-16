@@ -1,4 +1,12 @@
-from core.context import ContextBudget, ModelBudgetConfig, TiktokenTokenEstimator
+from core.context import (
+    ContextBudget,
+    ContextManager,
+    ContextPreparationService,
+    MicroCompactionConfig,
+    MicroCompactionPolicy,
+    ModelBudgetConfig,
+    TiktokenTokenEstimator,
+)
 from core.model_call import LLMCallResult, LLMResponse, LLMUsage
 from core.model_call.service import ModelCallService
 from core.runtime_artifacts import (
@@ -84,3 +92,36 @@ def model_call_service(llm_client) -> ModelCallService:
             ),
         ),
     )
+
+
+def context_preparation_service(
+    context_manager: ContextManager | None = None,
+) -> ContextPreparationService:
+    manager = context_manager or ContextManager()
+    budget = ContextBudget(
+        estimator=TiktokenTokenEstimator(),
+        config=ModelBudgetConfig(
+            context_limit=10_000_000,
+            input_ratio=0.75,
+        ),
+    )
+    summary_generator = MockSummaryGenerator()
+    return ContextPreparationService(
+        context_manager=manager,
+        micro_compaction_policy=MicroCompactionPolicy(
+            context_manager=manager,
+            context_budget=budget,
+            config=MicroCompactionConfig(
+                trigger_ratio=0.7,
+                target_ratio=0.5,
+                recent_protection_tokens=8_000,
+            ),
+        ),
+        context_budget=budget,
+        summary_generator=summary_generator,
+    )
+
+
+class MockSummaryGenerator:
+    def generate(self, model_context):
+        raise AssertionError("测试未预期执行 Level 2")

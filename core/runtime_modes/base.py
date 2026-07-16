@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
-from core.context import ContextManager
+from core.context import ContextPreparationService, ContextState, SummaryCompaction
 from core.messages import Conversation
 from core.model_call.service import ModelCallBlocked, ModelCallService
 from core.model_call.types import LLMUsage
 from core.tools_runtime.tools_state import ToolStep, ToolsState
+
+
+@dataclass(frozen=True)
+class RuntimeModeStartResult:
+    context_state: ContextState
+    usage: LLMUsage | None = None
+    blocked: ModelCallBlocked | None = None
+    summary_compaction: SummaryCompaction | None = None
 
 
 class RuntimeMode(Protocol):
@@ -15,8 +24,10 @@ class RuntimeMode(Protocol):
         conversation: Conversation,
         model_calls: ModelCallService,
         model: str,
-        context_manager: ContextManager,
-    ) -> LLMUsage | ModelCallBlocked | None:
+        context_preparation: ContextPreparationService,
+        context_state: ContextState,
+        level2_boundary_message_id: str | None,
+    ) -> RuntimeModeStartResult:
         ...
 
     def runtime_instructions(self) -> list[str]:

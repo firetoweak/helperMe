@@ -6,6 +6,7 @@ from typing import Any
 
 from core.messages import ConversationMessage
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
+from core.context.micro_compactor import MicroCompactor
 from core.context.state import ContextState
 
 
@@ -22,40 +23,74 @@ class ModelContext:
 
 
 class ContextManager:
-    def __init__(self, max_tool_result_chars: int = 16_000) -> None:
+    def __init__(
+        self,
+        max_tool_result_chars: int = 16_000,
+        micro_compactor: MicroCompactor | None = None,
+    ) -> None:
         if max_tool_result_chars <= 0:
             raise ValueError("max_tool_result_chars 必须大于 0")
         self.max_tool_result_chars = max_tool_result_chars
+        self.micro_compactor = micro_compactor or MicroCompactor()
 
     def build(self, request: ContextRequest) -> ModelContext:
         records = request.conversation_records
         state = request.context_state
+        summary_boundary_index = None
+        active_records = records
+
         if state.summary is None:
-            messages = deepcopy([r.payload for r in records])
+            handoff = None
         else:
-            boundary_id = state.compacted_through_message_id
-            boundary_index = next(
-                (i for i, r in enumerate(records) if r.message_id == boundary_id),
-                None,
+            boundary_id = state.summarized_through_message_id
+            summary_boundary_index = self._find_boundary_index(
+                records,
+                boundary_id,
+                "摘要",
             )
-            if boundary_index is None:
-                raise ValueError(
-                    f"压缩边界不存在: {boundary_id}"
-                )
-            if records[boundary_index].payload.get("role") == "system":
+            if records[summary_boundary_index].payload.get("role") == "system":
                 raise ValueError("压缩边界不能指向 system 消息")
-            # 保留 system（通常是 records[0]），再拼 handoff + 后缀
-            system_payload = deepcopy(records[0].payload)
-            if system_payload.get("role") != "system":
+            if records[0].payload.get("role") != "system":
                 raise ValueError("conversation_records 的第一个消息必须是 system 角色")
             handoff = {
                 "role": "assistant",
                 "content": f"工作交接摘要：\n{state.summary}",
             }
-            suffix = deepcopy(
-                [r.payload for r in records[boundary_index + 1 :]]
+            active_records = [
+                records[0],
+                *records[summary_boundary_index + 1 :],
+            ]
+
+        micro_boundary_id = state.micro_compacted_through_message_id
+        if micro_boundary_id is None:
+            messages = deepcopy(
+                [record.payload for record in active_records]
             )
-            messages = [system_payload, handoff, *suffix]
+        else:
+            micro_boundary_index = self._find_boundary_index(
+                records,
+                micro_boundary_id,
+                "micro",
+            )
+            if records[micro_boundary_index].payload.get("role") == "system":
+                raise ValueError("micro 压缩边界不能指向 system 消息")
+            if (
+                summary_boundary_index is not None
+                and micro_boundary_index < summary_boundary_index
+            ):
+                raise ValueError("micro 压缩边界不能早于摘要边界")
+            if micro_boundary_index == summary_boundary_index:
+                messages = deepcopy(
+                    [record.payload for record in active_records]
+                )
+            else:
+                messages = self.micro_compactor.compact(
+                    active_records,
+                    through_message_id=micro_boundary_id,
+                )
+
+        if handoff is not None:
+            messages.insert(1, handoff)
 
         if request.runtime_instructions:
             first_message = messages[0]
@@ -84,3 +119,21 @@ class ContextManager:
             raise ValueError(f"工具消息链不合法: {validation.errors}")
 
         return ModelContext(messages=messages)
+
+    @staticmethod
+    def _find_boundary_index(
+        records: list[ConversationMessage],
+        message_id: str,
+        boundary_name: str,
+    ) -> int:
+        index = next(
+            (
+                index
+                for index, record in enumerate(records)
+                if record.message_id == message_id
+            ),
+            None,
+        )
+        if index is None:
+            raise ValueError(f"{boundary_name} 压缩边界不存在: {message_id}")
+        return index

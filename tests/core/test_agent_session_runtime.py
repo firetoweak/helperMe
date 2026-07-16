@@ -12,6 +12,7 @@ from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from tests.core.llm_test_support import (
     call_result,
+    context_preparation_service,
     model_call_service,
     runtime_tool_dependencies,
 )
@@ -33,7 +34,7 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
                 model_calls=model_call_service(llm_client),
                 model="test-model",
                 runtime_mode=PlainMode(),
-                context_manager=ContextManager(),
+                context_preparation=context_preparation_service(),
                 **runtime_tool_dependencies(SUCCESS),
             )
         )

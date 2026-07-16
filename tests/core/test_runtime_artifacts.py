@@ -19,7 +19,11 @@ from core.tools_runtime.run_runtime import RunRuntime
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from tools.artifact_read import create_read_artifact_spec
 from tools.workspace import WORKSPACE
-from tests.core.llm_test_support import call_result, model_call_service
+from tests.core.llm_test_support import (
+    call_result,
+    context_preparation_service,
+    model_call_service,
+)
 
 
 class RuntimeArtifactsTest(unittest.TestCase):
@@ -176,7 +180,9 @@ class RuntimeArtifactsTest(unittest.TestCase):
             model_calls=model_call_service(LLMClient()),
             model="test-model",
             runtime_mode=PlainMode(),
-            context_manager=ContextManager(limit.max_chars),
+            context_preparation=context_preparation_service(
+                ContextManager(limit.max_chars)
+            ),
             tools_executor=ToolsExecutor(registry),
             tool_result_externalizer=ToolResultExternalizer(
                 self.store,

@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
+from core.context import ContextState
 from core.session_runner import SessionRuntime
 from core.session_state import (
     Session,
@@ -77,13 +78,17 @@ class SessionRuntimeStartTest(unittest.TestCase):
     def test_start_exposes_control_during_run_and_cleans_it_afterwards(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")
 
-        def run(*, conversation, user_message, max_rounds, control):
+        def run(*, conversation, user_message, max_rounds, control, context_state):
             self.assertIs(conversation, session.conversation)
             self.assertEqual(user_message, "完成任务")
             self.assertEqual(max_rounds, 20)
             self.assertIs(self.runtime.active_controls[session.id], control)
             self.assertEqual(session.status, SessionStatus.RUNNING)
-            return Mock(status=RunStatus.COMPLETED, final_reason=None)
+            return Mock(
+                status=RunStatus.COMPLETED,
+                final_reason=None,
+                context_state=context_state,
+            )
 
         self.run_runtime.run.side_effect = run
 
@@ -114,6 +119,7 @@ class SessionRuntimeStartTest(unittest.TestCase):
                 runtime.run_runtime.run.return_value = Mock(
                     status=run_status,
                     final_reason=reason,
+                    context_state=session.context_state,
                 )
 
                 outcome = runtime.start(session.id, f"run-{index}", "完成任务")
@@ -136,6 +142,30 @@ class SessionRuntimeStartTest(unittest.TestCase):
 
         self.assertEqual(self.runtime.active_controls, {})
 
+    def test_next_run_receives_context_state_committed_by_previous_run(self):
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
+        advanced_state = ContextState(
+            micro_compacted_through_message_id=session.conversation.records[0].message_id
+        )
+        seen_states = []
+
+        def run(**kwargs):
+            seen_states.append(kwargs["context_state"])
+            returned_state = advanced_state if len(seen_states) == 1 else kwargs["context_state"]
+            return Mock(
+                status=RunStatus.COMPLETED,
+                final_reason=None,
+                context_state=returned_state,
+            )
+
+        self.run_runtime.run.side_effect = run
+
+        self.runtime.start(session.id, "run-1", "第一轮")
+        self.runtime.start(session.id, "run-2", "第二轮")
+
+        self.assertEqual(seen_states, [ContextState(), advanced_state])
+        self.assertIs(session.context_state, advanced_state)
+
 
 class SessionRuntimeRequestInterruptTest(unittest.TestCase):
     def setUp(self):
@@ -145,7 +175,7 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
     def test_request_interrupt_marks_active_control_without_early_transition(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")
 
-        def run(*, conversation, user_message, max_rounds, control):
+        def run(*, conversation, user_message, max_rounds, control, context_state):
             self.runtime.request_interrupt(session.id, "用户请求暂停")
 
             self.assertTrue(control.interrupt_requested)
@@ -155,6 +185,7 @@ class SessionRuntimeRequestInterruptTest(unittest.TestCase):
             return Mock(
                 status=RunStatus.INTERRUPTED,
                 final_reason="run_interrupted",
+                context_state=context_state,
             )
 
         self.run_runtime.run.side_effect = run
@@ -208,12 +239,13 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         self.run_runtime.run.return_value = Mock(
             status=RunStatus.INTERRUPTED,
             final_reason="user_requested",
+            context_state=self.session.context_state,
         )
         self.runtime.start(self.session.id, "run-1", "开始任务")
         self.run_runtime.reset_mock()
 
     def test_resume_starts_new_run_from_interrupted_session(self):
-        def run(*, conversation, user_message, max_rounds, control):
+        def run(*, conversation, user_message, max_rounds, control, context_state):
             self.assertIs(conversation, self.session.conversation)
             self.assertEqual(user_message, "继续完成剩余任务")
             self.assertEqual(max_rounds, 20)
@@ -221,7 +253,11 @@ class SessionRuntimeResumeTest(unittest.TestCase):
             self.assertEqual(self.session.status, SessionStatus.RUNNING)
             self.assertEqual(self.session.events[-1].kind, SessionEventType.RESUMED)
             self.assertEqual(self.session.events[-1].run_id, "run-2")
-            return Mock(status=RunStatus.COMPLETED, final_reason=None)
+            return Mock(
+                status=RunStatus.COMPLETED,
+                final_reason=None,
+                context_state=context_state,
+            )
 
         self.run_runtime.run.side_effect = run
 

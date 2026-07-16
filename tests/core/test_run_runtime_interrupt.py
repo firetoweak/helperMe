@@ -8,6 +8,7 @@ from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.run_runtime import RunControl, RunRuntime
 from tests.core.llm_test_support import (
     call_result,
+    context_preparation_service,
     model_call_service,
     runtime_tool_dependencies,
 )
@@ -53,7 +54,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             model_call_service(llm),
             "test-model",
             PlainMode(),
-            ContextManager(),
+            context_preparation_service(),
             **runtime_tool_dependencies(SUCCESS),
         ).run(
             conversation,
@@ -88,7 +89,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             model_call_service(llm),
             "test-model",
             PlainMode(),
-            ContextManager(),
+            context_preparation_service(),
             **runtime_tool_dependencies(SUCCESS),
         ).run(
             conversation,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from core.context import ContextManager, ContextRequest
+from core.context import ContextPreparationService, ContextState, SummaryCompaction
 from core.messages import Conversation
 from core.model_call.service import (
     ModelCallBlocked,
@@ -25,6 +25,15 @@ class InvalidPlanResponse(ValueError):
 class PlanCallResult:
     plan: Plan
     usage: LLMUsage
+    context_state: ContextState
+    summary_compaction: SummaryCompaction | None
+
+
+@dataclass(frozen=True)
+class PlanCallBlocked:
+    blocked: ModelCallBlocked
+    context_state: ContextState
+    summary_compaction: SummaryCompaction | None
 
 
 PLANNER_INSTRUCTION = (
@@ -39,25 +48,38 @@ PLANNER_INSTRUCTION = (
 
 def create_plan(
     conversation: Conversation,
-    context_manager: ContextManager,
+    context_preparation: ContextPreparationService,
+    context_state: ContextState,
     model_calls: ModelCallService,
     model: str,
-) -> PlanCallResult | ModelCallBlocked:
-    model_context = context_manager.build(
-        ContextRequest(
-            conversation_records=conversation.records,
-            runtime_instructions=[PLANNER_INSTRUCTION],
-        )
+    level2_boundary_message_id: str | None = None,
+) -> PlanCallResult | PlanCallBlocked:
+    prepared = context_preparation.prepare(
+        conversation_records=conversation.records,
+        context_state=context_state,
+        runtime_instructions=[PLANNER_INSTRUCTION],
+        tools=[],
+        level2_boundary_message_id=level2_boundary_message_id,
     )
+    if prepared.blocked_assessment is not None:
+        return PlanCallBlocked(
+            blocked=ModelCallBlocked(prepared.blocked_assessment),
+            context_state=prepared.context_state,
+            summary_compaction=prepared.summary_compaction,
+        )
     outcome = model_calls.call(
         ModelCallRequest(
-            context=model_context,
+            context=prepared.model_context,
             tools=[],
         ),
         model,
     )
     if isinstance(outcome, ModelCallBlocked):
-        return outcome
+        return PlanCallBlocked(
+            blocked=outcome,
+            context_state=prepared.context_state,
+            summary_compaction=prepared.summary_compaction,
+        )
     response = outcome.response
 
     if response.type != "text":
@@ -65,6 +87,8 @@ def create_plan(
     return PlanCallResult(
         plan=parse_plan_response(response.content),
         usage=outcome.usage,
+        context_state=prepared.context_state,
+        summary_compaction=prepared.summary_compaction,
     )
 
 

@@ -339,12 +339,12 @@ ModelContext：某一次模型调用的不可变快照
 
 1. Level 1：确定性微压缩
    - 在真正超预算前主动触发，是持续维护，不是溢出后的突发补救。
-   - 优先处理已消费的 Assistant 文本和旧工具结果，不调用 LLM。
+   - 第一版只处理历史成功 tool result 与对应 assistant tool calls；普通文本暂不压缩。
    - 保留工具协议外壳，不切断 assistant tool calls 与全部对应 tool results。
    - 使用高低水位：达到高水位后开始维护，降到目标低水位后停止，避免每个 Round 反复触发。
 
 2. Level 2：增量 Auto-Compact
-   - 只在 Level 1 无法降到目标水位时升级，是最后一级，但必须在硬超限之前触发。
+   - 只在 Level 1 后仍超过输入预算时升级，是最后一级兜底。
    - 调用 LLM，第一版只用 prompt 约束生成自由文本摘要，不定义结构化摘要模型。
    - 摘要以合成 assistant 消息投影到 ModelContext，语义是“此前 Agent 的工作交接摘要”，不写回 Conversation。
    - 首次使用旧消息前缀生成 S1；后续使用 `S(n-1) + 新 delta` 生成 Sn，不重新读取全部已压缩历史。
@@ -353,8 +353,7 @@ ModelContext：某一次模型调用的不可变快照
 
 - system prompt、tools schema、runtime instructions 属于不可压缩基础占用。
 - 保留近期原始消息后缀；具体保护窗口和阈值在后续迭代调整。
-- 优先在已完成的完整 Run 边界压缩。
-- 允许压缩当前 Run 中已经协议闭合、已被后续模型响应消费的旧步骤。
+- 第一版固定以当前 Run 为边界，只压缩本 Run 开始前的历史。
 - 最新工具结果即使协议闭合，在模型尚未消费前也不属于可压缩历史。
 - 若不可压缩基础占用本身已超过项目输入预算，不启动任何 Level，直接 blocked。
 
@@ -370,8 +369,8 @@ Conversation + ContextState + runtime instructions + tools
         └─ 达到维护水位
                → Level 1
                → 重新投影和评估
-               ├─ 已降到目标水位 → ModelCall
-               └─ 仍处于 Level 2 水位
+               ├─ 已回到输入预算内 → ModelCall
+               └─ 仍超过输入预算
                       → 增量摘要候选 ContextState
                       → 校验压缩边界与工具协议
                       → 重新投影和预算评估
@@ -391,14 +390,14 @@ Conversation + ContextState + runtime instructions + tools
 - Safe Compression 产生完整 CompressionReport，至少可报告压缩级别、压缩前后 token、摘要边界、保留原文数量与增量摘要次数。
 - 压缩事实与指标进入 Run Trace / Checkpoint，不扩大 Session Event 的生命周期职责。
 - 摘要正文的唯一状态源是 ContextState，不复制到 trace。
-- 压缩是否向真实用户展示、如何展示，由 Application / Console 决定。
+- Level 2 成功后写入结构化 checkpoint，并在本轮最终回答前向真实用户提示一次。
 
 Benchmark：
 
 - 同一 Session 在不更换 session_id 的前提下至少连续触发两次 Level 2，仍能继续完成任务。
 - 第二次摘要使用 `S1 + 新 delta` 生成 S2，不重新读取已被 S1 覆盖的全部原始前缀。
 - Planner 和 Agent Round 都使用同一 Session ContextState 准备模型输入。
-- Level 2 可以压缩当前 Run 中已闭合、已消费的旧步骤，不要求等待整个 Run 完成。
+- Level 2 第一版以当前 Run 为安全边界，只摘要本 Run 开始前的历史；当前 Run 的用户目标与步骤保持原文。
 - interrupt/resume 后继续使用已提交的 ContextState，Conversation 工具协议链仍完整。
 - Conversation 中的原始消息数量、内容和 message_id 不因压缩发生变化。
 - 同一 Round 的 LLM retry 复用同一 ModelContext 快照，不在 retry 之间重新压缩。

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from core.context import ContextManager
+from core.context import ContextState
 from core.messages import Conversation
 from core.planning import (
     create_plan,
@@ -11,7 +11,7 @@ from core.planning import (
 )
 from core.model_call import LLMResponse
 from core.model_call.service import ModelCallRequest
-from tests.core.llm_test_support import call_result
+from tests.core.llm_test_support import call_result, context_preparation_service
 
 
 class PlannerTest(unittest.TestCase):
@@ -29,7 +29,8 @@ class PlannerTest(unittest.TestCase):
 
         plan_result = create_plan(
             conversation,
-            ContextManager(),
+            context_preparation_service(),
+            ContextState(),
             model_calls,
             "test-model",
         )
@@ -51,7 +52,8 @@ class PlannerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "planner unavailable"):
             create_plan(
                 conversation,
-                ContextManager(),
+                context_preparation_service(),
+                ContextState(),
                 model_calls,
                 "test-model",
             )
@@ -72,7 +74,8 @@ class PlannerTest(unittest.TestCase):
 
         create_plan(
             conversation,
-            ContextManager(),
+            context_preparation_service(),
+            ContextState(),
             model_calls,
             "test-model",
         )

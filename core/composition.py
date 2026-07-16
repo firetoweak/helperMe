@@ -11,10 +11,14 @@ from core.tools_runtime.run_runtime import RunRuntime
 from core.context import (
     ContextBudget,
     ContextManager,
+    ContextPreparationService,
+    MicroCompactionConfig,
+    MicroCompactionPolicy,
     ModelBudgetConfig,
     TiktokenTokenEstimator,
 )
 from core.model_call.service import ModelCallService
+from core.context_summary import LLMContextSummaryGenerator
 from core.runtime_artifacts import (
     FileArtifactStore,
     ToolResultExternalizer,
@@ -35,6 +39,9 @@ def create_agent_application(
     runtime_root: Path,
     input_budget_ratio: float = 0.75,
     runtime_mode: RuntimeMode | None = None,
+    micro_compaction_trigger_ratio: float = 0.7,
+    micro_compaction_target_ratio: float = 0.5,
+    recent_protection_tokens: int = 8_000,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
@@ -58,11 +65,26 @@ def create_agent_application(
     artifact_store = FileArtifactStore(runtime_root / "artifacts")
     tool_registry = BUILTIN_TOOL_REGISTRY.clone()
     tool_registry.register(create_read_artifact_spec(artifact_store))
+    context_manager = ContextManager(result_limit.max_chars)
+    context_preparation = ContextPreparationService(
+        context_manager=context_manager,
+        micro_compaction_policy=MicroCompactionPolicy(
+            context_manager=context_manager,
+            context_budget=context_budget,
+            config=MicroCompactionConfig(
+                trigger_ratio=micro_compaction_trigger_ratio,
+                target_ratio=micro_compaction_target_ratio,
+                recent_protection_tokens=recent_protection_tokens,
+            ),
+        ),
+        context_budget=context_budget,
+        summary_generator=LLMContextSummaryGenerator(model_calls, model),
+    )
     run_runtime = RunRuntime(
         model_calls=model_calls,
         model=model,
         runtime_mode=runtime_mode if runtime_mode is not None else PlainMode(),
-        context_manager=ContextManager(result_limit.max_chars),
+        context_preparation=context_preparation,
         tools_executor=ToolsExecutor(tool_registry),
         tool_result_externalizer=ToolResultExternalizer(
             artifact_store,

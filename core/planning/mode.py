@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from core.context import ContextManager
+from core.context import ContextPreparationService, ContextState
 from core.messages import Conversation
-from core.model_call.service import ModelCallBlocked, ModelCallService
-from core.model_call.types import LLMUsage
+from core.model_call.service import ModelCallService
+from core.runtime_modes.base import RuntimeModeStartResult
 from core.tools_runtime.tools_state import ToolStep, ToolsState
 from core.planning.plan import Plan
-from core.planning.planner import create_plan, format_plan_for_model
+from core.planning.planner import PlanCallBlocked, create_plan, format_plan_for_model
 
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}
 VERIFY_TOOL_NAMES = {"get_changes"}
@@ -25,23 +25,35 @@ class PlanningMode:
         conversation: Conversation,
         model_calls: ModelCallService,
         model: str,
-        context_manager: ContextManager,
-    ) -> LLMUsage | ModelCallBlocked | None:
+        context_preparation: ContextPreparationService,
+        context_state: ContextState,
+        level2_boundary_message_id: str | None,
+    ) -> RuntimeModeStartResult:
         self.reflection_requested = False
         self.tool_phase_started = False
         self.write_phase_started = False
         self.verify_phase_started = False
         outcome = create_plan(
             conversation=conversation,
-            context_manager=context_manager,
+            context_preparation=context_preparation,
+            context_state=context_state,
+            level2_boundary_message_id=level2_boundary_message_id,
             model_calls=model_calls,
             model=model,
         )
-        if isinstance(outcome, ModelCallBlocked):
-            return outcome
+        if isinstance(outcome, PlanCallBlocked):
+            return RuntimeModeStartResult(
+                context_state=outcome.context_state,
+                blocked=outcome.blocked,
+                summary_compaction=outcome.summary_compaction,
+            )
         self.plan = outcome.plan
         self.plan.mark_doing(1, "开始执行任务")
-        return outcome.usage
+        return RuntimeModeStartResult(
+            context_state=outcome.context_state,
+            usage=outcome.usage,
+            summary_compaction=outcome.summary_compaction,
+        )
 
     def runtime_instructions(self) -> list[str]:
         return [format_plan_for_model(self.plan)]

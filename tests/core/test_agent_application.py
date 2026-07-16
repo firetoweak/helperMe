@@ -135,9 +135,13 @@ class AgentApplicationContractTest(unittest.TestCase):
 
 class AgentApplicationSessionIsolationTest(unittest.TestCase):
     def test_one_application_operates_two_sessions_without_conversation_leak(self):
-        def run(*, conversation, user_message, max_rounds, control):
+        def run(*, conversation, user_message, max_rounds, control, context_state):
             conversation.add_user(user_message)
-            return Mock(status=RunStatus.COMPLETED, final_reason=None)
+            return Mock(
+                status=RunStatus.COMPLETED,
+                final_reason=None,
+                context_state=context_state,
+            )
 
         run_runtime = Mock()
         run_runtime.run.side_effect = run

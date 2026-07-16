@@ -7,6 +7,7 @@ from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
     context_budget_exceeded_checkpoint,
+    context_compressed_checkpoint,
     context_length_exceeded_checkpoint,
     format_checkpoint,
     invalid_llm_response_checkpoint,
@@ -36,7 +37,12 @@ from core.tools_runtime.tools_protocol import (
 )
 from core.tools_runtime.tools_state import ToolsState
 from core.runtime_modes import RuntimeMode
-from core.context import ContextManager, ContextRequest, ModelContext
+from core.context import (
+    ContextPreparationService,
+    ContextState,
+    ModelContext,
+    SummaryCompaction,
+)
 from core.runtime_artifacts import ToolResultExternalizer
 
 class RunStatus(str, Enum):
@@ -61,6 +67,7 @@ class RunResult:
     status: RunStatus
     answer: str
     checkpoints: list[Checkpoint]
+    context_state: ContextState
 
     @property
     def final_reason(self) -> str | None:
@@ -77,16 +84,43 @@ class RunRuntime:
         model_calls: ModelCallService,
         model: str,
         runtime_mode: RuntimeMode,
-        context_manager: ContextManager,
+        context_preparation: ContextPreparationService,
         tools_executor: ToolsExecutor,
         tool_result_externalizer: ToolResultExternalizer,
     ):
         self.model_calls = model_calls
         self.model = model
         self.runtime_mode = runtime_mode
-        self.context_manager = context_manager
+        self.context_preparation = context_preparation
         self.tools_executor = tools_executor
         self.tool_result_externalizer = tool_result_externalizer
+
+    @staticmethod
+    def _record_summary_compaction(
+        summary_compaction: SummaryCompaction | None,
+        checkpoints: list[Checkpoint],
+        round_index: int | None = None,
+    ) -> bool:
+        if summary_compaction is None:
+            return False
+        checkpoints.append(
+            llm_usage_checkpoint(
+                stage="context_summary",
+                round_index=round_index,
+                usage=LLMUsage(
+                    input_tokens=summary_compaction.generation.input_tokens,
+                    output_tokens=summary_compaction.generation.output_tokens,
+                ),
+            )
+        )
+        checkpoints.append(
+            context_compressed_checkpoint(
+                boundary_message_id=summary_compaction.boundary_message_id,
+                before=summary_compaction.before,
+                after=summary_compaction.after,
+            )
+        )
+        return summary_compaction.after.allowed
 
     @staticmethod
     def _finish(
@@ -95,12 +129,14 @@ class RunRuntime:
         answer: str,
         checkpoint: Checkpoint,
         checkpoints: list[Checkpoint],
+        context_state: ContextState,
     ) -> RunResult:
         checkpoints.append(checkpoint)
         return RunResult(
             status=status,
             answer=answer,
             checkpoints=checkpoints,
+            context_state=context_state,
         )
 
     def _call_llm_with_retry(
@@ -185,10 +221,18 @@ class RunRuntime:
         user_message: str,
         max_rounds: int = 20,
         control: RunControl | None = None,
+        context_state: ContextState | None = None,
     ) -> RunResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
         run_control = control or RunControl()
+        current_context_state = context_state or ContextState()
+        level2_performed = False
+        level2_boundary_message_id = (
+            conversation.records[-1].message_id
+            if conversation.records
+            else None
+        )
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
         try:
@@ -196,7 +240,9 @@ class RunRuntime:
                 conversation=conversation,
                 model_calls=self.model_calls,
                 model=self.model,
-                context_manager=self.context_manager,
+                context_preparation=self.context_preparation,
+                context_state=current_context_state,
+                level2_boundary_message_id=level2_boundary_message_id,
             )
         except LLMContextLengthError as exc:
             checkpoint = context_length_exceeded_checkpoint(
@@ -208,23 +254,56 @@ class RunRuntime:
                 answer=format_checkpoint(checkpoint),
                 checkpoint=checkpoint,
                 checkpoints=checkpoints,
+                context_state=current_context_state,
             )
-        if isinstance(start_outcome, ModelCallBlocked):
+        except LLMTransientError as exc:
+            checkpoint = llm_error_checkpoint(
+                round_index=0,
+                attempts=1,
+                error=str(exc),
+            )
+            return self._finish(
+                status=RunStatus.FAILED,
+                answer=format_checkpoint(checkpoint),
+                checkpoint=checkpoint,
+                checkpoints=checkpoints,
+                context_state=current_context_state,
+            )
+        except InvalidLLMResponse as exc:
+            checkpoint = invalid_llm_response_checkpoint(
+                round_index=0,
+                reason=exc.code,
+                error=str(exc),
+            )
+            return self._finish(
+                status=RunStatus.FAILED,
+                answer=format_checkpoint(checkpoint),
+                checkpoint=checkpoint,
+                checkpoints=checkpoints,
+                context_state=current_context_state,
+            )
+        current_context_state = start_outcome.context_state
+        level2_performed = self._record_summary_compaction(
+            start_outcome.summary_compaction,
+            checkpoints,
+        )
+        if start_outcome.blocked is not None:
             checkpoint = context_budget_exceeded_checkpoint(
                 stage="planning",
-                assessment=start_outcome.assessment,
+                assessment=start_outcome.blocked.assessment,
             )
             return self._finish(
                 status=RunStatus.BLOCKED,
                 answer=format_checkpoint(checkpoint),
                 checkpoint=checkpoint,
                 checkpoints=checkpoints,
+                context_state=current_context_state,
             )
-        if isinstance(start_outcome, LLMUsage):
+        if start_outcome.usage is not None:
             checkpoints.append(
                 llm_usage_checkpoint(
                     stage="planning",
-                    usage=start_outcome,
+                    usage=start_outcome.usage,
                 )
             )
         tools = self.tools_executor.registry.get_tools()
@@ -240,15 +319,77 @@ class RunRuntime:
                     answer=format_checkpoint(checkpoint),
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
+                    context_state=current_context_state,
                 )
-            context = self.context_manager.build(
-                ContextRequest(
+            try:
+                prepared = self.context_preparation.prepare(
                     conversation_records=conversation.records,
+                    context_state=current_context_state,
                     runtime_instructions=self.runtime_mode.runtime_instructions(),
+                    tools=tools,
+                    level2_boundary_message_id=level2_boundary_message_id,
                 )
-            )
+            except LLMContextLengthError as exc:
+                checkpoint = context_length_exceeded_checkpoint(
+                    stage="context_summary",
+                    round_index=round_index,
+                    error=str(exc),
+                )
+                return self._finish(
+                    status=RunStatus.BLOCKED,
+                    answer=format_checkpoint(checkpoint),
+                    checkpoint=checkpoint,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                )
+            except LLMTransientError as exc:
+                checkpoint = llm_error_checkpoint(
+                    round_index=round_index,
+                    attempts=1,
+                    error=str(exc),
+                )
+                return self._finish(
+                    status=RunStatus.FAILED,
+                    answer=format_checkpoint(checkpoint),
+                    checkpoint=checkpoint,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                )
+            except InvalidLLMResponse as exc:
+                checkpoint = invalid_llm_response_checkpoint(
+                    round_index=round_index,
+                    reason=exc.code,
+                    error=str(exc),
+                )
+                return self._finish(
+                    status=RunStatus.FAILED,
+                    answer=format_checkpoint(checkpoint),
+                    checkpoint=checkpoint,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                )
+            current_context_state = prepared.context_state
+            if self._record_summary_compaction(
+                prepared.summary_compaction,
+                checkpoints,
+                round_index,
+            ):
+                level2_performed = True
+            if prepared.blocked_assessment is not None:
+                checkpoint = context_budget_exceeded_checkpoint(
+                    stage="context_summary",
+                    round_index=round_index,
+                    assessment=prepared.blocked_assessment,
+                )
+                return self._finish(
+                    status=RunStatus.BLOCKED,
+                    answer=format_checkpoint(checkpoint),
+                    checkpoint=checkpoint,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                )
             llm_outcome = self._call_llm_with_retry(
-                context,
+                prepared.model_context,
                 tools,
                 round_index,
                 checkpoints,
@@ -267,6 +408,7 @@ class RunRuntime:
                     answer=format_checkpoint(llm_outcome),
                     checkpoint=llm_outcome,
                     checkpoints=checkpoints,
+                    context_state=current_context_state,
                 )
             response = llm_outcome
 
@@ -289,6 +431,7 @@ class RunRuntime:
                         answer=format_checkpoint(checkpoint),
                         checkpoint=checkpoint,
                         checkpoints=checkpoints,
+                        context_state=current_context_state,
                     )
 
                 if not stop_safety.business_safe:
@@ -297,15 +440,19 @@ class RunRuntime:
                     conversation.add_user(checkpoint.message)
                     continue
 
+                answer = response.content
+                if level2_performed:
+                    answer = "本轮已执行上下文压缩。\n\n" + answer
                 checkpoint = run_completed_checkpoint(
-                    answer=response.content,
+                    answer=answer,
                     extra_data=self.runtime_mode.checkpoint_data(),
                 )
                 return self._finish(
                     status=RunStatus.COMPLETED,
-                    answer=response.content,
+                    answer=answer,
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
+                    context_state=current_context_state,
                 )
 
             calls = response.calls
@@ -352,6 +499,7 @@ class RunRuntime:
                         answer=format_checkpoint(checkpoint),
                         checkpoint=checkpoint,
                         checkpoints=checkpoints,
+                        context_state=current_context_state,
                     )
 
                 if not stop_safety.business_safe:
@@ -368,6 +516,7 @@ class RunRuntime:
                     answer=checkpoint.message,
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
+                    context_state=current_context_state,
                 )
 
         checkpoint = budget_stop_checkpoint(max_rounds, tools_state)
@@ -376,4 +525,5 @@ class RunRuntime:
             answer=format_checkpoint(checkpoint),
             checkpoint=checkpoint,
             checkpoints=checkpoints,
+            context_state=current_context_state,
         )

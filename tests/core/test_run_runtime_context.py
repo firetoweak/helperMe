@@ -1,15 +1,25 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from core.context import BudgetAssessment, ContextManager
+from core.context import (
+    BudgetAssessment,
+    ContextManager,
+    ContextState,
+    MicroCompactionDecision,
+    ModelContext,
+    PreparedContext,
+    SummaryCompaction,
+    SummaryGeneration,
+)
 from core.messages import Conversation
 from core.model_call import LLMResponse
 from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.model_call.service import ModelCallBlocked
-from core.runtime_modes import PlainMode
+from core.runtime_modes import PlainMode, RuntimeModeStartResult
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from tests.core.llm_test_support import (
     call_result,
+    context_preparation_service,
     model_call_service,
     runtime_tool_dependencies,
 )
@@ -38,8 +48,16 @@ class ChangingInstructionsMode:
         self.instruction = "第一轮指令"
         self.instruction_calls = 0
 
-    def start(self, conversation, model_calls, model, context_manager):
-        return None
+    def start(
+        self,
+        conversation,
+        model_calls,
+        model,
+        context_preparation,
+        context_state,
+        level2_boundary_message_id,
+    ):
+        return RuntimeModeStartResult(context_state=context_state)
 
     def runtime_instructions(self):
         self.instruction_calls += 1
@@ -64,6 +82,54 @@ class StaticInstructionsMode(ChangingInstructionsMode):
 
 
 class RunRuntimeContextTest(unittest.TestCase):
+    def test_level2_records_checkpoint_and_notifies_user(self):
+        before = BudgetAssessment(900, 750)
+        after = BudgetAssessment(500, 750)
+        state = ContextState(
+            summary="handoff",
+            summarized_through_message_id="old-message",
+        )
+        decision = MicroCompactionDecision(
+            candidate_state=ContextState(),
+            before=before,
+            after=before,
+            changed=False,
+        )
+        context_preparation = Mock()
+        context_preparation.prepare.return_value = PreparedContext(
+            model_context=ModelContext(
+                messages=[{"role": "user", "content": "hello"}]
+            ),
+            context_state=state,
+            micro_compaction=decision,
+            summary_compaction=SummaryCompaction(
+                boundary_message_id="old-message",
+                before=before,
+                after=after,
+                generation=SummaryGeneration("handoff", 300, 20),
+            ),
+        )
+        model_calls = Mock()
+        model_calls.call.return_value = call_result(
+            LLMResponse(type="text", content="done")
+        )
+
+        result = RunRuntime(
+            model_calls,
+            "test-model",
+            PlainMode(),
+            context_preparation,
+            **runtime_tool_dependencies(),
+        ).run(Conversation(), "hello")
+
+        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.context_state, state)
+        self.assertTrue(result.answer.startswith("本轮已执行上下文压缩。"))
+        self.assertIn(
+            "level2_context_compressed",
+            [checkpoint.reason for checkpoint in result.checkpoints],
+        )
+
     def test_project_budget_exceeded_blocks_before_model_call(self):
         model_calls = Mock()
         model_calls.call.return_value = ModelCallBlocked(
@@ -78,7 +144,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             model_calls,
             "test-model",
             PlainMode(),
-            ContextManager(),
+            context_preparation_service(),
             **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
@@ -95,7 +161,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             model_call_service(ContextLimitLLMClient()),
             "test-model",
             PlainMode(),
-            ContextManager(),
+            context_preparation_service(),
             **runtime_tool_dependencies(),
         )
         conversation = Conversation()
@@ -117,7 +183,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             ]
         )
         mode = StaticInstructionsMode()
-        context_manager = Mock(wraps=ContextManager())
+        context_preparation = Mock(wraps=context_preparation_service())
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
@@ -125,12 +191,12 @@ class RunRuntimeContextTest(unittest.TestCase):
             model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,
-            context_manager=context_manager,
+            context_preparation=context_preparation,
             **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
         self.assertEqual(result.status, RunStatus.COMPLETED)
-        self.assertEqual(context_manager.build.call_count, 1)
+        self.assertEqual(context_preparation.prepare.call_count, 1)
         self.assertEqual(mode.instruction_calls, 1)
         self.assertIs(llm_client.messages[0], llm_client.messages[1])
         self.assertIn("第一轮指令", llm_client.messages[0][0]["content"])
@@ -147,7 +213,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             ]
         )
         mode = ChangingInstructionsMode()
-        context_manager = Mock(wraps=ContextManager())
+        context_preparation = Mock(wraps=context_preparation_service())
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
@@ -155,12 +221,12 @@ class RunRuntimeContextTest(unittest.TestCase):
             model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,
-            context_manager=context_manager,
+            context_preparation=context_preparation,
             **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
         self.assertEqual(result.status, RunStatus.COMPLETED)
-        self.assertEqual(context_manager.build.call_count, 2)
+        self.assertEqual(context_preparation.prepare.call_count, 2)
         self.assertEqual(mode.instruction_calls, 2)
         self.assertIn("第一轮指令", llm_client.messages[0][0]["content"])
         self.assertIn("第二轮指令", llm_client.messages[1][0]["content"])

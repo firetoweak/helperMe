@@ -119,6 +119,36 @@ def context_budget_exceeded_checkpoint(
     )
 
 
+def context_compressed_checkpoint(
+    *,
+    boundary_message_id: str,
+    before: BudgetAssessment,
+    after: BudgetAssessment,
+) -> Checkpoint:
+    accepted = after.allowed
+    return Checkpoint(
+        kind="context_compression",
+        reason=(
+            "level2_context_compressed"
+            if accepted
+            else "level2_context_compression_rejected"
+        ),
+        message=(
+            "已执行 Level 2 上下文压缩。"
+            if accepted
+            else "Level 2 摘要后仍超预算，未提交候选压缩状态。"
+        ),
+        data={
+            "level": 2,
+            "boundary_message_id": boundary_message_id,
+            "before_tokens": before.estimated_input_tokens,
+            "after_tokens": after.estimated_input_tokens,
+            "input_budget_tokens": after.input_budget_tokens,
+            "accepted": accepted,
+        },
+    )
+
+
 def invalid_llm_response_checkpoint(
     *,
     round_index: int,
