@@ -85,6 +85,7 @@ def main() -> None:
     application = create_agent_application(
         model,
         model_context_limit=MODEL_CONTEXT_LIMIT,
+        runtime_root=Path.home() / ".helper-me" / "runtime",
     )
     session_id = _new_session(application)
     last_status: RunStatus | None = None

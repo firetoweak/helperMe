@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.agent_application import AgentApplication
 from core.model_call.client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
@@ -13,6 +15,15 @@ from core.context import (
     TiktokenTokenEstimator,
 )
 from core.model_call.service import ModelCallService
+from core.runtime_artifacts import (
+    FileArtifactStore,
+    ToolResultExternalizer,
+    ToolResultLimit,
+)
+from core.tool_registry import BUILTIN_TOOL_REGISTRY
+from core.tools_runtime.tools_executor import ToolsExecutor
+from tools.artifact_read import create_read_artifact_spec
+from tools.workspace import WORKSPACE
 
 # 工具目前通过导入副作用注册；composition root 是唯一组装入口。
 import tools  # noqa: F401
@@ -21,11 +32,15 @@ import tools  # noqa: F401
 def create_agent_application(
     model: str,
     model_context_limit: int,
+    runtime_root: Path,
     input_budget_ratio: float = 0.75,
     runtime_mode: RuntimeMode | None = None,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
+    runtime_root = runtime_root.resolve()
+    if runtime_root.is_relative_to(WORKSPACE.resolve()):
+        raise ValueError("runtime_root 不能位于用户 workspace 内")
 
     llm_client = LLMClient()
     context_budget = ContextBudget(
@@ -39,11 +54,20 @@ def create_agent_application(
         llm_client=llm_client,
         context_budget=context_budget,
     )
+    result_limit = ToolResultLimit()
+    artifact_store = FileArtifactStore(runtime_root / "artifacts")
+    tool_registry = BUILTIN_TOOL_REGISTRY.clone()
+    tool_registry.register(create_read_artifact_spec(artifact_store))
     run_runtime = RunRuntime(
         model_calls=model_calls,
         model=model,
         runtime_mode=runtime_mode if runtime_mode is not None else PlainMode(),
-        context_manager=ContextManager(),
+        context_manager=ContextManager(result_limit.max_chars),
+        tools_executor=ToolsExecutor(tool_registry),
+        tool_result_externalizer=ToolResultExternalizer(
+            artifact_store,
+            result_limit,
+        ),
     )
     session_runtime = SessionRuntime(run_runtime)
     return AgentApplication(

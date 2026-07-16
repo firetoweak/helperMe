@@ -9,7 +9,11 @@ from core.model_call.service import ModelCallBlocked
 from core.planning import PlanningMode
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime
-from tests.core.llm_test_support import call_result, model_call_service
+from tests.core.llm_test_support import (
+    call_result,
+    model_call_service,
+    runtime_tool_dependencies,
+)
 
 
 class RecordingLLMClient:
@@ -62,6 +66,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
+            **runtime_tool_dependencies(),
         )
         conversation = self._conversation()
 
@@ -108,6 +113,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
+            **runtime_tool_dependencies(),
         ).run(conversation, "继续处理历史任务")
 
         self.assertEqual(result.status, "blocked")
@@ -127,6 +133,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
+            **runtime_tool_dependencies(),
         ).run(conversation, "继续处理历史任务")
 
         self.assertEqual(result.status, "blocked")
@@ -149,6 +156,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
+            **runtime_tool_dependencies(),
         )
         conversation = self._conversation()
 
@@ -186,6 +194,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             "test-model",
             runtime_mode=PlanningMode(),
             context_manager=ContextManager(),
+            **runtime_tool_dependencies(),
         )
         conversation = self._conversation()
 
@@ -216,6 +225,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
             "test-model",
             runtime_mode=PlainMode(),
             context_manager=ContextManager(),
+            **runtime_tool_dependencies(),
         )
         conversation = self._conversation()
 

@@ -28,9 +28,8 @@ from core.model_call.service import (
     ModelCallService,
 )
 from core.model_call.types import InvalidLLMResponse, LLMResponse, LLMUsage
-from core.tool_registry import get_tools
 from core.tools_runtime.stop_guard import evaluate_stop_safety
-from core.tools_runtime.tools_executor import encode_tool_result, execute_tool
+from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from core.tools_runtime.tools_protocol import (
     build_tool_messages,
     validate_tool_message_chain,
@@ -38,6 +37,7 @@ from core.tools_runtime.tools_protocol import (
 from core.tools_runtime.tools_state import ToolsState
 from core.runtime_modes import RuntimeMode
 from core.context import ContextManager, ContextRequest, ModelContext
+from core.runtime_artifacts import ToolResultExternalizer
 
 class RunStatus(str, Enum):
     COMPLETED = "completed"
@@ -78,11 +78,15 @@ class RunRuntime:
         model: str,
         runtime_mode: RuntimeMode,
         context_manager: ContextManager,
+        tools_executor: ToolsExecutor,
+        tool_result_externalizer: ToolResultExternalizer,
     ):
         self.model_calls = model_calls
         self.model = model
         self.runtime_mode = runtime_mode
         self.context_manager = context_manager
+        self.tools_executor = tools_executor
+        self.tool_result_externalizer = tool_result_externalizer
 
     @staticmethod
     def _finish(
@@ -223,7 +227,7 @@ class RunRuntime:
                     usage=start_outcome,
                 )
             )
-        tools = get_tools()
+        tools = self.tools_executor.registry.get_tools()
 
         for round_index in range(1, max_rounds + 1):
             validation = validate_tool_message_chain(conversation.messages)
@@ -304,8 +308,14 @@ class RunRuntime:
             batch_steps = tools_state.add_calls(calls)
 
             for call in calls:
-                tool_result = execute_tool(call.name, call.arguments)
-                tools_state.add_result(call.id, tool_result)
+                tool_result = self.tools_executor.execute(
+                    call.name,
+                    call.arguments,
+                )
+                projected_result = self.tool_result_externalizer.process(
+                    tool_result
+                )
+                tools_state.add_result(call.id, projected_result)
 
             tool_results = build_tool_messages(batch_steps, encode_tool_result)
             conversation.add_tools_result(tool_results)

@@ -1,5 +1,4 @@
 import unittest
-from unittest.mock import patch
 
 from core.context import ContextManager
 from core.messages import Conversation
@@ -7,7 +6,11 @@ from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.run_runtime import RunControl, RunRuntime
-from tests.core.llm_test_support import call_result, model_call_service
+from tests.core.llm_test_support import (
+    call_result,
+    model_call_service,
+    runtime_tool_dependencies,
+)
 
 
 class InterruptingLLMClient:
@@ -33,8 +36,7 @@ SUCCESS = {
 
 
 class RunRuntimeInterruptTest(unittest.TestCase):
-    @patch("core.tools_runtime.run_runtime.execute_tool", return_value=SUCCESS)
-    def test_interrupts_after_complete_tool_batch(self, _execute_tool):
+    def test_interrupts_after_complete_tool_batch(self):
         control = RunControl()
         llm = InterruptingLLMClient(
             control,
@@ -52,6 +54,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(SUCCESS),
         ).run(
             conversation,
             "执行工具",
@@ -62,8 +65,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         self.assertEqual(result.final_reason, "run_interrupted")
         self.assertTrue(validate_tool_message_chain(conversation.messages).ok)
 
-    @patch("core.tools_runtime.run_runtime.execute_tool", return_value=SUCCESS)
-    def test_interrupt_waits_for_verification(self, _execute_tool):
+    def test_interrupt_waits_for_verification(self):
         control = RunControl()
         llm = InterruptingLLMClient(
             control,
@@ -85,6 +87,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(SUCCESS),
         ).run(
             conversation,
             "修改文件",

@@ -1,12 +1,24 @@
 import unittest
-from unittest.mock import patch
 
 from core.context import ContextManager
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime
-from tests.core.llm_test_support import call_result, model_call_service
+from tests.core.llm_test_support import (
+    call_result,
+    model_call_service,
+    runtime_tool_dependencies,
+)
+
+
+SUCCESS = {
+    "ok": True,
+    "code": "OK",
+    "data": None,
+    "error": None,
+    "hint": None,
+}
 
 
 class RecordingLLMClient:
@@ -18,17 +30,7 @@ class RecordingLLMClient:
 
 
 class RunRuntimeStopGuardTest(unittest.TestCase):
-    @patch(
-        "core.tools_runtime.run_runtime.execute_tool",
-        return_value={
-            "ok": True,
-            "code": "OK",
-            "data": None,
-            "error": None,
-            "hint": None,
-        },
-    )
-    def test_unverified_write_cannot_complete(self, _execute_tool):
+    def test_unverified_write_cannot_complete(self):
         llm = RecordingLLMClient(
             [
                 LLMResponse(
@@ -50,6 +52,7 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(SUCCESS),
         ).run(
             conversation,
             "修改文件",

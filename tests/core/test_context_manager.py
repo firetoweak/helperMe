@@ -75,6 +75,34 @@ class ContextManagerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.build(request)
 
+    def test_build_rejects_oversized_historical_tool_message(self):
+        manager = ContextManager(max_tool_result_chars=20)
+        request = ContextRequest(
+            conversation_messages=[
+                {"role": "system", "content": "system prompt"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "demo", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "content": "x" * 21,
+                },
+            ],
+            runtime_instructions=[],
+        )
+
+        with self.assertRaisesRegex(ValueError, "字符上限"):
+            manager.build(request)
+
 
 if __name__ == "__main__":
     unittest.main()

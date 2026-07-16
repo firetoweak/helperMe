@@ -5,7 +5,6 @@
 
 ## Rule 同步区
 
-- 必须遵循 Early Fail 原则：当输入、状态或调用契约不成立时，应在责任边界立即明确失败。
 - 禁止为了跑通当前局部模块而添加静默兜底、隐式默认值或自动生成关键关联数据。兜底不得掩盖上层调用错误，否则会破坏整体设计并显著增加调试成本。
 
 ====================
@@ -301,6 +300,8 @@ Context Management
 5.1 Context Projection
 
 5.2 Context Budget
+
+5.2.1 Tool Result Budget / Runtime Artifact（5.3 前置）
 
 5.3 Safe Compression
 

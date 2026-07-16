@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import tools  # noqa: F401
 from core.agent_application import AgentApplication
@@ -10,7 +10,11 @@ from core.session_runner import SessionRuntime
 from core.session_state import SessionEventType, SessionStatus
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
-from tests.core.llm_test_support import call_result, model_call_service
+from tests.core.llm_test_support import (
+    call_result,
+    model_call_service,
+    runtime_tool_dependencies,
+)
 
 
 SUCCESS = {
@@ -30,6 +34,7 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
                 model="test-model",
                 runtime_mode=PlainMode(),
                 context_manager=ContextManager(),
+                **runtime_tool_dependencies(SUCCESS),
             )
         )
         application = AgentApplication(
@@ -39,10 +44,8 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
         application.create_session("session-1")
         return application, session_runtime
 
-    @patch("core.tools_runtime.run_runtime.execute_tool", return_value=SUCCESS)
     def test_application_starts_and_resumes_through_session_runtime(
         self,
-        _execute_tool,
     ):
         llm_client = Mock()
         responses = iter(

@@ -8,7 +8,11 @@ from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.model_call.service import ModelCallBlocked
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
-from tests.core.llm_test_support import call_result, model_call_service
+from tests.core.llm_test_support import (
+    call_result,
+    model_call_service,
+    runtime_tool_dependencies,
+)
 
 
 class RecordingLLMClient:
@@ -75,6 +79,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
         self.assertEqual(result.status, RunStatus.BLOCKED)
@@ -91,6 +96,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(),
         )
         conversation = Conversation()
 
@@ -120,6 +126,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             model="test-model",
             runtime_mode=mode,
             context_manager=context_manager,
+            **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
         self.assertEqual(result.status, RunStatus.COMPLETED)
@@ -146,6 +153,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             model="test-model",
             runtime_mode=mode,
             context_manager=context_manager,
+            **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
         self.assertEqual(result.status, RunStatus.COMPLETED)

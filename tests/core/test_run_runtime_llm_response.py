@@ -7,7 +7,11 @@ from core.model_call import InvalidLLMResponse, LLMResponse
 from core.model_call.client import LLMTransientError
 from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
-from tests.core.llm_test_support import call_result, model_call_service
+from tests.core.llm_test_support import (
+    call_result,
+    model_call_service,
+    runtime_tool_dependencies,
+)
 
 
 class EmptyResponseLLMClient:
@@ -34,6 +38,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(),
         )
         conversation = Conversation()
 
@@ -75,6 +80,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(),
         )
 
         result = runner.run(Conversation(), "hello")
@@ -97,6 +103,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(),
         )
 
         with self.assertRaisesRegex(RuntimeError, "client bug"):
@@ -122,6 +129,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
             "test-model",
             PlainMode(),
             ContextManager(),
+            **runtime_tool_dependencies(),
         )
 
         result = runner.run(Conversation(), "hello")

@@ -1,27 +1,35 @@
 import unittest
 
-from core.tool_registry import TOOL_SPECS, register_tool
+from core.tool_registry import EmptyInput, ToolRegistry, ToolSpec
 
 
 class ToolRegistryEarlyFailTest(unittest.TestCase):
     def test_duplicate_registration_fails_without_replacing_original(self):
         tool_name = "duplicate_registration_test_tool"
 
-        @register_tool("original")
-        def duplicate_registration_test_tool(_):
+        def original_handler(_):
             return {"ok": True, "code": "ORIGINAL"}
 
-        original = TOOL_SPECS[tool_name]
-        try:
-            with self.assertRaises(ValueError):
+        registry = ToolRegistry()
+        original = ToolSpec(
+            tool_name,
+            "original",
+            EmptyInput,
+            original_handler,
+        )
+        registry.register(original)
 
-                @register_tool("replacement")
-                def duplicate_registration_test_tool(_):
-                    return {"ok": True, "code": "REPLACEMENT"}
+        with self.assertRaises(ValueError):
+            registry.register(
+                ToolSpec(
+                    tool_name,
+                    "replacement",
+                    EmptyInput,
+                    original_handler,
+                )
+            )
 
-            self.assertIs(TOOL_SPECS[tool_name], original)
-        finally:
-            TOOL_SPECS.pop(tool_name, None)
+        self.assertIs(registry.get(tool_name), original)
 
 
 if __name__ == "__main__":
