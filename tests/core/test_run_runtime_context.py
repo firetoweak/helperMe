@@ -85,7 +85,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         self.assertEqual(result.status, RunStatus.BLOCKED)
         self.assertEqual(result.final_reason, "context_budget_exceeded")
         self.assertEqual(
-            conversation.messages,
+            conversation.protocol_messages(),
             [{"role": "user", "content": "hello"}],
         )
         self.assertEqual(result.checkpoints[-1].data["overflow_tokens"], 51)
@@ -134,7 +134,10 @@ class RunRuntimeContextTest(unittest.TestCase):
         self.assertEqual(mode.instruction_calls, 1)
         self.assertIs(llm_client.messages[0], llm_client.messages[1])
         self.assertIn("第一轮指令", llm_client.messages[0][0]["content"])
-        self.assertEqual(conversation.messages[0]["content"], "system prompt")
+        self.assertEqual(
+            conversation.records[0].payload["content"],
+            "system prompt",
+        )
 
     def test_each_round_builds_a_snapshot_with_current_instructions(self):
         llm_client = RecordingLLMClient(

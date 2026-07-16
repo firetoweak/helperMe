@@ -230,7 +230,9 @@ class RunRuntime:
         tools = self.tools_executor.registry.get_tools()
 
         for round_index in range(1, max_rounds + 1):
-            validation = validate_tool_message_chain(conversation.messages)
+            validation = validate_tool_message_chain(
+                conversation.protocol_messages()
+            )
             if not validation.ok:
                 checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
                 return self._finish(
@@ -241,7 +243,7 @@ class RunRuntime:
                 )
             context = self.context_manager.build(
                 ContextRequest(
-                    conversation_messages=conversation.messages,
+                    conversation_records=conversation.records,
                     runtime_instructions=self.runtime_mode.runtime_instructions(),
                 )
             )
@@ -274,11 +276,13 @@ class RunRuntime:
                     continue
 
                 stop_safety = evaluate_stop_safety(
-                    conversation.messages,
+                    conversation.protocol_messages(),
                     tools_state,
                 )
                 if not stop_safety.protocol_safe:
-                    validation = validate_tool_message_chain(conversation.messages)
+                    validation = validate_tool_message_chain(
+                        conversation.protocol_messages()
+                    )
                     checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
                     return self._finish(
                         status=RunStatus.FAILED,
@@ -335,11 +339,13 @@ class RunRuntime:
 
             if run_control.interrupt_requested:
                 stop_safety = evaluate_stop_safety(
-                    conversation.messages,
+                    conversation.protocol_messages(),
                     tools_state,
                 )
                 if not stop_safety.protocol_safe:
-                    validation = validate_tool_message_chain(conversation.messages)
+                    validation = validate_tool_message_chain(
+                        conversation.protocol_messages()
+                    )
                     checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
                     return self._finish(
                         status=RunStatus.FAILED,

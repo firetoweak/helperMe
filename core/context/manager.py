@@ -4,12 +4,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from core.messages import ConversationMessage
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 
 
 @dataclass(frozen=True)
 class ContextRequest:
-    conversation_messages: list[dict[str, Any]]
+    conversation_records: list[ConversationMessage]
     runtime_instructions: list[str]
 
 
@@ -25,11 +26,13 @@ class ContextManager:
         self.max_tool_result_chars = max_tool_result_chars
 
     def build(self, request: ContextRequest) -> ModelContext:
-        messages = deepcopy(request.conversation_messages)
+        messages = deepcopy(
+            [record.payload for record in request.conversation_records]
+        )
         if request.runtime_instructions:
             first_message = messages[0]
             if first_message.get("role") != "system":
-                raise ValueError("conversation_messages 的第一个消息必须是 system 角色")
+                raise ValueError("conversation_records 的第一个消息必须是 system 角色")
             system_content = first_message.get("content")
             instruction_block = "\n\n运行时指令：\n" + "\n".join(
                 instruction.strip()

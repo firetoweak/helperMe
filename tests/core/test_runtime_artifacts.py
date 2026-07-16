@@ -186,7 +186,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
 
         tool_message = next(
             message
-            for message in conversation.messages
+            for message in conversation.protocol_messages()
             if message["role"] == "tool"
         )
         tool_result = json.loads(tool_message["content"])

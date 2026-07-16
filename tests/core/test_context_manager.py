@@ -1,6 +1,14 @@
 import unittest
 
 from core.context import ContextManager, ContextRequest
+from core.messages import ConversationMessage
+
+
+def records(*payloads):
+    return [
+        ConversationMessage(message_id=f"message-{index}", payload=payload)
+        for index, payload in enumerate(payloads, start=1)
+    ]
 
 
 class ContextManagerTest(unittest.TestCase):
@@ -15,7 +23,7 @@ class ContextManagerTest(unittest.TestCase):
 
         context = self.manager.build(
             ContextRequest(
-                conversation_messages=source,
+                conversation_records=records(*source),
                 runtime_instructions=[],
             )
         )
@@ -35,7 +43,7 @@ class ContextManagerTest(unittest.TestCase):
 
         context = self.manager.build(
             ContextRequest(
-                conversation_messages=source,
+                conversation_records=records(*source),
                 runtime_instructions=["follow the current plan"],
             )
         )
@@ -46,7 +54,9 @@ class ContextManagerTest(unittest.TestCase):
 
     def test_build_rejects_runtime_instructions_without_system_message(self):
         request = ContextRequest(
-            conversation_messages=[{"role": "user", "content": "hello"}],
+            conversation_records=records(
+                {"role": "user", "content": "hello"}
+            ),
             runtime_instructions=["follow the current plan"],
         )
 
@@ -55,7 +65,7 @@ class ContextManagerTest(unittest.TestCase):
 
     def test_build_rejects_invalid_tool_message_chain(self):
         request = ContextRequest(
-            conversation_messages=[
+            conversation_records=records(
                 {"role": "system", "content": "system prompt"},
                 {
                     "role": "assistant",
@@ -68,7 +78,7 @@ class ContextManagerTest(unittest.TestCase):
                         }
                     ],
                 },
-            ],
+            ),
             runtime_instructions=[],
         )
 
@@ -78,7 +88,7 @@ class ContextManagerTest(unittest.TestCase):
     def test_build_rejects_oversized_historical_tool_message(self):
         manager = ContextManager(max_tool_result_chars=20)
         request = ContextRequest(
-            conversation_messages=[
+            conversation_records=records(
                 {"role": "system", "content": "system prompt"},
                 {
                     "role": "assistant",
@@ -96,7 +106,7 @@ class ContextManagerTest(unittest.TestCase):
                     "tool_call_id": "call-1",
                     "content": "x" * 21,
                 },
-            ],
+            ),
             runtime_instructions=[],
         )
 

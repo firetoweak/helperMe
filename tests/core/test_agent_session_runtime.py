@@ -73,7 +73,11 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
 
         self.assertEqual(interrupted.result.status, RunStatus.INTERRUPTED)
         self.assertEqual(session.status, SessionStatus.INTERRUPTED)
-        self.assertTrue(validate_tool_message_chain(session.conversation.messages).ok)
+        self.assertTrue(
+            validate_tool_message_chain(
+                session.conversation.protocol_messages()
+            ).ok
+        )
 
         completed = application.resume("session-1", "run-2", "继续执行")
 
@@ -91,7 +95,11 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
                 SessionEventType.COMPLETED,
             ],
         )
-        self.assertTrue(validate_tool_message_chain(session.conversation.messages).ok)
+        self.assertTrue(
+            validate_tool_message_chain(
+                session.conversation.protocol_messages()
+            ).ok
+        )
 
     def test_application_starts_new_run_in_same_session_after_completed(self):
         llm_client = Mock()

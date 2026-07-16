@@ -152,8 +152,14 @@ class AgentApplicationSessionIsolationTest(unittest.TestCase):
         application.start("session-a", "run-a", "A 的消息")
         application.start("session-b", "run-b", "B 的消息")
 
-        messages_a = session_runtime.sessions["session-a"].conversation.messages
-        messages_b = session_runtime.sessions["session-b"].conversation.messages
+        messages_a = (
+            session_runtime.sessions["session-a"]
+            .conversation.protocol_messages()
+        )
+        messages_b = (
+            session_runtime.sessions["session-b"]
+            .conversation.protocol_messages()
+        )
 
         self.assertEqual(
             messages_a,

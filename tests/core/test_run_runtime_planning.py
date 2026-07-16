@@ -78,7 +78,10 @@ class RunRuntimePlanningTest(unittest.TestCase):
         self.assertIn("当前执行计划", llm.seen_messages[1][0]["content"])
         self.assertIn("理解目标", llm.seen_messages[1][0]["content"])
         self.assertFalse(
-            any("当前运行计划" in str(message.get("content")) for message in conversation.messages)
+            any(
+                "当前运行计划" in str(message.get("content"))
+                for message in conversation.protocol_messages()
+            )
         )
         usage_checkpoints = [
             checkpoint
@@ -119,7 +122,10 @@ class RunRuntimePlanningTest(unittest.TestCase):
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.final_reason, "context_budget_exceeded")
         self.assertEqual(result.checkpoints[-1].data["stage"], "planning")
-        self.assertEqual(conversation.messages[-1]["content"], "继续处理历史任务")
+        self.assertEqual(
+            conversation.records[-1].payload["content"],
+            "继续处理历史任务",
+        )
 
     def test_planning_model_hard_limit_blocks_current_run(self):
         model_calls = Mock()
@@ -165,7 +171,10 @@ class RunRuntimePlanningTest(unittest.TestCase):
         self.assertEqual(result.answer, "复核后的最终回答")
         self.assertEqual(len(llm.seen_messages), 3)
         self.assertTrue(
-            any("最终回答前" in str(message.get("content")) for message in conversation.messages)
+            any(
+                "最终回答前" in str(message.get("content"))
+                for message in conversation.protocol_messages()
+            )
         )
 
     def test_tool_failure_adds_replan_prompt_and_checkpoint_plan(self):
@@ -202,7 +211,10 @@ class RunRuntimePlanningTest(unittest.TestCase):
 
         self.assertEqual(result.status, "completed")
         self.assertTrue(
-            any("工具调用失败" in str(message.get("content")) for message in conversation.messages)
+            any(
+                "工具调用失败" in str(message.get("content"))
+                for message in conversation.protocol_messages()
+            )
         )
         tool_batch_checkpoints = [
             checkpoint
@@ -238,7 +250,10 @@ class RunRuntimePlanningTest(unittest.TestCase):
             any("当前运行计划" in str(message.get("content")) for message in llm.seen_messages[0])
         )
         self.assertFalse(
-            any("最终回答前" in str(message.get("content")) for message in conversation.messages)
+            any(
+                "最终回答前" in str(message.get("content"))
+                for message in conversation.protocol_messages()
+            )
         )
         self.assertNotIn("plan", result.checkpoints[-1].data)
 

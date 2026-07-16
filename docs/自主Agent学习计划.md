@@ -2,6 +2,7 @@
 
 每章节 初次只做核心原型，在后续章节做的时候，发现需要继续补充前边的章节的技术的时候，就进行回顾补充。
 如果新 Phase 暴露出旧 Phase 的不足，就回补旧模块。但回补只服务当前 Phase，不做大而全重构。
+做每一节任务也是对前面设计的优化过程，必须先处理进行该章节，但未满足的前置模块补充/优化。
 
 ## Rule 同步区
 
@@ -304,6 +305,114 @@ Context Management
 5.2.1 Tool Result Budget / Runtime Artifact（5.3 前置）
 
 5.3 Safe Compression
+
+问题定义：
+当合法的用户消息、Assistant 消息和工具结果在同一 Session 中长期累积时，在不修改完整事实轨迹、不改变 Session 身份的前提下，生成能够继续发送给模型的安全投影。
+
+本阶段不负责补救单条无界输入。用户输入和单次工具输出必须在各自的外部边界限制；超过契约时明确失败，不进入 Safe Compression。
+
+核心状态：
+
+```text
+Session
+├─ Conversation：完整、只追加的事实轨迹
+└─ ContextState：Session 级的有损投影状态
+   ├─ summary
+   └─ compacted_through_message_id
+
+Conversation + ContextState + runtime instructions
+    ↓
+ModelContext：某一次模型调用的不可变快照
+```
+
+责任边界：
+
+- Conversation 只保存原始记录，压缩不删除、替换或改写其消息。
+- Conversation 的每条领域记录拥有稳定 `message_id`；`message_id` 属于记录外壳，不进入 OpenAI 消息协议。
+- `tool_call_id` 只负责匹配 assistant tool call 与 tool result，不能代替 `message_id`。
+- ContextState 随 Session 存活，支持 Planner、多个 Agent Round 与 resume 复用同一压缩进度。
+- ModelContext 仍是单次调用快照；同一 Round 的 retry 必须复用同一快照。
+- ContextBudget 只评估完整请求的压力与是否允许发送，不修改上下文、不触发副作用。
+- 压缩不新建 Session。新 Session Handoff 是另一种用例，不属于本阶段。
+
+两级压缩：
+
+1. Level 1：确定性微压缩
+   - 在真正超预算前主动触发，是持续维护，不是溢出后的突发补救。
+   - 优先处理已消费的 Assistant 文本和旧工具结果，不调用 LLM。
+   - 保留工具协议外壳，不切断 assistant tool calls 与全部对应 tool results。
+   - 使用高低水位：达到高水位后开始维护，降到目标低水位后停止，避免每个 Round 反复触发。
+
+2. Level 2：增量 Auto-Compact
+   - 只在 Level 1 无法降到目标水位时升级，是最后一级，但必须在硬超限之前触发。
+   - 调用 LLM，第一版只用 prompt 约束生成自由文本摘要，不定义结构化摘要模型。
+   - 摘要以合成 assistant 消息投影到 ModelContext，语义是“此前 Agent 的工作交接摘要”，不写回 Conversation。
+   - 首次使用旧消息前缀生成 S1；后续使用 `S(n-1) + 新 delta` 生成 Sn，不重新读取全部已压缩历史。
+
+压缩边界：
+
+- system prompt、tools schema、runtime instructions 属于不可压缩基础占用。
+- 保留近期原始消息后缀；具体保护窗口和阈值在后续迭代调整。
+- 优先在已完成的完整 Run 边界压缩。
+- 允许压缩当前 Run 中已经协议闭合、已被后续模型响应消费的旧步骤。
+- 最新工具结果即使协议闭合，在模型尚未消费前也不属于可压缩历史。
+- 若不可压缩基础占用本身已超过项目输入预算，不启动任何 Level，直接 blocked。
+
+最终流程：
+
+```text
+Conversation + ContextState + runtime instructions + tools
+        ↓
+生成原始 ModelContext 快照
+        ↓
+评估完整请求压力
+        ├─ 低于维护水位 → ModelCall
+        └─ 达到维护水位
+               → Level 1
+               → 重新投影和评估
+               ├─ 已降到目标水位 → ModelCall
+               └─ 仍处于 Level 2 水位
+                      → 增量摘要候选 ContextState
+                      → 校验压缩边界与工具协议
+                      → 重新投影和预算评估
+                      ├─ 全部通过 → 原子提交 → ModelCall
+                      └─ 任一失败 → 保留旧 ContextState → blocked
+```
+
+原子提交：
+
+- Level 2 先生成候选 summary 与候选边界。
+- 候选必须完成边界、工具协议、投影与预算校验后才能一次性替换 ContextState。
+- 摘要调用失败、边界不合法、工具协议不合法或重新投影后仍超预算，都不能修改旧 ContextState。
+- 已经产生的 LLM usage 仍如实记录，但不构成提交压缩状态的理由。
+
+可观测性：
+
+- Safe Compression 产生完整 CompressionReport，至少可报告压缩级别、压缩前后 token、摘要边界、保留原文数量与增量摘要次数。
+- 压缩事实与指标进入 Run Trace / Checkpoint，不扩大 Session Event 的生命周期职责。
+- 摘要正文的唯一状态源是 ContextState，不复制到 trace。
+- 压缩是否向真实用户展示、如何展示，由 Application / Console 决定。
+
+Benchmark：
+
+- 同一 Session 在不更换 session_id 的前提下至少连续触发两次 Level 2，仍能继续完成任务。
+- 第二次摘要使用 `S1 + 新 delta` 生成 S2，不重新读取已被 S1 覆盖的全部原始前缀。
+- Planner 和 Agent Round 都使用同一 Session ContextState 准备模型输入。
+- Level 2 可以压缩当前 Run 中已闭合、已消费的旧步骤，不要求等待整个 Run 完成。
+- interrupt/resume 后继续使用已提交的 ContextState，Conversation 工具协议链仍完整。
+- Conversation 中的原始消息数量、内容和 message_id 不因压缩发生变化。
+- 同一 Round 的 LLM retry 复用同一 ModelContext 快照，不在 retry 之间重新压缩。
+- 无效摘要候选、非法压缩边界、工具链不安全或重新投影后仍超预算时，旧 ContextState 保持不变并返回 blocked。
+- 不可压缩基础占用已经超预算时，不调用压缩模型，直接 blocked。
+
+第一版明确不做：
+
+- 结构化摘要模型与字段级校验。
+- `protected_message_ids` 和压缩边界前的稀疏原文保留。
+- 自动识别长期有效约束、语义等价验证等复杂安全控制。
+- 各 Level 内部的精细压缩算法、工具分类与最终阈值调优。
+- Memory、Retrieval、Workspace 回取与完整日志落盘。
+- 创建新 Session 的 Handoff 流程。
 
 5.4 Memory 提炼
 

@@ -85,9 +85,12 @@ class PlannerTest(unittest.TestCase):
         self.assertIn("只返回 JSON", request.context.messages[0]["content"])
         self.assertEqual(
             request.context.messages[1:],
-            conversation.messages[1:],
+            conversation.protocol_messages()[1:],
         )
-        self.assertEqual(conversation.messages[0]["content"], "system prompt")
+        self.assertEqual(
+            conversation.records[0].payload["content"],
+            "system prompt",
+        )
 
     def test_parse_valid_plan_response(self):
         plan = parse_plan_response(

@@ -45,7 +45,7 @@ def create_plan(
 ) -> PlanCallResult | ModelCallBlocked:
     model_context = context_manager.build(
         ContextRequest(
-            conversation_messages=conversation.messages,
+            conversation_records=conversation.records,
             runtime_instructions=[PLANNER_INSTRUCTION],
         )
     )

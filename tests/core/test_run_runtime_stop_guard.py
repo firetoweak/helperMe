@@ -70,7 +70,7 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
             any(
                 message.get("role") == "user"
                 and "必须先完成验证" in str(message.get("content"))
-                for message in conversation.messages
+                for message in conversation.protocol_messages()
             )
         )
 

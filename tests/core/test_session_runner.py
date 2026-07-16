@@ -23,7 +23,7 @@ class SessionRuntimeCreateSessionTest(unittest.TestCase):
 
         self.assertIs(self.runtime.sessions["session-1"], session)
         self.assertEqual(
-            session.conversation.messages,
+            session.conversation.protocol_messages(),
             [{"role": "system", "content": "system prompt"}],
         )
         self.assertEqual(session.status, SessionStatus.PENDING)

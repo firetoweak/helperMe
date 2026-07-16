@@ -47,7 +47,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
         self.assertEqual(result.status, RunStatus.FAILED)
         self.assertEqual(result.final_reason, "empty_model_response")
         self.assertEqual(llm_client.call_count, 3)
-        self.assertEqual(conversation.messages, [
+        self.assertEqual(conversation.protocol_messages(), [
             {"role": "user", "content": "hello"},
         ])
         retry_checkpoints = [

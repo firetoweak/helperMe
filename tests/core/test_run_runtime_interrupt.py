@@ -63,7 +63,9 @@ class RunRuntimeInterruptTest(unittest.TestCase):
 
         self.assertEqual(result.status, "interrupted")
         self.assertEqual(result.final_reason, "run_interrupted")
-        self.assertTrue(validate_tool_message_chain(conversation.messages).ok)
+        self.assertTrue(
+            validate_tool_message_chain(conversation.protocol_messages()).ok
+        )
 
     def test_interrupt_waits_for_verification(self):
         control = RunControl()
@@ -104,7 +106,9 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             "verification_required",
             [checkpoint.reason for checkpoint in result.checkpoints],
         )
-        self.assertTrue(validate_tool_message_chain(conversation.messages).ok)
+        self.assertTrue(
+            validate_tool_message_chain(conversation.protocol_messages()).ok
+        )
 
 
 if __name__ == "__main__":
