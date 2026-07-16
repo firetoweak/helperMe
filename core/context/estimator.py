@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from math import ceil
 from typing import Any, Protocol
+
+import tiktoken
 
 from core.context.manager import ModelContext
 
@@ -24,23 +27,28 @@ class TokenEstimator(Protocol):
         ...
 
 
-class TemplateTokenEstimator:
-    """用统一请求模板估算，并以模型真实 usage 更新系数。"""
+class TiktokenTokenEstimator:
+    """编码完整请求模板，并用近期真实 usage 校准模型差异。"""
 
-    def __init__(self, initial_coefficient: float = 1.0) -> None:
-        self._coefficient = initial_coefficient
+    def __init__(self, window_size: int = 8) -> None:
+        if window_size <= 0:
+            raise ValueError("window_size 必须大于 0")
+        self._encoding = tiktoken.get_encoding("o200k_base")
+        self._observed_coefficients: deque[float] = deque(
+            maxlen=window_size
+        )
 
     @property
     def coefficient(self) -> float:
-        return self._coefficient
+        return max((1.0, *self._observed_coefficients))
 
     def estimate(
         self,
         model_context: ModelContext,
         tools: list[dict[str, Any]],
     ) -> int:
-        raw_size = self._raw_size(model_context, tools)
-        return ceil(raw_size * self._coefficient)
+        base_tokens = self._base_tokens(model_context, tools)
+        return ceil(base_tokens * self.coefficient)
 
     def calibrate(
         self,
@@ -48,15 +56,13 @@ class TemplateTokenEstimator:
         tools: list[dict[str, Any]],
         actual_input_tokens: int,
     ) -> None:
-        raw_size = self._raw_size(model_context, tools)
-        observed_coefficient = actual_input_tokens / raw_size
-        self._coefficient = max(
-            self._coefficient,
-            observed_coefficient,
+        base_tokens = self._base_tokens(model_context, tools)
+        self._observed_coefficients.append(
+            actual_input_tokens / base_tokens
         )
 
-    @staticmethod
-    def _raw_size(
+    def _base_tokens(
+        self,
         model_context: ModelContext,
         tools: list[dict[str, Any]],
     ) -> int:
@@ -70,4 +76,4 @@ class TemplateTokenEstimator:
             separators=(",", ":"),
             sort_keys=True,
         )
-        return len(serialized)
+        return len(self._encoding.encode_ordinary(serialized))

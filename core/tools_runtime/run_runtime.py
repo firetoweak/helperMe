@@ -132,6 +132,17 @@ class RunRuntime:
                 )
                 return outcome.response
             except InvalidLLMResponse as exc:
+                if exc.code == "empty_model_response" and attempt < max_llm_retries:
+                    checkpoints.append(
+                        llm_retry_checkpoint(
+                            round_index=round_index,
+                            attempt=attempt,
+                            max_attempts=max_llm_retries,
+                            error=str(exc),
+                        )
+                    )
+                    time.sleep(min(attempt, 3))
+                    continue
                 return invalid_llm_response_checkpoint(
                     round_index=round_index,
                     reason=exc.code,

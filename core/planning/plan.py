@@ -77,20 +77,3 @@ class Plan:
                 for step in self.steps
             ],
         }
-
-
-if __name__ == "__main__":
-    plan = Plan(
-        goal="测试",
-        steps=[
-            PlanStep(id=1, text="理解任务"),
-            PlanStep(id=2, text="执行任务"),
-        ],
-    )
-
-    plan.mark_doing(1)
-    plan.mark_done(1)
-    plan.mark_doing(2)
-
-    print(plan.current_step())
-    print(plan.to_dict())

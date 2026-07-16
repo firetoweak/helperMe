@@ -10,7 +10,7 @@ from core.context import (
     ContextBudget,
     ContextManager,
     ModelBudgetConfig,
-    TemplateTokenEstimator,
+    TiktokenTokenEstimator,
 )
 from core.model_call.service import ModelCallService
 
@@ -29,7 +29,7 @@ def create_agent_application(
 
     llm_client = LLMClient()
     context_budget = ContextBudget(
-        estimator=TemplateTokenEstimator(),
+        estimator=TiktokenTokenEstimator(),
         config=ModelBudgetConfig(
             context_limit=model_context_limit,
             input_ratio=input_budget_ratio,

@@ -67,18 +67,19 @@ overflow_tokens       派生属性
 
 ### 估算与校准
 
-本阶段不绑定具体 tokenizer。`TemplateTokenEstimator` 使用统一 JSON 模板序列化 messages 和 tools，以字符规模乘校准系数得到请求前估算值。
+`TiktokenTokenEstimator` 使用统一 JSON 模板序列化 messages 和 tools，再通过 `o200k_base` 编码得到基础 token 数。由于当前模型不一定使用相同 tokenizer，估算器使用最近 8 次真实 usage 比例中的最大值校准模型差异，校准系数下限为 1.0。
 
 ```text
-请求前：统一模板 → 临时估算 → 预算判断
-请求后：模型真实 input_tokens → 更新校准系数
+请求前：统一模板 → o200k_base 编码 → 校准系数 → 预算判断
+请求后：模型真实 input_tokens → 更新滑动窗口
 ```
 
 约束：
 
 - 每次估算结果不持久化；
 - 只在内存中保留当前模型的校准系数；
-- 系数只向更保守的方向更新，避免历史样本导致低估；
+- 校准使用最近 8 次样本的最大比例；异常高值滑出窗口后不再永久影响估算；
+- 系数不低于 1.0，避免低于 tokenizer 基础计数；
 - tools schema 在一次 Run 内生成一次，并被各 Round 复用；
 - 真实 token 消费只记录模型返回的 input/output usage，不记录估算值。
 

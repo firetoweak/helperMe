@@ -6,7 +6,7 @@ from core.context import (
     ContextBudget,
     ModelBudgetConfig,
     ModelContext,
-    TemplateTokenEstimator,
+    TiktokenTokenEstimator,
 )
 
 
@@ -82,9 +82,9 @@ class ContextBudgetTest(unittest.TestCase):
         estimator.calibrate.assert_called_once_with(context, tools, 420)
 
 
-class TemplateTokenEstimatorTest(unittest.TestCase):
+class TiktokenTokenEstimatorTest(unittest.TestCase):
     def test_estimates_messages_and_tools_with_one_template(self):
-        estimator = TemplateTokenEstimator(initial_coefficient=1.0)
+        estimator = TiktokenTokenEstimator()
         context = ModelContext(
             messages=[{"role": "system", "content": "系统"}]
         )
@@ -95,28 +95,25 @@ class TemplateTokenEstimatorTest(unittest.TestCase):
 
         self.assertGreater(with_tools, without_tools)
 
-    def test_calibration_updates_only_the_coefficient(self):
-        estimator = TemplateTokenEstimator(initial_coefficient=1.0)
+    def test_calibration_uses_largest_coefficient_in_recent_window(self):
+        estimator = TiktokenTokenEstimator(window_size=2)
         context = ModelContext(
             messages=[{"role": "user", "content": "hello"}]
         )
         tools = []
         initial_estimate = estimator.estimate(context, tools)
 
-        estimator.calibrate(
-            context,
-            tools,
-            actual_input_tokens=initial_estimate * 2,
-        )
+        estimator.calibrate(context, tools, initial_estimate * 3)
+        estimator.calibrate(context, tools, initial_estimate * 2)
+
+        self.assertEqual(estimator.coefficient, 3.0)
+
+        estimator.calibrate(context, tools, initial_estimate)
 
         self.assertEqual(estimator.coefficient, 2.0)
-        self.assertEqual(
-            estimator.estimate(context, tools),
-            initial_estimate * 2,
-        )
 
-    def test_calibration_does_not_lower_the_safety_coefficient(self):
-        estimator = TemplateTokenEstimator(initial_coefficient=1.0)
+    def test_calibration_coefficient_does_not_fall_below_one(self):
+        estimator = TiktokenTokenEstimator()
         context = ModelContext(
             messages=[{"role": "user", "content": "hello"}]
         )
@@ -125,6 +122,10 @@ class TemplateTokenEstimatorTest(unittest.TestCase):
         estimator.calibrate(context, tools, actual_input_tokens=1)
 
         self.assertEqual(estimator.coefficient, 1.0)
+
+    def test_rejects_invalid_window_size(self):
+        with self.assertRaises(ValueError):
+            TiktokenTokenEstimator(window_size=0)
 
 
 if __name__ == "__main__":

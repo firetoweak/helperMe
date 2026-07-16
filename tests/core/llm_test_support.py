@@ -1,4 +1,4 @@
-from core.context import ContextBudget, ModelBudgetConfig, TemplateTokenEstimator
+from core.context import ContextBudget, ModelBudgetConfig, TiktokenTokenEstimator
 from core.model_call import LLMCallResult, LLMResponse, LLMUsage
 from core.model_call.service import ModelCallService
 
@@ -21,7 +21,7 @@ def model_call_service(llm_client) -> ModelCallService:
     return ModelCallService(
         llm_client=llm_client,
         context_budget=ContextBudget(
-            estimator=TemplateTokenEstimator(),
+            estimator=TiktokenTokenEstimator(),
             config=ModelBudgetConfig(
                 context_limit=10_000_000,
                 input_ratio=0.75,

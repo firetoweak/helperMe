@@ -22,7 +22,7 @@ TERMINAL_RUN_STATUSES = {
     RunStatus.FAILED,
 }
 
-MODEL_CONTEXT_LIMIT = 32_768
+MODEL_CONTEXT_LIMIT = 70_768
 
 
 def _new_session(application: AgentApplication) -> str:
