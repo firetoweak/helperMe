@@ -5,6 +5,7 @@ from core.context.budget import (
 )
 from core.context.estimator import TiktokenTokenEstimator, TokenEstimator
 from core.context.manager import ContextManager, ContextRequest, ModelContext
+from core.context.state import ContextState
 
 __all__ = [
     "BudgetAssessment",
@@ -15,4 +16,5 @@ __all__ = [
     "ModelContext",
     "TiktokenTokenEstimator",
     "TokenEstimator",
+    "ContextState",
 ]

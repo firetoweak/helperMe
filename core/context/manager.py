@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.messages import ConversationMessage
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
+from core.context.state import ContextState
 
 
 @dataclass(frozen=True)
 class ContextRequest:
     conversation_records: list[ConversationMessage]
     runtime_instructions: list[str]
+    context_state: ContextState = field(default_factory=ContextState)
 
 
 @dataclass(frozen=True)
@@ -26,9 +28,35 @@ class ContextManager:
         self.max_tool_result_chars = max_tool_result_chars
 
     def build(self, request: ContextRequest) -> ModelContext:
-        messages = deepcopy(
-            [record.payload for record in request.conversation_records]
-        )
+        records = request.conversation_records
+        state = request.context_state
+        if state.summary is None:
+            messages = deepcopy([r.payload for r in records])
+        else:
+            boundary_id = state.compacted_through_message_id
+            boundary_index = next(
+                (i for i, r in enumerate(records) if r.message_id == boundary_id),
+                None,
+            )
+            if boundary_index is None:
+                raise ValueError(
+                    f"压缩边界不存在: {boundary_id}"
+                )
+            if records[boundary_index].payload.get("role") == "system":
+                raise ValueError("压缩边界不能指向 system 消息")
+            # 保留 system（通常是 records[0]），再拼 handoff + 后缀
+            system_payload = deepcopy(records[0].payload)
+            if system_payload.get("role") != "system":
+                raise ValueError("conversation_records 的第一个消息必须是 system 角色")
+            handoff = {
+                "role": "assistant",
+                "content": f"工作交接摘要：\n{state.summary}",
+            }
+            suffix = deepcopy(
+                [r.payload for r in records[boundary_index + 1 :]]
+            )
+            messages = [system_payload, handoff, *suffix]
+
         if request.runtime_instructions:
             first_message = messages[0]
             if first_message.get("role") != "system":

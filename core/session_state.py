@@ -5,7 +5,7 @@ from enum import Enum
 from datetime import datetime, timezone
 
 from core.messages import Conversation
-
+from core.context import ContextState
 
 class SessionStatus(str, Enum):
     PENDING = "pending"
@@ -92,6 +92,7 @@ NON_TRANSITION_EVENT_KINDS = {
 class Session:
     id: str
     conversation: Conversation = field(default_factory=Conversation)
+    context_state: ContextState = field(default_factory=ContextState)
     status: SessionStatus = SessionStatus.PENDING
     events: list[SessionEvent] = field(default_factory=list)
     run_records: list[SessionRunRecord] = field(default_factory=list)
