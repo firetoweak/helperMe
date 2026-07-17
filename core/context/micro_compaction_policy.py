@@ -4,6 +4,10 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from core.context.budget import BudgetAssessment, ContextBudget
+from core.context.composition import (
+    ToolResultWindowStats,
+    content_char_length,
+)
 from core.context.manager import ContextManager, ContextRequest, ModelContext
 from core.context.state import ContextState
 from core.messages import ConversationMessage
@@ -30,6 +34,7 @@ class MicroCompactionDecision:
     before: BudgetAssessment
     after: BudgetAssessment
     changed: bool
+    tool_window: ToolResultWindowStats
 
 
 class MicroCompactionPolicy:
@@ -56,6 +61,24 @@ class MicroCompactionPolicy:
             runtime_instructions,
             tools,
         )
+        record_indexes = {
+            record.message_id: index
+            for index, record in enumerate(conversation_records)
+        }
+        summary_index = self._state_boundary_index(
+            context_state.summarized_through_message_id,
+            record_indexes,
+        )
+        minimum_recent_index = max(1, summary_index + 1)
+        recent_start_index = self._recent_start_index(
+            conversation_records,
+            minimum_recent_index,
+        )
+        tool_window = self._tool_window_stats(
+            conversation_records,
+            recent_start_index,
+        )
+
         trigger_tokens = int(
             before.input_budget_tokens * self.config.trigger_ratio
         )
@@ -65,24 +88,12 @@ class MicroCompactionPolicy:
                 before=before,
                 after=before,
                 changed=False,
+                tool_window=tool_window,
             )
 
-        record_indexes = {
-            record.message_id: index
-            for index, record in enumerate(conversation_records)
-        }
-        summary_index = self._state_boundary_index(
-            context_state.summarized_through_message_id,
-            record_indexes,
-        )
         current_micro_index = self._state_boundary_index(
             context_state.micro_compacted_through_message_id,
             record_indexes,
-        )
-        minimum_recent_index = max(1, summary_index + 1)
-        recent_start_index = self._recent_start_index(
-            conversation_records,
-            minimum_recent_index,
         )
         max_boundary_index = recent_start_index - 1
         first_candidate_index = max(
@@ -96,6 +107,7 @@ class MicroCompactionPolicy:
                 before=before,
                 after=before,
                 changed=False,
+                tool_window=tool_window,
             )
 
         target_tokens = int(
@@ -132,6 +144,7 @@ class MicroCompactionPolicy:
                     before=before,
                     after=assessment,
                     changed=True,
+                    tool_window=tool_window,
                 )
 
         return MicroCompactionDecision(
@@ -139,6 +152,7 @@ class MicroCompactionPolicy:
             before=before,
             after=best_assessment,
             changed=best_state != context_state,
+            tool_window=tool_window,
         )
 
     def _assess(
@@ -156,6 +170,59 @@ class MicroCompactionPolicy:
             )
         )
         return self.context_budget.assess(context, tools)
+
+    def _tool_window_stats(
+        self,
+        records: list[ConversationMessage],
+        recent_start_index: int,
+    ) -> ToolResultWindowStats:
+        # 基于 Conversation 事实轨迹，不依赖 Level 1 投影后的 composition。
+        recent_records = records[recent_start_index:]
+        compressible_records = records[:recent_start_index]
+        recent_chars = self._tool_chars(recent_records)
+        compressible_chars = self._tool_chars(compressible_records)
+
+        recent_start_message_id = None
+        if 0 <= recent_start_index < len(records):
+            recent_start_message_id = records[recent_start_index].message_id
+
+        return ToolResultWindowStats(
+            recent_start_message_id=recent_start_message_id,
+            recent_protection_tokens=self.config.recent_protection_tokens,
+            recent_tool_chars=recent_chars,
+            compressible_tool_chars=compressible_chars,
+            recent_tool_tokens_estimate=self._estimate_tool_tokens(
+                recent_records
+            ),
+            compressible_tool_tokens_estimate=self._estimate_tool_tokens(
+                compressible_records
+            ),
+        )
+
+    @staticmethod
+    def _tool_chars(records: list[ConversationMessage]) -> int:
+        total = 0
+        for record in records:
+            if record.payload.get("role") != "tool":
+                continue
+            total += content_char_length(record.payload.get("content", ""))
+        return total
+
+    def _estimate_tool_tokens(
+        self,
+        records: list[ConversationMessage],
+    ) -> int:
+        tool_messages = [
+            record.payload
+            for record in records
+            if record.payload.get("role") == "tool"
+        ]
+        if not tool_messages:
+            return 0
+        return self.context_budget.estimator.estimate(
+            ModelContext(messages=tool_messages),
+            [],
+        )
 
     def _recent_start_index(
         self,

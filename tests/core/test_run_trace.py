@@ -45,8 +45,17 @@ class RunTraceTest(unittest.TestCase):
         self.assertIn("by_role_tokens", composition)
         self.assertIn("tool", composition["by_role_tokens"])
         self.assertIn("tools_schema_tokens", composition)
-        self.assertIn("changed", data["micro_compaction"])
-        self.assertFalse(data["micro_compaction"]["changed"])
+        self.assertIn("tool_results", composition)
+        self.assertIn("dehydrated_tool_tokens_estimate", composition)
+        self.assertIn("dehydrated_tool_savings_estimate", composition)
+        micro = data["micro_compaction"]
+        self.assertIn("changed", micro)
+        self.assertFalse(micro["changed"])
+        self.assertIn("before_composition", micro)
+        self.assertIn("after_composition", micro)
+        self.assertIn("tool_window", micro)
+        self.assertIn("recent_tool_chars", micro["tool_window"])
+        self.assertIn("compressible_tool_chars", micro["tool_window"])
 
     def test_tool_batch_records_externalize_stats_from_outcome(self):
         huge = {
@@ -105,6 +114,7 @@ class RunTraceTest(unittest.TestCase):
             PreparedContext,
             SummaryCompaction,
             SummaryGeneration,
+            empty_tool_window_stats,
         )
 
         decision = MicroCompactionDecision(
@@ -112,6 +122,7 @@ class RunTraceTest(unittest.TestCase):
             before=before,
             after=before,
             changed=False,
+            tool_window=empty_tool_window_stats(),
         )
         context_preparation = Mock()
         context_preparation.prepare.return_value = PreparedContext(

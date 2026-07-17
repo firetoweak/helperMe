@@ -10,8 +10,13 @@ import tiktoken
 from core.context.composition import (
     ROLE_KEYS,
     ContextComposition,
+    ToolResultStat,
+    collect_tool_call_names,
+    content_char_length,
+    dehydrated_tool_content,
     empty_role_counts,
     empty_role_tokens,
+    parse_tool_result_meta,
 )
 from core.context.manager import ModelContext
 
@@ -76,26 +81,22 @@ class TiktokenTokenEstimator:
         by_role_base = empty_role_tokens()
         by_role_counts = empty_role_counts()
         tool_result_chars = 0
+        tool_message_bases: list[tuple[int, dict[str, Any], int, int]] = []
+        tool_names = collect_tool_call_names(model_context.messages)
 
-        for message in model_context.messages:
+        for index, message in enumerate(model_context.messages):
             role = message.get("role")
             if role not in ROLE_KEYS:
                 role = "assistant"
-            by_role_base[role] += self._encode_json(message)
+            message_base = self._encode_json(message)
+            by_role_base[role] += message_base
             by_role_counts[role] += 1
             if role == "tool":
-                content = message.get("content", "")
-                if isinstance(content, str):
-                    tool_result_chars += len(content)
-                else:
-                    tool_result_chars += len(
-                        json.dumps(
-                            content,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                            sort_keys=True,
-                        )
-                    )
+                chars = content_char_length(message.get("content", ""))
+                tool_result_chars += chars
+                tool_message_bases.append(
+                    (index, message, chars, message_base)
+                )
 
         tools_schema_base = self._encode_json(tools) if tools else 0
         weights = {
@@ -103,6 +104,17 @@ class TiktokenTokenEstimator:
             "tools_schema": tools_schema_base,
         }
         scaled = self._scale_weights(weights, estimated_total)
+        tool_role_tokens = scaled["tool"]
+        tool_results = self._scale_tool_results(
+            tool_message_bases,
+            tool_names,
+            tool_role_tokens,
+        )
+        dehydrated_estimate = self._dehydrated_tool_tokens(
+            tool_message_bases,
+            tool_role_base=by_role_base["tool"],
+            tool_role_tokens=tool_role_tokens,
+        )
         return ContextComposition(
             estimated_total_tokens=estimated_total,
             input_budget_tokens=input_budget_tokens,
@@ -112,6 +124,8 @@ class TiktokenTokenEstimator:
             },
             by_role_message_counts=by_role_counts,
             tool_result_chars=tool_result_chars,
+            tool_results=tool_results,
+            dehydrated_tool_tokens_estimate=dehydrated_estimate,
         )
 
     def calibrate(
@@ -144,6 +158,68 @@ class TiktokenTokenEstimator:
             sort_keys=True,
         )
         return len(self._encoding.encode_ordinary(serialized))
+
+    def _scale_tool_results(
+        self,
+        tool_message_bases: list[tuple[int, dict[str, Any], int, int]],
+        tool_names: dict[str, str],
+        tool_role_tokens: int,
+    ) -> tuple[ToolResultStat, ...]:
+        if not tool_message_bases:
+            return ()
+        base_weights = {
+            str(index): message_base
+            for index, _, _, message_base in tool_message_bases
+        }
+        scaled = self._scale_weights(base_weights, tool_role_tokens)
+        stats: list[ToolResultStat] = []
+        for index, message, chars, _ in tool_message_bases:
+            call_id = message.get("tool_call_id")
+            if not isinstance(call_id, str):
+                call_id = None
+            externalized, artifact_id = parse_tool_result_meta(
+                message.get("content", "")
+            )
+            stats.append(
+                ToolResultStat(
+                    message_index=index,
+                    tool_call_id=call_id,
+                    tool_name=(
+                        tool_names.get(call_id) if call_id else None
+                    ),
+                    chars=chars,
+                    estimated_tokens=scaled[str(index)],
+                    externalized=externalized,
+                    artifact_id=artifact_id,
+                )
+            )
+        return tuple(stats)
+
+    def _dehydrated_tool_tokens(
+        self,
+        tool_message_bases: list[tuple[int, dict[str, Any], int, int]],
+        *,
+        tool_role_base: int,
+        tool_role_tokens: int,
+    ) -> int:
+        """若全部 tool body 换成可回读 stub，tool role 的估算 token。"""
+        if not tool_message_bases or tool_role_base <= 0:
+            return 0
+        dehydrated_tool_base = 0
+        for _, message, chars, _ in tool_message_bases:
+            call_id = message.get("tool_call_id")
+            _, artifact_id = parse_tool_result_meta(
+                message.get("content", "")
+            )
+            stub_message = {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": dehydrated_tool_content(chars, artifact_id),
+            }
+            dehydrated_tool_base += self._encode_json(stub_message)
+        return floor(
+            dehydrated_tool_base * tool_role_tokens / tool_role_base
+        )
 
     @staticmethod
     def _scale_weights(

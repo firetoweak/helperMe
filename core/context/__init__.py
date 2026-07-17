@@ -4,7 +4,13 @@ from core.context.budget import (
     ModelBudgetConfig,
     make_budget_assessment,
 )
-from core.context.composition import ContextComposition, stub_composition
+from core.context.composition import (
+    ContextComposition,
+    ToolResultStat,
+    ToolResultWindowStats,
+    empty_tool_window_stats,
+    stub_composition,
+)
 from core.context.estimator import TiktokenTokenEstimator, TokenEstimator
 from core.context.manager import ContextManager, ContextRequest, ModelContext
 from core.context.micro_compactor import MicroCompactor
@@ -28,6 +34,8 @@ __all__ = [
     "BudgetAssessment",
     "ContextBudget",
     "ContextComposition",
+    "ToolResultStat",
+    "ToolResultWindowStats",
     "ContextManager",
     "ContextRequest",
     "ModelBudgetConfig",
@@ -48,4 +56,5 @@ __all__ = [
     "SummaryGenerationBlocked",
     "make_budget_assessment",
     "stub_composition",
+    "empty_tool_window_stats",
 ]

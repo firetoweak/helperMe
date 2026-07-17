@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from core.context.budget import BudgetAssessment, ContextBudget
-from core.context.composition import ContextComposition
+from core.context.composition import ContextComposition, ToolResultWindowStats
 from core.context.manager import ContextManager, ContextRequest, ModelContext
 from core.context.micro_compaction_policy import (
     MicroCompactionDecision,
@@ -55,9 +55,20 @@ class MicroCompactionTrace:
     before_tokens: int
     after_tokens: int
     boundary_message_id: str | None
+    before_composition: ContextComposition
+    after_composition: ContextComposition
+    tool_window: ToolResultWindowStats
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "changed": self.changed,
+            "before_tokens": self.before_tokens,
+            "after_tokens": self.after_tokens,
+            "boundary_message_id": self.boundary_message_id,
+            "before_composition": self.before_composition.to_dict(),
+            "after_composition": self.after_composition.to_dict(),
+            "tool_window": self.tool_window.to_dict(),
+        }
 
     @classmethod
     def from_decision(
@@ -71,6 +82,9 @@ class MicroCompactionTrace:
             boundary_message_id=(
                 decision.candidate_state.micro_compacted_through_message_id
             ),
+            before_composition=decision.before.composition,
+            after_composition=decision.after.composition,
+            tool_window=decision.tool_window,
         )
 
 

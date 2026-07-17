@@ -276,16 +276,45 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
     if checkpoint.reason == "context_prepared":
         composition = checkpoint.data["composition"]
         tool_tokens = composition["by_role_tokens"].get("tool", 0)
-        return "\n".join([
+        micro = checkpoint.data.get("micro_compaction") or {}
+        tool_window = micro.get("tool_window") or {}
+        lines = [
             checkpoint.message,
             f"阶段：{checkpoint.data['stage']}。",
             (
                 "估算输入："
                 f"{composition['estimated_total_tokens']}，"
                 f"tool={tool_tokens}，"
-                f"tools_schema={composition['tools_schema_tokens']}。"
+                f"tools_schema={composition['tools_schema_tokens']}，"
+                "dehydrated_tool≈"
+                f"{composition.get('dehydrated_tool_tokens_estimate', 0)}，"
+                "savings≈"
+                f"{composition.get('dehydrated_tool_savings_estimate', 0)}。"
             ),
-        ])
+        ]
+        if tool_window:
+            lines.append(
+                "tool 窗口："
+                f"recent_chars={tool_window.get('recent_tool_chars', 0)}，"
+                "compressible_chars="
+                f"{tool_window.get('compressible_tool_chars', 0)}，"
+                "recent_tokens≈"
+                f"{tool_window.get('recent_tool_tokens_estimate', 0)}，"
+                "compressible_tokens≈"
+                f"{tool_window.get('compressible_tool_tokens_estimate', 0)}。"
+            )
+        if micro.get("changed"):
+            before_comp = micro.get("before_composition") or {}
+            after_comp = micro.get("after_composition") or {}
+            before_roles = before_comp.get("by_role_tokens") or {}
+            after_roles = after_comp.get("by_role_tokens") or {}
+            lines.append(
+                "Level 1："
+                f"{micro.get('before_tokens')}→{micro.get('after_tokens')}，"
+                f"tool {before_roles.get('tool', 0)}→"
+                f"{after_roles.get('tool', 0)}。"
+            )
+        return "\n".join(lines)
 
     tools = checkpoint.data["tools"]
     verification = checkpoint.data["verification"]

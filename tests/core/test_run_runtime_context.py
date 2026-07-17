@@ -9,6 +9,7 @@ from core.context import (
     PreparedContext,
     SummaryCompaction,
     SummaryGeneration,
+    empty_tool_window_stats,
     make_budget_assessment,
 )
 from core.messages import Conversation
@@ -94,6 +95,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             before=before,
             after=before,
             changed=False,
+            tool_window=empty_tool_window_stats(),
         )
         context_preparation = Mock()
         context_preparation.prepare.return_value = PreparedContext(

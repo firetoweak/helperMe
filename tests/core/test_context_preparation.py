@@ -11,6 +11,7 @@ from core.context import (
     MicroCompactionPolicy,
     ModelBudgetConfig,
     SummaryGeneration,
+    empty_tool_window_stats,
     make_budget_assessment,
 )
 from core.messages import Conversation
@@ -36,6 +37,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             before=assessment,
             after=assessment,
             changed=True,
+            tool_window=empty_tool_window_stats(),
         )
         service = ContextPreparationService(
             ContextManager(),
@@ -133,6 +135,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             before=before,
             after=before,
             changed=False,
+            tool_window=empty_tool_window_stats(),
         )
         budget = Mock()
         budget.assess.return_value = after

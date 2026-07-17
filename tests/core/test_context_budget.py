@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import Mock
 
@@ -156,7 +157,7 @@ class TiktokenTokenEstimatorTest(unittest.TestCase):
                 {
                     "role": "tool",
                     "tool_call_id": "call_1",
-                    "content": "x" * 200,
+                    "content": "x" * 5_000,
                 },
             ]
         )
@@ -177,8 +178,85 @@ class TiktokenTokenEstimatorTest(unittest.TestCase):
         self.assertEqual(total_parts, composition.estimated_total_tokens)
         self.assertGreater(composition.by_role_tokens["tool"], 0)
         self.assertGreater(composition.tools_schema_tokens, 0)
-        self.assertEqual(composition.tool_result_chars, 200)
+        self.assertEqual(composition.tool_result_chars, 5_000)
         self.assertEqual(composition.input_budget_tokens, 10_000)
+        self.assertEqual(len(composition.tool_results), 1)
+        tool_stat = composition.tool_results[0]
+        self.assertEqual(tool_stat.tool_call_id, "call_1")
+        self.assertEqual(tool_stat.tool_name, "grep")
+        self.assertEqual(tool_stat.chars, 5_000)
+        self.assertFalse(tool_stat.externalized)
+        self.assertIsNone(tool_stat.artifact_id)
+        self.assertEqual(
+            sum(item.estimated_tokens for item in composition.tool_results),
+            composition.by_role_tokens["tool"],
+        )
+        self.assertLess(
+            composition.dehydrated_tool_tokens_estimate,
+            composition.by_role_tokens["tool"],
+        )
+        self.assertGreater(
+            composition.to_dict()["dehydrated_tool_savings_estimate"],
+            0,
+        )
+
+    def test_breakdown_marks_externalized_tool_results(self):
+        estimator = TiktokenTokenEstimator()
+        content = json.dumps(
+            {
+                "ok": True,
+                "code": "OK",
+                "data": {
+                    "externalized": True,
+                    "artifact_id": "art_abc",
+                    "size_chars": 20_000,
+                    "preview": "head",
+                },
+                "error": None,
+                "hint": "read_artifact",
+            },
+            ensure_ascii=False,
+        )
+        context = ModelContext(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_ext",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_ext",
+                    "content": content,
+                },
+            ]
+        )
+
+        composition = estimator.breakdown(
+            context,
+            [],
+            input_budget_tokens=10_000,
+        )
+
+        self.assertEqual(len(composition.tool_results), 1)
+        self.assertTrue(composition.tool_results[0].externalized)
+        self.assertEqual(
+            composition.tool_results[0].artifact_id,
+            "art_abc",
+        )
+        self.assertEqual(
+            composition.tool_results[0].tool_name,
+            "read_file",
+        )
 
 
 if __name__ == "__main__":

@@ -172,6 +172,35 @@ class MicroCompactionPolicyTest(unittest.TestCase):
         self.assertIs(decision.candidate_state, state)
         self.assertEqual(decision.before, decision.after)
         self.assertFalse(decision.changed)
+        self.assertEqual(decision.tool_window.recent_tool_chars, 0)
+        self.assertEqual(decision.tool_window.compressible_tool_chars, 0)
+
+    def test_tool_window_splits_recent_and_compressible_tool_mass(self):
+        conversation = Conversation()
+        conversation.set_system_prompt("system prompt")
+        conversation.add_user("old work")
+        add_successful_batch(conversation, "call-old", result_size=900)
+        conversation.add_user("recent work")
+        add_successful_batch(conversation, "call-recent", result_size=700)
+
+        decision = self._policy(recent_tokens=900).propose(
+            conversation_records=conversation.records,
+            context_state=ContextState(),
+            runtime_instructions=[],
+            tools=[],
+        )
+
+        self.assertGreater(decision.tool_window.compressible_tool_chars, 0)
+        self.assertGreater(decision.tool_window.recent_tool_chars, 0)
+        self.assertGreater(
+            decision.tool_window.compressible_tool_tokens_estimate,
+            0,
+        )
+        self.assertGreater(
+            decision.tool_window.recent_tool_tokens_estimate,
+            0,
+        )
+        self.assertIsNotNone(decision.tool_window.recent_start_message_id)
 
     def test_advances_micro_boundary_without_touching_recent_tool_batch(self):
         conversation = Conversation()
