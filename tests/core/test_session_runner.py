@@ -145,7 +145,9 @@ class SessionRuntimeStartTest(unittest.TestCase):
     def test_next_run_receives_context_state_committed_by_previous_run(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")
         advanced_state = ContextState(
-            micro_compacted_through_message_id=session.conversation.records[0].message_id
+            tool_artifacts={
+                session.conversation.records[0].message_id: "art_" + "9" * 32
+            }
         )
         seen_states = []
 

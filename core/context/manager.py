@@ -61,33 +61,11 @@ class ContextManager:
                 *records[summary_boundary_index + 1 :],
             ]
 
-        micro_boundary_id = state.micro_compacted_through_message_id
-        if micro_boundary_id is None:
-            messages = deepcopy(
-                [record.payload for record in active_records]
-            )
-        else:
-            micro_boundary_index = self._find_boundary_index(
-                records,
-                micro_boundary_id,
-                "micro",
-            )
-            if records[micro_boundary_index].payload.get("role") == "system":
-                raise ValueError("micro 压缩边界不能指向 system 消息")
-            if (
-                summary_boundary_index is not None
-                and micro_boundary_index < summary_boundary_index
-            ):
-                raise ValueError("micro 压缩边界不能早于摘要边界")
-            if micro_boundary_index == summary_boundary_index:
-                messages = deepcopy(
-                    [record.payload for record in active_records]
-                )
-            else:
-                messages = self.micro_compactor.compact(
-                    active_records,
-                    through_message_id=micro_boundary_id,
-                )
+        # Level 1：按 tool_artifacts 脱水；摘要前缀外的 active_records 携带原 message_id
+        messages = self.micro_compactor.dehydrate(
+            active_records,
+            state.tool_artifacts,
+        )
 
         if handoff is not None:
             messages.insert(1, handoff)

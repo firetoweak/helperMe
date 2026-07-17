@@ -1,86 +1,46 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import json
-from typing import Any
+from typing import Any, Mapping
 
+from core.context.composition import (
+    content_char_length,
+    dehydrated_tool_content,
+)
 from core.messages import ConversationMessage
 
 
-COMPACTED_TOOL_BATCH_CONTENT = "[历史成功工具批次已压缩]"
-
-
 class MicroCompactor:
+    """Level 1 投影：按 tool_artifacts 将 tool body 替换为可回读 stub，保留协议外壳。"""
+
+    def dehydrate(
+        self,
+        records: list[ConversationMessage],
+        tool_artifacts: Mapping[str, str],
+    ) -> list[dict[str, Any]]:
+        messages = deepcopy([record.payload for record in records])
+        if not tool_artifacts:
+            return messages
+
+        for index, record in enumerate(records):
+            if record.message_id not in tool_artifacts:
+                continue
+            message = messages[index]
+            if message.get("role") != "tool":
+                raise ValueError(
+                    "tool_artifacts 只能指向 tool 消息: "
+                    f"{record.message_id}"
+                )
+            artifact_id = tool_artifacts[record.message_id]
+            chars = content_char_length(message.get("content", ""))
+            message["content"] = dehydrated_tool_content(chars, artifact_id)
+
+        return messages
+
+    # 兼容旧测试名；新语义为脱水而非墓碑折叠。
     def compact(
         self,
         records: list[ConversationMessage],
-        through_message_id: str,
+        tool_artifacts: Mapping[str, str],
     ) -> list[dict[str, Any]]:
-        boundary_index = next(
-            (
-                index
-                for index, record in enumerate(records)
-                if record.message_id == through_message_id
-            ),
-            None,
-        )
-        if boundary_index is None:
-            raise ValueError(f"微压缩边界不存在: {through_message_id}")
-
-        messages = deepcopy([record.payload for record in records])
-        projected: list[dict[str, Any]] = []
-        index = 0
-
-        while index < len(messages):
-            message = messages[index]
-            calls = message.get("tool_calls")
-            if (
-                index > boundary_index
-                or message.get("role") != "assistant"
-                or not calls
-            ):
-                projected.append(message)
-                index += 1
-                continue
-
-            result_end = index + 1
-            while (
-                result_end < len(messages)
-                and messages[result_end].get("role") == "tool"
-            ):
-                result_end += 1
-
-            results = messages[index + 1 : result_end]
-            call_ids = [call["id"] for call in calls]
-            result_ids = [result["tool_call_id"] for result in results]
-            batch_is_complete = (
-                result_ids == call_ids
-                and result_end - 1 <= boundary_index
-            )
-            if not batch_is_complete:
-                projected.append(message)
-                index += 1
-                continue
-
-            batch_was_consumed = any(
-                later.get("role") == "assistant"
-                for later in messages[result_end : boundary_index + 1]
-            )
-            batch_succeeded = all(
-                json.loads(result["content"])["ok"] is True
-                for result in results
-            )
-            if not batch_was_consumed or not batch_succeeded:
-                projected.append(message)
-                index += 1
-                continue
-
-            projected.append(
-                {
-                    "role": "assistant",
-                    "content": COMPACTED_TOOL_BATCH_CONTENT,
-                }
-            )
-            index = result_end
-
-        return projected
+        return self.dehydrate(records, tool_artifacts)

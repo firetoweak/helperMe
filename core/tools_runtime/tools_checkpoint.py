@@ -309,10 +309,11 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             before_roles = before_comp.get("by_role_tokens") or {}
             after_roles = after_comp.get("by_role_tokens") or {}
             lines.append(
-                "Level 1："
+                "Level 1 脱水："
                 f"{micro.get('before_tokens')}→{micro.get('after_tokens')}，"
                 f"tool {before_roles.get('tool', 0)}→"
-                f"{after_roles.get('tool', 0)}。"
+                f"{after_roles.get('tool', 0)}，"
+                f"new={micro.get('newly_dehydrated_count', 0)}。"
             )
         return "\n".join(lines)
 

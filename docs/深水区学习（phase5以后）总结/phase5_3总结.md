@@ -2,6 +2,8 @@
 
 这一阶段完成了同一 Session 内的安全上下文压缩闭环：Conversation 继续保存完整事实轨迹，运行时只更新 ContextState，并由 ContextManager 生成可发送给模型的 ModelContext 投影。压缩不会修改原始消息，也不会更换 session_id。
 
+> **L1 语义修订（后继）**：Level 1 已从高低水位「整批墓碑折叠」改为**持续性工具脱水投影**。`micro_compacted_through_message_id` 由 `tool_artifacts: message_id → artifact_id` 取代；投影保留 tool call 外壳，仅替换已消费成功且位于 recent 窗外的 tool body，首次脱水懒写入 ArtifactStore。下文若仍写「墓碑 / 高低水位」，以本修订为准。
+
 ### 问题边界
 
 Safe Compression 解决的是合法、有界消息在长期 Session 中不断累积的问题，不负责补救单条无界输入。
@@ -31,13 +33,13 @@ Session 维护一份最小派生状态：
 ContextState
 ├─ summary
 ├─ summarized_through_message_id
-└─ micro_compacted_through_message_id
+└─ tool_artifacts
 ```
 
 其中：
 
 - `summary + summarized_through_message_id` 表示 Level 2 已提交的历史摘要及事实边界；
-- `micro_compacted_through_message_id` 表示 Level 1 已持续推进到的边界；
+- `tool_artifacts` 表示 Level 1 已为哪些 tool 消息建立可回读 artifact 映射；
 - ContextState 不保存 ModelContext 副本，不复制 Conversation 消息。
 
 每次模型调用仍生成新的不可变 ModelContext 快照。同一 Round 的 retry 复用同一个快照，不在 retry 之间重新压缩。
@@ -63,33 +65,24 @@ PreparedContext
 
 ContextPreparationService 只生成候选状态，不直接修改 Session。RunRuntime 在一次 Run 内维护当前候选状态，通过 RunResult 返回；SessionRuntime 在 Run 结束时统一回写。这样 Session 后续 Run 会继续复用已经提交的摘要和压缩边界。
 
-### Level 1：确定性微压缩
+### Level 1：持续性工具脱水投影
 
-Level 1 是持续维护策略，不等到真正超预算才启动。它使用高低水位：达到高水位后开始尝试压缩，并尽量降到更低目标水位，减少频繁触发和后续 token 消耗。
+Level 1 在每次 ContextPreparation 执行：对 recent 保护窗外、已消费且成功的历史 tool body 做确定性脱水，不依赖高低水位。
 
-第一版只压缩：
-
-- 历史成功 tool results；
-- 与这些结果对应的 assistant tool calls。
-
-只有完整工具批次同时满足以下条件才会被整体替换：
+只有完整工具批次同时满足以下条件，其中的 tool 消息才会进入脱水集合：
 
 - tool call 与全部 tool result 完整对应；
 - 所有结果都成功；
 - 后续已经出现 Assistant 响应，说明该批结果已被模型消费；
-- 整个批次位于压缩边界内。
+- 整个批次位于 recent 保护窗之前。
 
-压缩后的批次变成一条普通合成 Assistant 文本：
+投影保留 assistant `tool_calls` 与 tool 消息外壳，仅替换 tool `content` 为可回读 stub（`artifact_id` + hint）。首次脱水时写入 ArtifactStore，并记入 `ContextState.tool_artifacts`；已外置结果复用已有 `artifact_id`，不重复落盘。
 
-```text
-[历史成功工具批次已压缩]
-```
-
-失败结果、未消费结果、不完整批次、近期保护窗口内消息和普通文本保持原样。Level 1 边界只向前推进，不回退；这既能持续减少无用历史，也有利于后续模型调用保持稳定前缀、提高缓存命中。
+失败结果、未消费结果、不完整批次、近期保护窗口内消息和普通文本保持原样。映射只增不改同一 `message_id`；Conversation 全文不变。
 
 ### Level 2：增量 Auto-Compact
 
-Level 2 是最后兜底，只在 Level 1 完成后仍超过项目输入预算时触发。没有超过输入预算时，即使 Level 1 未达到理想低水位，也不会调用摘要模型。
+Level 2 是最后兜底，只在 Level 1 脱水投影后仍超过项目输入预算时触发。没有超过输入预算时，不会调用摘要模型。
 
 第一版使用普通 prompt 控制 LLM 输出自由文本摘要，不定义结构化摘要模型。摘要必须保留用户目标与约束、完成和待完成状态、关键工具事实及必要标识。
 
@@ -132,7 +125,7 @@ Level 1 后仍超预算
         └─ exceeded → 丢弃摘要候选 → blocked
 ```
 
-提交新摘要时会清空 `micro_compacted_through_message_id`，因为对应 Level 1 历史已经被 Level 2 整体覆盖，旧微压缩边界不再有意义。
+提交新摘要时会丢弃已被摘要边界覆盖的 `tool_artifacts` 条目，因为对应 Level 1 历史已经不再出现在模型投影中。
 
 以下情况不会提交候选摘要：
 
@@ -173,9 +166,8 @@ RunRuntime
     ├─ 记录当前 Run 前边界
     ├─ Planner ContextPreparation
     └─ 每轮 Agent ContextPreparation
-            ├─ ContextBudget 初评
-            ├─ Level 1
-            ├─ 重新评估
+            ├─ Level 1 持续性工具脱水（落盘/映射 + 投影）
+            ├─ ContextBudget 评估
             ├─ 必要时 Level 2
             └─ 最终 ModelContext
     ↓
@@ -200,16 +192,16 @@ Conversation 始终保持完整，ContextState 在同一 Session 中持续复用
 
 ### 验证结果
 
-全量测试 `147/147` 通过，覆盖：
+全量测试通过，覆盖：
 
 - Conversation message_id 与协议 payload 分离；
 - ContextState 摘要投影和边界校验；
-- 成功、失败、未消费和不完整工具批次的 Level 1 行为；
-- 高低水位、近期保护窗口和单调边界；
+- 成功、失败、未消费和不完整工具批次的 Level 1 脱水行为；
+- recent 保护窗、懒落盘 artifact 与幂等二次 propose；
 - Planner 与 Agent Round 使用统一准备入口；
 - ContextState 在 Run 内推进并由 Session 跨 Run 复用；
 - Level 2 不读取当前 Run 的用户目标；
-- Level 2 成功后清空旧微压缩边界；
+- Level 2 成功后裁剪已被摘要覆盖的 tool_artifacts；
 - 摘要后仍超预算时拒绝候选状态并 blocked；
 - compression checkpoint、summary usage 和最终用户提示；
 - Conversation 原始内容和工具协议链不受压缩影响。

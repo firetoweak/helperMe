@@ -1,20 +1,21 @@
 import json
 import unittest
 
-from core.context import MicroCompactor
+from core.context import ContextState, MicroCompactor
+from core.context.composition import parse_tool_result_meta
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 
 
-def tool_result(call_id: str, ok: bool = True) -> dict[str, str]:
+def tool_result(call_id: str, ok: bool = True, size: int = 100) -> dict[str, str]:
     return {
         "tool_call_id": call_id,
         "content": json.dumps(
             {
                 "ok": ok,
                 "code": "OK" if ok else "FAILED",
-                "data": {"content": "x" * 100},
+                "data": {"content": "x" * size},
                 "error": None if ok else "tool failed",
                 "hint": None,
             }
@@ -23,7 +24,7 @@ def tool_result(call_id: str, ok: bool = True) -> dict[str, str]:
 
 
 class MicroCompactorTest(unittest.TestCase):
-    def test_compacts_a_successful_consumed_tool_batch_atomically(self):
+    def test_dehydrates_tool_body_but_keeps_protocol_shell(self):
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
         conversation.add_user("读取文件")
@@ -33,67 +34,46 @@ class MicroCompactorTest(unittest.TestCase):
                 calls=[ToolCall("call-1", "read_file", '{"path":"a.txt"}')],
             )
         )
-        conversation.add_tools_result([tool_result("call-1")])
+        conversation.add_tools_result([tool_result("call-1", size=500)])
         conversation.add_assistant(
             LLMResponse(type="text", content="已经读取并分析")
         )
-        conversation.add_user("继续")
-        boundary = conversation.records[4].message_id
+        tool_record = conversation.records[3]
         original_payloads = [
             record.payload.copy() for record in conversation.records
         ]
+        artifacts = {tool_record.message_id: "art_" + "a" * 32}
 
-        projected = MicroCompactor().compact(
+        projected = MicroCompactor().dehydrate(
             conversation.records,
-            through_message_id=boundary,
+            artifacts,
         )
 
         self.assertEqual(
             [message["role"] for message in projected],
-            ["system", "user", "assistant", "assistant", "user"],
+            ["system", "user", "assistant", "tool", "assistant"],
         )
-        self.assertNotIn("tool_calls", projected[2])
-        self.assertIn("工具批次已压缩", projected[2]["content"])
-        self.assertEqual(projected[3]["content"], "已经读取并分析")
+        self.assertIn("tool_calls", projected[2])
+        self.assertEqual(
+            projected[2]["tool_calls"][0]["function"]["name"],
+            "read_file",
+        )
+        externalized, artifact_id = parse_tool_result_meta(
+            projected[3]["content"]
+        )
+        self.assertTrue(externalized)
+        self.assertEqual(artifact_id, artifacts[tool_record.message_id])
+        self.assertLess(
+            len(projected[3]["content"]),
+            len(tool_record.payload["content"]),
+        )
         self.assertTrue(validate_tool_message_chain(projected).ok)
         self.assertEqual(
             [record.payload for record in conversation.records],
             original_payloads,
         )
 
-    def test_compacts_a_multi_call_batch_only_when_every_result_succeeds(self):
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("读取文件")
-        conversation.add_assistant(
-            LLMResponse(
-                type="tool_calls",
-                calls=[
-                    ToolCall("call-1", "read_file", '{"path":"a.txt"}'),
-                    ToolCall("call-2", "read_file", '{"path":"b.txt"}'),
-                ],
-            )
-        )
-        conversation.add_tools_result(
-            [tool_result("call-1"), tool_result("call-2", ok=False)]
-        )
-        conversation.add_assistant(
-            LLMResponse(type="text", content="根据失败结果调整")
-        )
-        boundary = conversation.records[-1].message_id
-
-        projected = MicroCompactor().compact(
-            conversation.records,
-            through_message_id=boundary,
-        )
-
-        self.assertIn("tool_calls", projected[2])
-        self.assertEqual(
-            [message["role"] for message in projected[2:5]],
-            ["assistant", "tool", "tool"],
-        )
-
-    def test_does_not_compact_a_batch_before_a_later_assistant_consumes_it(self):
+    def test_does_not_dehydrate_without_artifact_mapping(self):
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
         conversation.add_user("读取文件")
@@ -104,26 +84,21 @@ class MicroCompactorTest(unittest.TestCase):
             )
         )
         conversation.add_tools_result([tool_result("call-1")])
-        boundary = conversation.records[-1].message_id
 
-        projected = MicroCompactor().compact(
-            conversation.records,
-            through_message_id=boundary,
-        )
+        projected = MicroCompactor().dehydrate(conversation.records, {})
 
-        self.assertEqual(
-            projected,
-            conversation.protocol_messages(),
-        )
+        self.assertEqual(projected, conversation.protocol_messages())
 
-    def test_rejects_an_unknown_boundary(self):
+    def test_rejects_artifact_mapping_to_non_tool_message(self):
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
+        conversation.add_user("hello")
+        user_id = conversation.records[1].message_id
 
-        with self.assertRaisesRegex(ValueError, "missing-message"):
-            MicroCompactor().compact(
+        with self.assertRaisesRegex(ValueError, "只能指向 tool"):
+            MicroCompactor().dehydrate(
                 conversation.records,
-                through_message_id="missing-message",
+                {user_id: "art_" + "b" * 32},
             )
 
 

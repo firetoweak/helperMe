@@ -39,8 +39,6 @@ def create_agent_application(
     runtime_root: Path,
     input_budget_ratio: float = 0.75,
     runtime_mode: RuntimeMode | None = None,
-    micro_compaction_trigger_ratio: float = 0.7,
-    micro_compaction_target_ratio: float = 0.5,
     recent_protection_tokens: int = 10_000,
 ) -> AgentApplication:
     if not model or not model.strip():
@@ -72,10 +70,9 @@ def create_agent_application(
             context_manager=context_manager,
             context_budget=context_budget,
             config=MicroCompactionConfig(
-                trigger_ratio=micro_compaction_trigger_ratio,
-                target_ratio=micro_compaction_target_ratio,
                 recent_protection_tokens=recent_protection_tokens,
             ),
+            artifact_store=artifact_store,
         ),
         context_budget=context_budget,
         summary_generator=LLMContextSummaryGenerator(model_calls, model),

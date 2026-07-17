@@ -1,29 +1,27 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
+import json
 from typing import Any
 
 from core.context.budget import BudgetAssessment, ContextBudget
 from core.context.composition import (
     ToolResultWindowStats,
     content_char_length,
+    parse_tool_result_meta,
 )
 from core.context.manager import ContextManager, ContextRequest, ModelContext
 from core.context.state import ContextState
 from core.messages import ConversationMessage
+from core.runtime_artifacts.store import ArtifactStore
 
 
 @dataclass(frozen=True)
 class MicroCompactionConfig:
-    trigger_ratio: float
-    target_ratio: float
     recent_protection_tokens: int
 
     def __post_init__(self) -> None:
-        if not 0 < self.trigger_ratio < 1:
-            raise ValueError("trigger_ratio 必须在 0 和 1 之间")
-        if not 0 < self.target_ratio < self.trigger_ratio:
-            raise ValueError("target_ratio 必须大于 0 且小于 trigger_ratio")
         if self.recent_protection_tokens <= 0:
             raise ValueError("recent_protection_tokens 必须大于 0")
 
@@ -35,18 +33,23 @@ class MicroCompactionDecision:
     after: BudgetAssessment
     changed: bool
     tool_window: ToolResultWindowStats
+    newly_dehydrated_message_ids: tuple[str, ...] = ()
 
 
 class MicroCompactionPolicy:
+    """持续性 Level 1：recent 窗外已消费成功 tool body 懒落盘并脱水投影。"""
+
     def __init__(
         self,
         context_manager: ContextManager,
         context_budget: ContextBudget,
         config: MicroCompactionConfig,
+        artifact_store: ArtifactStore,
     ) -> None:
         self.context_manager = context_manager
         self.context_budget = context_budget
         self.config = config
+        self.artifact_store = artifact_store
 
     def propose(
         self,
@@ -79,80 +82,55 @@ class MicroCompactionPolicy:
             recent_start_index,
         )
 
-        trigger_tokens = int(
-            before.input_budget_tokens * self.config.trigger_ratio
+        eligible_ids = self._eligible_tool_message_ids(
+            conversation_records,
+            max_index_exclusive=recent_start_index,
         )
-        if before.estimated_input_tokens < trigger_tokens:
-            return MicroCompactionDecision(
-                candidate_state=context_state,
-                before=before,
-                after=before,
-                changed=False,
-                tool_window=tool_window,
-            )
+        new_artifacts = dict(context_state.tool_artifacts)
+        newly_dehydrated: list[str] = []
+        for message_id in eligible_ids:
+            if message_id in new_artifacts:
+                continue
+            record = conversation_records[record_indexes[message_id]]
+            content = record.payload.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(
+                    content,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            _, existing_artifact_id = parse_tool_result_meta(content)
+            if existing_artifact_id is not None:
+                artifact_id = existing_artifact_id
+            else:
+                artifact_id = self.artifact_store.save(content).artifact_id
+            new_artifacts[message_id] = artifact_id
+            newly_dehydrated.append(message_id)
 
-        current_micro_index = self._state_boundary_index(
-            context_state.micro_compacted_through_message_id,
-            record_indexes,
+        candidate_state = replace(
+            context_state,
+            tool_artifacts=new_artifacts,
         )
-        max_boundary_index = recent_start_index - 1
-        first_candidate_index = max(
-            1,
-            summary_index + 1,
-            current_micro_index + 1,
-        )
-        if first_candidate_index > max_boundary_index:
-            return MicroCompactionDecision(
-                candidate_state=context_state,
-                before=before,
-                after=before,
-                changed=False,
-                tool_window=tool_window,
-            )
-
-        target_tokens = int(
-            before.input_budget_tokens * self.config.target_ratio
-        )
-        best_state = context_state
-        best_assessment = before
-
-        for boundary_index in range(
-            first_candidate_index,
-            max_boundary_index + 1,
-        ):
-            candidate_state = replace(
-                context_state,
-                micro_compacted_through_message_id=(
-                    conversation_records[boundary_index].message_id
-                ),
-            )
-            assessment = self._assess(
+        changed = bool(newly_dehydrated)
+        after = (
+            before
+            if not changed
+            else self._assess(
                 conversation_records,
                 candidate_state,
                 runtime_instructions,
                 tools,
             )
-            if (
-                assessment.estimated_input_tokens
-                < best_assessment.estimated_input_tokens
-            ):
-                best_state = candidate_state
-                best_assessment = assessment
-            if assessment.estimated_input_tokens <= target_tokens:
-                return MicroCompactionDecision(
-                    candidate_state=candidate_state,
-                    before=before,
-                    after=assessment,
-                    changed=True,
-                    tool_window=tool_window,
-                )
+        )
 
         return MicroCompactionDecision(
-            candidate_state=best_state,
+            candidate_state=candidate_state,
             before=before,
-            after=best_assessment,
-            changed=best_state != context_state,
+            after=after,
+            changed=changed,
             tool_window=tool_window,
+            newly_dehydrated_message_ids=tuple(newly_dehydrated),
         )
 
     def _assess(
@@ -171,17 +149,72 @@ class MicroCompactionPolicy:
         )
         return self.context_budget.assess(context, tools)
 
+    def _eligible_tool_message_ids(
+        self,
+        records: list[ConversationMessage],
+        *,
+        max_index_exclusive: int,
+    ) -> list[str]:
+        """返回可脱水的 tool message_id（批次完整、成功、已消费，且全在保护窗外）。"""
+        payloads = [record.payload for record in records]
+        eligible: list[str] = []
+        index = 0
+        while index < len(payloads):
+            message = payloads[index]
+            calls = message.get("tool_calls")
+            if (
+                index >= max_index_exclusive
+                or message.get("role") != "assistant"
+                or not calls
+            ):
+                index += 1
+                continue
+
+            result_end = index + 1
+            while (
+                result_end < len(payloads)
+                and payloads[result_end].get("role") == "tool"
+            ):
+                result_end += 1
+
+            results = payloads[index + 1 : result_end]
+            call_ids = [call["id"] for call in calls]
+            result_ids = [result.get("tool_call_id") for result in results]
+            batch_is_complete = (
+                result_ids == call_ids
+                and result_end - 1 < max_index_exclusive
+            )
+            if not batch_is_complete:
+                index += 1
+                continue
+
+            batch_was_consumed = any(
+                later.get("role") == "assistant"
+                for later in payloads[result_end:max_index_exclusive]
+            )
+            try:
+                batch_succeeded = all(
+                    json.loads(result["content"])["ok"] is True
+                    for result in results
+                )
+            except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                batch_succeeded = False
+
+            if batch_was_consumed and batch_succeeded:
+                for tool_index in range(index + 1, result_end):
+                    eligible.append(records[tool_index].message_id)
+
+            index = result_end
+
+        return eligible
+
     def _tool_window_stats(
         self,
         records: list[ConversationMessage],
         recent_start_index: int,
     ) -> ToolResultWindowStats:
-        # 基于 Conversation 事实轨迹，不依赖 Level 1 投影后的 composition。
         recent_records = records[recent_start_index:]
         compressible_records = records[:recent_start_index]
-        recent_chars = self._tool_chars(recent_records)
-        compressible_chars = self._tool_chars(compressible_records)
-
         recent_start_message_id = None
         if 0 <= recent_start_index < len(records):
             recent_start_message_id = records[recent_start_index].message_id
@@ -189,8 +222,8 @@ class MicroCompactionPolicy:
         return ToolResultWindowStats(
             recent_start_message_id=recent_start_message_id,
             recent_protection_tokens=self.config.recent_protection_tokens,
-            recent_tool_chars=recent_chars,
-            compressible_tool_chars=compressible_chars,
+            recent_tool_chars=self._tool_chars(recent_records),
+            compressible_tool_chars=self._tool_chars(compressible_records),
             recent_tool_tokens_estimate=self._estimate_tool_tokens(
                 recent_records
             ),
@@ -213,7 +246,7 @@ class MicroCompactionPolicy:
         records: list[ConversationMessage],
     ) -> int:
         tool_messages = [
-            record.payload
+            deepcopy(record.payload)
             for record in records
             if record.payload.get("role") == "tool"
         ]

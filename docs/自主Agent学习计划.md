@@ -317,8 +317,8 @@ Context Management
 Session
 ├─ Conversation：完整、只追加的事实轨迹
 └─ ContextState：Session 级的有损投影状态
-   ├─ summary
-   └─ compacted_through_message_id
+   ├─ summary / summarized_through_message_id
+   └─ tool_artifacts：message_id → artifact_id
 
 Conversation + ContextState + runtime instructions
     ↓
@@ -332,29 +332,31 @@ ModelContext：某一次模型调用的不可变快照
 - `tool_call_id` 只负责匹配 assistant tool call 与 tool result，不能代替 `message_id`。
 - ContextState 随 Session 存活，支持 Planner、多个 Agent Round 与 resume 复用同一压缩进度。
 - ModelContext 仍是单次调用快照；同一 Round 的 retry 必须复用同一快照。
-- ContextBudget 只评估完整请求的压力与是否允许发送，不修改上下文、不触发副作用。
+- ContextBudget 只评估完整请求的压力与是否允许发送，不修改上下文；Level 1 首次脱水允许写入 ArtifactStore。
 - 压缩不新建 Session。新 Session Handoff 是另一种用例，不属于本阶段。
 
 两级压缩：
 
-1. Level 1：确定性微压缩
-   - 在真正超预算前主动触发，是持续维护，不是溢出后的突发补救。
-   - 第一版只处理历史成功 tool result 与对应 assistant tool calls；普通文本暂不压缩。
-   - 保留工具协议外壳，不切断 assistant tool calls 与全部对应 tool results。
-   - 使用高低水位：达到高水位后开始维护，降到目标低水位后停止，避免每个 Round 反复触发。
+1. Level 1：持续性工具脱水投影
+   - 每次 ContextPreparation 都执行，不是高低水位触发的突发补救。
+   - 只处理 recent 保护窗外、已消费且成功的历史 tool result；保留 assistant tool_calls 与 tool 消息外壳。
+   - 投影将 tool body 替换为可回读 stub（artifact_id + hint）；Conversation 全文不变。
+   - 首次脱水时写入 ArtifactStore，并在 ContextState.tool_artifacts 记录 message_id→artifact_id（已外置结果复用已有 id，不重复落盘）。
+   - 普通文本暂不压缩。
 
 2. Level 2：增量 Auto-Compact
    - 只在 Level 1 后仍超过输入预算时升级，是最后一级兜底。
    - 调用 LLM，第一版只用 prompt 约束生成自由文本摘要，不定义结构化摘要模型。
    - 摘要以合成 assistant 消息投影到 ModelContext，语义是“此前 Agent 的工作交接摘要”，不写回 Conversation。
    - 首次使用旧消息前缀生成 S1；后续使用 `S(n-1) + 新 delta` 生成 Sn，不重新读取全部已压缩历史。
+   - Level 2 提交成功后，丢弃已被摘要边界覆盖的 tool_artifacts 条目。
 
 压缩边界：
 
 - system prompt、tools schema、runtime instructions 属于不可压缩基础占用。
-- 保留近期原始消息后缀；具体保护窗口和阈值在后续迭代调整。
-- 第一版固定以当前 Run 为边界，只压缩本 Run 开始前的历史。
-- 最新工具结果即使协议闭合，在模型尚未消费前也不属于可压缩历史。
+- 保留近期原始消息后缀（recent_protection_tokens）；窗内 tool 保持湿润。
+- 第一版固定以当前 Run 为边界，Level 2 只摘要本 Run 开始前的历史。
+- 最新工具结果即使协议闭合，在模型尚未消费前也不属于可脱水历史。
 - 若不可压缩基础占用本身已超过项目输入预算，不启动任何 Level，直接 blocked。
 
 最终流程：
@@ -362,20 +364,20 @@ ModelContext：某一次模型调用的不可变快照
 ```text
 Conversation + ContextState + runtime instructions + tools
         ↓
-生成原始 ModelContext 快照
+Level 1：持续性工具脱水
+  ├─ 计算 recent 保护窗
+  ├─ 对窗外已消费成功的 tool：缺映射则落盘 ArtifactStore
+  ├─ 更新候选 ContextState.tool_artifacts
+  └─ 投影 ModelContext（保留 tool call 外壳，body → stub）
         ↓
 评估完整请求压力
-        ├─ 低于维护水位 → ModelCall
-        └─ 达到维护水位
-               → Level 1
-               → 重新投影和评估
-               ├─ 已回到输入预算内 → ModelCall
-               └─ 仍超过输入预算
-                      → 增量摘要候选 ContextState
-                      → 校验压缩边界与工具协议
-                      → 重新投影和预算评估
-                      ├─ 全部通过 → 原子提交 → ModelCall
-                      └─ 任一失败 → 保留旧 ContextState → blocked
+        ├─ 未超输入预算 → ModelCall
+        └─ 仍超过输入预算
+               → Level 2 增量摘要候选 ContextState
+               → 校验压缩边界与工具协议
+               → 重新投影和预算评估（裁剪摘要前缀的 tool_artifacts）
+               ├─ 全部通过 → 原子提交 → ModelCall
+               └─ 任一失败 → 保留旧 ContextState → blocked
 ```
 
 原子提交：

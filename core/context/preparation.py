@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any, Mapping, Protocol
 
 from core.context.budget import BudgetAssessment, ContextBudget
 from core.context.composition import ContextComposition, ToolResultWindowStats
@@ -58,6 +58,7 @@ class MicroCompactionTrace:
     before_composition: ContextComposition
     after_composition: ContextComposition
     tool_window: ToolResultWindowStats
+    newly_dehydrated_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +69,7 @@ class MicroCompactionTrace:
             "before_composition": self.before_composition.to_dict(),
             "after_composition": self.after_composition.to_dict(),
             "tool_window": self.tool_window.to_dict(),
+            "newly_dehydrated_count": self.newly_dehydrated_count,
         }
 
     @classmethod
@@ -75,16 +77,16 @@ class MicroCompactionTrace:
         cls,
         decision: MicroCompactionDecision,
     ) -> MicroCompactionTrace:
+        newly = decision.newly_dehydrated_message_ids
         return cls(
             changed=decision.changed,
             before_tokens=decision.before.estimated_input_tokens,
             after_tokens=decision.after.estimated_input_tokens,
-            boundary_message_id=(
-                decision.candidate_state.micro_compacted_through_message_id
-            ),
+            boundary_message_id=newly[-1] if newly else None,
             before_composition=decision.before.composition,
             after_composition=decision.after.composition,
             tool_window=decision.tool_window,
+            newly_dehydrated_count=len(newly),
         )
 
 
@@ -162,15 +164,12 @@ class ContextPreparationService:
             )
 
         boundary_message_id = conversation_records[boundary_index].message_id
-        summary_source_state = replace(
-            candidate_state,
-            micro_compacted_through_message_id=boundary_message_id,
-        )
+        # 摘要输入使用已含 tool_artifacts 的候选状态，对历史前缀做 Level 1 投影。
         summary_source = self.context_manager.build(
             ContextRequest(
                 conversation_records=conversation_records[: boundary_index + 1],
                 runtime_instructions=[SUMMARY_INSTRUCTION],
-                context_state=summary_source_state,
+                context_state=candidate_state,
             )
         )
         generation = self.summary_generator.generate(summary_source)
@@ -183,10 +182,15 @@ class ContextPreparationService:
                 blocked_assessment=generation.assessment,
             )
 
+        pruned_artifacts = self._prune_artifacts_through(
+            candidate_state.tool_artifacts,
+            conversation_records,
+            boundary_index,
+        )
         summarized_state = ContextState(
             summary=generation.summary,
             summarized_through_message_id=boundary_message_id,
-            micro_compacted_through_message_id=None,
+            tool_artifacts=pruned_artifacts,
         )
         summarized_context = self.context_manager.build(
             ContextRequest(
@@ -216,6 +220,22 @@ class ContextPreparationService:
                 None if after_summary.allowed else after_summary
             ),
         )
+
+    @staticmethod
+    def _prune_artifacts_through(
+        tool_artifacts: Mapping[str, str],
+        records: list[ConversationMessage],
+        boundary_index: int,
+    ) -> dict[str, str]:
+        covered_ids = {
+            record.message_id
+            for record in records[: boundary_index + 1]
+        }
+        return {
+            message_id: artifact_id
+            for message_id, artifact_id in tool_artifacts.items()
+            if message_id not in covered_ids
+        }
 
     @staticmethod
     def _eligible_level2_boundary_index(

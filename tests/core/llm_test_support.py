@@ -102,6 +102,9 @@ def model_call_service(llm_client) -> ModelCallService:
 
 def context_preparation_service(
     context_manager: ContextManager | None = None,
+    *,
+    recent_protection_tokens: int = 8_000,
+    artifact_store: MemoryArtifactStore | None = None,
 ) -> ContextPreparationService:
     manager = context_manager or ContextManager()
     budget = ContextBudget(
@@ -112,16 +115,16 @@ def context_preparation_service(
         ),
     )
     summary_generator = MockSummaryGenerator()
+    store = artifact_store or MemoryArtifactStore()
     return ContextPreparationService(
         context_manager=manager,
         micro_compaction_policy=MicroCompactionPolicy(
             context_manager=manager,
             context_budget=budget,
             config=MicroCompactionConfig(
-                trigger_ratio=0.7,
-                target_ratio=0.5,
-                recent_protection_tokens=8_000,
+                recent_protection_tokens=recent_protection_tokens,
             ),
+            artifact_store=store,
         ),
         context_budget=budget,
         summary_generator=summary_generator,
