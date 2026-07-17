@@ -1,4 +1,5 @@
 from core.runtime_artifacts.externalizer import (
+    ExternalizeOutcome,
     ToolResultExternalizer,
     ToolResultLimit,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "ArtifactOffsetOutOfRangeError",
     "ArtifactRef",
     "ArtifactStore",
+    "ExternalizeOutcome",
     "FileArtifactStore",
     "ToolResultExternalizer",
     "ToolResultLimit",

@@ -19,6 +19,14 @@ class ToolResultLimit:
             raise ValueError("preview_chars 必须大于等于 0 且小于 max_chars")
 
 
+@dataclass(frozen=True)
+class ExternalizeOutcome:
+    result: dict[str, Any]
+    original_chars: int
+    projected_chars: int
+    externalized: bool
+
+
 class ToolResultExternalizer:
     def __init__(
         self,
@@ -28,10 +36,16 @@ class ToolResultExternalizer:
         self.store = store
         self.limit = limit
 
-    def process(self, result: dict[str, Any]) -> dict[str, Any]:
+    def process(self, result: dict[str, Any]) -> ExternalizeOutcome:
         serialized = encode_tool_result(result)
-        if len(serialized) <= self.limit.max_chars:
-            return result
+        original_chars = len(serialized)
+        if original_chars <= self.limit.max_chars:
+            return ExternalizeOutcome(
+                result=result,
+                original_chars=original_chars,
+                projected_chars=original_chars,
+                externalized=False,
+            )
 
         artifact = self.store.save(serialized)
         projected = {
@@ -50,6 +64,12 @@ class ToolResultExternalizer:
             ),
             "hint": "需要更多内容时调用 read_artifact 分页读取。",
         }
-        if len(encode_tool_result(projected)) > self.limit.max_chars:
+        projected_chars = len(encode_tool_result(projected))
+        if projected_chars > self.limit.max_chars:
             raise ValueError("外置后的工具结果仍超过 max_chars")
-        return projected
+        return ExternalizeOutcome(
+            result=projected,
+            original_chars=original_chars,
+            projected_chars=projected_chars,
+            externalized=True,
+        )

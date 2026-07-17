@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from core.context import BudgetAssessment, ContextManager
+from core.context import ContextManager, make_budget_assessment
 from core.messages import Conversation
 from core.model_call import LLMCallResult, LLMResponse, ToolCall
 from core.model_call.client import LLMContextLengthError
@@ -105,7 +105,7 @@ class RunRuntimePlanningTest(unittest.TestCase):
     def test_planning_budget_exceeded_blocks_current_run(self):
         model_calls = Mock()
         model_calls.call.return_value = ModelCallBlocked(
-            BudgetAssessment(
+            make_budget_assessment(
                 estimated_input_tokens=820,
                 input_budget_tokens=750,
             )

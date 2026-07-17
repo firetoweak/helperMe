@@ -48,7 +48,10 @@ class RuntimeArtifactsTest(unittest.TestCase):
             ToolResultLimit(max_chars=1000, preview_chars=100),
         )
 
-        self.assertIs(externalizer.process(result), result)
+        outcome = externalizer.process(result)
+        self.assertIs(outcome.result, result)
+        self.assertFalse(outcome.externalized)
+        self.assertEqual(outcome.original_chars, outcome.projected_chars)
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_large_result_is_saved_and_replaced_by_opaque_reference(self):
@@ -65,10 +68,13 @@ class RuntimeArtifactsTest(unittest.TestCase):
             ToolResultLimit(max_chars=500, preview_chars=80),
         )
 
-        projected = externalizer.process(result)
+        outcome = externalizer.process(result)
+        projected = outcome.result
         artifact_id = projected["data"]["artifact_id"]
 
+        self.assertTrue(outcome.externalized)
         self.assertTrue(projected["data"]["externalized"])
+        self.assertGreater(outcome.original_chars, outcome.projected_chars)
         self.assertNotIn(str(self.root), json.dumps(projected))
         self.assertLessEqual(len(encode_tool_result(projected)), 500)
         chunk = self.store.read(artifact_id, 0, len(original))

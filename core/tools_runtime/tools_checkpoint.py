@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from core.context import BudgetAssessment
+from core.context import (
+    BudgetAssessment,
+    ContextComposition,
+    MicroCompactionTrace,
+)
 from core.model_call.types import LLMUsage
 from core.tools_runtime.stop_guard import verification_status
 from core.tools_runtime.tools_state import ToolsState
@@ -51,10 +55,17 @@ def tool_batch_completed_checkpoint(
     tools_state: ToolsState,
     batch_size: int,
     extra_data: dict[str, Any] | None = None,
+    *,
+    result_chars_before: int = 0,
+    result_chars_after: int = 0,
+    externalized_count: int = 0,
 ) -> Checkpoint:
     data = {
         "round_index": round_index,
         "batch_size": batch_size,
+        "result_chars_before": result_chars_before,
+        "result_chars_after": result_chars_after,
+        "externalized_count": externalized_count,
         "tools": tools_state.summary(),
         "verification": verification_status(tools_state),
     }
@@ -65,6 +76,26 @@ def tool_batch_completed_checkpoint(
         reason="tool_batch_completed",
         message=f"第 {round_index} 轮工具调用已完成。",
         data=data,
+    )
+
+
+def context_prepared_checkpoint(
+    *,
+    stage: str,
+    composition: ContextComposition,
+    micro_compaction: MicroCompactionTrace,
+    round_index: int | None = None,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="context",
+        reason="context_prepared",
+        message="已准备模型调用上下文构成。",
+        data={
+            "stage": stage,
+            "round_index": round_index,
+            "composition": composition.to_dict(),
+            "micro_compaction": micro_compaction.to_dict(),
+        },
     )
 
 
@@ -145,6 +176,8 @@ def context_compressed_checkpoint(
             "after_tokens": after.estimated_input_tokens,
             "input_budget_tokens": after.input_budget_tokens,
             "accepted": accepted,
+            "before_composition": before.composition.to_dict(),
+            "after_composition": after.composition.to_dict(),
         },
     )
 
@@ -239,6 +272,20 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
 
     if checkpoint.reason == "verification_required":
         return checkpoint.message
+
+    if checkpoint.reason == "context_prepared":
+        composition = checkpoint.data["composition"]
+        tool_tokens = composition["by_role_tokens"].get("tool", 0)
+        return "\n".join([
+            checkpoint.message,
+            f"阶段：{checkpoint.data['stage']}。",
+            (
+                "估算输入："
+                f"{composition['estimated_total_tokens']}，"
+                f"tool={tool_tokens}，"
+                f"tools_schema={composition['tools_schema_tokens']}。"
+            ),
+        ])
 
     tools = checkpoint.data["tools"]
     verification = checkpoint.data["verification"]

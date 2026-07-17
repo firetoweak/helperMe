@@ -1,11 +1,17 @@
 from core.context import (
     ContextBudget,
+    ContextComposition,
     ContextManager,
     ContextPreparationService,
     MicroCompactionConfig,
     MicroCompactionPolicy,
     ModelBudgetConfig,
     TiktokenTokenEstimator,
+)
+from core.context.composition import (
+    ROLE_KEYS,
+    empty_role_counts,
+    empty_role_tokens,
 )
 from core.model_call import LLMCallResult, LLMResponse, LLMUsage
 from core.model_call.service import ModelCallService
@@ -125,3 +131,49 @@ def context_preparation_service(
 class MockSummaryGenerator:
     def generate(self, model_context):
         raise AssertionError("测试未预期执行 Level 2")
+
+
+class CharacterEstimator:
+    """按字符近似估算，供压缩/准备测试使用。"""
+
+    def estimate(self, model_context, tools) -> int:
+        return sum(
+            len(str(message.get("content", "")))
+            for message in model_context.messages
+        ) + len(str(tools))
+
+    def breakdown(
+        self,
+        model_context,
+        tools,
+        *,
+        input_budget_tokens: int,
+    ) -> ContextComposition:
+        by_role = empty_role_tokens()
+        counts = empty_role_counts()
+        tool_result_chars = 0
+        for message in model_context.messages:
+            role = message.get("role")
+            if role not in ROLE_KEYS:
+                role = "assistant"
+            size = len(str(message.get("content", "")))
+            by_role[role] += size
+            counts[role] += 1
+            if role == "tool":
+                tool_result_chars += size
+        tools_schema = len(str(tools))
+        total = self.estimate(model_context, tools)
+        parts = sum(by_role.values()) + tools_schema
+        if parts != total:
+            by_role["assistant"] += total - parts
+        return ContextComposition(
+            estimated_total_tokens=total,
+            input_budget_tokens=input_budget_tokens,
+            tools_schema_tokens=tools_schema,
+            by_role_tokens=by_role,
+            by_role_message_counts=counts,
+            tool_result_chars=tool_result_chars,
+        )
+
+    def calibrate(self, model_context, tools, actual_input_tokens) -> None:
+        return None

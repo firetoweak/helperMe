@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol
 
 from core.context.budget import BudgetAssessment, ContextBudget
+from core.context.composition import ContextComposition
 from core.context.manager import ContextManager, ContextRequest, ModelContext
 from core.context.micro_compaction_policy import (
     MicroCompactionDecision,
@@ -49,12 +50,42 @@ class SummaryCompaction:
 
 
 @dataclass(frozen=True)
+class MicroCompactionTrace:
+    changed: bool
+    before_tokens: int
+    after_tokens: int
+    boundary_message_id: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_decision(
+        cls,
+        decision: MicroCompactionDecision,
+    ) -> MicroCompactionTrace:
+        return cls(
+            changed=decision.changed,
+            before_tokens=decision.before.estimated_input_tokens,
+            after_tokens=decision.after.estimated_input_tokens,
+            boundary_message_id=(
+                decision.candidate_state.micro_compacted_through_message_id
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class PreparedContext:
     model_context: ModelContext
     context_state: ContextState
     micro_compaction: MicroCompactionDecision
+    composition: ContextComposition
     summary_compaction: SummaryCompaction | None = None
     blocked_assessment: BudgetAssessment | None = None
+
+    @property
+    def micro_compaction_trace(self) -> MicroCompactionTrace:
+        return MicroCompactionTrace.from_decision(self.micro_compaction)
 
 
 class ContextPreparationService:
@@ -99,6 +130,7 @@ class ContextPreparationService:
                 model_context=model_context,
                 context_state=candidate_state,
                 micro_compaction=decision,
+                composition=decision.after.composition,
             )
 
         boundary_index = self._eligible_level2_boundary_index(
@@ -111,6 +143,7 @@ class ContextPreparationService:
                 model_context=model_context,
                 context_state=candidate_state,
                 micro_compaction=decision,
+                composition=decision.after.composition,
                 blocked_assessment=decision.after,
             )
 
@@ -132,6 +165,7 @@ class ContextPreparationService:
                 model_context=model_context,
                 context_state=candidate_state,
                 micro_compaction=decision,
+                composition=decision.after.composition,
                 blocked_assessment=generation.assessment,
             )
 
@@ -162,6 +196,7 @@ class ContextPreparationService:
                 else candidate_state
             ),
             micro_compaction=decision,
+            composition=after_summary.composition,
             summary_compaction=summary_compaction,
             blocked_assessment=(
                 None if after_summary.allowed else after_summary

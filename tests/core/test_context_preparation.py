@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import Mock
 
 from core.context import (
-    BudgetAssessment,
     ContextBudget,
     ContextManager,
     ContextPreparationService,
@@ -12,9 +11,11 @@ from core.context import (
     MicroCompactionPolicy,
     ModelBudgetConfig,
     SummaryGeneration,
+    make_budget_assessment,
 )
 from core.messages import Conversation
 from core.model_call import LLMResponse
+from tests.core.llm_test_support import CharacterEstimator
 
 
 class ContextPreparationServiceTest(unittest.TestCase):
@@ -28,7 +29,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
         candidate_state = ContextState(
             micro_compacted_through_message_id=old_message.message_id
         )
-        assessment = BudgetAssessment(10, 100)
+        assessment = make_budget_assessment(10, 100)
         policy = Mock()
         policy.propose.return_value = MicroCompactionDecision(
             candidate_state=candidate_state,
@@ -53,6 +54,12 @@ class ContextPreparationServiceTest(unittest.TestCase):
         self.assertIs(prepared.context_state, candidate_state)
         self.assertEqual(original_state, ContextState())
         self.assertIn("runtime", prepared.model_context.messages[0]["content"])
+        self.assertEqual(prepared.composition, assessment.composition)
+        self.assertTrue(prepared.micro_compaction_trace.changed)
+        self.assertEqual(
+            prepared.micro_compaction_trace.boundary_message_id,
+            old_message.message_id,
+        )
         policy.propose.assert_called_once()
 
     def test_level2_summarizes_only_history_before_current_run(self):
@@ -106,6 +113,10 @@ class ContextPreparationServiceTest(unittest.TestCase):
         )
         self.assertIsNotNone(prepared.summary_compaction)
         self.assertIsNone(prepared.blocked_assessment)
+        self.assertEqual(
+            prepared.composition,
+            prepared.summary_compaction.after.composition,
+        )
 
     def test_level2_rejects_summary_state_when_reassessment_is_still_over_budget(self):
         conversation = Conversation()
@@ -114,8 +125,8 @@ class ContextPreparationServiceTest(unittest.TestCase):
         conversation.add_assistant(LLMResponse(type="text", content="old answer"))
         boundary = conversation.records[-1]
         conversation.add_user("current goal")
-        before = BudgetAssessment(900, 750)
-        after = BudgetAssessment(800, 750)
+        before = make_budget_assessment(900, 750)
+        after = make_budget_assessment(800, 750)
         policy = Mock()
         policy.propose.return_value = MicroCompactionDecision(
             candidate_state=ContextState(),
@@ -142,17 +153,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
 
         self.assertEqual(prepared.blocked_assessment, after)
         self.assertEqual(prepared.context_state, ContextState())
-
-
-class CharacterEstimator:
-    def estimate(self, model_context, tools):
-        return sum(
-            len(str(message.get("content", "")))
-            for message in model_context.messages
-        ) + len(str(tools))
-
-    def observe(self, estimated_tokens, actual_input_tokens):
-        pass
+        self.assertEqual(prepared.composition, after.composition)
 
 
 class RecordingSummaryGenerator:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.context.composition import ContextComposition, stub_composition
 from core.context.estimator import TokenEstimator
 from core.context.manager import ModelContext
 
@@ -23,6 +24,25 @@ class ModelBudgetConfig:
 class BudgetAssessment:
     estimated_input_tokens: int
     input_budget_tokens: int
+    composition: ContextComposition
+
+    def __post_init__(self) -> None:
+        if (
+            self.composition.estimated_total_tokens
+            != self.estimated_input_tokens
+        ):
+            raise ValueError(
+                "composition.estimated_total_tokens 必须等于 "
+                "estimated_input_tokens"
+            )
+        if (
+            self.composition.input_budget_tokens
+            != self.input_budget_tokens
+        ):
+            raise ValueError(
+                "composition.input_budget_tokens 必须等于 "
+                "input_budget_tokens"
+            )
 
     @property
     def allowed(self) -> bool:
@@ -34,6 +54,23 @@ class BudgetAssessment:
             0,
             self.estimated_input_tokens - self.input_budget_tokens,
         )
+
+
+def make_budget_assessment(
+    estimated_input_tokens: int,
+    input_budget_tokens: int,
+    composition: ContextComposition | None = None,
+) -> BudgetAssessment:
+    """构造 BudgetAssessment；未提供 composition 时使用总量占位。"""
+    return BudgetAssessment(
+        estimated_input_tokens=estimated_input_tokens,
+        input_budget_tokens=input_budget_tokens,
+        composition=composition
+        or stub_composition(
+            estimated_input_tokens,
+            input_budget_tokens,
+        ),
+    )
 
 
 class ContextBudget:
@@ -50,14 +87,18 @@ class ContextBudget:
         model_context: ModelContext,
         tools: list[dict[str, Any]],
     ) -> BudgetAssessment:
+        input_budget_tokens = int(
+            self.config.context_limit * self.config.input_ratio
+        )
+        composition = self.estimator.breakdown(
+            model_context,
+            tools,
+            input_budget_tokens=input_budget_tokens,
+        )
         return BudgetAssessment(
-            estimated_input_tokens=self.estimator.estimate(
-                model_context,
-                tools,
-            ),
-            input_budget_tokens=int(
-                self.config.context_limit * self.config.input_ratio
-            ),
+            estimated_input_tokens=composition.estimated_total_tokens,
+            input_budget_tokens=input_budget_tokens,
+            composition=composition,
         )
 
     def observe_actual_usage(

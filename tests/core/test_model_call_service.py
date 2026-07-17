@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from core.context import BudgetAssessment, ModelContext
+from core.context import ModelContext, make_budget_assessment
 from core.model_call.service import (
     ModelCallBlocked,
     ModelCallRequest,
@@ -14,7 +14,7 @@ class ModelCallServiceTest(unittest.TestCase):
     def test_budget_exceeded_does_not_call_model(self):
         llm_client = Mock()
         context_budget = Mock()
-        assessment = BudgetAssessment(
+        assessment = make_budget_assessment(
             estimated_input_tokens=801,
             input_budget_tokens=750,
         )
@@ -37,7 +37,7 @@ class ModelCallServiceTest(unittest.TestCase):
     def test_success_calibrates_with_real_input_usage(self):
         llm_client = Mock()
         context_budget = Mock()
-        context_budget.assess.return_value = BudgetAssessment(
+        context_budget.assess.return_value = make_budget_assessment(
             estimated_input_tokens=700,
             input_budget_tokens=750,
         )

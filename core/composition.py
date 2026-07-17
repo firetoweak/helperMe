@@ -41,7 +41,7 @@ def create_agent_application(
     runtime_mode: RuntimeMode | None = None,
     micro_compaction_trigger_ratio: float = 0.7,
     micro_compaction_target_ratio: float = 0.5,
-    recent_protection_tokens: int = 8_000,
+    recent_protection_tokens: int = 10_000,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")

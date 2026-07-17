@@ -46,6 +46,8 @@ class PlanningMode:
                 context_state=outcome.context_state,
                 blocked=outcome.blocked,
                 summary_compaction=outcome.summary_compaction,
+                composition=outcome.composition,
+                micro_compaction_trace=outcome.micro_compaction_trace,
             )
         self.plan = outcome.plan
         self.plan.mark_doing(1, "开始执行任务")
@@ -53,6 +55,8 @@ class PlanningMode:
             context_state=outcome.context_state,
             usage=outcome.usage,
             summary_compaction=outcome.summary_compaction,
+            composition=outcome.composition,
+            micro_compaction_trace=outcome.micro_compaction_trace,
         )
 
     def runtime_instructions(self) -> list[str]:

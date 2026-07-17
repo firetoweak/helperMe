@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from core.context import ContextPreparationService, ContextState, SummaryCompaction
+from core.context import (
+    ContextComposition,
+    ContextPreparationService,
+    ContextState,
+    MicroCompactionTrace,
+    SummaryCompaction,
+)
 from core.messages import Conversation
 from core.model_call.service import ModelCallBlocked, ModelCallService
 from core.model_call.types import LLMUsage
@@ -16,6 +22,8 @@ class RuntimeModeStartResult:
     usage: LLMUsage | None = None
     blocked: ModelCallBlocked | None = None
     summary_compaction: SummaryCompaction | None = None
+    composition: ContextComposition | None = None
+    micro_compaction_trace: MicroCompactionTrace | None = None
 
 
 class RuntimeMode(Protocol):

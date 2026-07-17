@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from core.context import ContextPreparationService, ContextState, SummaryCompaction
+from core.context import (
+    ContextComposition,
+    ContextPreparationService,
+    ContextState,
+    MicroCompactionTrace,
+    SummaryCompaction,
+)
 from core.messages import Conversation
 from core.model_call.service import (
     ModelCallBlocked,
@@ -27,6 +33,8 @@ class PlanCallResult:
     usage: LLMUsage
     context_state: ContextState
     summary_compaction: SummaryCompaction | None
+    composition: ContextComposition
+    micro_compaction_trace: MicroCompactionTrace
 
 
 @dataclass(frozen=True)
@@ -34,6 +42,8 @@ class PlanCallBlocked:
     blocked: ModelCallBlocked
     context_state: ContextState
     summary_compaction: SummaryCompaction | None
+    composition: ContextComposition
+    micro_compaction_trace: MicroCompactionTrace
 
 
 PLANNER_INSTRUCTION = (
@@ -66,6 +76,8 @@ def create_plan(
             blocked=ModelCallBlocked(prepared.blocked_assessment),
             context_state=prepared.context_state,
             summary_compaction=prepared.summary_compaction,
+            composition=prepared.composition,
+            micro_compaction_trace=prepared.micro_compaction_trace,
         )
     outcome = model_calls.call(
         ModelCallRequest(
@@ -79,6 +91,8 @@ def create_plan(
             blocked=outcome,
             context_state=prepared.context_state,
             summary_compaction=prepared.summary_compaction,
+            composition=prepared.composition,
+            micro_compaction_trace=prepared.micro_compaction_trace,
         )
     response = outcome.response
 
@@ -89,6 +103,8 @@ def create_plan(
         usage=outcome.usage,
         context_state=prepared.context_state,
         summary_compaction=prepared.summary_compaction,
+        composition=prepared.composition,
+        micro_compaction_trace=prepared.micro_compaction_trace,
     )
 
 

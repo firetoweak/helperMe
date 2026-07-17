@@ -2,21 +2,21 @@ import unittest
 from unittest.mock import Mock
 
 from core.context import (
-    BudgetAssessment,
     ContextBudget,
     ModelBudgetConfig,
     ModelContext,
     TiktokenTokenEstimator,
+    make_budget_assessment,
 )
 
 
 class BudgetAssessmentTest(unittest.TestCase):
     def test_allowed_and_overflow_are_derived(self):
-        allowed = BudgetAssessment(
+        allowed = make_budget_assessment(
             estimated_input_tokens=750,
             input_budget_tokens=750,
         )
-        exceeded = BudgetAssessment(
+        exceeded = make_budget_assessment(
             estimated_input_tokens=820,
             input_budget_tokens=750,
         )
@@ -46,7 +46,8 @@ class ModelBudgetConfigTest(unittest.TestCase):
 class ContextBudgetTest(unittest.TestCase):
     def test_assess_uses_project_ratio_without_mutating_context(self):
         estimator = Mock()
-        estimator.estimate.return_value = 751
+        composition = make_budget_assessment(751, 750).composition
+        estimator.breakdown.return_value = composition
         context = ModelContext(
             messages=[{"role": "user", "content": "hello"}]
         )
@@ -66,7 +67,12 @@ class ContextBudgetTest(unittest.TestCase):
         self.assertEqual(assessment.estimated_input_tokens, 751)
         self.assertFalse(assessment.allowed)
         self.assertEqual(context.messages, original_messages)
-        estimator.estimate.assert_called_once_with(context, tools)
+        self.assertIs(assessment.composition, composition)
+        estimator.breakdown.assert_called_once_with(
+            context,
+            tools,
+            input_budget_tokens=750,
+        )
 
     def test_observe_actual_usage_only_delegates_calibration(self):
         estimator = Mock()
@@ -126,6 +132,53 @@ class TiktokenTokenEstimatorTest(unittest.TestCase):
     def test_rejects_invalid_window_size(self):
         with self.assertRaises(ValueError):
             TiktokenTokenEstimator(window_size=0)
+
+    def test_breakdown_roles_and_tools_sum_to_estimated_total(self):
+        estimator = TiktokenTokenEstimator()
+        context = ModelContext(
+            messages=[
+                {"role": "system", "content": "系统指令"},
+                {"role": "user", "content": "请搜索"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "grep",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "x" * 200,
+                },
+            ]
+        )
+        tools = [{"type": "function", "function": {"name": "grep"}}]
+
+        composition = estimator.breakdown(
+            context,
+            tools,
+            input_budget_tokens=10_000,
+        )
+        role_sum = sum(composition.by_role_tokens.values())
+        total_parts = role_sum + composition.tools_schema_tokens
+
+        self.assertEqual(
+            composition.estimated_total_tokens,
+            estimator.estimate(context, tools),
+        )
+        self.assertEqual(total_parts, composition.estimated_total_tokens)
+        self.assertGreater(composition.by_role_tokens["tool"], 0)
+        self.assertGreater(composition.tools_schema_tokens, 0)
+        self.assertEqual(composition.tool_result_chars, 200)
+        self.assertEqual(composition.input_budget_tokens, 10_000)
 
 
 if __name__ == "__main__":

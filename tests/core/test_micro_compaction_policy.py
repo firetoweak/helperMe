@@ -3,6 +3,7 @@ import unittest
 
 from core.context import (
     ContextBudget,
+    ContextComposition,
     ContextManager,
     ContextRequest,
     ContextState,
@@ -10,6 +11,11 @@ from core.context import (
     MicroCompactionPolicy,
     ModelBudgetConfig,
     ModelContext,
+)
+from core.context.composition import (
+    ROLE_KEYS,
+    empty_role_counts,
+    empty_role_tokens,
 )
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
@@ -24,6 +30,42 @@ class CharacterEstimator:
                 separators=(",", ":"),
                 sort_keys=True,
             )
+        )
+
+    def breakdown(
+        self,
+        model_context: ModelContext,
+        tools: list[dict],
+        *,
+        input_budget_tokens: int,
+    ) -> ContextComposition:
+        total = self.estimate(model_context, tools)
+        by_role = empty_role_tokens()
+        counts = empty_role_counts()
+        tool_result_chars = 0
+        for message in model_context.messages:
+            role = message.get("role")
+            if role not in ROLE_KEYS:
+                role = "assistant"
+            size = len(json.dumps(message, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+            by_role[role] += size
+            counts[role] += 1
+            if role == "tool":
+                content = message.get("content", "")
+                tool_result_chars += len(content) if isinstance(content, str) else 0
+        tools_schema = len(
+            json.dumps(tools, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        ) if tools else 0
+        parts = sum(by_role.values()) + tools_schema
+        if parts != total:
+            by_role["assistant"] += total - parts
+        return ContextComposition(
+            estimated_total_tokens=total,
+            input_budget_tokens=input_budget_tokens,
+            tools_schema_tokens=tools_schema,
+            by_role_tokens=by_role,
+            by_role_message_counts=counts,
+            tool_result_chars=tool_result_chars,
         )
 
     def calibrate(self, model_context, tools, actual_input_tokens):

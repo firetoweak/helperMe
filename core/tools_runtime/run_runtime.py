@@ -9,6 +9,7 @@ from core.tools_runtime.tools_checkpoint import (
     context_budget_exceeded_checkpoint,
     context_compressed_checkpoint,
     context_length_exceeded_checkpoint,
+    context_prepared_checkpoint,
     format_checkpoint,
     invalid_llm_response_checkpoint,
     llm_error_checkpoint,
@@ -38,8 +39,10 @@ from core.tools_runtime.tools_protocol import (
 from core.tools_runtime.tools_state import ToolsState
 from core.runtime_modes import RuntimeMode
 from core.context import (
+    ContextComposition,
     ContextPreparationService,
     ContextState,
+    MicroCompactionTrace,
     ModelContext,
     SummaryCompaction,
 )
@@ -121,6 +124,26 @@ class RunRuntime:
             )
         )
         return summary_compaction.after.allowed
+
+    @staticmethod
+    def _record_context_prepared(
+        *,
+        stage: str,
+        composition: ContextComposition | None,
+        micro_compaction_trace: MicroCompactionTrace | None,
+        checkpoints: list[Checkpoint],
+        round_index: int | None = None,
+    ) -> None:
+        if composition is None or micro_compaction_trace is None:
+            return
+        checkpoints.append(
+            context_prepared_checkpoint(
+                stage=stage,
+                composition=composition,
+                micro_compaction=micro_compaction_trace,
+                round_index=round_index,
+            )
+        )
 
     @staticmethod
     def _finish(
@@ -287,6 +310,12 @@ class RunRuntime:
             start_outcome.summary_compaction,
             checkpoints,
         )
+        self._record_context_prepared(
+            stage="planning",
+            composition=start_outcome.composition,
+            micro_compaction_trace=start_outcome.micro_compaction_trace,
+            checkpoints=checkpoints,
+        )
         if start_outcome.blocked is not None:
             checkpoint = context_budget_exceeded_checkpoint(
                 stage="planning",
@@ -375,6 +404,13 @@ class RunRuntime:
                 round_index,
             ):
                 level2_performed = True
+            self._record_context_prepared(
+                stage="agent_round",
+                composition=prepared.composition,
+                micro_compaction_trace=prepared.micro_compaction_trace,
+                checkpoints=checkpoints,
+                round_index=round_index,
+            )
             if prepared.blocked_assessment is not None:
                 checkpoint = context_budget_exceeded_checkpoint(
                     stage="context_summary",
@@ -457,16 +493,21 @@ class RunRuntime:
 
             calls = response.calls
             batch_steps = tools_state.add_calls(calls)
+            result_chars_before = 0
+            result_chars_after = 0
+            externalized_count = 0
 
             for call in calls:
                 tool_result = self.tools_executor.execute(
                     call.name,
                     call.arguments,
                 )
-                projected_result = self.tool_result_externalizer.process(
-                    tool_result
-                )
-                tools_state.add_result(call.id, projected_result)
+                outcome = self.tool_result_externalizer.process(tool_result)
+                result_chars_before += outcome.original_chars
+                result_chars_after += outcome.projected_chars
+                if outcome.externalized:
+                    externalized_count += 1
+                tools_state.add_result(call.id, outcome.result)
 
             tool_results = build_tool_messages(batch_steps, encode_tool_result)
             conversation.add_tools_result(tool_results)
@@ -481,6 +522,9 @@ class RunRuntime:
                     tools_state,
                     len(calls),
                     self.runtime_mode.checkpoint_data(),
+                    result_chars_before=result_chars_before,
+                    result_chars_after=result_chars_after,
+                    externalized_count=externalized_count,
                 )
             )
 

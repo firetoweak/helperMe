@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 from core.context import (
-    BudgetAssessment,
     ContextManager,
     ContextState,
     MicroCompactionDecision,
@@ -10,6 +9,7 @@ from core.context import (
     PreparedContext,
     SummaryCompaction,
     SummaryGeneration,
+    make_budget_assessment,
 )
 from core.messages import Conversation
 from core.model_call import LLMResponse
@@ -83,8 +83,8 @@ class StaticInstructionsMode(ChangingInstructionsMode):
 
 class RunRuntimeContextTest(unittest.TestCase):
     def test_level2_records_checkpoint_and_notifies_user(self):
-        before = BudgetAssessment(900, 750)
-        after = BudgetAssessment(500, 750)
+        before = make_budget_assessment(900, 750)
+        after = make_budget_assessment(500, 750)
         state = ContextState(
             summary="handoff",
             summarized_through_message_id="old-message",
@@ -102,6 +102,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             ),
             context_state=state,
             micro_compaction=decision,
+            composition=after.composition,
             summary_compaction=SummaryCompaction(
                 boundary_message_id="old-message",
                 before=before,
@@ -133,7 +134,7 @@ class RunRuntimeContextTest(unittest.TestCase):
     def test_project_budget_exceeded_blocks_before_model_call(self):
         model_calls = Mock()
         model_calls.call.return_value = ModelCallBlocked(
-            BudgetAssessment(
+            make_budget_assessment(
                 estimated_input_tokens=801,
                 input_budget_tokens=750,
             )
