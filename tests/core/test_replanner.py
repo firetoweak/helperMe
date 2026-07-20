@@ -1,21 +1,16 @@
 import json
 import unittest
-from unittest.mock import Mock
 
-from core.context import ContextState, make_budget_assessment
-from core.messages import Conversation
-from core.model_call import LLMResponse, ToolCall
-from core.model_call.service import ModelCallBlocked, ModelCallRequest
+from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
 from core.planning import Plan, PlanStep
 from core.planning.replanner import (
+    build_replanner_instruction,
     InvalidReplanResponse,
-    ReplanCallBlocked,
     ReplanDecision,
     parse_replan_response,
     replan,
 )
 from core.tools_runtime.tools_state import ToolStep
-from tests.core.llm_test_support import call_result, context_preparation_service
 
 
 class ReplannerTest(unittest.TestCase):
@@ -29,13 +24,6 @@ class ReplannerTest(unittest.TestCase):
                 PlanStep(id=3, text="处理结果", status="pending"),
             ],
         )
-
-    @staticmethod
-    def _conversation() -> Conversation:
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("完成任务")
-        return conversation
 
     @staticmethod
     def _failed_step() -> ToolStep:
@@ -52,149 +40,58 @@ class ReplannerTest(unittest.TestCase):
             },
         )
 
-    def test_replan_calls_model_with_plan_and_failure_without_mutating_plan(self):
-        model_calls = Mock()
-        model_calls.call.return_value = call_result(
+    def test_build_instruction_contains_plan_and_failure(self):
+        instruction = build_replanner_instruction(
+            self._plan(),
+            [self._failed_step()],
+        )
+
+        self.assertIn("replanner", instruction)
+        self.assertIn("revision=1", instruction)
+        self.assertIn("调用接口", instruction)
+        self.assertIn("tool=missing_tool", instruction)
+        self.assertIn("code=TOOL_NOT_FOUND", instruction)
+
+    def test_replan_parses_response_without_mutating_plan(self):
+        plan = self._plan()
+        before = plan.to_dict()
+
+        decision = replan(
             LLMResponse(
                 type="text",
                 content=(
                     '{"action":"revise","reason":"原工具不存在",'
                     '"steps":["检查可用工具","继续任务"]}'
                 ),
-            ),
-            input_tokens=101,
-            output_tokens=11,
-        )
-        conversation = self._conversation()
-        plan = self._plan()
-        plan_before = plan.to_dict()
-
-        outcome = replan(
-            conversation=conversation,
-            plan=plan,
-            failed_steps=[self._failed_step()],
-            context_preparation=context_preparation_service(),
-            context_state=ContextState(),
-            model_calls=model_calls,
-            model="test-model",
-        )
-
-        self.assertEqual(outcome.decision.action, "revise")
-        self.assertEqual(outcome.decision.steps, ["检查可用工具", "继续任务"])
-        self.assertEqual(outcome.usage.input_tokens, 101)
-        self.assertEqual(outcome.usage.output_tokens, 11)
-        self.assertEqual(plan.to_dict(), plan_before)
-
-        request, model = model_calls.call.call_args.args
-        self.assertIsInstance(request, ModelCallRequest)
-        self.assertEqual(model, "test-model")
-        self.assertEqual(request.tools, [])
-        instruction = request.context.messages[0]["content"]
-        self.assertIn("replanner", instruction)
-        self.assertIn("revision=1", instruction)
-        self.assertIn("2. [doing] 调用接口", instruction)
-        self.assertIn("tool=missing_tool", instruction)
-        self.assertIn("code=TOOL_NOT_FOUND", instruction)
-        self.assertIn("error=Tool missing_tool not found", instruction)
-        self.assertEqual(
-            request.context.messages[1:],
-            conversation.protocol_messages()[1:],
-        )
-
-    def test_replan_returns_keep_decision(self):
-        model_calls = Mock()
-        model_calls.call.return_value = call_result(
-            LLMResponse(
-                type="text",
-                content='{"action":"keep","reason":"原计划仍然有效"}',
             )
         )
 
-        outcome = replan(
-            conversation=self._conversation(),
-            plan=self._plan(),
-            failed_steps=[self._failed_step()],
-            context_preparation=context_preparation_service(),
-            context_state=ContextState(),
-            model_calls=model_calls,
-            model="test-model",
-        )
+        self.assertEqual(decision.action, "revise")
+        self.assertEqual(decision.steps, ["检查可用工具", "继续任务"])
+        self.assertEqual(plan.to_dict(), before)
 
-        self.assertEqual(outcome.decision.action, "keep")
-        self.assertEqual(outcome.decision.steps, [])
-
-    def test_replan_propagates_model_blocked_result(self):
-        model_calls = Mock()
-        assessment = make_budget_assessment(
-            estimated_input_tokens=820,
-            input_budget_tokens=750,
-        )
-        model_calls.call.return_value = ModelCallBlocked(assessment)
-
-        outcome = replan(
-            conversation=self._conversation(),
-            plan=self._plan(),
-            failed_steps=[self._failed_step()],
-            context_preparation=context_preparation_service(),
-            context_state=ContextState(),
-            model_calls=model_calls,
-            model="test-model",
-        )
-
-        self.assertIsInstance(outcome, ReplanCallBlocked)
-        self.assertIs(outcome.blocked.assessment, assessment)
-
-    def test_replan_rejects_non_text_model_response(self):
-        model_calls = Mock()
-        model_calls.call.return_value = call_result(
-            LLMResponse(
-                type="tool_calls",
-                calls=[
-                    ToolCall(
-                        id="call-unexpected",
-                        name="unexpected_tool",
-                        arguments="{}",
-                    )
-                ],
-            )
-        )
-
-        with self.assertRaises(InvalidReplanResponse):
+    def test_replan_rejects_non_text_response(self):
+        with self.assertRaises(InvalidLLMResponse) as raised:
             replan(
-                conversation=self._conversation(),
-                plan=self._plan(),
-                failed_steps=[self._failed_step()],
-                context_preparation=context_preparation_service(),
-                context_state=ContextState(),
-                model_calls=model_calls,
-                model="test-model",
+                LLMResponse(
+                    type="tool_calls",
+                    calls=[ToolCall(id="call-1", name="tool", arguments="{}")],
+                )
             )
+
+        self.assertEqual(raised.exception.code, "invalid_replan_response")
+
+    def test_replan_invalid_json_exposes_raw_response(self):
+        with self.assertRaises(InvalidLLMResponse) as raised:
+            replan(LLMResponse(type="text", content="不是合法 JSON"))
+
+        self.assertEqual(raised.exception.code, "invalid_replan_response")
+        self.assertIn("raw_response='不是合法 JSON'", str(raised.exception))
 
     def test_parse_keep_decision(self):
         decision = parse_replan_response(
-            '{"action": "keep", "reason": "失败不影响原计划"}'
+            '{"action":"keep","reason":"原计划仍然有效"}'
         )
-
-        self.assertEqual(
-            decision,
-            ReplanDecision(
-                action="keep",
-                reason="失败不影响原计划",
-                steps=[],
-            ),
-        )
-
-    def test_parse_keep_accepts_empty_steps(self):
-        decision = parse_replan_response(
-            """
-            {
-                "action": "keep",
-                "reason": "原计划仍然有效",
-                "steps": []
-            }
-            """
-        )
-
         self.assertEqual(
             decision,
             ReplanDecision(
@@ -203,6 +100,12 @@ class ReplannerTest(unittest.TestCase):
                 steps=[],
             ),
         )
+
+    def test_parse_keep_accepts_empty_steps(self):
+        decision = parse_replan_response(
+            '{"action":"keep","reason":"继续执行","steps":[]}'
+        )
+        self.assertEqual(decision.steps, [])
 
     def test_parse_revise_decision_trims_reason_and_steps(self):
         decision = parse_replan_response(
@@ -214,7 +117,6 @@ class ReplannerTest(unittest.TestCase):
             }
             """
         )
-
         self.assertEqual(
             decision,
             ReplanDecision(
@@ -252,13 +154,8 @@ class ReplannerTest(unittest.TestCase):
     def test_keep_with_steps_fails(self):
         with self.assertRaises(InvalidReplanResponse):
             parse_replan_response(
-                """
-                {
-                    "action": "keep",
-                    "reason": "继续原计划",
-                    "steps": ["不应提供新步骤"]
-                }
-                """
+                '{"action":"keep","reason":"继续",'
+                '"steps":["不应提供新步骤"]}'
             )
 
     def test_revise_requires_one_to_six_non_empty_steps(self):
@@ -269,23 +166,13 @@ class ReplannerTest(unittest.TestCase):
             ["有效步骤", "   "],
             ["有效步骤", 123],
         )
-
         for steps in invalid_steps:
-            if steps is None:
-                content = '{"action": "revise", "reason": "需要修改"}'
-            else:
-                content = json.dumps(
-                    {
-                        "action": "revise",
-                        "reason": "需要修改",
-                        "steps": steps,
-                    },
-                    ensure_ascii=False,
-                )
-
+            payload = {"action": "revise", "reason": "需要修改"}
+            if steps is not None:
+                payload["steps"] = steps
             with self.subTest(steps=steps):
                 with self.assertRaises(InvalidReplanResponse):
-                    parse_replan_response(content)
+                    parse_replan_response(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":

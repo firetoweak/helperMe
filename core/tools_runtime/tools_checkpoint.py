@@ -79,6 +79,28 @@ def tool_batch_completed_checkpoint(
     )
 
 
+def plan_revision_decided_checkpoint(data: dict[str, Any]) -> Checkpoint:
+    return Checkpoint(
+        kind="planning",
+        reason="plan_revision_decided",
+        message=(
+            "已根据工具失败修订执行计划。"
+            if data["action"] == "revise"
+            else "已判断工具失败不影响当前执行计划。"
+        ),
+        data=data,
+    )
+
+
+def plan_created_checkpoint(data: dict[str, Any]) -> Checkpoint:
+    return Checkpoint(
+        kind="planning",
+        reason="plan_created",
+        message="已创建初始执行计划。",
+        data=data,
+    )
+
+
 def context_prepared_checkpoint(
     *,
     stage: str,
@@ -184,7 +206,8 @@ def context_compressed_checkpoint(
 
 def invalid_llm_response_checkpoint(
     *,
-    round_index: int,
+    stage: str,
+    round_index: int | None,
     reason: str,
     error: str,
 ) -> Checkpoint:
@@ -193,6 +216,7 @@ def invalid_llm_response_checkpoint(
         reason=reason,
         message="运行已停止：LLM 返回了非法响应。",
         data={
+            "stage": stage,
             "round_index": round_index,
             "error": error,
         },
@@ -224,11 +248,17 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
         return "\n".join(lines)
 
     if checkpoint.reason == "llm_error":
-        return "\n".join([
+        lines = [
             checkpoint.message,
-            f"轮次：{checkpoint.data['round_index']}，重试次数：{checkpoint.data['attempts']}。",
+            f"阶段：{checkpoint.data['stage']}。",
+        ]
+        if checkpoint.data["round_index"] is not None:
+            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        lines.extend([
+            f"重试次数：{checkpoint.data['attempts']}。",
             f"错误：{checkpoint.data['error']}",
         ])
+        return "\n".join(lines)
 
     if checkpoint.reason == "context_length_exceeded":
         lines = [
@@ -263,12 +293,22 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
         ])
         return "\n".join(lines)
 
-    if checkpoint.reason in {"empty_model_response", "invalid_llm_response"}:
-        return "\n".join([
+    if checkpoint.reason in {
+        "empty_model_response",
+        "invalid_llm_response",
+        "invalid_plan_response",
+        "invalid_replan_response",
+    }:
+        lines = [
             checkpoint.message,
-            f"轮次：{checkpoint.data['round_index']}。",
+            f"阶段：{checkpoint.data['stage']}。",
+        ]
+        if checkpoint.data["round_index"] is not None:
+            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        lines.extend([
             f"错误：{checkpoint.data['error']}",
         ])
+        return "\n".join(lines)
 
     if checkpoint.reason == "verification_required":
         return checkpoint.message
@@ -352,7 +392,8 @@ def run_interrupted_checkpoint(reason: str | None = None) -> Checkpoint:
 
 def llm_retry_checkpoint(
     *,
-    round_index: int,
+    stage: str,
+    round_index: int | None,
     attempt: int,
     max_attempts: int,
     error: str,
@@ -360,8 +401,9 @@ def llm_retry_checkpoint(
     return Checkpoint(
         kind="llm",
         reason="llm_retry",
-        message=f"第 {round_index} 轮 LLM 调用失败，准备重试 ({attempt}/{max_attempts})。",
+        message=f"LLM 调用失败，准备重试 ({attempt}/{max_attempts})。",
         data={
+            "stage": stage,
             "round_index": round_index,
             "attempt": attempt,
             "max_attempts": max_attempts,
@@ -389,12 +431,19 @@ def llm_usage_checkpoint(
     )
 
 
-def llm_error_checkpoint(*, round_index: int, attempts: int, error: str) -> Checkpoint:
+def llm_error_checkpoint(
+    *,
+    stage: str,
+    round_index: int | None,
+    attempts: int,
+    error: str,
+) -> Checkpoint:
     return Checkpoint(
         kind="run",
         reason="llm_error",
         message="运行已停止：LLM 调用失败，重试已耗尽。",
         data={
+            "stage": stage,
             "round_index": round_index,
             "attempts": attempts,
             "error": error,

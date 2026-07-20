@@ -447,6 +447,22 @@ Phase 8 Multi-Agent
 
 失败、信息不足或目标变化时，允许当前 Run 修改既有计划并继续执行；只回补动态计划能力，不扩展为任务调度系统。
 
+职责边界：
+
+```text
+RunRuntime
+├─ 准备 Planner / Executor / Replanner 各自独立的 ModelContext
+├─ 统一执行模型调用、瞬时错误重试、usage 与 checkpoint
+└─ 驱动 PlanningMode 生命周期
+
+PlanningMode
+├─ 提供 Planner / Replanner 专用 prompt
+├─ 接收并解析结构化响应
+└─ 维护 Plan 状态与 revision
+```
+
+Planner / Replanner 不再直接持有 `ModelCallService`、模型名或重试策略。重试属于单次 Run 的调用编排，因此归 `RunRuntime`；planning 层只保留计划契约与状态变化。Planner、Executor、Replanner 可以共用同一模型，但必须使用互相隔离的 system prompt 与 ModelContext。同一次调用的 retry 复用已经准备好的 ModelContext，不在 retry 之间重新压缩。
+
 回补 B：输入/工具结果边界
 
 补齐用户输入与单次工具结果的外部边界契约；边界内直接相信契约，超过边界明确失败，不交给 Safe Compression 补救。

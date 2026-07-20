@@ -16,6 +16,8 @@ from core.tools_runtime.tools_checkpoint import (
     llm_retry_checkpoint,
     llm_usage_checkpoint,
     message_chain_invalid_checkpoint,
+    plan_created_checkpoint,
+    plan_revision_decided_checkpoint,
     run_completed_checkpoint,
     run_interrupted_checkpoint,
     run_started_checkpoint,
@@ -30,6 +32,7 @@ from core.model_call.service import (
     ModelCallService,
 )
 from core.model_call.types import InvalidLLMResponse, LLMResponse, LLMUsage
+from core.planning.context_projection import project_system_prompt
 from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from core.tools_runtime.tools_protocol import (
@@ -166,7 +169,8 @@ class RunRuntime:
         self,
         model_context: ModelContext,
         tools: list[dict],
-        round_index: int,
+        stage: str,
+        round_index: int | None,
         checkpoints: list[Checkpoint],
         max_llm_retries: int = 3,
     ) -> LLMResponse | Checkpoint:
@@ -182,13 +186,13 @@ class RunRuntime:
                 )
                 if isinstance(outcome, ModelCallBlocked):
                     return context_budget_exceeded_checkpoint(
-                        stage="agent_round",
+                        stage=stage,
                         round_index=round_index,
                         assessment=outcome.assessment,
                     )
                 checkpoints.append(
                     llm_usage_checkpoint(
-                        stage="agent_round",
+                        stage=stage,
                         round_index=round_index,
                         usage=outcome.usage,
                     )
@@ -198,6 +202,7 @@ class RunRuntime:
                 if exc.code == "empty_model_response" and attempt < max_llm_retries:
                     checkpoints.append(
                         llm_retry_checkpoint(
+                            stage=stage,
                             round_index=round_index,
                             attempt=attempt,
                             max_attempts=max_llm_retries,
@@ -207,13 +212,14 @@ class RunRuntime:
                     time.sleep(min(attempt, 3))
                     continue
                 return invalid_llm_response_checkpoint(
+                    stage=stage,
                     round_index=round_index,
                     reason=exc.code,
                     error=str(exc),
                 )
             except LLMContextLengthError as exc:
                 return context_length_exceeded_checkpoint(
-                    stage="agent_round",
+                    stage=stage,
                     round_index=round_index,
                     error=str(exc),
                 )
@@ -222,6 +228,7 @@ class RunRuntime:
                 if attempt < max_llm_retries:
                     checkpoints.append(
                         llm_retry_checkpoint(
+                            stage=stage,
                             round_index=round_index,
                             attempt=attempt,
                             max_attempts=max_llm_retries,
@@ -232,11 +239,99 @@ class RunRuntime:
                     continue
 
                 checkpoint = llm_error_checkpoint(
+                    stage=stage,
                     round_index=round_index,
                     attempts=max_llm_retries,
                     error=last_error,
                 )
                 return checkpoint
+
+    def _prepare_and_call_role(
+        self,
+        *,
+        conversation: Conversation,
+        system_prompt: str,
+        context_state: ContextState,
+        level2_boundary_message_id: str | None,
+        stage: str,
+        round_index: int | None,
+        checkpoints: list[Checkpoint],
+    ) -> tuple[LLMResponse | Checkpoint, ContextState, bool]:
+        try:
+            prepared = self.context_preparation.prepare(
+                conversation_records=project_system_prompt(
+                    conversation.records,
+                    system_prompt,
+                ),
+                context_state=context_state,
+                runtime_instructions=[],
+                tools=[],
+                level2_boundary_message_id=level2_boundary_message_id,
+            )
+        except LLMContextLengthError as exc:
+            return (
+                context_length_exceeded_checkpoint(
+                    stage=stage,
+                    round_index=round_index,
+                    error=str(exc),
+                ),
+                context_state,
+                False,
+            )
+        except LLMTransientError as exc:
+            return (
+                llm_error_checkpoint(
+                    stage=stage,
+                    round_index=round_index,
+                    attempts=1,
+                    error=str(exc),
+                ),
+                context_state,
+                False,
+            )
+        except InvalidLLMResponse as exc:
+            return (
+                invalid_llm_response_checkpoint(
+                    stage=stage,
+                    round_index=round_index,
+                    reason=exc.code,
+                    error=str(exc),
+                ),
+                context_state,
+                False,
+            )
+
+        compressed = self._record_summary_compaction(
+            prepared.summary_compaction,
+            checkpoints,
+            round_index,
+        )
+        self._record_context_prepared(
+            stage=stage,
+            composition=prepared.composition,
+            micro_compaction_trace=prepared.micro_compaction_trace,
+            checkpoints=checkpoints,
+            round_index=round_index,
+        )
+        if prepared.blocked_assessment is not None:
+            return (
+                context_budget_exceeded_checkpoint(
+                    stage=stage,
+                    round_index=round_index,
+                    assessment=prepared.blocked_assessment,
+                ),
+                prepared.context_state,
+                compressed,
+            )
+
+        response = self._call_llm_with_retry(
+            prepared.model_context,
+            [],
+            stage,
+            round_index,
+            checkpoints,
+        )
+        return response, prepared.context_state, compressed
 
     def run(
         self,
@@ -258,83 +353,56 @@ class RunRuntime:
         )
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
-        try:
-            start_outcome = self.runtime_mode.start(
-                conversation=conversation,
-                model_calls=self.model_calls,
-                model=self.model,
-                context_preparation=self.context_preparation,
-                context_state=current_context_state,
-                level2_boundary_message_id=level2_boundary_message_id,
-            )
-        except LLMContextLengthError as exc:
-            checkpoint = context_length_exceeded_checkpoint(
-                stage="planning",
-                error=str(exc),
-            )
-            return self._finish(
-                status=RunStatus.BLOCKED,
-                answer=format_checkpoint(checkpoint),
-                checkpoint=checkpoint,
-                checkpoints=checkpoints,
-                context_state=current_context_state,
-            )
-        except LLMTransientError as exc:
-            checkpoint = llm_error_checkpoint(
-                round_index=0,
-                attempts=1,
-                error=str(exc),
-            )
-            return self._finish(
-                status=RunStatus.FAILED,
-                answer=format_checkpoint(checkpoint),
-                checkpoint=checkpoint,
-                checkpoints=checkpoints,
-                context_state=current_context_state,
-            )
-        except InvalidLLMResponse as exc:
-            checkpoint = invalid_llm_response_checkpoint(
-                round_index=0,
-                reason=exc.code,
-                error=str(exc),
-            )
-            return self._finish(
-                status=RunStatus.FAILED,
-                answer=format_checkpoint(checkpoint),
-                checkpoint=checkpoint,
-                checkpoints=checkpoints,
-                context_state=current_context_state,
-            )
-        current_context_state = start_outcome.context_state
-        level2_performed = self._record_summary_compaction(
-            start_outcome.summary_compaction,
-            checkpoints,
-        )
-        self._record_context_prepared(
-            stage="planning",
-            composition=start_outcome.composition,
-            micro_compaction_trace=start_outcome.micro_compaction_trace,
-            checkpoints=checkpoints,
-        )
-        if start_outcome.blocked is not None:
-            checkpoint = context_budget_exceeded_checkpoint(
-                stage="planning",
-                assessment=start_outcome.blocked.assessment,
-            )
-            return self._finish(
-                status=RunStatus.BLOCKED,
-                answer=format_checkpoint(checkpoint),
-                checkpoint=checkpoint,
-                checkpoints=checkpoints,
-                context_state=current_context_state,
-            )
-        if start_outcome.usage is not None:
-            checkpoints.append(
-                llm_usage_checkpoint(
+        start_prompt = self.runtime_mode.start(conversation)
+        if start_prompt is not None:
+            start_response, current_context_state, compressed = (
+                self._prepare_and_call_role(
+                    conversation=conversation,
+                    system_prompt=start_prompt,
+                    context_state=current_context_state,
+                    level2_boundary_message_id=level2_boundary_message_id,
                     stage="planning",
-                    usage=start_outcome.usage,
+                    round_index=None,
+                    checkpoints=checkpoints,
                 )
             )
+            level2_performed = level2_performed or compressed
+            if isinstance(start_response, Checkpoint):
+                status = (
+                    RunStatus.BLOCKED
+                    if start_response.reason in {
+                        "context_budget_exceeded",
+                        "context_length_exceeded",
+                    }
+                    else RunStatus.FAILED
+                )
+                return self._finish(
+                    status=status,
+                    answer=format_checkpoint(start_response),
+                    checkpoint=start_response,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                )
+            try:
+                start_data = self.runtime_mode.accept_start_response(
+                    start_response
+                )
+            except InvalidLLMResponse as exc:
+                checkpoint = invalid_llm_response_checkpoint(
+                    stage="planning",
+                    round_index=None,
+                    reason=exc.code,
+                    error=str(exc),
+                )
+                return self._finish(
+                    status=RunStatus.FAILED,
+                    answer=format_checkpoint(checkpoint),
+                    checkpoint=checkpoint,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                )
+            if start_data is not None:
+                checkpoints.append(plan_created_checkpoint(start_data))
         tools = self.tools_executor.registry.get_tools()
 
         for round_index in range(1, max_rounds + 1):
@@ -373,6 +441,7 @@ class RunRuntime:
                 )
             except LLMTransientError as exc:
                 checkpoint = llm_error_checkpoint(
+                    stage="context_summary",
                     round_index=round_index,
                     attempts=1,
                     error=str(exc),
@@ -386,6 +455,7 @@ class RunRuntime:
                 )
             except InvalidLLMResponse as exc:
                 checkpoint = invalid_llm_response_checkpoint(
+                    stage="context_summary",
                     round_index=round_index,
                     reason=exc.code,
                     error=str(exc),
@@ -427,6 +497,7 @@ class RunRuntime:
             llm_outcome = self._call_llm_with_retry(
                 prepared.model_context,
                 tools,
+                "agent_round",
                 round_index,
                 checkpoints,
             )
@@ -562,6 +633,70 @@ class RunRuntime:
                     checkpoints=checkpoints,
                     context_state=current_context_state,
                 )
+
+            failed_steps = [
+                step for step in batch_steps if step.ok is False
+            ]
+            if failed_steps:
+                replan_prompt = self.runtime_mode.handle_tool_failures(
+                    conversation=conversation,
+                    failed_steps=failed_steps,
+                )
+                if replan_prompt is not None:
+                    replan_response, current_context_state, compressed = (
+                        self._prepare_and_call_role(
+                            conversation=conversation,
+                            system_prompt=replan_prompt,
+                            context_state=current_context_state,
+                            level2_boundary_message_id=(
+                                level2_boundary_message_id
+                            ),
+                            stage="replanning",
+                            round_index=round_index,
+                            checkpoints=checkpoints,
+                        )
+                    )
+                    level2_performed = level2_performed or compressed
+                    if isinstance(replan_response, Checkpoint):
+                        status = (
+                            RunStatus.BLOCKED
+                            if replan_response.reason in {
+                                "context_budget_exceeded",
+                                "context_length_exceeded",
+                            }
+                            else RunStatus.FAILED
+                        )
+                        return self._finish(
+                            status=status,
+                            answer=format_checkpoint(replan_response),
+                            checkpoint=replan_response,
+                            checkpoints=checkpoints,
+                            context_state=current_context_state,
+                        )
+                    try:
+                        revision_data = (
+                            self.runtime_mode.accept_tool_failure_response(
+                                replan_response
+                            )
+                        )
+                    except InvalidLLMResponse as exc:
+                        checkpoint = invalid_llm_response_checkpoint(
+                            stage="replanning",
+                            round_index=round_index,
+                            reason=exc.code,
+                            error=str(exc),
+                        )
+                        return self._finish(
+                            status=RunStatus.FAILED,
+                            answer=format_checkpoint(checkpoint),
+                            checkpoint=checkpoint,
+                            checkpoints=checkpoints,
+                            context_state=current_context_state,
+                        )
+                    if revision_data is not None:
+                        checkpoints.append(
+                            plan_revision_decided_checkpoint(revision_data)
+                        )
 
         checkpoint = budget_stop_checkpoint(max_rounds, tools_state)
         return self._finish(

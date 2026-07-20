@@ -16,7 +16,7 @@ from core.messages import Conversation
 from core.model_call import LLMResponse
 from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.model_call.service import ModelCallBlocked
-from core.runtime_modes import PlainMode, RuntimeModeStartResult
+from core.runtime_modes import PlainMode
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from tests.core.llm_test_support import (
     call_result,
@@ -49,16 +49,11 @@ class ChangingInstructionsMode:
         self.instruction = "第一轮指令"
         self.instruction_calls = 0
 
-    def start(
-        self,
-        conversation,
-        model_calls,
-        model,
-        context_preparation,
-        context_state,
-        level2_boundary_message_id,
-    ):
-        return RuntimeModeStartResult(context_state=context_state)
+    def start(self, conversation):
+        return None
+
+    def accept_start_response(self, response):
+        raise AssertionError("no start model call")
 
     def runtime_instructions(self):
         self.instruction_calls += 1
@@ -72,6 +67,12 @@ class ChangingInstructionsMode:
 
     def after_tool_batch(self, conversation, tools_state, batch_steps):
         return None
+
+    def handle_tool_failures(self, conversation, failed_steps):
+        return None
+
+    def accept_tool_failure_response(self, response):
+        raise AssertionError("no replanning model call")
 
     def checkpoint_data(self):
         return None

@@ -1,22 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-
-from core.context import (
-    ContextComposition,
-    ContextPreparationService,
-    ContextState,
-    MicroCompactionTrace,
-    SummaryCompaction,
-)
-from core.messages import Conversation
-from core.model_call.service import (
-    ModelCallBlocked,
-    ModelCallRequest,
-    ModelCallService,
-)
-from core.model_call.types import LLMUsage
+from core.model_call.types import InvalidLLMResponse, LLMResponse
 from core.planning.plan import Plan, PlanStep
 
 MIN_PLAN_STEPS = 2
@@ -27,85 +12,43 @@ class InvalidPlanResponse(ValueError):
     pass
 
 
-@dataclass(frozen=True)
-class PlanCallResult:
-    plan: Plan
-    usage: LLMUsage
-    context_state: ContextState
-    summary_compaction: SummaryCompaction | None
-    composition: ContextComposition
-    micro_compaction_trace: MicroCompactionTrace
+PLANNER_SYSTEM_PROMPT = """
+你是任务规划器。
+
+你的唯一职责是根据用户目标制定执行计划。
+
+你不执行计划，不调用工具，不回答用户的问题，
+也不能声称已经完成任何步骤。
+
+你的输出必须是一个 JSON 对象，不要输出 Markdown、
+代码块、解释文字、思考过程或 JSON 之外的任何内容。
+
+输出结构：
+{"goal":"用户目标","steps":["步骤1","步骤2"]}
+
+约束：
+- goal 必须是非空字符串。
+- steps 必须包含 2 到 6 个简短的意图阶段。
+- steps 不得包含执行结果、status、id 或 note。
+- 第一个非空字符必须是 {，最后一个非空字符必须是 }。
+""".strip()
 
 
-@dataclass(frozen=True)
-class PlanCallBlocked:
-    blocked: ModelCallBlocked
-    context_state: ContextState
-    summary_compaction: SummaryCompaction | None
-    composition: ContextComposition
-    micro_compaction_trace: MicroCompactionTrace
-
-
-PLANNER_INSTRUCTION = (
-    "你是 planner，只负责为 agent 生成执行计划。"
-    "只返回 JSON，不要输出 Markdown，不要解释。"
-    "JSON 格式必须是："
-    '{"goal": "目标", "steps": ["步骤1", "步骤2"]}。'
-    "steps 应该是 2 到 6 个简短的意图阶段，"
-    "不要包含执行结果，不要包含 status/id/note。"
-)
-
-
-def create_plan(
-    conversation: Conversation,
-    context_preparation: ContextPreparationService,
-    context_state: ContextState,
-    model_calls: ModelCallService,
-    model: str,
-    level2_boundary_message_id: str | None = None,
-) -> PlanCallResult | PlanCallBlocked:
-    prepared = context_preparation.prepare(
-        conversation_records=conversation.records,
-        context_state=context_state,
-        runtime_instructions=[PLANNER_INSTRUCTION],
-        tools=[],
-        level2_boundary_message_id=level2_boundary_message_id,
-    )
-    if prepared.blocked_assessment is not None:
-        return PlanCallBlocked(
-            blocked=ModelCallBlocked(prepared.blocked_assessment),
-            context_state=prepared.context_state,
-            summary_compaction=prepared.summary_compaction,
-            composition=prepared.composition,
-            micro_compaction_trace=prepared.micro_compaction_trace,
-        )
-    outcome = model_calls.call(
-        ModelCallRequest(
-            context=prepared.model_context,
-            tools=[],
-        ),
-        model,
-    )
-    if isinstance(outcome, ModelCallBlocked):
-        return PlanCallBlocked(
-            blocked=outcome,
-            context_state=prepared.context_state,
-            summary_compaction=prepared.summary_compaction,
-            composition=prepared.composition,
-            micro_compaction_trace=prepared.micro_compaction_trace,
-        )
-    response = outcome.response
-
+def create_plan(response: LLMResponse) -> Plan:
     if response.type != "text":
-        raise InvalidPlanResponse("planner response type must be text")
-    return PlanCallResult(
-        plan=parse_plan_response(response.content),
-        usage=outcome.usage,
-        context_state=prepared.context_state,
-        summary_compaction=prepared.summary_compaction,
-        composition=prepared.composition,
-        micro_compaction_trace=prepared.micro_compaction_trace,
-    )
+        raise InvalidLLMResponse(
+            "invalid_plan_response",
+            "planner response type must be text",
+        )
+    try:
+        plan = parse_plan_response(response.content)
+    except InvalidPlanResponse as exc:
+        raw_preview = response.content[:2000]
+        raise InvalidLLMResponse(
+            "invalid_plan_response",
+            f"{exc}; raw_response={raw_preview!r}",
+        ) from exc
+    return plan
 
 
 def format_plan_for_model(plan: Plan) -> str:

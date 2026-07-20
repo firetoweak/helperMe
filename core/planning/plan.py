@@ -60,6 +60,12 @@ class Plan:
         self.steps = history + new_steps
         self.revision += 1
 
+    def complete_remaining(self, note: str) -> None:
+        for step in self.steps:
+            if step.status in {"doing", "pending"}:
+                step.status = "done"
+                step.note = note
+
     def mark_doing(self, step_id: int, note: str | None = None) -> PlanStep:
         step = self.get_step(step_id)
         step.status = "doing"

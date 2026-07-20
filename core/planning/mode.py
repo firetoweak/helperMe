@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from core.context import ContextPreparationService, ContextState
 from core.messages import Conversation
-from core.model_call.service import ModelCallService
-from core.runtime_modes.base import RuntimeModeStartResult
+from core.model_call.types import LLMResponse
 from core.tools_runtime.tools_state import ToolStep, ToolsState
 from core.planning.plan import Plan
-from core.planning.planner import PlanCallBlocked, create_plan, format_plan_for_model
+from core.planning.planner import (
+    PLANNER_SYSTEM_PROMPT,
+    create_plan,
+    format_plan_for_model,
+)
+from core.planning.replanner import (
+    build_replanner_instruction,
+    replan,
+)
 
 WRITE_TOOL_NAMES = {"apply_patch", "replace_all", "write_file"}
 VERIFY_TOOL_NAMES = {"get_changes"}
@@ -20,50 +26,24 @@ class PlanningMode:
         self.write_phase_started = False
         self.verify_phase_started = False
 
-    def start(
-        self,
-        conversation: Conversation,
-        model_calls: ModelCallService,
-        model: str,
-        context_preparation: ContextPreparationService,
-        context_state: ContextState,
-        level2_boundary_message_id: str | None,
-    ) -> RuntimeModeStartResult:
+    def start(self, conversation: Conversation) -> str | None:
         self.reflection_requested = False
         self.tool_phase_started = False
         self.write_phase_started = False
         self.verify_phase_started = False
-        outcome = create_plan(
-            conversation=conversation,
-            context_preparation=context_preparation,
-            context_state=context_state,
-            level2_boundary_message_id=level2_boundary_message_id,
-            model_calls=model_calls,
-            model=model,
-        )
-        if isinstance(outcome, PlanCallBlocked):
-            return RuntimeModeStartResult(
-                context_state=outcome.context_state,
-                blocked=outcome.blocked,
-                summary_compaction=outcome.summary_compaction,
-                composition=outcome.composition,
-                micro_compaction_trace=outcome.micro_compaction_trace,
-            )
-        self.plan = outcome.plan
+        return PLANNER_SYSTEM_PROMPT
+
+    def accept_start_response(self, response: LLMResponse) -> dict | None:
+        self.plan = create_plan(response)
         self.plan.mark_doing(1, "开始执行任务")
-        return RuntimeModeStartResult(
-            context_state=outcome.context_state,
-            usage=outcome.usage,
-            summary_compaction=outcome.summary_compaction,
-            composition=outcome.composition,
-            micro_compaction_trace=outcome.micro_compaction_trace,
-        )
+        return {"plan": self.plan.to_dict()}
 
     def runtime_instructions(self) -> list[str]:
         return [format_plan_for_model(self.plan)]
 
     def on_assistant_text(self, conversation: Conversation) -> bool:
         if self.reflection_requested:
+            self.plan.complete_remaining("已完成最终回答")
             return False
 
         self.reflection_requested = True
@@ -72,10 +52,13 @@ class PlanningMode:
             doing_note="正在最终复核计划完成情况",
         )
         conversation.add_user(
-            "请在最终回答前根据当前执行计划做一次简短检查："
-            "哪些步骤已完成？是否还有未完成步骤？"
-            "如果有未完成步骤，最终回答必须明确说明。"
-            "检查后再给出最终回答。"
+            "请在内部根据当前执行计划检查候选回答是否完整，"
+            "不要输出检查过程。"
+            "检查后输出一份完整、可独立阅读的最终答案，"
+            "其中必须包含用户实际需要的内容。"
+            "禁止引用上一条回复，禁止使用‘如前所述’等省略表达。"
+            "如果仍有未完成事项，应在最终答案中直接说明。"
+            "仅输出最终答案。"
         )
         return True
 
@@ -112,11 +95,29 @@ class PlanningMode:
                 doing_note="正在验证结果并准备总结",
             )
 
-        if any(step.ok is False for step in batch_steps):
-            conversation.add_user(
-                "刚才有工具调用失败。请根据工具返回的 code/error/hint 调整下一步。"
-                "如果原计划不再适用，请先说明调整后的计划，再继续执行。"
-            )
+    def handle_tool_failures(
+        self,
+        conversation: Conversation,
+        failed_steps: list[ToolStep],
+    ) -> str | None:
+        return build_replanner_instruction(self.plan, failed_steps)
+
+    def accept_tool_failure_response(
+        self,
+        response: LLMResponse,
+    ) -> dict | None:
+        before_plan = self.plan.to_dict()
+        decision = replan(response)
+        if decision.action == "revise":
+            self.plan.revise(decision.reason, decision.steps)
+
+        return {
+            "trigger": "tool_failure",
+            "action": decision.action,
+            "reason": decision.reason,
+            "before_plan": before_plan,
+            "after_plan": self.plan.to_dict(),
+        }
 
     def checkpoint_data(self) -> dict | None:
         return {"plan": self.plan.to_dict()}

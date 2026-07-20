@@ -1,40 +1,26 @@
 import unittest
-from unittest.mock import Mock
 
-from core.context import ContextState
-from core.messages import Conversation
+from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
 from core.planning import (
     create_plan,
     format_plan_for_model,
     InvalidPlanResponse,
     parse_plan_response,
 )
-from core.model_call import LLMResponse
-from core.model_call.service import ModelCallRequest
-from tests.core.llm_test_support import call_result, context_preparation_service
 
 
 class PlannerTest(unittest.TestCase):
-    def test_create_and_format_plan(self):
-        model_calls = Mock()
-        model_calls.call.return_value = call_result(
+    def test_create_and_format_plan_from_model_response(self):
+        plan = create_plan(
             LLMResponse(
                 type="text",
-                content='{"goal": "帮我分析项目", "steps": ["读取项目", "分析结构"]}',
+                content=(
+                    '{"goal":"帮我分析项目",'
+                    '"steps":["读取项目","分析结构"]}'
+                ),
             )
         )
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("帮我分析项目")
 
-        plan_result = create_plan(
-            conversation,
-            context_preparation_service(),
-            ContextState(),
-            model_calls,
-            "test-model",
-        )
-        plan = plan_result.plan
         text = format_plan_for_model(plan)
 
         self.assertEqual(plan.goal, "帮我分析项目")
@@ -42,58 +28,34 @@ class PlannerTest(unittest.TestCase):
         self.assertIn("当前执行计划", text)
         self.assertIn("[pending]", text)
 
-    def test_create_plan_propagates_llm_failure(self):
-        model_calls = Mock()
-        model_calls.call.side_effect = RuntimeError("planner unavailable")
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("帮我分析项目")
-
-        with self.assertRaisesRegex(RuntimeError, "planner unavailable"):
+    def test_create_plan_invalid_json_exposes_raw_response(self):
+        with self.assertRaises(InvalidLLMResponse) as raised:
             create_plan(
-                conversation,
-                context_preparation_service(),
-                ContextState(),
-                model_calls,
-                "test-model",
+                LLMResponse(type="text", content="先分析一下再制定计划")
             )
 
-    def test_create_plan_projects_full_conversation_without_tools(self):
-        model_calls = Mock()
-        model_calls.call.return_value = call_result(
-            LLMResponse(
-                type="text",
-                content='{"goal": "继续分析", "steps": ["读取历史", "继续任务"]}',
+        self.assertEqual(raised.exception.code, "invalid_plan_response")
+        self.assertIn(
+            "raw_response='先分析一下再制定计划'",
+            str(raised.exception),
+        )
+
+    def test_create_plan_rejects_non_text_response(self):
+        with self.assertRaises(InvalidLLMResponse) as raised:
+            create_plan(
+                LLMResponse(
+                    type="tool_calls",
+                    calls=[
+                        ToolCall(
+                            id="call-unexpected",
+                            name="unexpected_tool",
+                            arguments="{}",
+                        )
+                    ],
+                )
             )
-        )
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("第一轮问题")
-        conversation.add_assistant(LLMResponse(type="text", content="第一轮回答"))
-        conversation.add_user("继续分析")
 
-        create_plan(
-            conversation,
-            context_preparation_service(),
-            ContextState(),
-            model_calls,
-            "test-model",
-        )
-
-        request, model = model_calls.call.call_args.args
-
-        self.assertIsInstance(request, ModelCallRequest)
-        self.assertEqual(model, "test-model")
-        self.assertEqual(request.tools, [])
-        self.assertIn("只返回 JSON", request.context.messages[0]["content"])
-        self.assertEqual(
-            request.context.messages[1:],
-            conversation.protocol_messages()[1:],
-        )
-        self.assertEqual(
-            conversation.records[0].payload["content"],
-            "system prompt",
-        )
+        self.assertEqual(raised.exception.code, "invalid_plan_response")
 
     def test_parse_valid_plan_response(self):
         plan = parse_plan_response(

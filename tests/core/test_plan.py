@@ -107,6 +107,29 @@ class PlanTest(unittest.TestCase):
             ],
         )
 
+    def test_complete_remaining_marks_all_active_steps_done(self):
+        plan = Plan(
+            goal="完成任务",
+            steps=[
+                PlanStep(id=1, text="已完成", status="done", note="原说明"),
+                PlanStep(id=2, text="当前步骤", status="doing"),
+                PlanStep(id=3, text="后续步骤", status="pending"),
+                PlanStep(id=4, text="无需执行", status="skipped", note="已跳过"),
+            ],
+        )
+
+        plan.complete_remaining("已完成最终回答")
+
+        self.assertEqual(
+            [(step.status, step.note) for step in plan.steps],
+            [
+                ("done", "原说明"),
+                ("done", "已完成最终回答"),
+                ("done", "已完成最终回答"),
+                ("skipped", "已跳过"),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

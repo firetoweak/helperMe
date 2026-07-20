@@ -23,12 +23,12 @@ class AgentApplication:
             )
         return session_id
 
-    def start(self, session_id, run_id, message, max_rounds=20):
+    def start(self, session_id, run_id, message, max_rounds=50):
         return self._session_runtime.start(
             session_id, run_id, message, max_rounds
         )
 
-    def resume(self, session_id, run_id, message, max_rounds=20):
+    def resume(self, session_id, run_id, message, max_rounds=50):
         return self._session_runtime.resume(
             session_id, run_id, message, max_rounds
         )
