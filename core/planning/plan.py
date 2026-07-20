@@ -19,6 +19,7 @@ class PlanStep:
 class Plan:
     goal: str
     steps: list[PlanStep]
+    revision: int = 1
 
     def get_step(self, step_id: int) -> PlanStep:
         for step in self.steps:
@@ -34,6 +35,30 @@ class Plan:
             if step.status == "pending":
                 return step
         return None
+    
+    def revise(self, reason: str, remaining_steps: list[str]) -> None:
+        next_id = max((step.id for step in self.steps), default=0) + 1
+
+        history: list[PlanStep] = []
+        for step in self.steps:
+            if step.status == "doing":
+                step.status = "skipped"
+                step.note = reason
+
+            if step.status != "pending":
+                history.append(step)
+
+        new_steps = [
+            PlanStep(
+                id=next_id + index,
+                text=text,
+                status="doing" if index == 0 else "pending",
+            )
+            for index, text in enumerate(remaining_steps)
+        ]
+
+        self.steps = history + new_steps
+        self.revision += 1
 
     def mark_doing(self, step_id: int, note: str | None = None) -> PlanStep:
         step = self.get_step(step_id)
@@ -67,6 +92,7 @@ class Plan:
     def to_dict(self) -> dict:
         return {
             "goal": self.goal,
+            "revision": self.revision,
             "steps": [
                 {
                     "id": step.id,

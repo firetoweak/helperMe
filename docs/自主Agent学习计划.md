@@ -154,7 +154,7 @@ Benchmark：
 ✓ Execution Monitoring
 工具调用后观察当前计划是否推进，根据plan state
 
-？ Dynamic Replan
+→ Phase 5.3 完成验收后回补 A：Dynamic Replan
 失败、信息不足、目标变化时改计划，计划的修改，好像有点问题。
 我觉得可能是设计的问题，当前是start-text-tools-texts-end，如果修改计划，是需要修改plan后续状态的，当前只做到一次性的plan
 
@@ -304,7 +304,7 @@ Context Management
 
 5.2.1 Tool Result Budget / Runtime Artifact（5.3 前置）
 
-5.3 Safe Compression
+5.3 Safe Compression（完成验收）
 
 问题定义：
 当合法的用户消息、Assistant 消息和工具结果在同一 Session 中长期累积时，在不修改完整事实轨迹、不改变 Session 身份的前提下，生成能够继续发送给模型的安全投影。
@@ -415,33 +415,92 @@ Benchmark：
 - Memory、Retrieval、Workspace 回取与完整日志落盘。
 - 创建新 Session 的 Handoff 流程。
 
-5.4 Memory 提炼
+Phase 5.3 后续路线
 
-5.5 Retrieval
+```text
+Phase 5.3 完成验收
+│
+├─ 回补 A：Dynamic Replan
+├─ 回补 B：输入/工具结果边界
+└─ 回补 C：Artifact 生命周期
+        ↓
+Phase 5.4 Memory Model
+        ↓
+Phase 5.4B Memory Extraction
+        ↓
+Phase 5.5 Unified Retrieval
+        ↓
+Phase 5.6 Workspace Retrieval
+        ↓
+Phase 6A Goal / Task Management
+        ↓
+Phase 6B Skill / Toolset Progressive Loading
+        ↓
+Phase 6C SubAgent Delegation
+        ↓
+Phase 7 Scheduler / Watcher / Background Task
+        ↓
+Phase 8 Multi-Agent
+```
 
-5.6 Workspace 上下文接入
+回补 A：Dynamic Replan
+
+失败、信息不足或目标变化时，允许当前 Run 修改既有计划并继续执行；只回补动态计划能力，不扩展为任务调度系统。
+
+回补 B：输入/工具结果边界
+
+补齐用户输入与单次工具结果的外部边界契约；边界内直接相信契约，超过边界明确失败，不交给 Safe Compression 补救。
+
+回补 C：Artifact 生命周期
+
+明确 Runtime Artifact 的创建、引用、回读、保留与清理边界，保证可回读引用在有效生命周期内不会先于消费者失效。
+
+5.4 Memory Model
+
+定义 Memory 的领域模型、职责边界与生命周期，不在本阶段进行自动提炼。
+
+5.4B Memory Extraction
+
+从 Conversation / Run 事实中提炼候选 Memory，并完成筛选、更新与写入。
+
+5.5 Unified Retrieval
+
+统一检索 Memory、历史事实与 Runtime Artifact，形成面向 Agent 的单一回取入口。
+
+5.6 Workspace Retrieval
+
+将 Workspace 内容接入统一检索，但不改变 Workspace 作为外部事实源的职责。
 
 ====================
 
 
 Phase 6
-Goal Management
+Goal、能力加载与委派
 ====================
 
-Goal
+6A Goal / Task Management
 
-Scheduler
+6B Skill / Toolset Progressive Loading
 
-Background Task
-
-Watcher
-
-Event
+6C SubAgent Delegation
 
 ====================
 
 
 Phase 7
+Scheduler / Watcher / Background Task
+====================
+
+Scheduler
+
+Watcher
+
+Background Task
+
+====================
+
+
+Phase 8
 Multi-Agent（最后）
 ====================
 

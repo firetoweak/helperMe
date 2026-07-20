@@ -33,6 +33,7 @@ class PlanTest(unittest.TestCase):
             plan.to_dict(),
             {
                 "goal": "测试目标",
+                "revision": 1,
                 "steps": [
                     {
                         "id": 1,
@@ -49,6 +50,62 @@ class PlanTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             plan.get_step(1)
+
+    def test_revise_replaces_unfinished_suffix_and_preserves_history(self):
+        plan = Plan(
+            goal="完成任务",
+            revision=1,
+            steps=[
+                PlanStep(id=1, text="分析", status="done", note="已完成分析"),
+                PlanStep(id=2, text="调用接口", status="doing"),
+                PlanStep(id=3, text="处理结果", status="pending"),
+            ],
+        )
+
+        plan.revise(
+            reason="接口不存在",
+            remaining_steps=["检查本地数据", "验证结果"],
+        )
+
+        self.assertEqual(plan.goal, "完成任务")
+        self.assertEqual(plan.revision, 2)
+        self.assertEqual(
+            [
+                (step.id, step.text, step.status, step.note)
+                for step in plan.steps
+            ],
+            [
+                (1, "分析", "done", "已完成分析"),
+                (2, "调用接口", "skipped", "接口不存在"),
+                (4, "检查本地数据", "doing", None),
+                (5, "验证结果", "pending", None),
+            ],
+        )
+
+    def test_revise_keeps_step_ids_monotonic_across_revisions(self):
+        plan = Plan(
+            goal="完成任务",
+            steps=[
+                PlanStep(id=1, text="分析", status="done"),
+                PlanStep(id=2, text="首次方案", status="doing"),
+                PlanStep(id=3, text="首次验证", status="pending"),
+            ],
+        )
+
+        plan.revise("首次方案失败", ["第二套方案", "第二次验证"])
+        plan.mark_done(4)
+        plan.revise("验证路径失效", ["最终验证"])
+
+        self.assertEqual(plan.revision, 3)
+        self.assertEqual(
+            [(step.id, step.text, step.status) for step in plan.steps],
+            [
+                (1, "分析", "done"),
+                (2, "首次方案", "skipped"),
+                (4, "第二套方案", "done"),
+                (6, "最终验证", "doing"),
+            ],
+        )
 
 
 if __name__ == "__main__":
