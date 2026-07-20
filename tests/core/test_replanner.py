@@ -23,6 +23,26 @@ class ReplannerTest(unittest.TestCase):
             ),
         )
 
+    def test_parse_keep_accepts_empty_steps(self):
+        decision = parse_replan_response(
+            """
+            {
+                "action": "keep",
+                "reason": "原计划仍然有效",
+                "steps": []
+            }
+            """
+        )
+
+        self.assertEqual(
+            decision,
+            ReplanDecision(
+                action="keep",
+                reason="原计划仍然有效",
+                steps=[],
+            ),
+        )
+
     def test_parse_revise_decision_trims_reason_and_steps(self):
         decision = parse_replan_response(
             """
