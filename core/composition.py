@@ -5,7 +5,12 @@ from pathlib import Path
 from core.agent_application import AgentApplication
 from core.model_call.client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
-from core.runtime_modes import RuntimeMode
+from core.runtime_modes import (
+    PlainMode,
+    RunMode,
+    RuntimeMode,
+    RuntimeModeRouter,
+)
 from core.todos import TodoMode
 from core.session_runner import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
@@ -78,18 +83,27 @@ def create_agent_application(
         context_budget=context_budget,
         summary_generator=LLMContextSummaryGenerator(model_calls, model),
     )
+    mode_configuration = (
+        {"runtime_mode": runtime_mode}
+        if runtime_mode is not None
+        else {
+            "mode_router": RuntimeModeRouter(),
+            "runtime_modes": {
+                RunMode.PLAIN: PlainMode(),
+                RunMode.TODO: TodoMode(),
+            },
+        }
+    )
     run_runtime = RunRuntime(
         model_calls=model_calls,
         model=model,
-        runtime_mode=(
-            runtime_mode if runtime_mode is not None else TodoMode()
-        ),
         context_preparation=context_preparation,
         tools_executor=ToolsExecutor(tool_registry),
         tool_result_externalizer=ToolResultExternalizer(
             artifact_store,
             result_limit,
         ),
+        **mode_configuration,
     )
     session_runtime = SessionRuntime(run_runtime)
     return AgentApplication(

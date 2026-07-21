@@ -19,6 +19,9 @@ from core.tools_runtime.tools_checkpoint import (
     todo_list_created_checkpoint,
     run_completed_checkpoint,
     run_interrupted_checkpoint,
+    runtime_mode_activation_failed_checkpoint,
+    runtime_mode_fallback_checkpoint,
+    runtime_mode_routed_checkpoint,
     run_started_checkpoint,
     tool_batch_completed_checkpoint,
     verification_required_checkpoint,
@@ -39,7 +42,7 @@ from core.tools_runtime.tools_protocol import (
     validate_tool_message_chain,
 )
 from core.tools_runtime.tools_state import ToolsState
-from core.runtime_modes import RuntimeMode
+from core.runtime_modes import RunMode, RuntimeMode, RuntimeModeRouter
 from core.context import (
     ContextComposition,
     ContextPreparationService,
@@ -88,14 +91,28 @@ class RunRuntime:
         self,
         model_calls: ModelCallService,
         model: str,
-        runtime_mode: RuntimeMode,
-        context_preparation: ContextPreparationService,
-        tools_executor: ToolsExecutor,
-        tool_result_externalizer: ToolResultExternalizer,
+        runtime_mode: RuntimeMode | None = None,
+        context_preparation: ContextPreparationService | None = None,
+        tools_executor: ToolsExecutor | None = None,
+        tool_result_externalizer: ToolResultExternalizer | None = None,
+        *,
+        mode_router: RuntimeModeRouter | None = None,
+        runtime_modes: dict[RunMode, RuntimeMode] | None = None,
     ):
+        if runtime_mode is None:
+            if mode_router is None or runtime_modes is None:
+                raise ValueError(
+                    "mode_router and runtime_modes are required without runtime_mode"
+                )
+        elif mode_router is not None or runtime_modes is not None:
+            raise ValueError(
+                "runtime_mode cannot be combined with mode_router/runtime_modes"
+            )
         self.model_calls = model_calls
         self.model = model
         self.runtime_mode = runtime_mode
+        self.mode_router = mode_router
+        self.runtime_modes = runtime_modes
         self.context_preparation = context_preparation
         self.tools_executor = tools_executor
         self.tool_result_externalizer = tool_result_externalizer
@@ -343,7 +360,6 @@ class RunRuntime:
     ) -> RunResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
-        mode_state = self.runtime_mode.create_state()
         run_control = control or RunControl()
         current_context_state = context_state or ContextState()
         level2_performed = False
@@ -354,9 +370,69 @@ class RunRuntime:
         )
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
-        start_prompt = self.runtime_mode.start(mode_state)
+
+        runtime_mode = self.runtime_mode
+        if self.mode_router is not None:
+            route_response, current_context_state, compressed = (
+                self._prepare_and_call_role(
+                    conversation=conversation,
+                    system_prompt=self.mode_router.system_prompt,
+                    context_state=current_context_state,
+                    level2_boundary_message_id=level2_boundary_message_id,
+                    stage="routing",
+                    round_index=None,
+                    checkpoints=checkpoints,
+                    tools=[],
+                )
+            )
+            level2_performed = level2_performed or compressed
+            if isinstance(route_response, Checkpoint):
+                status = (
+                    RunStatus.BLOCKED
+                    if route_response.reason in {
+                        "context_budget_exceeded",
+                        "context_length_exceeded",
+                    }
+                    else RunStatus.FAILED
+                )
+                return self._finish(
+                    status=status,
+                    answer=format_checkpoint(route_response),
+                    checkpoint=route_response,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                )
+            try:
+                decision = self.mode_router.accept_response(route_response)
+            except InvalidLLMResponse as exc:
+                checkpoint = runtime_mode_activation_failed_checkpoint(
+                    mode=None,
+                    stage="routing",
+                    reason=exc.code,
+                    error=str(exc),
+                )
+                checkpoints.append(checkpoint)
+                checkpoints.append(
+                    runtime_mode_fallback_checkpoint(
+                        from_mode=None,
+                        to_mode=RunMode.PLAIN.value,
+                        reason=exc.code,
+                    )
+                )
+                runtime_mode = self.runtime_modes[RunMode.PLAIN]
+            else:
+                checkpoints.append(
+                    runtime_mode_routed_checkpoint(
+                        decision.mode.value,
+                        decision.reason,
+                    )
+                )
+                runtime_mode = self.runtime_modes[decision.mode]
+
+        mode_state = runtime_mode.create_state()
+        start_prompt = runtime_mode.start(mode_state)
         if start_prompt is not None:
-            start_tools = self.runtime_mode.runtime_tools(mode_state)
+            start_tools = runtime_mode.runtime_tools(mode_state)
             start_response, current_context_state, compressed = (
                 self._prepare_and_call_role(
                     conversation=conversation,
@@ -387,28 +463,46 @@ class RunRuntime:
                     context_state=current_context_state,
                 )
             try:
-                start_data = self.runtime_mode.accept_start_response(
+                start_data = runtime_mode.accept_start_response(
                     mode_state,
                     start_response
                 )
             except InvalidLLMResponse as exc:
-                checkpoint = invalid_llm_response_checkpoint(
+                if self.mode_router is None:
+                    checkpoint = invalid_llm_response_checkpoint(
+                        stage="todo_initialization",
+                        round_index=None,
+                        reason=exc.code,
+                        error=str(exc),
+                    )
+                    return self._finish(
+                        status=RunStatus.FAILED,
+                        answer=format_checkpoint(checkpoint),
+                        checkpoint=checkpoint,
+                        checkpoints=checkpoints,
+                        context_state=current_context_state,
+                    )
+                checkpoint = runtime_mode_activation_failed_checkpoint(
+                    mode=RunMode.TODO.value,
                     stage="todo_initialization",
-                    round_index=None,
                     reason=exc.code,
                     error=str(exc),
                 )
-                return self._finish(
-                    status=RunStatus.FAILED,
-                    answer=format_checkpoint(checkpoint),
-                    checkpoint=checkpoint,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
+                checkpoints.append(checkpoint)
+                checkpoints.append(
+                    runtime_mode_fallback_checkpoint(
+                        from_mode=RunMode.TODO.value,
+                        to_mode=RunMode.PLAIN.value,
+                        reason=exc.code,
+                    )
                 )
-            if start_data is not None:
-                checkpoints.append(todo_list_created_checkpoint(start_data))
+                runtime_mode = self.runtime_modes[RunMode.PLAIN]
+                mode_state = runtime_mode.create_state()
+            else:
+                if start_data is not None:
+                    checkpoints.append(todo_list_created_checkpoint(start_data))
         external_tools = self.tools_executor.registry.get_tools()
-        runtime_tools = self.runtime_mode.runtime_tools(mode_state)
+        runtime_tools = runtime_mode.runtime_tools(mode_state)
         external_names = {
             tool["function"]["name"] for tool in external_tools
         }
@@ -439,7 +533,7 @@ class RunRuntime:
                 prepared = self.context_preparation.prepare(
                     conversation_records=conversation.records,
                     context_state=current_context_state,
-                    runtime_instructions=self.runtime_mode.runtime_instructions(
+                    runtime_instructions=runtime_mode.runtime_instructions(
                         mode_state
                     ),
                     tools=tools,
@@ -540,7 +634,7 @@ class RunRuntime:
 
             conversation.add_assistant(response)
             if response.type == "text":
-                final_feedback = self.runtime_mode.check_final_candidate(
+                final_feedback = runtime_mode.check_final_candidate(
                     mode_state
                 )
                 if final_feedback is not None:
@@ -573,10 +667,10 @@ class RunRuntime:
                 answer = response.content
                 if level2_performed:
                     answer = "本轮已执行上下文压缩。\n\n" + answer
-                self.runtime_mode.on_run_completed(mode_state)
+                runtime_mode.on_run_completed(mode_state)
                 checkpoint = run_completed_checkpoint(
                     answer=answer,
-                    extra_data=self.runtime_mode.checkpoint_data(mode_state),
+                    extra_data=runtime_mode.checkpoint_data(mode_state),
                 )
                 return self._finish(
                     status=RunStatus.COMPLETED,
@@ -593,8 +687,8 @@ class RunRuntime:
             externalized_count = 0
 
             for call in calls:
-                if self.runtime_mode.handles_tool(call.name):
-                    tool_result = self.runtime_mode.execute_tool(
+                if runtime_mode.handles_tool(call.name):
+                    tool_result = runtime_mode.execute_tool(
                         mode_state,
                         call.name,
                         call.arguments,
@@ -613,7 +707,7 @@ class RunRuntime:
 
             tool_results = build_tool_messages(batch_steps, encode_tool_result)
             conversation.add_tools_result(tool_results)
-            batch_feedback = self.runtime_mode.after_tool_batch(
+            batch_feedback = runtime_mode.after_tool_batch(
                 mode_state,
                 batch_steps,
             )
@@ -624,7 +718,7 @@ class RunRuntime:
                     round_index,
                     tools_state,
                     len(calls),
-                    self.runtime_mode.checkpoint_data(mode_state),
+                    runtime_mode.checkpoint_data(mode_state),
                     result_chars_before=result_chars_before,
                     result_chars_after=result_chars_after,
                     externalized_count=externalized_count,

@@ -88,6 +88,58 @@ def todo_list_created_checkpoint(data: dict[str, Any]) -> Checkpoint:
     )
 
 
+def runtime_mode_routed_checkpoint(
+    mode: str,
+    reason: str,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="run",
+        reason="runtime_mode_routed",
+        message=f"本次 Run 已选择 {mode} 模式。",
+        data={
+            "mode": mode,
+            "reason": reason,
+        },
+    )
+
+
+def runtime_mode_fallback_checkpoint(
+    from_mode: str | None,
+    to_mode: str,
+    reason: str,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="run",
+        reason="runtime_mode_fallback",
+        message=f"RuntimeMode 已降级为 {to_mode}。",
+        data={
+            "from_mode": from_mode,
+            "to_mode": to_mode,
+            "reason": reason,
+        },
+    )
+
+
+def runtime_mode_activation_failed_checkpoint(
+    *,
+    mode: str | None,
+    stage: str,
+    reason: str,
+    error: str,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="runtime_mode",
+        reason=reason,
+        message="RuntimeMode 激活响应非法，准备降级。",
+        data={
+            "mode": mode,
+            "stage": stage,
+            "error": error,
+            "recoverable": True,
+        },
+    )
+
+
 def context_prepared_checkpoint(
     *,
     stage: str,
@@ -283,6 +335,7 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
     if checkpoint.reason in {
         "empty_model_response",
         "invalid_llm_response",
+        "invalid_runtime_mode_route",
         "invalid_todo_initialization",
     }:
         lines = [

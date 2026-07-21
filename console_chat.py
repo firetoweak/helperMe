@@ -74,13 +74,14 @@ def _run_with_interrupt(
     return outcomes[0]
 
 
+def _resolve_log_path() -> Path:
+    if "HELPER_RUN_LOG_PATH" in os.environ:
+        return Path(os.environ["HELPER_RUN_LOG_PATH"])
+    return get_default_run_log_path()
+
+
 def main() -> None:
     model = os.environ.get("HELPER_MODEL", "qwen27b")
-    log_path = (
-        Path(os.environ["HELPER_RUN_LOG_PATH"])
-        if "HELPER_RUN_LOG_PATH" in os.environ
-        else get_default_run_log_path()
-    )
 
     application = create_agent_application(
         model,
@@ -88,6 +89,7 @@ def main() -> None:
         runtime_root=Path.home() / ".helper-me" / "runtime",
     )
     session_id = _new_session(application)
+    log_path = _resolve_log_path()
     last_status: RunStatus | None = None
 
     print(f"Session 手动测试已启动。model={model}")
@@ -136,7 +138,9 @@ def main() -> None:
         if last_status in TERMINAL_RUN_STATUSES:
             print("当前 Session 已结束；下一条输入将创建新的 Session。")
             session_id = _new_session(application)
+            log_path = _resolve_log_path()
             last_status = None
+            print(f"新 Session 日志路径：{log_path}")
 
 
 if __name__ == "__main__":

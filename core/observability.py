@@ -13,8 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def get_default_run_log_path() -> Path:
-    today = datetime.now().strftime("%Y-%m-%d")
-    return PROJECT_ROOT / f"run_{today}.log"
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return PROJECT_ROOT / f"session_{stamp}.log"
 
 
 def build_run_trace(

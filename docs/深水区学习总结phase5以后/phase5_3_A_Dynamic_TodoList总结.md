@@ -192,7 +192,7 @@ UNINITIALIZED → ACTIVE + CLEAN
 revision = 1
 ```
 
-如果模型返回文本、调用其他工具、调用多个工具或提交非法快照，当前 Run 以 `invalid_todo_initialization` 失败。Runtime 不生成默认 TodoList，也不把失败的初始化响应写回 Conversation；原始响应只进入错误与 trace，避免掩盖模型协议问题。
+如果模型返回文本、调用其他工具、调用多个工具或提交非法快照，`TodoMode` 以 `invalid_todo_initialization` 拒绝该次激活。显式固定 TodoMode 时当前 Run 失败；动态路由场景由 RunRuntime 记录原因并降级到 PlainMode。Runtime 不生成默认 TodoList，也不把失败的初始化响应写回 Conversation；原始响应只进入错误与 trace，避免掩盖模型协议问题。
 
 ### 同一个模型兼任 Executor 与 Todo 审查者
 
@@ -302,6 +302,84 @@ checkpoint_data(state)
 
 TodoList 的所有权与其生命周期一致：它属于一个 Run，而不是属于可复用的 Mode。
 
+### 后续增量：Runtime Mode Router
+
+TodoList 落地后，简单问题仍然会无条件进入 Todo 初始化，额外产生一次模型调用和一套不必要的执行状态。现在在每个 Run 的执行入口增加轻量 Router，只判断本次请求需要哪种 RuntimeMode：
+
+```text
+Conversation
+    │ 追加本次 user message
+    ▼
+RuntimeModeRouter
+    │ 读取完整 Conversation
+    │ tools = []
+    ▼
+{"mode":"plain|todo","reason":"..."}
+    ├─ plain → PlainMode → 直接进入 Agent Round
+    └─ todo  → TodoMode  → 受限 Todo 初始化 → Agent Round
+```
+
+路由属于 Run，不属于 Session。同一个 Session 的简单追问可以选择 `plain`，后续复杂任务仍可重新选择 `todo`。Router 不持有状态，也不改变 Conversation。
+
+Router 只负责两件事：
+
+- 提供区分 `plain/todo` 的 system prompt；
+- 严格解析模型返回的结构化决策。
+
+`RunRuntime` 继续统一负责 Context Preparation、模型调用、retry、usage 和 checkpoint。Runtime 不使用步骤数、关键词等规则自行猜测复杂度，也不让 Router 生成 Todo：
+
+```text
+Router：选择执行机制
+TodoMode：管理 Todo 生命周期规则
+Executor：决定具体行动
+```
+
+路由输出契约为：
+
+```json
+{"mode":"todo","reason":"需要分析、修改并验证多个步骤"}
+```
+
+约束如下：
+
+- `mode` 只能是 `plain` 或 `todo`；
+- `reason` 必须是非空字符串；
+- 只接受恰好包含这两个字段的 JSON object；
+- 先判断最后一条用户消息是否明确授权执行，再判断执行复杂度；
+- 讨论、评价、解释、询问看法或提出优化方向选择 `plain`，不能因为话题复杂或历史 Run 使用过 Todo 就推断为授权实施；
+- 是否授权执行不明确时选择 `plain`；已明确要求执行、但不确定执行复杂度时选择 `todo`；
+- 不允许工具调用、Markdown、额外字段或自然语言包裹；
+- 非法路由响应记录 `invalid_runtime_mode_route`，随后在同一 Run 降级到 `plain`。
+
+合法结果只写入 `runtime_mode_routed` checkpoint，模型 token 记入 `routing` usage stage，不把路由原因写回 Conversation。这样 Conversation 仍只保存用户与执行 Agent 的协议轨迹，路由决策属于 Run trace。
+
+Composition Root 默认组装：
+
+```text
+RuntimeModeRouter
+├─ plain → PlainMode
+└─ todo  → TodoMode
+```
+
+测试和特定调用仍可显式注入固定 `runtime_mode`，此时跳过路由。固定模式与路由模式互斥，避免一个 Run 同时存在两个 mode 来源。
+
+Router 的选择是概率性执行建议，不是不可逆状态迁移。动态选择 `todo` 后，如果受限初始化没有产生合法 `rewrite_todos`，`TodoMode` 仍严格拒绝该响应，但 `RunRuntime` 不再把局部协议不匹配升级为 Run 失败：
+
+```text
+todo activation
+    │ 非法初始化响应
+    ▼
+记录 mode activation failed checkpoint
+    │ 丢弃受限阶段响应，不写入 Conversation
+    ▼
+runtime_mode_fallback: todo → plain
+    │ 使用正常 Agent Prompt 重新调用
+    ▼
+继续同一个 Run
+```
+
+严格契约与运行恢复因此分层：`TodoMode` 负责判定初始化是否合法，`RunRuntime` 负责动态 mode 激活失败后的单向、有界降级。显式注入固定 `TodoMode` 时没有备选策略，仍保留原有严格失败语义。
+
 ### 最终模块职责
 
 ```text
@@ -320,12 +398,21 @@ core/todos/
 │
 └─ mode.py
      薄的 Todo 生命周期协调策略
+
+core/runtime_modes/
+├─ router.py
+│    RunMode、RouteDecision、严格解析与路由 Prompt
+├─ plain.py
+│    不启用 Todo 生命周期的轻量执行策略
+└─ base.py
+     RuntimeMode 协议
 ```
 
 外围职责：
 
 ```text
 RunRuntime
+├─ 追加当前用户消息后为本次 Run 选择 RuntimeMode
 ├─ 创建 Run-local mode state
 ├─ 准备初始化与 Agent ModelContext
 ├─ 合并 Runtime 工具和外部工具
@@ -363,7 +450,7 @@ parameters
 
 ### 验证结果
 
-全量 161 项测试通过，覆盖：
+全量 175 项测试通过，覆盖：
 
 - 初始化阶段只开放 `rewrite_todos`；
 - 初始化必须调用且只调用一次该工具；
@@ -379,6 +466,14 @@ parameters
 - 同一个 RunRuntime 连续执行多个 Run 时 Todo 状态互不泄漏；
 - RuntimeMode、PlainMode、Context Preparation、StopGuard、interrupt 和 Session 原有链路保持正常；
 - 嵌套 Pydantic 工具 schema 保留完整 `$defs`。
+- Router 严格解析 `plain/todo` 决策，非法响应不降级；
+- Router 读取包含当前请求的完整 Conversation，但决策不写回 Conversation；
+- plain 跳过 Todo 初始化，todo 保持原有初始化与退出屏障；
+- 同一个 Session 的不同 Run 可以选择不同 mode；
+- Todo Run 完成后的方案讨论能够重新路由到 plain，不继承上一轮模式；
+- 路由结果、原因和模型 usage 进入 Run checkpoint。
+- 非法路由或动态 Todo 激活失败会记录原因并在同一 Run 降级到 plain；
+- Todo 初始化阶段产生的非法文本不会进入 Conversation，也不会杀死当前 Session。
 
 这一节最重要的认知是：
 
