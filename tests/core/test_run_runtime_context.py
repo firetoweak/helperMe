@@ -49,38 +49,47 @@ class ChangingInstructionsMode:
         self.instruction = "第一轮指令"
         self.instruction_calls = 0
 
-    def start(self, conversation):
+    def create_state(self):
         return None
 
-    def accept_start_response(self, response):
+    def start(self, state):
+        return None
+
+    def accept_start_response(self, state, response):
         raise AssertionError("no start model call")
 
-    def runtime_instructions(self):
+    def runtime_instructions(self, state):
         self.instruction_calls += 1
         return [self.instruction]
 
-    def on_assistant_text(self, conversation):
+    def check_final_candidate(self, state):
         if self.instruction == "第一轮指令":
             self.instruction = "第二轮指令"
-            return True
+            return "继续"
+        return None
+
+    def on_run_completed(self, state):
+        return None
+
+    def after_tool_batch(self, state, batch_steps):
+        return None
+
+    def runtime_tools(self, state):
+        return []
+
+    def handles_tool(self, name):
         return False
 
-    def after_tool_batch(self, conversation, tools_state, batch_steps):
-        return None
+    def execute_tool(self, state, name, arguments):
+        raise AssertionError("mode has no runtime tools")
 
-    def handle_tool_failures(self, conversation, failed_steps):
-        return None
-
-    def accept_tool_failure_response(self, response):
-        raise AssertionError("no replanning model call")
-
-    def checkpoint_data(self):
+    def checkpoint_data(self, state):
         return None
 
 
 class StaticInstructionsMode(ChangingInstructionsMode):
-    def on_assistant_text(self, conversation):
-        return False
+    def check_final_candidate(self, state):
+        return None
 
 
 class RunRuntimeContextTest(unittest.TestCase):

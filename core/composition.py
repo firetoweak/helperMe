@@ -6,7 +6,7 @@ from core.agent_application import AgentApplication
 from core.model_call.client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
 from core.runtime_modes import RuntimeMode
-from core.planning import PlanningMode
+from core.todos import TodoMode
 from core.session_runner import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
 from core.context import (
@@ -82,7 +82,7 @@ def create_agent_application(
         model_calls=model_calls,
         model=model,
         runtime_mode=(
-            runtime_mode if runtime_mode is not None else PlanningMode()
+            runtime_mode if runtime_mode is not None else TodoMode()
         ),
         context_preparation=context_preparation,
         tools_executor=ToolsExecutor(tool_registry),

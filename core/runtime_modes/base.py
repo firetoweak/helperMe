@@ -1,44 +1,53 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
-from core.messages import Conversation
 from core.model_call.types import LLMResponse
-from core.tools_runtime.tools_state import ToolStep, ToolsState
+from core.tools_runtime.tools_state import ToolStep
 
 class RuntimeMode(Protocol):
-    def start(self, conversation: Conversation) -> str | None:
+    def create_state(self) -> Any:
         ...
 
-    def accept_start_response(self, response: LLMResponse) -> dict | None:
+    def start(self, state: Any) -> str | None:
         ...
 
-    def runtime_instructions(self) -> list[str]:
-        ...
-
-    def on_assistant_text(self, conversation: Conversation) -> bool:
-        ...
-
-    def after_tool_batch(
+    def accept_start_response(
         self,
-        conversation: Conversation,
-        tools_state: ToolsState,
-        batch_steps: list[ToolStep],
-    ) -> None:
-        ...
-
-    def handle_tool_failures(
-        self,
-        conversation: Conversation,
-        failed_steps: list[ToolStep],
-    ) -> str | None:
-        ...
-
-    def accept_tool_failure_response(
-        self,
+        state: Any,
         response: LLMResponse,
     ) -> dict | None:
         ...
 
-    def checkpoint_data(self) -> dict | None:
+    def runtime_instructions(self, state: Any) -> list[str]:
+        ...
+
+    def check_final_candidate(self, state: Any) -> str | None:
+        ...
+
+    def on_run_completed(self, state: Any) -> None:
+        ...
+
+    def after_tool_batch(
+        self,
+        state: Any,
+        batch_steps: list[ToolStep],
+    ) -> str | None:
+        ...
+
+    def runtime_tools(self, state: Any) -> list[dict]:
+        ...
+
+    def handles_tool(self, name: str) -> bool:
+        ...
+
+    def execute_tool(
+        self,
+        state: Any,
+        name: str,
+        arguments: str,
+    ) -> dict:
+        ...
+
+    def checkpoint_data(self, state: Any) -> dict | None:
         ...

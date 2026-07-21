@@ -79,7 +79,7 @@ class ToolsExecutor:
                 {
                     "ok": False,
                     "code": "VALIDATION_ERROR",
-                    "error": exc.errors(),
+                    "error": exc.errors(include_context=False),
                     "hint": "按工具 schema 修正参数后重试。",
                 }
             )

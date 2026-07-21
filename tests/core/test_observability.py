@@ -4,7 +4,7 @@ from core.observability import format_run_log
 
 
 class ObservabilityContractTest(unittest.TestCase):
-    def test_plan_revision_checkpoint_is_written_to_run_log(self):
+    def test_todo_revision_checkpoint_is_written_to_run_log(self):
         trace = {
             "started_at": "2026-01-01 00:00:00",
             "ended_at": "2026-01-01 00:00:01",
@@ -15,15 +15,15 @@ class ObservabilityContractTest(unittest.TestCase):
             "answer": "world",
             "checkpoints": [
                 {
-                    "kind": "planning",
-                    "reason": "plan_revision_decided",
-                    "message": "已根据工具失败修订执行计划。",
+                    "kind": "tool_batch",
+                    "reason": "tool_batch_completed",
+                    "message": "TodoList 已同步。",
                     "data": {
-                        "trigger": "tool_failure",
-                        "action": "revise",
-                        "reason": "原工具不存在",
-                        "before_plan": {"revision": 1},
-                        "after_plan": {"revision": 2},
+                        "todo_list": {
+                            "phase": "active",
+                            "sync_state": "clean",
+                            "revision": 2,
+                        },
                     },
                 }
             ],
@@ -31,11 +31,9 @@ class ObservabilityContractTest(unittest.TestCase):
 
         log = format_run_log(trace)
 
-        self.assertIn('"reason": "plan_revision_decided"', log)
-        self.assertIn('"reason": "原工具不存在"', log)
-        self.assertIn('"before_plan": {', log)
-        self.assertIn('"revision": 1', log)
-        self.assertIn('"after_plan": {', log)
+        self.assertIn('"reason": "tool_batch_completed"', log)
+        self.assertIn('"todo_list": {', log)
+        self.assertIn('"sync_state": "clean"', log)
         self.assertIn('"revision": 2', log)
 
     def test_missing_internal_trace_field_is_not_defaulted(self):

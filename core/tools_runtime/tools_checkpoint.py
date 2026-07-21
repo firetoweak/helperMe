@@ -79,24 +79,11 @@ def tool_batch_completed_checkpoint(
     )
 
 
-def plan_revision_decided_checkpoint(data: dict[str, Any]) -> Checkpoint:
+def todo_list_created_checkpoint(data: dict[str, Any]) -> Checkpoint:
     return Checkpoint(
-        kind="planning",
-        reason="plan_revision_decided",
-        message=(
-            "已根据工具失败修订执行计划。"
-            if data["action"] == "revise"
-            else "已判断工具失败不影响当前执行计划。"
-        ),
-        data=data,
-    )
-
-
-def plan_created_checkpoint(data: dict[str, Any]) -> Checkpoint:
-    return Checkpoint(
-        kind="planning",
-        reason="plan_created",
-        message="已创建初始执行计划。",
+        kind="todo",
+        reason="todo_list_created",
+        message="已创建初始 TodoList。",
         data=data,
     )
 
@@ -296,8 +283,7 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
     if checkpoint.reason in {
         "empty_model_response",
         "invalid_llm_response",
-        "invalid_plan_response",
-        "invalid_replan_response",
+        "invalid_todo_initialization",
     }:
         lines = [
             checkpoint.message,

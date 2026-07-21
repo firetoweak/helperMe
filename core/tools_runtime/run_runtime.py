@@ -16,8 +16,7 @@ from core.tools_runtime.tools_checkpoint import (
     llm_retry_checkpoint,
     llm_usage_checkpoint,
     message_chain_invalid_checkpoint,
-    plan_created_checkpoint,
-    plan_revision_decided_checkpoint,
+    todo_list_created_checkpoint,
     run_completed_checkpoint,
     run_interrupted_checkpoint,
     run_started_checkpoint,
@@ -32,7 +31,7 @@ from core.model_call.service import (
     ModelCallService,
 )
 from core.model_call.types import InvalidLLMResponse, LLMResponse, LLMUsage
-from core.planning.context_projection import project_system_prompt
+from core.context.projection import project_system_prompt
 from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from core.tools_runtime.tools_protocol import (
@@ -256,6 +255,7 @@ class RunRuntime:
         stage: str,
         round_index: int | None,
         checkpoints: list[Checkpoint],
+        tools: list[dict],
     ) -> tuple[LLMResponse | Checkpoint, ContextState, bool]:
         try:
             prepared = self.context_preparation.prepare(
@@ -265,7 +265,7 @@ class RunRuntime:
                 ),
                 context_state=context_state,
                 runtime_instructions=[],
-                tools=[],
+                tools=tools,
                 level2_boundary_message_id=level2_boundary_message_id,
             )
         except LLMContextLengthError as exc:
@@ -326,7 +326,7 @@ class RunRuntime:
 
         response = self._call_llm_with_retry(
             prepared.model_context,
-            [],
+            tools,
             stage,
             round_index,
             checkpoints,
@@ -343,6 +343,7 @@ class RunRuntime:
     ) -> RunResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
+        mode_state = self.runtime_mode.create_state()
         run_control = control or RunControl()
         current_context_state = context_state or ContextState()
         level2_performed = False
@@ -353,17 +354,19 @@ class RunRuntime:
         )
         checkpoints.append(run_started_checkpoint(max_rounds))
         conversation.add_user(user_message)
-        start_prompt = self.runtime_mode.start(conversation)
+        start_prompt = self.runtime_mode.start(mode_state)
         if start_prompt is not None:
+            start_tools = self.runtime_mode.runtime_tools(mode_state)
             start_response, current_context_state, compressed = (
                 self._prepare_and_call_role(
                     conversation=conversation,
                     system_prompt=start_prompt,
                     context_state=current_context_state,
                     level2_boundary_message_id=level2_boundary_message_id,
-                    stage="planning",
+                    stage="todo_initialization",
                     round_index=None,
                     checkpoints=checkpoints,
+                    tools=start_tools,
                 )
             )
             level2_performed = level2_performed or compressed
@@ -385,11 +388,12 @@ class RunRuntime:
                 )
             try:
                 start_data = self.runtime_mode.accept_start_response(
+                    mode_state,
                     start_response
                 )
             except InvalidLLMResponse as exc:
                 checkpoint = invalid_llm_response_checkpoint(
-                    stage="planning",
+                    stage="todo_initialization",
                     round_index=None,
                     reason=exc.code,
                     error=str(exc),
@@ -402,8 +406,21 @@ class RunRuntime:
                     context_state=current_context_state,
                 )
             if start_data is not None:
-                checkpoints.append(plan_created_checkpoint(start_data))
-        tools = self.tools_executor.registry.get_tools()
+                checkpoints.append(todo_list_created_checkpoint(start_data))
+        external_tools = self.tools_executor.registry.get_tools()
+        runtime_tools = self.runtime_mode.runtime_tools(mode_state)
+        external_names = {
+            tool["function"]["name"] for tool in external_tools
+        }
+        runtime_names = {
+            tool["function"]["name"] for tool in runtime_tools
+        }
+        duplicated_names = external_names & runtime_names
+        if duplicated_names:
+            raise ValueError(
+                f"runtime tool conflicts with external tool: {sorted(duplicated_names)}"
+            )
+        tools = external_tools + runtime_tools
 
         for round_index in range(1, max_rounds + 1):
             validation = validate_tool_message_chain(
@@ -422,7 +439,9 @@ class RunRuntime:
                 prepared = self.context_preparation.prepare(
                     conversation_records=conversation.records,
                     context_state=current_context_state,
-                    runtime_instructions=self.runtime_mode.runtime_instructions(),
+                    runtime_instructions=self.runtime_mode.runtime_instructions(
+                        mode_state
+                    ),
                     tools=tools,
                     level2_boundary_message_id=level2_boundary_message_id,
                 )
@@ -521,7 +540,11 @@ class RunRuntime:
 
             conversation.add_assistant(response)
             if response.type == "text":
-                if self.runtime_mode.on_assistant_text(conversation):
+                final_feedback = self.runtime_mode.check_final_candidate(
+                    mode_state
+                )
+                if final_feedback is not None:
+                    conversation.add_user(final_feedback)
                     continue
 
                 stop_safety = evaluate_stop_safety(
@@ -550,9 +573,10 @@ class RunRuntime:
                 answer = response.content
                 if level2_performed:
                     answer = "本轮已执行上下文压缩。\n\n" + answer
+                self.runtime_mode.on_run_completed(mode_state)
                 checkpoint = run_completed_checkpoint(
                     answer=answer,
-                    extra_data=self.runtime_mode.checkpoint_data(),
+                    extra_data=self.runtime_mode.checkpoint_data(mode_state),
                 )
                 return self._finish(
                     status=RunStatus.COMPLETED,
@@ -569,10 +593,17 @@ class RunRuntime:
             externalized_count = 0
 
             for call in calls:
-                tool_result = self.tools_executor.execute(
-                    call.name,
-                    call.arguments,
-                )
+                if self.runtime_mode.handles_tool(call.name):
+                    tool_result = self.runtime_mode.execute_tool(
+                        mode_state,
+                        call.name,
+                        call.arguments,
+                    )
+                else:
+                    tool_result = self.tools_executor.execute(
+                        call.name,
+                        call.arguments,
+                    )
                 outcome = self.tool_result_externalizer.process(tool_result)
                 result_chars_before += outcome.original_chars
                 result_chars_after += outcome.projected_chars
@@ -582,17 +613,18 @@ class RunRuntime:
 
             tool_results = build_tool_messages(batch_steps, encode_tool_result)
             conversation.add_tools_result(tool_results)
-            self.runtime_mode.after_tool_batch(
-                conversation,
-                tools_state,
+            batch_feedback = self.runtime_mode.after_tool_batch(
+                mode_state,
                 batch_steps,
             )
+            if batch_feedback is not None:
+                conversation.add_user(batch_feedback)
             checkpoints.append(
                 tool_batch_completed_checkpoint(
                     round_index,
                     tools_state,
                     len(calls),
-                    self.runtime_mode.checkpoint_data(),
+                    self.runtime_mode.checkpoint_data(mode_state),
                     result_chars_before=result_chars_before,
                     result_chars_after=result_chars_after,
                     externalized_count=externalized_count,
@@ -633,70 +665,6 @@ class RunRuntime:
                     checkpoints=checkpoints,
                     context_state=current_context_state,
                 )
-
-            failed_steps = [
-                step for step in batch_steps if step.ok is False
-            ]
-            if failed_steps:
-                replan_prompt = self.runtime_mode.handle_tool_failures(
-                    conversation=conversation,
-                    failed_steps=failed_steps,
-                )
-                if replan_prompt is not None:
-                    replan_response, current_context_state, compressed = (
-                        self._prepare_and_call_role(
-                            conversation=conversation,
-                            system_prompt=replan_prompt,
-                            context_state=current_context_state,
-                            level2_boundary_message_id=(
-                                level2_boundary_message_id
-                            ),
-                            stage="replanning",
-                            round_index=round_index,
-                            checkpoints=checkpoints,
-                        )
-                    )
-                    level2_performed = level2_performed or compressed
-                    if isinstance(replan_response, Checkpoint):
-                        status = (
-                            RunStatus.BLOCKED
-                            if replan_response.reason in {
-                                "context_budget_exceeded",
-                                "context_length_exceeded",
-                            }
-                            else RunStatus.FAILED
-                        )
-                        return self._finish(
-                            status=status,
-                            answer=format_checkpoint(replan_response),
-                            checkpoint=replan_response,
-                            checkpoints=checkpoints,
-                            context_state=current_context_state,
-                        )
-                    try:
-                        revision_data = (
-                            self.runtime_mode.accept_tool_failure_response(
-                                replan_response
-                            )
-                        )
-                    except InvalidLLMResponse as exc:
-                        checkpoint = invalid_llm_response_checkpoint(
-                            stage="replanning",
-                            round_index=round_index,
-                            reason=exc.code,
-                            error=str(exc),
-                        )
-                        return self._finish(
-                            status=RunStatus.FAILED,
-                            answer=format_checkpoint(checkpoint),
-                            checkpoint=checkpoint,
-                            checkpoints=checkpoints,
-                            context_state=current_context_state,
-                        )
-                    if revision_data is not None:
-                        checkpoints.append(
-                            plan_revision_decided_checkpoint(revision_data)
-                        )
 
         checkpoint = budget_stop_checkpoint(max_rounds, tools_state)
         return self._finish(

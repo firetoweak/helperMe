@@ -28,11 +28,7 @@ class ToolSpec:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": {
-                    "type": "object",
-                    "properties": schema.get("properties", {}),
-                    "required": schema.get("required", []),
-                },
+                "parameters": schema,
             },
         }
 

@@ -125,50 +125,40 @@ RunRuntime -> RunResult -> SessionRuntime
 ====================
 
 Phase 2
-Planning
+TodoList
 
-「让模型有显式计划」，不是做任务调度系统
-给模型看的plan文本 + 轻量结构化外壳。plan 是“行动前的认知脚手架”，不是“可恢复执行状态”
-为什么做： 当前 agent 执行多步骤任务时，容易直接进入工具调用，缺少显式任务分解和执行进度判断，导致跑偏、漏步骤或过早总结。
-
-**注意** 当前 planning 涉及针对单个run 不涉及多个run组成的task (7.15)
+TodoList 是面向单个 Run 执行的可变任务认知状态，不是真正的 Plan，也不是任务调度系统。
+Executor 将其作为当前行动参考，而不是不可违背的指令序列。
+真正的 Plan 保留给未来针对大目标进行 Todo 拆分、依赖组织与 SubAgent 委派的规划层。
 ====================
 
-目标：让 agent 在执行任务前形成短计划，并在执行过程中根据工具结果更新计划判断。
-计划主要服务模型推理，不追求持久化、恢复执行或复杂调度。
+目标：让 agent 在执行长任务前形成可审阅的 TodoList，并在执行过程中通过 `rewrite_todos` 自主维护。
+TodoList 主要服务模型执行，不追求持久化、跨 Run 恢复或复杂调度。
 
 Benchmark：
-面对一个需要读文件、分析、修改、验证的任务，agent 能先生成短计划；
-执行过程中能在日志/checkpoint 中看到当前计划进度；（完成）
-工具失败或信息不足时能更新计划；（不行×）
-最终回答前能检查计划是否完成。（完成）
+面对一个需要读文件、分析、修改、验证的任务，Todo 初始化阶段只开放 `rewrite_todos` 并创建步骤清单；
+Executor 能把 TodoList 作为柔性行动参考；
+工具产生新观察后，Executor 可继续行动，也可随时 `rewrite_todos`；
+最终回答前必须通过 Todo Sync Barrier。
 
 
-✓ Task Decomposition
-模型自主把用户请求拆成少量意图阶段.
-定义好固定的plan state，plan不仅仅是一段提示也是有状态的。
+设计：
 
-✓ Execution Plan
-把计划注入模型上下文
-
-✓ Execution Monitoring
-工具调用后观察当前计划是否推进，根据plan state
-
-→ Phase 5.3 完成验收后回补 A：Dynamic Replan
-失败、信息不足、目标变化时改计划，计划的修改，好像有点问题。
-我觉得可能是设计的问题，当前是start-text-tools-texts-end，如果修改计划，是需要修改plan后续状态的，当前只做到一次性的plan
-
-✓ Reflection
-最终回答前检查计划是否完成
-
-✓ 补强 phase 1 checkpoint：
-✓ - checkpoint 增加 plan 相关观测字段
-✓ - run trace 中记录计划变化
+- Todo 初始化是同一模型的只读阶段，只开放 `rewrite_todos`，首次快照包含 2 到 6 个可审阅的长任务步骤。
+- 删除独立 Planner / Replanner；同一个模型在后续轮次兼任 Executor 与 Todo 审查者。
+- `rewrite_todos` 是初始化和后续修改的唯一入口；完整快照支持状态修改、新增、删除、调序、拆分、合并与取消。
+- `TodoPhase` 管理 `UNINITIALIZED / ACTIVE / COMPLETED` 生命周期。
+- `TodoSyncState` 独立管理 `CLEAN / DIRTY` 同步状态。
+- 外部工具批次后进入 `ACTIVE + DIRTY`；执行过程不强制立即同步。
+- 最终回答前必须同步，并且所有必要 Todo 都是 `done/cancelled`。
+- `COMPLETED + DIRTY` 为非法组合。
+- TodoList 是 Run 局部状态；TodoMode 是不持有运行状态的生命周期策略。
+- TodoList 与 revision 进入 checkpoint / run trace，不把初始化模型原始响应写回 Conversation。
 
 
 遗留问题：
 用户 **只读/禁止修改** 约束跟随，当前的agent并不能很好的跟随。
-更稳定的工具失败动态重规划测试。
+真实长任务下 `rewrite_todos` 的稳定性测试。
 
 ====================
 
@@ -330,7 +320,7 @@ ModelContext：某一次模型调用的不可变快照
 - Conversation 只保存原始记录，压缩不删除、替换或改写其消息。
 - Conversation 的每条领域记录拥有稳定 `message_id`；`message_id` 属于记录外壳，不进入 OpenAI 消息协议。
 - `tool_call_id` 只负责匹配 assistant tool call 与 tool result，不能代替 `message_id`。
-- ContextState 随 Session 存活，支持 Planner、多个 Agent Round 与 resume 复用同一压缩进度。
+- ContextState 随 Session 存活，支持 Todo 初始化、多个 Agent Round 与 resume 复用同一压缩进度。
 - ModelContext 仍是单次调用快照；同一 Round 的 retry 必须复用同一快照。
 - ContextBudget 只评估完整请求的压力与是否允许发送，不修改上下文；Level 1 首次脱水允许写入 ArtifactStore。
 - 压缩不新建 Session。新 Session Handoff 是另一种用例，不属于本阶段。
@@ -398,7 +388,7 @@ Benchmark：
 
 - 同一 Session 在不更换 session_id 的前提下至少连续触发两次 Level 2，仍能继续完成任务。
 - 第二次摘要使用 `S1 + 新 delta` 生成 S2，不重新读取已被 S1 覆盖的全部原始前缀。
-- Planner 和 Agent Round 都使用同一 Session ContextState 准备模型输入。
+- Todo 初始化和 Agent Round 都使用同一 Session ContextState 准备模型输入。
 - Level 2 第一版以当前 Run 为安全边界，只摘要本 Run 开始前的历史；当前 Run 的用户目标与步骤保持原文。
 - interrupt/resume 后继续使用已提交的 ContextState，Conversation 工具协议链仍完整。
 - Conversation 中的原始消息数量、内容和 message_id 不因压缩发生变化。
@@ -420,7 +410,7 @@ Phase 5.3 后续路线
 ```text
 Phase 5.3 完成验收
 │
-├─ 回补 A：Dynamic Replan
+├─ ✓ 回补 A：Dynamic TodoList
 ├─ 回补 B：输入/工具结果边界
 └─ 回补 C：Artifact 生命周期
         ↓
@@ -443,25 +433,25 @@ Phase 7 Scheduler / Watcher / Background Task
 Phase 8 Multi-Agent
 ```
 
-回补 A：Dynamic Replan
+✓ 回补 A：Dynamic TodoList
 
-失败、信息不足或目标变化时，允许当前 Run 修改既有计划并继续执行；只回补动态计划能力，不扩展为任务调度系统。
+TodoList 是当前 Run 面向执行的可变认知状态。外部工具产生新观察后将其标记为 dirty；Executor 可以继续行动，并在最终回答前通过 `rewrite_todos` 完成同步。
 
 职责边界：
 
 ```text
 RunRuntime
-├─ 准备 Planner / Executor / Replanner 各自独立的 ModelContext
+├─ 准备只读 Todo 初始化与 Executor 的 ModelContext
 ├─ 统一执行模型调用、瞬时错误重试、usage 与 checkpoint
-└─ 驱动 PlanningMode 生命周期
+└─ 驱动 TodoMode 生命周期与 Todo Sync Barrier
 
-PlanningMode
-├─ 提供 Planner / Replanner 专用 prompt
-├─ 接收并解析结构化响应
-└─ 维护 Plan 状态与 revision
+TodoMode
+├─ 提供初始 Todo 生成 prompt 与 `rewrite_todos` 内部工具
+├─ 驱动 Run 局部 TodoList 的状态迁移
+└─ 在退出边界拒绝 dirty 或未完成的 TodoList
 ```
 
-Planner / Replanner 不再直接持有 `ModelCallService`、模型名或重试策略。重试属于单次 Run 的调用编排，因此归 `RunRuntime`；planning 层只保留计划契约与状态变化。Planner、Executor、Replanner 可以共用同一模型，但必须使用互相隔离的 system prompt 与 ModelContext。同一次调用的 retry 复用已经准备好的 ModelContext，不在 retry 之间重新压缩。
+Todo 初始化不是独立组件：它是同一个模型在 Run 开始时承担的只读阶段，只能调用 `rewrite_todos`。后续 Executor 兼任 Todo 审查者，通过同一工具提交完整快照，不再存在失败专用 Replanner 调用。模型调用、retry、usage 与 checkpoint 仍统一由 `RunRuntime` 编排。
 
 回补 B：输入/工具结果边界
 
