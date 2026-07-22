@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from core.context import ContextState
-from core.session_runner import SessionRuntime
+from core.session_runner import MAX_USER_MESSAGE_CHARS, SessionRuntime
 from core.session_state import (
     Session,
     SessionEvent,
@@ -168,6 +168,20 @@ class SessionRuntimeStartTest(unittest.TestCase):
         self.assertEqual(seen_states, [ContextState(), advanced_state])
         self.assertIs(session.context_state, advanced_state)
 
+    def test_start_rejects_oversized_user_message_without_entering_run(self):
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
+        oversized = "x" * (MAX_USER_MESSAGE_CHARS + 1)
+        message_count = len(session.conversation.records)
+
+        with self.assertRaisesRegex(ValueError, "超过单次输入上限"):
+            self.runtime.start(session.id, "run-1", oversized)
+
+        self.run_runtime.run.assert_not_called()
+        self.assertEqual(session.status, SessionStatus.PENDING)
+        self.assertEqual(session.run_records, [])
+        self.assertEqual(len(session.conversation.records), message_count)
+        self.assertEqual(self.runtime.active_controls, {})
+
 
 class SessionRuntimeRequestInterruptTest(unittest.TestCase):
     def setUp(self):
@@ -298,6 +312,19 @@ class SessionRuntimeResumeTest(unittest.TestCase):
         self.run_runtime.run.assert_not_called()
         self.assertEqual(len(self.session.run_records), 1)
         self.assertEqual(self.session.status, SessionStatus.INTERRUPTED)
+
+    def test_resume_rejects_oversized_user_message_without_entering_run(self):
+        oversized = "x" * (MAX_USER_MESSAGE_CHARS + 1)
+        message_count = len(self.session.conversation.records)
+
+        with self.assertRaisesRegex(ValueError, "超过单次输入上限"):
+            self.runtime.resume(self.session.id, "run-2", oversized)
+
+        self.run_runtime.run.assert_not_called()
+        self.assertEqual(self.session.status, SessionStatus.INTERRUPTED)
+        self.assertEqual(len(self.session.run_records), 1)
+        self.assertEqual(len(self.session.conversation.records), message_count)
+        self.assertEqual(self.runtime.active_controls, {})
 
     def test_resume_rejects_unknown_session(self):
         with self.assertRaises(KeyError):

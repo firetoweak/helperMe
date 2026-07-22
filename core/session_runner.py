@@ -18,6 +18,7 @@ from core.session_state import (
 )
 from datetime import datetime, timezone
 
+MAX_USER_MESSAGE_CHARS = 32_000
 
 RUN_STATUS_MAPPING = {
     RunStatus.COMPLETED: (
@@ -87,8 +88,7 @@ class SessionRuntime:
             raise ValueError("session_id 不能为空")
         if not run_id or not run_id.strip():
             raise ValueError("run_id 不能为空")
-        if not user_message or not user_message.strip():
-            raise ValueError("user_message 不能为空")
+        self._validate_user_message(user_message)
 
         if session_id not in self.sessions:
             raise KeyError(f"Session 不存在: {session_id}")
@@ -147,8 +147,7 @@ class SessionRuntime:
             raise ValueError("session_id 不能为空")
         if not run_id or not run_id.strip():
             raise ValueError("run_id 不能为空")
-        if not user_message or not user_message.strip():
-            raise ValueError("user_message 不能为空")
+        self._validate_user_message(user_message)
         if session_id not in self.sessions:
             raise KeyError(f"Session 不存在: {session_id}")
 
@@ -166,6 +165,16 @@ class SessionRuntime:
             event_kind=SessionEventType.RESUMED,
             event_reason="Session resumed",
         )
+
+    @staticmethod
+    def _validate_user_message(user_message: str) -> None:
+        if not user_message or not user_message.strip():
+            raise ValueError("user_message 不能为空")
+        if len(user_message) > MAX_USER_MESSAGE_CHARS:
+            raise ValueError(
+                "user_message 超过单次输入上限: "
+                f"{len(user_message)} > {MAX_USER_MESSAGE_CHARS}"
+            )
 
     def _begin_and_execute_run(
         self,
