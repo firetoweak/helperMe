@@ -14,7 +14,7 @@ from openai import (
     RateLimitError,
 )
 
-from core.context_compactor import is_context_limit_error
+from core.context.compactor import is_context_limit_error
 from core.model_call.types import (
     InvalidLLMResponse,
     LLMCallResult,

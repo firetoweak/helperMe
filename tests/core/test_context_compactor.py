@@ -1,6 +1,6 @@
 import unittest
 
-from core.context_compactor import (
+from core.context.compactor import (
     ContextCompactor,
     ContextCompressionNotImplementedError,
     is_context_limit_error,

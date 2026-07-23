@@ -5,8 +5,8 @@ from core.context import ContextState, make_budget_assessment
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.session_runner import SessionRuntime
-from core.session_state import SessionEvent
+from core.session import SessionRuntime
+from core.session.state import SessionEvent
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from tests.core.llm_test_support import (
     call_result,

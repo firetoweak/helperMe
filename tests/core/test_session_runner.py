@@ -2,8 +2,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from core.context import ContextState
-from core.session_runner import MAX_USER_MESSAGE_CHARS, SessionRuntime
-from core.session_state import (
+from core.session import MAX_USER_MESSAGE_CHARS, SessionRuntime
+from core.session.state import (
     Session,
     SessionEvent,
     SessionEventType,

@@ -13,7 +13,7 @@ from core.observability import (
     get_default_run_log_path,
     write_run_log,
 )
-from core.session_runner import SessionRunOutcome
+from core.session import SessionRunOutcome
 from core.tools_runtime.run_runtime import RunStatus
 
 

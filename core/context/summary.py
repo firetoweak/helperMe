@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.context import ModelContext
+from core.context.manager import ModelContext
 from core.context.preparation import (
     SummaryGeneration,
     SummaryGenerationBlocked,

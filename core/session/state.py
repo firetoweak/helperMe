@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from core.messages import Conversation
 from core.context import ContextState
 
+
 class SessionStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"

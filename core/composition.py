@@ -12,19 +12,19 @@ from core.runtime_modes import (
     RuntimeModeRouter,
 )
 from core.todos import TodoMode
-from core.session_runner import SessionRuntime
+from core.session import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
 from core.context import (
     ContextBudget,
     ContextManager,
     ContextPreparationService,
+    LLMContextSummaryGenerator,
     MicroCompactionConfig,
     MicroCompactionPolicy,
     ModelBudgetConfig,
     TiktokenTokenEstimator,
 )
 from core.model_call.service import ModelCallService
-from core.context_summary import LLMContextSummaryGenerator
 from core.runtime_artifacts import (
     FileArtifactStore,
     ToolResultExternalizer,

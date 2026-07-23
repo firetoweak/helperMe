@@ -9,7 +9,7 @@ from core.tools_runtime.run_runtime import (
     RunRuntime,
     RunStatus,
 )
-from core.session_state import (
+from core.session.state import (
     Session,
     SessionEvent,
     SessionEventType,

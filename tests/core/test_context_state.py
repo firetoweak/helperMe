@@ -5,7 +5,7 @@ from core.context import ContextManager, ContextRequest, ContextState
 from core.context.composition import parse_tool_result_meta
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
-from core.session_state import Session
+from core.session.state import Session
 
 
 class ContextStateTest(unittest.TestCase):

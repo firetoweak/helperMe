@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock
 
 from core.agent_application import AgentApplication
-from core.session_runner import SessionRuntime
+from core.session import SessionRuntime
 from core.tools_runtime.run_runtime import RunStatus
 
 

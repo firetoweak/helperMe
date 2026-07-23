@@ -29,6 +29,12 @@ from core.context.preparation import (
     SummaryGeneration,
     SummaryGenerationBlocked,
 )
+from core.context.compactor import (
+    ContextCompactor,
+    ContextCompressionNotImplementedError,
+    is_context_limit_error,
+)
+from core.context.summary import LLMContextSummaryGenerator
 
 __all__ = [
     "BudgetAssessment",
@@ -54,6 +60,10 @@ __all__ = [
     "SummaryCompaction",
     "SummaryGeneration",
     "SummaryGenerationBlocked",
+    "ContextCompactor",
+    "ContextCompressionNotImplementedError",
+    "is_context_limit_error",
+    "LLMContextSummaryGenerator",
     "make_budget_assessment",
     "stub_composition",
     "empty_tool_window_stats",

@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from core.session_state import (
+from core.session.state import (
     InvalidSessionTransition,
     Session,
     SessionEvent,

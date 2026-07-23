@@ -6,8 +6,8 @@ from core.agent_application import AgentApplication
 from core.context import ContextManager
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.session_runner import SessionRuntime
-from core.session_state import SessionEventType, SessionStatus
+from core.session import SessionRuntime
+from core.session.state import SessionEventType, SessionStatus
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from tests.core.llm_test_support import (

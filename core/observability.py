@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.session_runner import SessionRunOutcome
+from core.session import SessionRunOutcome
 from core.tools_runtime.tools_checkpoint import checkpoint_to_record
 
 
