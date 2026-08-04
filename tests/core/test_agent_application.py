@@ -99,6 +99,12 @@ class AgentApplicationContractTest(unittest.TestCase):
             "console_interrupt",
         )
 
+    def test_delete_session_forwards_explicit_use_case(self):
+        result = self.application.delete_session("session-1")
+
+        self.assertIsNone(result)
+        self.session_runtime.delete_session.assert_called_once_with("session-1")
+
     def test_session_runtime_errors_are_not_hidden(self):
         self.session_runtime.start.side_effect = KeyError("Session 不存在")
 

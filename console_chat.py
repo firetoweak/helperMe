@@ -22,7 +22,8 @@ TERMINAL_RUN_STATUSES = {
     RunStatus.FAILED,
 }
 
-MODEL_CONTEXT_LIMIT = 70_768
+MODEL_CONTEXT_LIMIT = 200_000
+INPUT_BUDGET_RATIO = 0.9
 
 
 def _new_session(application: AgentApplication) -> str:
@@ -87,6 +88,7 @@ def main() -> None:
         model,
         model_context_limit=MODEL_CONTEXT_LIMIT,
         runtime_root=Path.home() / ".helper-me" / "runtime",
+        input_budget_ratio=INPUT_BUDGET_RATIO,
     )
     session_id = _new_session(application)
     log_path = _resolve_log_path()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from dataclasses import dataclass
+from typing import Callable
 
 from core.tools_runtime.run_runtime import (
     RunControl,
@@ -48,8 +49,25 @@ class SessionRunOutcome:
 
 
 class SessionRuntime:
-    def __init__(self, run_runtime: RunRuntime):
+    def __init__(
+        self,
+        run_runtime: RunRuntime | None = None,
+        *,
+        run_runtime_factory: Callable[[str], RunRuntime] | None = None,
+        delete_session_resources: Callable[[str], None] | None = None,
+    ):
+        if (run_runtime is None) == (run_runtime_factory is None):
+            raise ValueError(
+                "run_runtime 与 run_runtime_factory 必须且只能提供一个"
+            )
+        if run_runtime_factory is not None and delete_session_resources is None:
+            raise ValueError(
+                "使用 run_runtime_factory 时必须提供 delete_session_resources"
+            )
         self.run_runtime = run_runtime
+        self._run_runtime_factory = run_runtime_factory
+        self._delete_session_resources = delete_session_resources
+        self._session_run_runtimes: dict[str, RunRuntime] = {}
         self.sessions: dict[str, Session] = {}
         self.active_controls: dict[str, RunControl] = {}
 
@@ -74,8 +92,25 @@ class SessionRuntime:
         )
 
         session.record_event(event)
+        if self._run_runtime_factory is not None:
+            self._session_run_runtimes[session.id] = self._run_runtime_factory(
+                session.id
+            )
         self.sessions[session.id] = session
         return session
+
+    def delete_session(self, session_id: str) -> None:
+        if not session_id or not session_id.strip():
+            raise ValueError("session_id 不能为空")
+        if session_id not in self.sessions:
+            raise KeyError(f"Session 不存在: {session_id}")
+        if session_id in self.active_controls:
+            raise ValueError(f"不能删除正在执行的 Session: {session_id}")
+
+        if self._delete_session_resources is not None:
+            self._delete_session_resources(session_id)
+        self._session_run_runtimes.pop(session_id, None)
+        del self.sessions[session_id]
 
     def start(
         self,
@@ -228,7 +263,11 @@ class SessionRuntime:
         max_rounds: int,
         control: RunControl,
     ) -> SessionRunOutcome:
-        result = self.run_runtime.run(
+        run_runtime = self._session_run_runtimes.get(
+            session.id,
+            self.run_runtime,
+        )
+        result = run_runtime.run(
             conversation=session.conversation,
             user_message=user_message,
             max_rounds=max_rounds,

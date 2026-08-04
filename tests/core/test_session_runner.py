@@ -70,6 +70,73 @@ class SessionRuntimeCreateSessionTest(unittest.TestCase):
         self.assertNotIn("session-1", self.runtime.sessions)
 
 
+class SessionRuntimeDeleteSessionTest(unittest.TestCase):
+    def setUp(self):
+        self.created_runtimes = {}
+        self.deleted_sessions = []
+
+        def create_runtime(session_id):
+            runtime = Mock()
+            self.created_runtimes[session_id] = runtime
+            return runtime
+
+        self.runtime = SessionRuntime(
+            run_runtime_factory=create_runtime,
+            delete_session_resources=self.deleted_sessions.append,
+        )
+
+    def test_delete_session_removes_state_runtime_and_resources(self):
+        self.runtime.create_session("session-1", system_prompt="prompt")
+
+        self.runtime.delete_session("session-1")
+
+        self.assertNotIn("session-1", self.runtime.sessions)
+        self.assertNotIn("session-1", self.runtime._session_run_runtimes)
+        self.assertEqual(self.deleted_sessions, ["session-1"])
+
+    def test_delete_session_rejects_active_session_without_deleting_resources(self):
+        self.runtime.create_session("session-1", system_prompt="prompt")
+        self.runtime.active_controls["session-1"] = Mock()
+
+        with self.assertRaisesRegex(ValueError, "正在执行"):
+            self.runtime.delete_session("session-1")
+
+        self.assertIn("session-1", self.runtime.sessions)
+        self.assertEqual(self.deleted_sessions, [])
+
+    def test_resource_delete_failure_preserves_session_state(self):
+        runtime = SessionRuntime(
+            run_runtime_factory=lambda _session_id: Mock(),
+            delete_session_resources=Mock(
+                side_effect=OSError("drawer delete failed")
+            ),
+        )
+        runtime.create_session("session-1", system_prompt="prompt")
+
+        with self.assertRaisesRegex(OSError, "drawer delete failed"):
+            runtime.delete_session("session-1")
+
+        self.assertIn("session-1", runtime.sessions)
+        self.assertIn("session-1", runtime._session_run_runtimes)
+
+    def test_completed_run_does_not_delete_session_drawer(self):
+        session = self.runtime.create_session(
+            "session-1",
+            system_prompt="prompt",
+        )
+        self.created_runtimes[session.id].run.return_value = Mock(
+            status=RunStatus.COMPLETED,
+            final_reason=None,
+            context_state=session.context_state,
+        )
+
+        self.runtime.start(session.id, "run-1", "完成任务")
+
+        self.assertIn(session.id, self.runtime.sessions)
+        self.assertIn(session.id, self.runtime._session_run_runtimes)
+        self.assertEqual(self.deleted_sessions, [])
+
+
 class SessionRuntimeStartTest(unittest.TestCase):
     def setUp(self):
         self.run_runtime = Mock()

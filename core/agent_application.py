@@ -35,3 +35,6 @@ class AgentApplication:
 
     def request_interrupt(self, session_id, reason=None):
         self._session_runtime.request_interrupt(session_id, reason)
+
+    def delete_session(self, session_id: str) -> None:
+        self._session_runtime.delete_session(session_id)

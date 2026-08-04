@@ -26,7 +26,7 @@ from core.context import (
 )
 from core.model_call.service import ModelCallService
 from core.runtime_artifacts import (
-    FileArtifactStore,
+    FileArtifactDrawers,
     ToolResultExternalizer,
     ToolResultLimit,
 )
@@ -66,23 +66,9 @@ def create_agent_application(
         context_budget=context_budget,
     )
     result_limit = ToolResultLimit()
-    artifact_store = FileArtifactStore(runtime_root / "artifacts")
-    tool_registry = BUILTIN_TOOL_REGISTRY.clone()
-    tool_registry.register(create_read_artifact_spec(artifact_store))
     context_manager = ContextManager(result_limit.max_chars)
-    context_preparation = ContextPreparationService(
-        context_manager=context_manager,
-        micro_compaction_policy=MicroCompactionPolicy(
-            context_manager=context_manager,
-            context_budget=context_budget,
-            config=MicroCompactionConfig(
-                recent_protection_tokens=recent_protection_tokens,
-            ),
-            artifact_store=artifact_store,
-        ),
-        context_budget=context_budget,
-        summary_generator=LLMContextSummaryGenerator(model_calls, model),
-    )
+    summary_generator = LLMContextSummaryGenerator(model_calls, model)
+    artifact_drawers = FileArtifactDrawers(runtime_root / "sessions")
     mode_configuration = (
         {"runtime_mode": runtime_mode}
         if runtime_mode is not None
@@ -94,18 +80,40 @@ def create_agent_application(
             },
         }
     )
-    run_runtime = RunRuntime(
-        model_calls=model_calls,
-        model=model,
-        context_preparation=context_preparation,
-        tools_executor=ToolsExecutor(tool_registry),
-        tool_result_externalizer=ToolResultExternalizer(
-            artifact_store,
-            result_limit,
-        ),
-        **mode_configuration,
+
+    def create_session_run_runtime(session_id: str) -> RunRuntime:
+        artifact_store = artifact_drawers.for_session(session_id)
+        tool_registry = BUILTIN_TOOL_REGISTRY.clone()
+        tool_registry.register(create_read_artifact_spec(artifact_store))
+        context_preparation = ContextPreparationService(
+            context_manager=context_manager,
+            micro_compaction_policy=MicroCompactionPolicy(
+                context_manager=context_manager,
+                context_budget=context_budget,
+                config=MicroCompactionConfig(
+                    recent_protection_tokens=recent_protection_tokens,
+                ),
+                artifact_store=artifact_store,
+            ),
+            context_budget=context_budget,
+            summary_generator=summary_generator,
+        )
+        return RunRuntime(
+            model_calls=model_calls,
+            model=model,
+            context_preparation=context_preparation,
+            tools_executor=ToolsExecutor(tool_registry),
+            tool_result_externalizer=ToolResultExternalizer(
+                artifact_store,
+                result_limit,
+            ),
+            **mode_configuration,
+        )
+
+    session_runtime = SessionRuntime(
+        run_runtime_factory=create_session_run_runtime,
+        delete_session_resources=artifact_drawers.delete,
     )
-    session_runtime = SessionRuntime(run_runtime)
     return AgentApplication(
         session_runtime=session_runtime,
         system_prompt=DEFAULT_AGENT_PROMPT,

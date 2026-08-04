@@ -5,6 +5,7 @@ from pathlib import Path
 
 from core.runtime_artifacts import (
     ArtifactNotFoundError,
+    FileArtifactDrawers,
     FileArtifactStore,
     ToolResultExternalizer,
     ToolResultLimit,
@@ -93,6 +94,38 @@ class RuntimeArtifactsTest(unittest.TestCase):
     def test_store_rejects_unknown_artifact(self):
         with self.assertRaises(ArtifactNotFoundError):
             self.store.read("art_00000000000000000000000000000000", 0, 1)
+
+    def test_session_drawer_survives_store_reconstruction(self):
+        drawers = FileArtifactDrawers(self.root / "sessions")
+        ref = drawers.for_session("session-1").save("persistent content")
+
+        reopened = FileArtifactDrawers(
+            self.root / "sessions"
+        ).for_session("session-1")
+
+        self.assertEqual(
+            reopened.read(ref.artifact_id, 0, 100).content,
+            "persistent content",
+        )
+
+    def test_session_drawers_are_isolated_and_deleted_as_a_whole(self):
+        drawers = FileArtifactDrawers(self.root / "sessions")
+        session_a = drawers.for_session("session-a")
+        session_b = drawers.for_session("session-b")
+        ref_a = session_a.save("A content")
+        ref_b = session_b.save("B content")
+
+        with self.assertRaises(ArtifactNotFoundError):
+            session_b.read(ref_a.artifact_id, 0, 100)
+
+        drawers.delete("session-a")
+
+        with self.assertRaises(ArtifactNotFoundError):
+            session_a.read(ref_a.artifact_id, 0, 100)
+        self.assertEqual(
+            session_b.read(ref_b.artifact_id, 0, 100).content,
+            "B content",
+        )
 
     def test_externalizer_does_not_hide_store_failure(self):
         class FailingStore:

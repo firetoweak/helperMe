@@ -1,5 +1,7 @@
 ## Phase 5.2.1 Tool Result Budget / Runtime Artifact 总结
 
+> **Artifact 生命周期后继修订（Phase 5 回补 C）**：Runtime Artifact 已明确为 Conversation 的外部正文，并改为 Session 私有工作抽屉。应用退出、Run/Session 完成和 Level 2 裁剪均不自动删除；只有显式 `delete_session` 才整体清理对应抽屉。本文后面“暂不按 Session 划分、暂不自动清理”的描述只代表 5.2.1 初版状态，以本修订为准。
+
 这一步是 Phase 5.3 Safe Compression 的前置。我们解决的问题不是简单截断字符串，而是保证单次工具结果不会独自撑爆上下文，同时保留完整结果供模型按需继续读取。
 
 ### 为什么 Context Budget 仍然不够
