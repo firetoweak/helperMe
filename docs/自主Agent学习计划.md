@@ -7,13 +7,13 @@
 ## Rule 同步区
 
 - 禁止为了跑通当前局部模块而添加静默兜底、隐式默认值或自动生成关键关联数据。兜底不得掩盖上层调用错误，否则会破坏整体设计并显著增加调试成本。
-- 每个暴露给模型的工具描述必须回答四件事：工具做什么；什么时候使用以及代替什么；危险行为或关键限制；结果截断或失败后如何继续。
 
 ====================
 
 Phase 0
 Agent Core
 ====================
+
 目标是做一个能够调用工具，并且能够读写文件的agent最小MCP。
 
 学习内容：
@@ -22,6 +22,8 @@ Agent Core
 3. 调用工具的openAI api怎么定义的
 4. 工具是如何注册和描述
 5. 读写文件工具要做哪些？
+
+- 每个暴露给模型的工具描述必须回答四件事：工具做什么；什么时候使用以及代替什么；危险行为或关键限制；结果截断或失败后如何继续。
 
 Benchmark：
 提问：你觉得项目的工具描述是不是有点像一个code agent？你帮我优化一下描述，让它更像一个通用智能体。
@@ -59,9 +61,11 @@ Benchmark：
 
 Phase 1
 Reliable Tool-Calling Runtime
+====================
 
 为什么做：当前可靠性主要依赖 system prompt 和模型自觉，所有agent运行状态都在一起了，需要拆解
-====================
+
+
 目标是 Phase 1 的目标不是做完整 Runtime，而是把当前 Agent.run 中混杂的 tool calling loop 抽象成可靠的 RunRuntime，并用 tools_state 管理当前 run 内的工具调用链路，使工具调用过程可检查、可修复、可截断、可停止。
 
 学习内容：
@@ -127,11 +131,12 @@ RunRuntime -> RunResult -> SessionRuntime
 
 Phase 2
 TodoList
+====================
 
 TodoList 是面向单个 Run 执行的可变任务认知状态，不是真正的 Plan，也不是任务调度系统。
 Executor 将其作为当前行动参考，而不是不可违背的指令序列。
 真正的 Plan 保留给未来针对大目标进行 Todo 拆分、依赖组织与 SubAgent 委派的规划层。
-====================
+
 
 目标：让 agent 在执行长任务前形成可审阅的 TodoList，并在执行过程中通过 `rewrite_todos` 自主维护。
 TodoList 主要服务模型执行，不追求持久化、跨 Run 恢复或复杂调度。
@@ -171,10 +176,8 @@ Executor 能把 TodoList 作为柔性行动参考；
 
 Phase 3
 Long-running Agent
-
-把一次性 Agent.run 升级成可中断、可继续、可被人类介入的 Session Runtime。
-
 ====================
+把一次性 Agent.run 升级成可中断、可继续、可被人类介入的 Session Runtime。
 
 Benchmark：
 一个多步骤任务开始后，系统能创建 session；
