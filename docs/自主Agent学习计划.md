@@ -8,414 +8,129 @@
 
 - 禁止为了跑通当前局部模块而添加静默兜底、隐式默认值或自动生成关键关联数据。兜底不得掩盖上层调用错误，否则会破坏整体设计并显著增加调试成本。
 
-====================
-
-Phase 0
-Agent Core
-====================
-
-目标是做一个能够调用工具，并且能够读写文件的agent最小MCP。
-
-学习内容：
-1. 最小agent loop
-2. 消息拼接格式
-3. 调用工具的openAI api怎么定义的
-4. 工具是如何注册和描述
-5. 读写文件工具要做哪些？
-
-- 每个暴露给模型的工具描述必须回答四件事：工具做什么；什么时候使用以及代替什么；危险行为或关键限制；结果截断或失败后如何继续。
-
-Benchmark：
-提问：你觉得项目的工具描述是不是有点像一个code agent？你帮我优化一下描述，让它更像一个通用智能体。
-这个测试提问，agent能完成执行，并不出错（已达成 2026.06.30）
-修改正确✓ 不死循环✓ get_changes一致✓ 最终总结真实✓ 
-
-✓ OpenAI Protocol
-简单的openAI api 
-有：标准调用格式，支持配置api 和工具调用
-缺：无流式
-
-✓ Message
-有：基础状态，消息拼装
-缺：无trace跟踪
-
-✓ Tool Registry
-有：工具注册表
-
-✓ Tool Execute
-有：ok code data...输出标准格式
-
-✓ Loop
-有：完整一轮对话工具调用循环，system_prompt
-缺：没有runtime
-
-✓ Workspace
-有：基础工作空间；Phase 5.5 已补充由 Composition Root 配置并注入的多根轻量路径沙箱。每个 root 使用独立 WorkspaceSandbox，文件工具只接受 root 名称与 root 内相对路径。
-边界：只约束经过 Workspace 工具的路径访问，不做进程/容器隔离。
-
-✓ Verification
-有：git diff 只能看到相比上次提交前是否改动此文件
-缺：以后优化成真正的改动地方检测
-
-====================
-
-Phase 1
-Reliable Tool-Calling Runtime
-====================
-
-为什么做：当前可靠性主要依赖 system prompt 和模型自觉，所有agent运行状态都在一起了，需要拆解
-
-
-目标是 Phase 1 的目标不是做完整 Runtime，而是把当前 Agent.run 中混杂的 tool calling loop 抽象成可靠的 RunRuntime，并用 tools_state 管理当前 run 内的工具调用链路，使工具调用过程可检查、可修复、可截断、可停止。
-
-学习内容：
-
-Benchmark：
-提问：
-你觉得项目的工具描述是不是有点像一个 code agent？你帮我优化一下描述，让它更像一个通用智能体。
-这个测试提问不出错的前提下，能够在日志中清晰的观测到工具调用状态（已完成）
-
-
-✓ 基础的runtime已经有了。
-ToolsState 是账本。RunRuntime 是执行控制者，Checkpoint/RunResult 是对外报告。
-
-
-✓ 抽出 RunRuntime，作为整个agent的心脏，最小运行内核
-短任务 runtime，保持其生命周期在一轮text-tools-text，一次多轮的工具调用。不持久的化状态。
-模型异常（完成了）
-
-✓ 定义 ToolsState
-ToolsState.compact_completed() ~~目前只是状态层截断，还没有和 conversation.messages 的上下文压缩真正打通~~
-超上下文直接报错，本期不做上下文压缩截断这些上下文优化操作。
-
-✓ 工具链路检查（初版）
-初版放在 ToolsState 中；Phase 3 回顾时发现协议校验不属于账本职责，后续已拆出。
-
-✓ Runner 退出结果
-
-✓ 非持久化 Checkpoint
-checkpoint 主要是run内报告，还不是可恢复执行点。
-
-Phase 1 已完成最小可靠 tool-calling runtime：工具调用循环已从 Agent 中抽出，工具链状态可检查、可报告、可在异常/预算耗尽时安全停止。上下文压缩、恢复执行、长期会话不属于本阶段。
-
-### Phase 3 回顾补强记录（2026.07.14）
-
-设计 SessionRuntime 时，上层对 interrupt、resume 和安全停止的需求暴露出 Phase 1 初版边界不清：ToolsState 混入 messages 协议处理，Checkpoint 混入停止安全判断，ToolStep 重复保存 result/ok/code/error，RunResult 使用含糊的 terminated，并且缺少供上层请求安全中断的控制入口。
-
-本次只为 Phase 3 回补 Tools Runtime，不扩展调度、持久化、Context/Facts 或多 Agent：
-
-- ToolsState：仅保存一次 run 内的工具步骤账本；ToolStep.result 是唯一结果源，ok/code/error 改为派生属性；每个 call_id 只能记录一次 result。
-- ToolsProtocol：独立负责 assistant tool_calls 与 tool results 的消息链校验及 tool message 转换。
-- StopGuard：独立判断 protocol_safe 和 business_safe；只有消息链完整，并且最后一次成功写入后完成 get_changes，才允许 completed/interrupted。
-- Checkpoint：只记录 run 内观察点，不再计算安全规则；Session 层生命周期记录统一称为 Event。
-- RunResult：使用 completed/interrupted/blocked/failed 四种 RunStatus；final_reason 从最终 Checkpoint 派生，不重复保存 error。
-- RunControl：提供 interrupt_requested 控制信号；RunRuntime 只在完整 tool batch 和业务安全点返回 interrupted。
-- RunRuntime：只负责编排模型调用、工具执行、协议、安全、Checkpoint 和统一 RunResult 出口；ToolsState 不向 SessionRuntime 泄漏。
-
-回补后的职责关系：
+## 全局路线图
 
 ```text
-RunRuntime
-├─ ToolsState：工具账本
-├─ ToolsProtocol：消息协议
-├─ ToolsExecutor：工具执行
-├─ StopGuard：停止安全
-└─ Checkpoint：run 内观测
-
-RunRuntime -> RunResult -> SessionRuntime
+Phase 0 Agent Core
+        ↓
+Phase 1 Reliable Tool-Calling Runtime
+        ↓
+Phase 2 TodoList
+        ↓
+Phase 3 Long-running Agent
+        ↓
+Phase 4 Agent Application Layer
+        ↓
+Phase 5 Context Management
+│
+├─ ✓ 5.1 Context Projection
+├─ ✓ 5.2 Context Budget
+├─ ✓ 5.2.1 Tool Result Budget / Runtime Artifact
+├─ ✓ 5.3 Safe Compression
+├─ ✓ 回补 A / A.1 / B / C
+├─ ✓ 5.5 Workspace Sandbox
+└─ 5.6 Workspace Retrieval（工具型）
+        ↓
+Phase 6 Goal、能力加载与委派
+        ↓
+Phase 7 Scheduler / Watcher / Background Task
+        ↓
+Phase 8 Multi-Agent
+        ↓
+Memory（后置，外挂）
 ```
 
-验证：完整测试 41 项通过；未验证写入不能完成或安全中断，中断后的 tool_call/result 消息链保持合法。
+详细执行过程按 Phase 编号见 [`docs/0/`](0/) … [`docs/5/`](5/)。
 
-====================
+---
 
-Phase 2
-TodoList
-====================
+## Phase 0 · Agent Core
 
-TodoList 是面向单个 Run 执行的可变任务认知状态，不是真正的 Plan，也不是任务调度系统。
-Executor 将其作为当前行动参考，而不是不可违背的指令序列。
-真正的 Plan 保留给未来针对大目标进行 Todo 拆分、依赖组织与 SubAgent 委派的规划层。
+目标是做一个能够调用工具，并且能够读写文件的 agent 最小 MCP。
 
+### 小节索引
 
-目标：让 agent 在执行长任务前形成可审阅的 TodoList，并在执行过程中通过 `rewrite_todos` 自主维护。
-TodoList 主要服务模型执行，不追求持久化、跨 Run 恢复或复杂调度。
+### ✓ Agent Core 最小闭环
 
-Benchmark：
-每个 Run 在执行前根据完整 Conversation 选择 `plain/todo`；
-简单任务跳过 Todo 初始化，复杂或不确定任务进入 TodoMode；
-面对一个需要读文件、分析、修改、验证的任务，Todo 初始化阶段只开放 `rewrite_todos` 并创建步骤清单；
-Executor 能把 TodoList 作为柔性行动参考；
-工具产生新观察后，Executor 可继续行动，也可随时 `rewrite_todos`；
-最终回答前必须通过 Todo Sync Barrier。
+- 状态：完成（Benchmark 已达成 2026.06.30）
+- 目标：打通最小 agent loop、工具注册/调用与文件读写。
+- 结论：已有 Protocol / Message / Registry / Execute / Loop / Workspace / Verification；缺流式、trace 与独立 runtime。
+- 详述：[phase0_总结.md](0/phase0_总结.md)
 
+---
 
-设计：
+## Phase 1 · Reliable Tool-Calling Runtime
 
-- `RuntimeModeRouter` 在当前 user message 写入 Conversation 后、创建 mode state 前运行；路由按 Run 生效，不固定整个 Session。
-- Router 不开放工具，只返回严格的 `mode/reason` JSON；非法响应被严格拒绝，但动态路由链路在同一 Run 降级到 `plain`。
-- 路由结果只进入 checkpoint / usage，不写回 Conversation；`RunRuntime` 仍统一管理模型调用和上下文准备。
-- `plain` 直接进入 Agent Round；`todo` 先执行受限 Todo 初始化。讨论、评价、解释或提出方向属于 `plain`；只有明确授权执行后才继续判断是否需要 `todo`。
-- Todo 初始化是同一模型的只读阶段，只开放 `rewrite_todos`，首次快照包含 2 到 6 个可审阅的长任务步骤。
-- 删除独立 Planner / Replanner；同一个模型在后续轮次兼任 Executor 与 Todo 审查者。
-- `rewrite_todos` 是初始化和后续修改的唯一入口；完整快照支持状态修改、新增、删除、调序、拆分、合并与取消。
-- `TodoPhase` 管理 `UNINITIALIZED / ACTIVE / COMPLETED` 生命周期。
-- `TodoSyncState` 独立管理 `CLEAN / DIRTY` 同步状态。
-- 外部工具批次后进入 `ACTIVE + DIRTY`；执行过程不强制立即同步。
-- 最终回答前必须同步，并且所有必要 Todo 都是 `done/cancelled`。
-- `COMPLETED + DIRTY` 为非法组合。
-- TodoList 是 Run 局部状态；TodoMode 是不持有运行状态的生命周期策略。
-- TodoList 与 revision 进入 checkpoint / run trace，不把初始化模型原始响应写回 Conversation。
+把 Agent.run 中混杂的 tool calling loop 抽成可检查、可截断、可停止的 RunRuntime。
 
+### 小节索引
 
-遗留问题：
-用户 **只读/禁止修改** 约束跟随，当前的agent并不能很好的跟随。
-真实长任务下 `rewrite_todos` 的稳定性测试。
+### ✓ 初版 RunRuntime
 
-====================
+- 状态：完成
+- 目标：用 ToolsState 管理一次 run 内的工具调用链路，并统一 RunResult 出口。
+- 结论：ToolsState 是账本，RunRuntime 是执行控制者；上下文压缩与长期会话不属于本阶段。
+- 详述：[phase1_总结.md](1/phase1_总结.md)
 
-Phase 3
-Long-running Agent
-====================
+### ✓ Phase 3 回顾补强（2026.07.14）
+
+- 状态：完成
+- 目标：为 interrupt/resume 回补 Tools Runtime 职责边界。
+- 结论：拆出 ToolsProtocol / StopGuard / RunControl；RunStatus 收敛为 completed/interrupted/blocked/failed。
+- 详述：[phase1_Phase3回补总结.md](1/phase1_Phase3回补总结.md)
+
+---
+
+## Phase 2 · TodoList
+
+让 agent 在长任务前形成可审阅 TodoList，并在执行中通过 `rewrite_todos` 自主维护。
+
+### 小节索引
+
+### ✓ TodoList
+
+- 状态：完成（遗留：只读约束跟随、长任务稳定性）
+- 目标：按 Run 路由 `plain/todo`，把 TodoList 作为柔性行动参考。
+- 结论：删除独立 Planner/Replanner；最终回答前必须通过 Todo Sync Barrier。
+- 详述：[phase2_总结.md](2/phase2_总结.md)
+
+---
+
+## Phase 3 · Long-running Agent
+
 把一次性 Agent.run 升级成可中断、可继续、可被人类介入的 Session Runtime。
 
-Benchmark：
-一个多步骤任务开始后，系统能创建 session；
-执行到安全点时可以 interrupt；
-interrupt 后 messages/tool_call 链路仍然合法；
-用户追加新的 user_message 后可以 resume；
-resume 后 agent 能基于原 conversation 继续完成任务；
-日志/Event 能看到 session: running -> interrupted -> running -> completed。
+### 小节索引
 
+### ✓ Session Runtime
 
-Session
-定义好会话状态，一个多步任务/多轮交互的状态。
-持久化到文件中，先搁置。
+- 状态：完成
+- 目标：支持 session 创建、安全点 interrupt、追加 user_message 后 resume。
+- 结论：Conversation 是协议层事实；resume 是同进程继续，不是持久化崩溃恢复。
+- 详述：[phase3_总结.md](3/phase3_总结.md)
 
-Session 必须持有：
-1. conversation：恢复上下文
-2. status：运行状态
-3. event：可观察历史
-4. run_records：历次 run 的最小摘要
+---
 
+## Phase 4 · Agent Application Layer
 
-重点：
-- conversation 是协议层消息历史；ToolsState 是 runtime 层工具账本。它们互相映射，但不是包含关系。
-- facts 推迟到 Phase 5 Context Management：Phase 3 复用完整 conversation，没有独立 facts 的实际消费者，不提前复制工具结果或对话摘要。
-- constraints 推迟到 Phase 5：Phase 3 将 resume 输入视为新的 user_message，不判断它是继续指令、反馈还是长期约束。没有约束消费者时，提前分类只会复制数据并制造同步责任。
-- 不保存 progress.last_safe_point：RunRuntime 已保证 completed/interrupted 只发生在安全点，SessionRuntime 基于完整 conversation 继续即可。没有持久化恢复消费者时，再保存一份恢复位置属于重复状态。
-- session events 应该分层，不直接包含 tools runtime 的全部 events，只保存 session 层事件和 run 摘要。工具 runtime 的完整 event 留在 run result / run trace。
-- Session Event 在本阶段只记录生命周期，事件均由 SessionRuntime 产生，因此不设计 event source。等出现真实的多来源事件消费者后再引入来源模型。
-- Session Event 不提供任意 data 字典；当前生命周期字段已明确，提前开放无约束扩展口会弱化事件契约。
+建立无状态 `AgentApplication`，让 Console/API 通过显式用例复用同一套 SessionRuntime。
 
-✓ 回补 Phase 1 Tools Runtime：
-SessionRuntime 设计暴露出 ToolsState、协议校验、停止安全和结果状态边界不清；
-已按 Phase 3 的 interrupt/resume 需求完成职责拆分，不扩展无关能力。
+### 小节索引
 
-Run 摘要边界：
-- `SessionRunRecord` 只记录 run_id、状态、起止时间、结束原因等最小索引信息；
-- verification 是 RunRuntime 内部的安全检查与 checkpoint/trace 观测数据，不复制到 `RunResult` 或 `SessionRunRecord`；
-- RunRuntime 保证只有处于业务安全点的 run 才能 completed/interrupted；SessionRuntime 只根据最终 status/final_reason 驱动 Session 状态迁移；
-- 需要验证细节时，通过 run_id 查询 run trace，避免跨层重复保存快照。
+### ✓ AgentApplication
 
+- 状态：完成
+- 目标：拆出应用服务、Composition Root、Prompt 与 Observability 边界。
+- 结论：应用层不持有 Session；Channel 持有 session_id 并显式选择 start/resume。
+- 详述：[phase4_总结.md](4/phase4_总结.md)
 
-Context 边界
-本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/run trace。分类、提炼和长期约束需要真实消费者，统一留到 Phase 5。
+---
 
+## Phase 5 · Context Management
 
-Interrupt
-- 运行控制状态，不是具体业务策略
-- 可恢复的中断点：Agent 执行到某个关键节点时，主动暂停，把当前状态交给外部系统或用户，等外部输入后再从原位置继续执行。
-- Interrupt 不能只依赖 tool_call 链路完整，还要检查业务安全点。
-写入类工具成功后，必须完成 get_changes，才允许进入 interrupted/completed。
+在同一 Session 内管理长期累积的上下文：Conversation 保存完整事实轨迹，运行时生成可发送给模型的安全投影，不更换 Session 身份。
 
-Resume
-resume 不是崩溃恢复，也不是持久化恢复；
-只是同一进程内，基于 session 状态继续执行。
-resume 接收新的 user_message，但不判断或复制其语义；消息由 RunRuntime 写入原 conversation。
-本阶段不设计 Task Queue；active_controls 只管理当前同步 run 的控制信号，不是调度队列。
-
-✓ Agent 接入 SessionRuntime：
-- Agent 不再直接调用或持有 RunRuntime；RunRuntime 由 SessionRuntime 编排。
-- Agent 的 conversation 指向当前 Session 持有的 conversation，pending/completed 时 start，interrupted 时 resume。
-- completed 表示当前 run 已完成并等待下一条 user_message；下一轮在同一 Session、同一 conversation 中重新进入 running。interrupted 才使用 resume；blocked、failed 仍是终态。
-- SessionRuntime 使用临时 SessionRunOutcome 向调用方返回 RunResult 与 SessionRunRecord；Outcome 不写入 Session，避免长期状态重复。
-- 跨层测试已验证 Agent -> SessionRuntime -> RunRuntime 的 interrupt/resume、conversation 协议完整性及完整 Session Event 流。
-
-====================
-
-
-Phase 4
-Agent Application Layer
-====================
-
-为什么做：Phase 3 后旧 Agent 仍绑定单个 Session，并混合依赖创建、Prompt、用例编排和日志职责，不利于多个入口复用。
-
-目标：建立无状态 `AgentApplication`。Console/API 持有 session_id，应用层通过显式用例操作 SessionRuntime；不改变 Run/Session 语义。
-
-学习内容：
-1. Application Service 与显式用例。
-2. Composition Root 与依赖注入。
-3. Channel State、Prompt、Observability 边界。
-
-职责关系：
-
-```text
-Console / API -> AgentApplication -> SessionRuntime -> RunRuntime
-                    ↑
-             Composition Root
-
-Observability <- SessionRunOutcome
-```
-
-✓ AgentApplication：提供 create_session、start、resume、request_interrupt；不持有当前 Session、conversation 或 last_result。
-
-✓ Composition Root：统一组装 LLMClient、RunRuntime、SessionRuntime、Prompt 和 AgentApplication。
-
-✓ Console：持有 session_id/run_id，根据上次 RunStatus 显式选择 start 或 resume。
-
-✓ Prompt：从应用服务中拆出，由组合入口选择并注入；以后可扩展为外部人格配置。
-
-✓ Observability：只消费 SessionRunOutcome，不为日志或展示向 SessionRuntime 增加查询接口。
-
-✓ 删除旧 core/agent.py，不保留第二套正式 API。
-
-约束：
-- 自下而上扩展；不因上层展示需求修改 SessionRuntime 以下的边界。
-- 不引入 AgentCommand、Context/Memory、持久化 RunState、revision、async、调度、插件系统或 Event Bus。
-- start 不隐式创建 Session，错误 session_id/run_id 立即失败。
-
-Benchmark：
-- 同一个 AgentApplication 可操作两个 Session，conversation 不串线。
-- AgentApplication 不直接创建 LLMClient、RunRuntime，不包含 Prompt 常量和日志写入。
-- Console 保持同 Session 多轮与 interrupt/resume。
-- Phase 3/4 全量 91 项测试通过。
-
-====================
-
-
-Phase 5
-Context Management
-====================
-
-5.1 Context Projection
-
-5.2 Context Budget
-
-5.2.1 Tool Result Budget / Runtime Artifact（5.3 前置）
-
-5.3 Safe Compression（完成验收）
-
-问题定义：
-当合法的用户消息、Assistant 消息和工具结果在同一 Session 中长期累积时，在不修改完整事实轨迹、不改变 Session 身份的前提下，生成能够继续发送给模型的安全投影。
-
-本阶段不负责补救单条无界输入。用户输入和单次工具输出必须在各自的外部边界限制；超过契约时明确失败，不进入 Safe Compression。
-
-核心状态：
-
-```text
-Session
-├─ Conversation：完整、只追加的事实轨迹
-└─ ContextState：Session 级的有损投影状态
-   ├─ summary / summarized_through_message_id
-   └─ tool_artifacts：message_id → artifact_id
-
-Conversation + ContextState + runtime instructions
-    ↓
-ModelContext：某一次模型调用的不可变快照
-```
-
-责任边界：
-
-- Conversation 只保存原始记录，压缩不删除、替换或改写其消息。
-- Conversation 的每条领域记录拥有稳定 `message_id`；`message_id` 属于记录外壳，不进入 OpenAI 消息协议。
-- `tool_call_id` 只负责匹配 assistant tool call 与 tool result，不能代替 `message_id`。
-- ContextState 随 Session 存活，支持 Todo 初始化、多个 Agent Round 与 resume 复用同一压缩进度。
-- ModelContext 仍是单次调用快照；同一 Round 的 retry 必须复用同一快照。
-- ContextBudget 只评估完整请求的压力与是否允许发送，不修改上下文；Level 1 首次脱水允许写入 ArtifactStore。
-- 压缩不新建 Session。新 Session Handoff 是另一种用例，不属于本阶段。
-
-两级压缩：
-
-1. Level 1：持续性工具脱水投影
-   - 每次 ContextPreparation 都执行，不是高低水位触发的突发补救。
-   - 只处理 recent 保护窗外、已消费且成功的历史 tool result；保留 assistant tool_calls 与 tool 消息外壳。
-   - 投影将 tool body 替换为可回读 stub（artifact_id + hint）；Conversation 全文不变。
-   - 首次脱水时写入 ArtifactStore，并在 ContextState.tool_artifacts 记录 message_id→artifact_id（已外置结果复用已有 id，不重复落盘）。
-   - 普通文本暂不压缩。
-
-2. Level 2：增量 Auto-Compact
-   - 只在 Level 1 后仍超过输入预算时升级，是最后一级兜底。
-   - 调用 LLM，第一版只用 prompt 约束生成自由文本摘要，不定义结构化摘要模型。
-   - 摘要以合成 assistant 消息投影到 ModelContext，语义是“此前 Agent 的工作交接摘要”，不写回 Conversation。
-   - 首次使用旧消息前缀生成 S1；后续使用 `S(n-1) + 新 delta` 生成 Sn，不重新读取全部已压缩历史。
-   - Level 2 提交成功后，丢弃已被摘要边界覆盖的 tool_artifacts 条目。
-
-压缩边界：
-
-- system prompt、tools schema、runtime instructions 属于不可压缩基础占用。
-- 保留近期原始消息后缀（recent_protection_tokens）；窗内 tool 保持湿润。
-- 第一版固定以当前 Run 为边界，Level 2 只摘要本 Run 开始前的历史。
-- 最新工具结果即使协议闭合，在模型尚未消费前也不属于可脱水历史。
-- 若不可压缩基础占用本身已超过项目输入预算，不启动任何 Level，直接 blocked。
-
-最终流程：
-
-```text
-Conversation + ContextState + runtime instructions + tools
-        ↓
-Level 1：持续性工具脱水
-  ├─ 计算 recent 保护窗
-  ├─ 对窗外已消费成功的 tool：缺映射则落盘 ArtifactStore
-  ├─ 更新候选 ContextState.tool_artifacts
-  └─ 投影 ModelContext（保留 tool call 外壳，body → stub）
-        ↓
-评估完整请求压力
-        ├─ 未超输入预算 → ModelCall
-        └─ 仍超过输入预算
-               → Level 2 增量摘要候选 ContextState
-               → 校验压缩边界与工具协议
-               → 重新投影和预算评估（裁剪摘要前缀的 tool_artifacts）
-               ├─ 全部通过 → 原子提交 → ModelCall
-               └─ 任一失败 → 保留旧 ContextState → blocked
-```
-
-原子提交：
-
-- Level 2 先生成候选 summary 与候选边界。
-- 候选必须完成边界、工具协议、投影与预算校验后才能一次性替换 ContextState。
-- 摘要调用失败、边界不合法、工具协议不合法或重新投影后仍超预算，都不能修改旧 ContextState。
-- 已经产生的 LLM usage 仍如实记录，但不构成提交压缩状态的理由。
-
-可观测性：
-
-- Safe Compression 产生完整 CompressionReport，至少可报告压缩级别、压缩前后 token、摘要边界、保留原文数量与增量摘要次数。
-- 压缩事实与指标进入 Run Trace / Checkpoint，不扩大 Session Event 的生命周期职责。
-- 摘要正文的唯一状态源是 ContextState，不复制到 trace。
-- Level 2 成功后写入结构化 checkpoint，并在本轮最终回答前向真实用户提示一次。
-
-Benchmark：
-
-- 同一 Session 在不更换 session_id 的前提下至少连续触发两次 Level 2，仍能继续完成任务。
-- 第二次摘要使用 `S1 + 新 delta` 生成 S2，不重新读取已被 S1 覆盖的全部原始前缀。
-- Todo 初始化和 Agent Round 都使用同一 Session ContextState 准备模型输入。
-- Level 2 第一版以当前 Run 为安全边界，只摘要本 Run 开始前的历史；当前 Run 的用户目标与步骤保持原文。
-- interrupt/resume 后继续使用已提交的 ContextState，Conversation 工具协议链仍完整。
-- Conversation 中的原始消息数量、内容和 message_id 不因压缩发生变化。
-- 同一 Round 的 LLM retry 复用同一 ModelContext 快照，不在 retry 之间重新压缩。
-- 无效摘要候选、非法压缩边界、工具链不安全或重新投影后仍超预算时，旧 ContextState 保持不变并返回 blocked。
-- 不可压缩基础占用已经超预算时，不调用压缩模型，直接 blocked。
-
-第一版明确不做：
-
-- 结构化摘要模型与字段级校验。
-- `protected_message_ids` 和压缩边界前的稀疏原文保留。
-- 自动识别长期有效约束、语义等价验证等复杂安全控制。
-- 各 Level 内部的精细压缩算法、工具分类与最终阈值调优。
-- Memory、Unified Retrieval 与完整日志落盘（Workspace 沙箱/回取见后续 5.5/5.6）。
-- 创建新 Session 的 Handoff 流程。
-
-Phase 5.3 后续路线
+### 路线图
 
 ```text
 Phase 5.3 完成验收
@@ -442,169 +157,183 @@ Phase 8 Multi-Agent
 （很晚，外挂）Memory Model → Memory Extraction → 再考虑 Unified Retrieval
 ```
 
-✓ 回补 A：Dynamic TodoList
+### 小节索引
 
-TodoList 是当前 Run 面向执行的可变认知状态。外部工具产生新观察后将其标记为 dirty；Executor 可以继续行动，并在最终回答前通过 `rewrite_todos` 完成同步。
+### ✓ 5.1 Context Projection
 
-职责边界：
+- 状态：完成
+- 目标：建立 Conversation → ModelContext 的最小投影闭环。
+- 结论：Conversation 是事实，RuntimeMode 提供控制状态，ModelContext 是二者在某个 Round 上的临时投影。
+- 详述：[phase5_1总结.md](5/phase5_1总结.md)
 
-```text
-RunRuntime
-├─ 准备只读 Todo 初始化与 Executor 的 ModelContext
-├─ 统一执行模型调用、瞬时错误重试、usage 与 checkpoint
-└─ 驱动 TodoMode 生命周期与 Todo Sync Barrier
+### ✓ 5.2 Context Budget
 
-TodoMode
-├─ 提供初始 Todo 生成 prompt 与 `rewrite_todos` 内部工具
-├─ 驱动 Run 局部 TodoList 的状态迁移
-└─ 在退出边界拒绝 dirty 或未完成的 TodoList
-```
+- 状态：完成
+- 目标：正式模型调用发送前检查项目输入预算，并用真实 usage 校准估算。
+- 结论：预算作用于完整模型请求，不修改 Conversation；超预算不能靠删除事实轨迹解决。
+- 详述：[phase5_2总结.md](5/phase5_2总结.md)
 
-Todo 初始化不是独立组件：它是同一个模型在 Run 开始时承担的只读阶段，只能调用 `rewrite_todos`。后续 Executor 兼任 Todo 审查者，通过同一工具提交完整快照，不再存在失败专用 Replanner 调用。模型调用、retry、usage 与 checkpoint 仍统一由 `RunRuntime` 编排。
+### ✓ 5.2.1 Tool Result Budget / Runtime Artifact（5.3 前置）
 
-✓ 回补 A.1：Runtime Mode Router
+- 状态：完成
+- 目标：保证单次工具结果有界，超大完整结果外置为 Runtime Artifact 供按需回读。
+- 结论：Safe Compression 只处理历史累积，不补救单条无界工具结果。
+- 详述：[phase5_2_1总结.md](5/phase5_2_1总结.md)
 
-每个 Run 在追加当前用户消息后，由无状态 Router 读取完整 Conversation，并严格返回 `plain/todo + reason`。`plain` 跳过 Todo 初始化；`todo` 进入原有 TodoMode 生命周期。Router 先判断最后一条用户消息是否明确授权执行：讨论、评价、解释或提出方向选择 `plain`；授权不明确时也选择 `plain`；只有明确要求执行后才判断是否需要 `todo`。
+### ✓ 5.3 Safe Compression
 
-Router 只选择执行机制，不生成 Todo，也不承担 Planner 职责。路由响应不写入 Conversation，只记录为 `runtime_mode_routed` checkpoint。同一 Session 的不同 Run 会重新路由。
+- 状态：完成验收
+- 目标：在不修改完整事实轨迹的前提下，生成可继续发送给模型的安全投影。
+- 结论：Level 1 持续性工具脱水 + Level 2 增量摘要；压缩只更新 ContextState，不改 Conversation。
+- 详述：[phase5_3总结.md](5/phase5_3总结.md)
 
-路由选择是可降级策略，不是不可逆承诺。非法路由响应或动态 Todo 初始化协议不匹配时，Runtime 记录明确的 activation/fallback checkpoint，丢弃受限阶段响应，并在同一 Run 使用 `PlainMode` 重新进入正常 Agent Round。局部契约保持严格，但不再把 Mode 激活失败升级成 Run/Session 失败；显式固定 `TodoMode` 仍保持严格失败。
+### ✓ 回补 A：Dynamic TodoList
 
-✓ 回补 B：输入/工具结果边界
+- 状态：完成
+- 目标：把固定 Plan 改为 Run 内可变 TodoList，由 `rewrite_todos` 统一维护。
+- 结论：TodoList 是柔性行动参考；最终回答前必须通过 Todo Sync Barrier。
+- 详述：[phase5_3_A_Dynamic_TodoList总结.md](5/phase5_3_A_Dynamic_TodoList总结.md)
 
-补齐用户输入与单次工具结果的外部边界契约；边界内直接相信契约，超过边界明确失败，不交给 Safe Compression 补救。
+### ✓ 回补 A.1：Runtime Mode Router
 
-- 单次工具结果：Phase 5.2.1 已由 `ToolResultLimit` / Externalizer 与 ContextManager 硬检查保证有界。
-- 用户输入：`SessionRuntime.start` / `resume` 在进入 Run 前以 `MAX_USER_MESSAGE_CHARS = 32_000` 硬拒绝；超限不创建 run、不改 Session、不写入 Conversation。
+- 状态：完成
+- 目标：每个 Run 按 Conversation 选择 `plain/todo`，不固定整个 Session。
+- 结论：Router 只选执行机制；非法路由可降级到 PlainMode，不升级成 Session 失败。
+- 详述：[phase5_3_A1_Runtime_Mode_Router总结.md](5/phase5_3_A1_Runtime_Mode_Router总结.md)
 
+### ✓ 回补 B：输入/工具结果边界
 
-✓ 回补 C：Artifact 生命周期
+- 状态：完成
+- 目标：补齐用户输入与单次工具结果的外部边界契约。
+- 结论：边界内相信契约，超限明确失败，不交给 Safe Compression 补救。
+- 详述：[phase5_3_B_输入工具结果边界总结.md](5/phase5_3_B_输入工具结果边界总结.md)
 
-Runtime Artifact 是 Conversation 的外部正文，不是应用退出时可丢弃的临时缓存。Session 被定义为独立的“工作抽屉”，持有 Conversation、ContextState、运行记录与私有 Artifact；Artifact 引用只在所属 Session 内有效。
+### ✓ 回补 C：Artifact 生命周期
 
-- Composition Root 为每个 Session 组装绑定私有 ArtifactStore 的 RunRuntime；工具结果外置、Level 1 脱水与 `read_artifact` 使用同一个 Session 抽屉，不把 `session_id` 泄漏到 RunRuntime 以下。
-- 文件系统第一版按 Session 隔离 Artifact 目录；重建同一抽屉的 FileArtifactStore 后，已有 `artifact_id` 仍可回读，为以后 Session/Conversation 持久化保留稳定引用。
-- Run 完成、Session completed/blocked/failed、Level 2 裁剪 `tool_artifacts` 或应用退出都不自动删除 Artifact。
-- 只有显式 `delete_session` 才整体删除 Session 抽屉；正在执行的 Session 拒绝删除，资源删除失败保留 Session 状态并直接暴露原始异常。
-- 不做 TTL、后台清理、逐 Artifact 引用计数或跨 Session 共享。未来切换数据库时由 Session 持久化层负责保存引用关系与永久删除事务，不改变 `artifact_id` / `read_artifact` 契约。
+- 状态：完成
+- 目标：明确 Runtime Artifact 为 Session 私有工作抽屉中的外部正文。
+- 结论：只有显式 `delete_session` 才整体清理；Run/Session 结束与 Level 2 裁剪不自动删除 Artifact。
+- 详述：[phase5_3_C_Artifact生命周期总结.md](5/phase5_3_C_Artifact生命周期总结.md)
 
-本次只补 Artifact 生命周期与显式删除用例；Conversation、ContextState、Event 和 Run Trace 的落盘恢复仍属于后续 Session Persistence，不在本回补中提前实现。
+### ✓ 5.5 Workspace Sandbox（完成于 2026.08.05）
 
-✓ 5.5 Workspace Sandbox（完成于 2026.08.05）
+- 状态：完成
+- 目标：把根目录相对路径解析升级为可配置的多根轻量路径沙箱。
+- 结论：Sandbox 只做路径权限边界；存在性与文件操作仍由具体工具负责。
+- 详述：[phase5_5_Workspace_Sandbox总结.md](5/phase5_5_Workspace_Sandbox总结.md)
 
-目标：把「根目录相对路径解析」升级为可配置的轻量路径沙箱；不引入进程/容器隔离。
+### 5.6 Workspace Retrieval（工具型）
 
-核心结论：Workspace Sandbox 是文件工具的路径权限边界，不是文件操作门面。它只回答「该逻辑相对路径在当前 root 内对应哪个安全绝对路径」；路径是否存在、类型是否符合以及是否创建父目录，仍由具体文件工具负责。
+- 状态：进行中 / 总结待写
+- 目标：在 PathGuard 边界内提供只读回取工具；不自动注入 Context，不改变 Workspace 作为外部事实源的职责。
+- 结论：（待写）
+- 详述：总结待写
 
-职责边界：
+---
 
-```text
-Composition Root
-├─ 接收可信的 workspace_roots 配置
-├─ 为每个 root 创建独立 WorkspaceSandbox
-└─ 创建并注册绑定 WorkspaceSandboxes 的 Workspace ToolSpec
-        ↓
-WorkspaceSandboxes
-├─ 按逻辑 root 名称选择 Sandbox
-└─ 不参与单根路径解析
-        ↓
-WorkspaceSandbox
-├─ 只接受 root 内相对路径
-├─ 规范化路径并解析已有符号链接
-└─ 拒绝绝对路径与 root 外逃逸
-        ↓
-Workspace Tools
-└─ 检查存在性/文件类型并执行读取、写入、搜索或验证
-```
+## Phase 6 · Goal、能力加载与委派
 
-路径契约：
+面向更大目标组织任务、渐进加载能力，并支持 SubAgent 委派。
 
-- 工具输入采用 `root + path`；`root` 是逻辑根名称，`path` 永远是该 root 内的相对路径。
-- 即使绝对路径实际位于 root 内，也返回 `ABSOLUTE_PATH_NOT_ALLOWED`，不让 `path` 同时具有逻辑路径和物理路径两套语义。
-- `.`、`..` 会先规范化；规范化后仍在 root 内则允许，越出 root 返回 `PATH_OUTSIDE_WORKSPACE`。
-- 路径不存在不等于路径不安全；Sandbox 可以返回安全但尚不存在的路径，存在性由具体工具检查。
-- 已有父路径中的符号链接会参与解析；最终目标落在 root 外时拒绝访问。
-- 未知 root 由多根选择层返回 `UNKNOWN_WORKSPACE_ROOT`，单根 Sandbox 不感知其他 root。
+### 小节索引
 
-错误契约：
+### 6A Goal / Task Management
 
-- 可预期的外部路径违规使用 `WorkspaceInputError` 领域异常表达，只在 Workspace 工具边界转换成 Tool Protocol 错误结果。
-- `OSError` 等非预期文件系统异常不统一包装、不静默兜底，保留原始异常直接失败。
-- `must_exist`、`expect`、`create_parents` 已从 Sandbox 移出，分别由需要它们的具体文件工具处理。
+- 状态：未开始
+- 目标：管理跨步骤的目标与任务组织。
+- 结论：（待写）
+- 详述：总结待写
 
-目录隔离：
+### 6B Skill / Toolset Progressive Loading
 
-- Agent Source 是程序资源，正常运行时不注册为 Workspace root。
-- Runtime Root 保存 Session Artifact 等内部状态，不通过普通 Workspace 工具暴露。
-- User Workspace 才会作为具名 root 注入 `glob/read_file/grep/write_file/apply_patch/replace_all/get_changes` 等文件工具。
-- 测试入口暂时显式配置 `DEFAULT_USER_PROJECT_ROOT`；后续再替换成命令行、配置文件或用户选择结果，不改变 Sandbox 契约。
+- 状态：未开始
+- 目标：按需渐进加载 Skill / Toolset，避免一次性暴露全部能力。
+- 结论：（待写）
+- 详述：总结待写
 
-验收：
+### 6C SubAgent Delegation
 
-- 相对路径、规范化后仍在 root 内的路径及安全的不存在路径可以解析。
-- 绝对路径、`..` 越界、未知 root 与指向 root 外的符号链接会被拒绝。
-- Workspace 工具不再通过全局 `WORKSPACE` 和导入副作用绑定目录，而由 Composition Root 生成并注册已绑定依赖的 ToolSpec。
-- 多个 root 各自持有独立 Sandbox；同名文件必须通过 root 名称区分。
-- 完整测试通过；Windows 当前环境无符号链接创建权限时，对应真实符号链接用例跳过。
+- 状态：未开始
+- 目标：把子任务委派给 SubAgent 并回收结果。
+- 结论：（待写）
+- 详述：总结待写
 
-第一版明确不做：
+---
 
-- 进程、容器或操作系统级文件系统隔离。
-- 路径校验完成后抵御并发替换的 TOCTOU 防护。
-- root 级只读/读写权限模型。
-- 自动发现 Agent Source、Runtime Root 或多个 User root 的重叠配置；当前由 Composition Root 显式配置并避免授权受保护目录。
-- 用户目录选择器及配置持久化。
+## Phase 7 · Scheduler / Watcher / Background Task
 
+支持定时、监听与后台任务，让 Agent 不只在同步对话中运行。
 
-5.6 Workspace Retrieval（工具型）
+### 小节索引
 
-目标：在 PathGuard 边界内提供只读回取工具；不自动注入 Context，不改变 Workspace 作为外部事实源的职责。
+### Scheduler
 
+- 状态：未开始
+- 目标：调度定时或延迟任务。
+- 结论：（待写）
+- 详述：总结待写
 
-====================
+### Watcher
 
+- 状态：未开始
+- 目标：监听外部变化并触发后续行动。
+- 结论：（待写）
+- 详述：总结待写
 
-Phase 6
-Goal、能力加载与委派
-====================
+### Background Task
 
-6A Goal / Task Management
+- 状态：未开始
+- 目标：在前台会话之外运行后台任务。
+- 结论：（待写）
+- 详述：总结待写
 
-6B Skill / Toolset Progressive Loading
+---
 
-6C SubAgent Delegation
+## Phase 8 · Multi-Agent（最后）
 
-====================
+多 Agent 协作：协调、分工、委派与共享状态。
 
+### 小节索引
 
-Phase 7
-Scheduler / Watcher / Background Task
-====================
+### Coordinator
 
-Scheduler
+- 状态：未开始
+- 目标：协调多个 Agent 的目标与分工。
+- 结论：（待写）
+- 详述：总结待写
 
-Watcher
+### Worker
 
-Background Task
+- 状态：未开始
+- 目标：执行被委派的具体工作。
+- 结论：（待写）
+- 详述：总结待写
 
-====================
+### Delegation
 
+- 状态：未开始
+- 目标：定义任务委派与结果回收契约。
+- 结论：（待写）
+- 详述：总结待写
 
-Phase 8
-Multi-Agent（最后）
-====================
+### Shared State
 
-Coordinator
+- 状态：未开始
+- 目标：管理多 Agent 共享状态边界。
+- 结论：（待写）
+- 详述：总结待写
 
-Worker
+---
 
-Delegation
+## Memory（后置，外挂）
 
-Shared State
+Long Memory 不进入 Phase 5 主链路，作为后期可选外挂能力。
 
-====================
+### 小节索引
 
+### Long Memory
 
-Memory（后置，外挂）
-
-Long Memory 不进入 Phase 5 主链路。作为单端可选能力，在 Phase 8 之后或并行外挂：独立 store + 可选注入；出现第二数据源后再做 Unified Retrieval。
+- 状态：后置未开始
+- 目标：作为单端可选能力，在 Phase 8 之后或并行外挂：独立 store + 可选注入；出现第二数据源后再做 Unified Retrieval。
+- 结论：（待写）
+- 详述：总结待写
