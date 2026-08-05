@@ -354,7 +354,7 @@ class RunRuntime:
         self,
         conversation: Conversation,
         user_message: str,
-        max_rounds: int = 20,
+        max_rounds: int = 50,
         control: RunControl | None = None,
         context_state: ContextState | None = None,
     ) -> RunResult:

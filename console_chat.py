@@ -24,7 +24,9 @@ TERMINAL_RUN_STATUSES = {
 
 MODEL_CONTEXT_LIMIT = 200_000
 INPUT_BUDGET_RATIO = 0.9
-
+DEFAULT_USER_PROJECT_ROOT = Path(
+    r"E:\myCard\Helper\helperMe-test1"
+)
 
 def _new_session(application: AgentApplication) -> str:
     session_id = f"session-{uuid4().hex}"
@@ -88,6 +90,9 @@ def main() -> None:
         model,
         model_context_limit=MODEL_CONTEXT_LIMIT,
         runtime_root=Path.home() / ".helper-me" / "runtime",
+        workspace_roots={
+            "project": DEFAULT_USER_PROJECT_ROOT,
+        },
         input_budget_ratio=INPUT_BUDGET_RATIO,
     )
     session_id = _new_session(application)

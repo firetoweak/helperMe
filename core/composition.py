@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 
 from core.agent_application import AgentApplication
 from core.model_call.client import LLMClient
@@ -33,9 +34,10 @@ from core.runtime_artifacts import (
 from core.tool_registry import BUILTIN_TOOL_REGISTRY
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tools.artifact_read import create_read_artifact_spec
-from tools.workspace import WORKSPACE
+from tools import create_workspace_tool_specs
+from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 
-# 工具目前通过导入副作用注册；composition root 是唯一组装入口。
+# 无状态内建工具通过导入注册；Workspace 工具在 composition root 中绑定。
 import tools  # noqa: F401
 
 
@@ -43,15 +45,27 @@ def create_agent_application(
     model: str,
     model_context_limit: int,
     runtime_root: Path,
+    workspace_roots: Mapping[str, Path],
     input_budget_ratio: float = 0.75,
     runtime_mode: RuntimeMode | None = None,
     recent_protection_tokens: int = 10_000,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
+    workspaces = WorkspaceSandboxes({
+        name: WorkspaceSandbox(root)
+        for name, root in workspace_roots.items()
+    })
     runtime_root = runtime_root.resolve()
-    if runtime_root.is_relative_to(WORKSPACE.resolve()):
-        raise ValueError("runtime_root 不能位于用户 workspace 内")
+    if any(
+        runtime_root.is_relative_to(workspace.root)
+        for workspace in workspaces.values()
+    ):
+        raise ValueError("runtime_root 不能位于用户 workspace root 内")
+
+    application_tool_registry = BUILTIN_TOOL_REGISTRY.clone()
+    for spec in create_workspace_tool_specs(workspaces):
+        application_tool_registry.register(spec)
 
     llm_client = LLMClient()
     context_budget = ContextBudget(
@@ -83,7 +97,7 @@ def create_agent_application(
 
     def create_session_run_runtime(session_id: str) -> RunRuntime:
         artifact_store = artifact_drawers.for_session(session_id)
-        tool_registry = BUILTIN_TOOL_REGISTRY.clone()
+        tool_registry = application_tool_registry.clone()
         tool_registry.register(create_read_artifact_spec(artifact_store))
         context_preparation = ContextPreparationService(
             context_manager=context_manager,

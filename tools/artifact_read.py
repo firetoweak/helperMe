@@ -13,9 +13,9 @@ from core.tool_registry import ToolSpec
 
 
 class ReadArtifactInput(BaseModel):
-    artifact_id: str = Field(pattern=r"^art_[0-9a-f]{32}$")
-    offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=3000, ge=1, le=3000)
+    artifact_id: str = Field(description="先前工具结果真实返回的 artifact_id", pattern=r"^art_[0-9a-f]{32}$")
+    offset: int = Field(default=0, ge=0, description="从 0 开始的字符偏移；继续读取时传上次的 next_offset")
+    limit: int = Field(default=3000, ge=1, le=3000, description="本次最多读取字符数，范围 1 到 3000")
 
 
 def create_read_artifact_spec(store: ArtifactStore) -> ToolSpec:
@@ -50,10 +50,12 @@ def create_read_artifact_spec(store: ArtifactStore) -> ToolSpec:
 
     return ToolSpec(
         name="read_artifact",
-        description=(
-            "分页读取已外置的完整工具结果。只能使用工具结果提供的 "
-            "artifact_id；offset 是字符偏移，返回 next_offset 时可继续读取。"
-        ),
+        description="""
+用途：分页读取因长度限制而外置保存的完整工具结果。
+何时使用：先前工具结果返回 artifact_id，且当前摘要不足以完成判断时使用；已有正文足够时不要额外读取，也不能用它代替 Workspace 文件工具。
+关键限制：只能使用工具结果真实提供的 artifact_id；offset 是字符偏移，limit 最大为 3000；Artifact 只在所属 Session 抽屉内有效。
+失败/截断后：truncated=true 时使用 next_offset 继续；ARTIFACT_NOT_FOUND 时停止猜测 id；ARTIFACT_OFFSET_OUT_OF_RANGE 时依据错误修正 offset。
+""".strip(),
         input_model=ReadArtifactInput,
         handler=read_artifact,
     )

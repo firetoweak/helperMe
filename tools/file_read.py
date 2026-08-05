@@ -1,288 +1,301 @@
-from pydantic import BaseModel, Field
-from core.tool_registry import register_tool, EmptyInput
-from typing import Any, Literal
-from tools.workspace import _resolve_in_workspace, _to_workspace_relative, WORKSPACE
-import sys
-import subprocess
-import shutil
+from __future__ import annotations
+
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+from typing import Any, Literal
 
-class GlobInput(BaseModel):
-    pattern: str = Field(description="文件名或相对 path 的 glob 模式，例如 file_read.py、*.py、tools/file_read.py")
-    path: str = Field(default=".", description="搜索起始目录，相对 workspace，默认当前 workspace")
-    kind: Literal["file", "dir", "any"] = Field(default="any", description="查找类型：file（仅文件）、dir（仅文件夹）、any（都要）")
-    max_depth: int | None = Field(default=None, description="搜索深度限制；默认（递归查找）；设为 1 则只看当前目录")
-    max_results: int = Field(default=10, description="最多返回结果数量")
+from pydantic import BaseModel, Field
 
-class ReadFileInput(BaseModel):
-    path: str = Field(description="要读取的文件路径，相对 workspace 的路径")
-    offset: int = Field(default=1, description="读取起始行号，从 1 开始")
-    limit: int = Field(default=200, description="最多读取行数")
+from core.tool_registry import EmptyInput, ToolSpec
+from tools.workspace import (
+    AbsolutePathNotAllowed,
+    PathOutsideWorkspace,
+    WorkspaceInputError,
+    WorkspaceSandbox,
+    WorkspaceSandboxes,
+    workspace_error,
+)
 
-class GrepInput(BaseModel):
+
+GET_WORKSPACE_INFO_DESCRIPTION = """
+用途：列出当前可用 workspace root 的逻辑名称、物理位置和系统平台。
+何时使用：不知道该选哪个 root、用户询问文件位置或需要平台信息时使用；它用于发现工作区，不代替 glob/read_file 等文件操作工具。
+关键限制：无参数，必须传 {}；返回的绝对位置仅用于说明，其他 Workspace 工具仍必须使用 root 名称和 root 内相对 path。
+失败/截断后：结果不会截断；若缺少预期 root，应检查应用配置，不能猜测 root 名称或改用绝对 path 绕过。
+""".strip()
+
+GLOB_DESCRIPTION = """
+用途：在指定 workspace root 中按名称模式查找文件或目录，返回可继续传给其他文件工具的相对路径。
+何时使用：不知道目标文件位置、需要按扩展名或目录层级定位时使用；搜索文件内容用 grep，读取已知文件用 read_file。
+关键限制：root 必须是已配置名称；path 和 pattern 必须相对 root，不能包含越界；glob 只定位名称，不读取文件内容，指向 root 外的符号链接结果会被排除。
+失败/截断后：truncated=true 时缩小 path、pattern、kind、max_depth 或提高 max_results 后继续；无结果时调整搜索范围；root/path 错误时先用 get_workspace_info 或修正相对路径。
+""".strip()
+
+GREP_DESCRIPTION = """
+用途：在指定 workspace root 的文件或目录内按关键词或正则搜索文本，返回命中位置和少量上下文。
+何时使用：不知道内容出现在哪个文件、修改前需要定位原文时使用；找文件名用 glob，阅读已知文件的完整上下文用 read_file。
+关键限制：root 必须是已配置名称，path 必须相对 root；query 按正则解释；结果仅用于定位，不能替代修改前的完整原文读取。
+失败/截断后：truncated=true 时缩小 path/query 或提高 max_results 后继续；命中后用 read_file 读取目标区域；RG_NOT_FOUND/RG_FAILED 时修复搜索后端，不要假定没有匹配。
+""".strip()
+
+READ_FILE_DESCRIPTION = """
+用途：读取指定 workspace root 内已知文本文件的行范围，返回内容、行号和分页状态。
+何时使用：已经知道文件路径、需要查看 grep 命中的完整上下文或在修改前取得真实 old_block 时使用；不知道路径先用 glob/grep，不要用它读取二进制文件。
+关键限制：root 必须是已配置名称，path 必须相对 root；offset 从 1 开始；单次最多受 limit 和字符预算共同限制，不能把局部结果当作完整文件。
+失败/截断后：truncated=true 时必须使用 next_offset 继续，truncated_by 表示行数或字符限制；NOT_FOUND 后重新定位路径，OFFSET_OUT_OF_RANGE 后依据 total_lines 修正，NOT_A_TEXT_FILE 时改用适合该格式的工具。
+""".strip()
+
+
+class RootInput(BaseModel):
+    root: str = Field(description="workspace root 的逻辑名称；只能使用 get_workspace_info 返回的 name")
+
+
+class GlobInput(RootInput):
+    pattern: str = Field(description="文件名或相对 path 的 glob 模式，例如 file_read.py、*.py、tools/*.py")
+    path: str = Field(default=".", description="root 内的相对搜索起点；默认搜索整个 root")
+    kind: Literal["file", "dir", "any"] = Field(default="any", description="结果类型：file 仅文件、dir 仅目录、any 两者都要")
+    max_depth: int | None = Field(default=None, ge=1, description="相对搜索起点的深度限制；默认不限制，1 表示只看当前层")
+    max_results: int = Field(default=10, ge=1, le=100, description="最多返回的结果数量，范围 1 到 100")
+
+
+class ReadFileInput(RootInput):
+    path: str = Field(description="root 内要读取的相对文件路径")
+    offset: int = Field(default=1, ge=1, description="读取起始行号，从 1 开始")
+    limit: int = Field(default=200, ge=1, le=2000, description="最多读取行数，范围 1 到 2000")
+
+
+class GrepInput(RootInput):
     query: str = Field(description="搜索关键词或正则表达式")
-    path: str = Field(default=".", description="搜索目录路径(必须是目录)，相对worksplace的路径")
-    context_lines: int = Field(default=2, description="每个匹配前后各返回多少行上下文")
-    max_results: int = Field(default=10, description="最多返回 match 条数")
+    path: str = Field(default=".", description="root 内的相对搜索路径")
+    context_lines: int = Field(default=2, ge=0, le=20, description="每个匹配前后各返回的上下文行数，范围 0 到 20")
+    max_results: int = Field(default=10, ge=1, le=100, description="最多返回的匹配数量，范围 1 到 100")
 
 
-@register_tool("""
-获取当前工作区的绝对路径和系统平台信息。
-
-适用场景：
-- 用户询问文件存放在哪里，或需要了解当前工作目录的位置
-- 整理、归档文件，或需要在特定目录下执行操作
-- 识别当前操作系统平台（如 Windows、Linux、macOS），以便执行平台特定的操作
-- 编写报告、整理资源时需要引用项目路径信息
-
-输入：无参数，传 {} 即可。
-输出：JSON 对象，字段含义如下：
-      - workspace_root: 工作区的绝对路径
-      - platform: 系统平台标识（如 'linux', 'win32' 等）
-""")
-def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "code": "WORKSPACE_INFO_READ",
-        "workspace_root": WORKSPACE.resolve().as_posix(),
-        "platform": sys.platform,
-    }
+def _require_existing(
+    sandbox: WorkspaceSandbox,
+    path: str,
+    *,
+    expect: Literal["file", "dir", "any"],
+) -> tuple[Path | None, dict[str, Any] | None]:
+    resolved = sandbox.resolve(path)
+    if not resolved.exists():
+        return None, {"ok": False, "code": "NOT_FOUND", "error": f"路径不存在: {path}"}
+    if expect == "file" and not resolved.is_file():
+        return None, {"ok": False, "code": "NOT_A_FILE", "error": f"不是文件: {path}"}
+    if expect == "dir" and not resolved.is_dir():
+        return None, {"ok": False, "code": "NOT_A_DIR", "error": f"不是目录: {path}"}
+    return resolved, None
 
 
-@register_tool("""
-在 workspace 中按文件名模式查找文件或目录，返回可继续传给 read_file/grep/write_file 的相对路径。
-适用场景：
-- 不确定目标文件在哪里
-- 需要按扩展名、文件名片段或目录层级定位资源
-不适用场景：
-- 搜索文件内容；用 grep
-- 读取文件内容；用 read_file
-使用提示：
-- path 是搜索起点，pattern 是在该起点下匹配的名称或相对路径
-- 推荐写法：glob(path="tools", pattern="file_read.py")
-- pattern 也可以包含相对路径，例如 tools/file_read.py
-- 结果过多时，缩小 path、kind、max_depth 或 max_results
-""", input_model=GlobInput)
-def glob(raw: GlobInput) -> dict[str, Any]:
-    root, err = _resolve_in_workspace(raw.path, expect="dir")
-    if err:
-        return {"ok": False, **err}
-
-    pattern = raw.pattern.replace("\\", "/")
-    if Path(pattern).is_absolute():
-        return {"ok": False, "error": "pattern 必须是相对 path 的匹配模式，不能是绝对路径", "code": "ABSOLUTE_PATTERN"}
-    if not pattern.strip():
-        return {"ok": False, "error": "pattern 不能为空", "code": "EMPTY_PATTERN"}
-
-    ws = WORKSPACE.resolve()
-    root = root.resolve()
-    has_path_part = "/" in pattern
-    candidates = root.glob(pattern) if has_path_part else root.rglob(pattern)
-
-    matches = []
-    for abs_path in sorted((p.resolve() for p in candidates), key=lambda p: p.as_posix()):
-        if raw.kind == "dir" and not abs_path.is_dir():
-            continue
-        if raw.kind == "file" and not abs_path.is_file():
-            continue
-
-        rel_from_root = abs_path.relative_to(root)
-        if raw.max_depth is not None and len(rel_from_root.parts) > raw.max_depth:
-            continue
-
-        rel = abs_path.relative_to(ws).as_posix()
-        entry_kind = "dir" if abs_path.is_dir() else "file"
-        matches.append({"path": rel, "kind": entry_kind})
-
-    total = len(matches)
-    truncated = total > raw.max_results
-    matches = matches[:raw.max_results]
-    return {
-        "ok": True,
-        "code": "GLOB_COMPLETED",
-        "pattern": raw.pattern,
-        "path": raw.path,
-        "matches": matches,
-        "total": total,
-        "truncated": truncated, 
-    }
-
-
-@register_tool("""
-在 workspace 内按关键词或正则搜索文本内容，返回匹配位置及少量上下文。
-不要用本工具找文件名；找文件请用 glob。
-适用场景：
-- 不确定关键词出现在哪个文件
-- 定位文章、代码或报告中的特定段落
-- 修改前先找到包含目标内容的位置
-- 需要少量上下文判断是否值得继续 read_file
-不适用场景：
-- 按文件名、扩展名或目录查找路径；用 glob
-- 阅读已知文件的大段内容；用 read_file
-使用提示：
-- query 可以是关键词或正则表达式
-- context_lines 用于控制每个匹配前后的上下文行数
-- grep 只能定位；需要完整理解或修改前，应再用 read_file 读取目标区域
-""", input_model=GrepInput)
-def grep(raw: GrepInput) -> dict[str, Any]:
-    if shutil.which("rg") is None:
+def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
+    def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
         return {
-            "ok": False,
-            "code": "RG_NOT_FOUND",
-            "error": "未找到 rg，请先安装: winget install BurntSushi.ripgrep.MSVC",
+            "ok": True,
+            "code": "WORKSPACE_INFO_READ",
+            "roots": workspaces.info(),
+            "platform": sys.platform,
         }
 
-    p, err = _resolve_in_workspace(raw.path, expect="any")
+    def glob(raw: GlobInput) -> dict[str, Any]:
+        try:
+            sandbox = workspaces.get(raw.root)
+            search_root, err = _require_existing(sandbox, raw.path, expect="dir")
+            if err:
+                return err
 
-    if err:
-        return {"ok": False, **err}
-    cmd = ["rg", "--json", "-C", str(raw.context_lines), raw.query, str(p)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+            pattern = raw.pattern.replace("\\", "/")
+            pattern_path = Path(pattern)
+            if pattern_path.is_absolute() or pattern_path.drive:
+                raise AbsolutePathNotAllowed(raw.pattern)
+            if ".." in pattern_path.parts:
+                raise PathOutsideWorkspace(raw.pattern)
+        except WorkspaceInputError as exc:
+            return workspace_error(exc)
 
-    if proc.returncode == 2:
-        return {
-            "ok": False,
-            "code": "RG_FAILED",
-            "error": proc.stderr.strip() or "rg 执行失败",
-        }
-    
-    hits = []
-    current_file = None
-    snippet = []
-    match_line = None
+        if not pattern.strip():
+            return {"ok": False, "error": "pattern 不能为空", "code": "EMPTY_PATTERN"}
 
-    for raw_line in proc.stdout.splitlines():
-        if not raw_line.strip():
-            continue
-        obj = json.loads(raw_line)
+        has_path_part = "/" in pattern
+        candidates = search_root.glob(pattern) if has_path_part else search_root.rglob(pattern)
+        matches = []
+        for candidate in candidates:
+            try:
+                relative_candidate = candidate.relative_to(sandbox.root).as_posix()
+                absolute_candidate = sandbox.resolve(relative_candidate)
+            except WorkspaceInputError:
+                continue
+            if raw.kind == "dir" and not absolute_candidate.is_dir():
+                continue
+            if raw.kind == "file" and not absolute_candidate.is_file():
+                continue
 
-        event_type = obj.get("type")
-        data = obj.get("data") or {}
-
-        if event_type == "begin":
-            current_file = data["path"]["text"]
-            snippet = []
-            match_line = None
-        elif event_type in {"context", "match"}:
-            line_number = data["line_number"]
-            content = data["lines"]["text"].rstrip("\r\n")
-
-            if event_type == "match" and match_line is None:
-                match_line = line_number
-            snippet.append({
-                "line": line_number,
-                "content": content,
-                "kind": event_type,
+            rel_from_search_root = absolute_candidate.relative_to(search_root)
+            if raw.max_depth is not None and len(rel_from_search_root.parts) > raw.max_depth:
+                continue
+            matches.append({
+                "path": sandbox.relative(absolute_candidate),
+                "kind": "dir" if absolute_candidate.is_dir() else "file",
             })
-        elif event_type == "end":
-            if snippet and match_line is not None:
+
+        matches.sort(key=lambda item: item["path"])
+        total = len(matches)
+        return {
+            "ok": True,
+            "code": "GLOB_COMPLETED",
+            "root": raw.root,
+            "pattern": raw.pattern,
+            "path": raw.path,
+            "matches": matches[:raw.max_results],
+            "total": total,
+            "truncated": total > raw.max_results,
+        }
+
+    def grep(raw: GrepInput) -> dict[str, Any]:
+        if shutil.which("rg") is None:
+            return {"ok": False, "code": "RG_NOT_FOUND", "error": "未找到 rg"}
+        try:
+            sandbox = workspaces.get(raw.root)
+            path, err = _require_existing(sandbox, raw.path, expect="any")
+        except WorkspaceInputError as exc:
+            return workspace_error(exc)
+        if err:
+            return err
+
+        proc = subprocess.run(
+            ["rg", "--json", "-C", str(raw.context_lines), raw.query, str(path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if proc.returncode == 2:
+            return {"ok": False, "code": "RG_FAILED", "error": proc.stderr.strip() or "rg 执行失败"}
+
+        hits = []
+        current_file = None
+        snippet = []
+        match_line = None
+        for raw_line in proc.stdout.splitlines():
+            if not raw_line.strip():
+                continue
+            obj = json.loads(raw_line)
+            event_type = obj.get("type")
+            data = obj.get("data") or {}
+            if event_type == "begin":
+                current_file = data["path"]["text"]
+                snippet = []
+                match_line = None
+            elif event_type in {"context", "match"}:
+                line_number = data["line_number"]
+                if event_type == "match" and match_line is None:
+                    match_line = line_number
+                snippet.append({
+                    "line": line_number,
+                    "content": data["lines"]["text"].rstrip("\r\n"),
+                    "kind": event_type,
+                })
+            elif event_type == "end" and snippet and match_line is not None:
                 hits.append({
-                    "file": _to_workspace_relative(current_file),
+                    "file": sandbox.relative(current_file),
                     "line": match_line,
                     "snippet": snippet,
                 })
                 if len(hits) >= raw.max_results:
                     break
 
-    return {
-        "ok": True,
-        "code": "GREP_COMPLETED",
-        "path": _to_workspace_relative(p),
-        "query": raw.query,
-        "context_lines": raw.context_lines,
-        "hits": hits[:raw.max_results],
-        "total_hits": len(hits[:raw.max_results]),
-        "truncated": len(hits) >= raw.max_results,
-    }
+        return {
+            "ok": True,
+            "code": "GREP_COMPLETED",
+            "root": raw.root,
+            "path": sandbox.relative(path),
+            "query": raw.query,
+            "context_lines": raw.context_lines,
+            "hits": hits,
+            "total_hits": len(hits),
+            "truncated": len(hits) >= raw.max_results,
+        }
 
+    def read_file(raw: ReadFileInput) -> dict[str, Any]:
+        try:
+            sandbox = workspaces.get(raw.root)
+            path, err = _require_existing(sandbox, raw.path, expect="file")
+        except WorkspaceInputError as exc:
+            return workspace_error(exc)
+        if err:
+            return err
+        relative_path = sandbox.relative(path)
+        if raw.offset < 1:
+            return {"ok": False, "code": "INVALID_OFFSET", "error": "offset 必须大于等于 1", "path": relative_path}
+        if raw.limit < 1:
+            return {"ok": False, "code": "INVALID_LIMIT", "error": "limit 必须大于等于 1", "path": relative_path}
 
-@register_tool("""
-读取 workspace 内已知文本文件的指定行范围，返回内容和分页信息。
-
-适用场景：
-- 已经知道目标文件路径，需要阅读文件内容
-- 根据 grep 命中的文件和行号，继续读取更完整的上下文
-- 修改文件前，获取将要替换的真实原文片段
-
-不适用场景：
-- 不知道文件在哪里；先用 glob 查找路径
-- 不知道关键词在哪个文件；先用 grep 定位
-- 读取二进制文件、图片、压缩包等非文本内容
-
-使用提示：
-- offset 从 1 开始，用于指定读取起始行
-- limit 控制最多读取多少行，但单次内容过长仍会被截断
-- 返回 truncated=true 时，必须使用 next_offset 继续读取后续内容
-- truncated_by 标记截断原因：lines 表示行数限制，chars 表示字符预算限制，null 表示未截断
-- 修改文件前，old_block 应来自 read_file 或 grep 返回的真实原文
-""", input_model=ReadFileInput)
-def read_file(raw: ReadFileInput) -> dict[str, Any]:
-    max_length= 3000 # 默认最大读取字符数，超出会截断
-    p, err = _resolve_in_workspace(raw.path, expect="file")
-    if err:
-        return {"ok": False, **err}
-    if raw.offset < 1:
-        return {"ok": False, "code": "INVALID_OFFSET", "error": "offset 必须大于等于 1", "path": _to_workspace_relative(p)}
-    if raw.limit < 1:
-        return {"ok": False, "code": "INVALID_LIMIT", "error": "limit 必须大于等于 1", "path": _to_workspace_relative(p)}
-
-    try:    
-        with open(p, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            total_lines = len(lines)
-            if raw.offset > total_lines:
-                return {
-                    "ok": False,
-                    "code": "OFFSET_OUT_OF_RANGE",
-                    "error": f"起始行号超出文件总行数: {_to_workspace_relative(p)}",
-                    "total_lines": total_lines,
-                    "path":_to_workspace_relative(p),
-                }
-            start_index = raw.offset - 1
-            selected_lines = []
-            content_length = 0
-            stopped_by_chars = False
-
-            for line in lines[start_index:]:
-                if len(selected_lines) >= raw.limit:
-                    break
-
-                next_length = content_length + len(line)
-                if next_length > max_length and selected_lines:
-                    stopped_by_chars = True
-                    break
-
-                selected_lines.append(line)
-                content_length = next_length
-
-            content = "".join(selected_lines)
-            end_line = start_index + len(selected_lines)
-
-            if stopped_by_chars:
-                truncated_by = "chars"
-            elif end_line < total_lines:
-                truncated_by = "lines"
-            else:
-                truncated_by = None
-
-            if end_line < total_lines:
-                next_offset = end_line + 1
-            else:
-                next_offset = None
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        except UnicodeDecodeError:
+            return {"ok": False, "code": "NOT_A_TEXT_FILE", "error": f"无法以文本读取: {relative_path}"}
+        total_lines = len(lines)
+        if raw.offset > total_lines:
             return {
-                "ok": True,
-                "code": "FILE_READ",
-                "path": _to_workspace_relative(p),
-                "content": content,
-                "start_line": raw.offset,
-                "end_line": end_line,
+                "ok": False,
+                "code": "OFFSET_OUT_OF_RANGE",
+                "error": f"起始行号超出文件总行数: {relative_path}",
                 "total_lines": total_lines,
-                "next_offset": next_offset,
-                "truncated": truncated_by is not None,
-                "truncated_by": truncated_by,
+                "path": relative_path,
             }
-    except UnicodeDecodeError:
-        return {"ok": False, "code": "NOT_A_TEXT_FILE", "error": f"无法以文本读取（可能是二进制文件）: {_to_workspace_relative(p)}"}
-    except OSError as e:
-        return {"ok": False, "code": "FILE_SYSTEM_ERROR", "error": f"文件系统错误: {e}"}
+
+        selected = []
+        content_length = 0
+        stopped_by_chars = False
+        for line in lines[raw.offset - 1:]:
+            if len(selected) >= raw.limit:
+                break
+            if content_length + len(line) > 3000 and selected:
+                stopped_by_chars = True
+                break
+            selected.append(line)
+            content_length += len(line)
+
+        end_line = raw.offset - 1 + len(selected)
+        truncated_by = "chars" if stopped_by_chars else "lines" if end_line < total_lines else None
+        return {
+            "ok": True,
+            "code": "FILE_READ",
+            "root": raw.root,
+            "path": relative_path,
+            "content": "".join(selected),
+            "start_line": raw.offset,
+            "end_line": end_line,
+            "total_lines": total_lines,
+            "next_offset": end_line + 1 if end_line < total_lines else None,
+            "truncated": truncated_by is not None,
+            "truncated_by": truncated_by,
+        }
+
+    return [
+        ToolSpec(
+            name="get_workspace_info",
+            description=GET_WORKSPACE_INFO_DESCRIPTION,
+            input_model=EmptyInput,
+            handler=get_workspace_info,
+        ),
+        ToolSpec(
+            name="glob",
+            description=GLOB_DESCRIPTION,
+            input_model=GlobInput,
+            handler=glob,
+        ),
+        ToolSpec(
+            name="grep",
+            description=GREP_DESCRIPTION,
+            input_model=GrepInput,
+            handler=grep,
+        ),
+        ToolSpec(
+            name="read_file",
+            description=READ_FILE_DESCRIPTION,
+            input_model=ReadFileInput,
+            handler=read_file,
+        ),
+    ]

@@ -10,12 +10,47 @@ from core.todos import TodoMode
 
 
 class CompositionTest(unittest.TestCase):
+    def test_workspace_tools_are_bound_by_composition_root(self):
+        with tempfile.TemporaryDirectory() as runtime_directory, tempfile.TemporaryDirectory() as workspace_directory:
+            workspace_root = Path(workspace_directory)
+            application = create_agent_application(
+                model="test-model",
+                model_context_limit=10_000,
+                runtime_root=Path(runtime_directory),
+                workspace_roots={"project": workspace_root},
+            )
+            application.create_session("session-1")
+            runtime = application._session_runtime._session_run_runtimes["session-1"]
+
+            missing_root = runtime.tools_executor.execute(
+                "read_file",
+                '{"root":"missing","path":"a.txt"}',
+            )
+            absolute_path = runtime.tools_executor.execute(
+                "read_file",
+                json.dumps({"root": "project", "path": str(workspace_root / "a.txt")}),
+            )
+            write_result = runtime.tools_executor.execute(
+                "write_file",
+                '{"root":"project","path":"docs/a.txt","content":"hello"}',
+            )
+            read_result = runtime.tools_executor.execute(
+                "read_file",
+                '{"root":"project","path":"docs/a.txt"}',
+            )
+
+        self.assertEqual(missing_root["code"], "UNKNOWN_WORKSPACE_ROOT")
+        self.assertEqual(absolute_path["code"], "ABSOLUTE_PATH_NOT_ALLOWED")
+        self.assertEqual(write_result["code"], "FILE_CREATED")
+        self.assertEqual(read_result["data"]["content"], "hello")
+
     def test_runtime_router_is_the_default_runtime_capability(self):
         with tempfile.TemporaryDirectory() as directory:
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
                 runtime_root=Path(directory),
+                workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-1")
 
@@ -34,6 +69,7 @@ class CompositionTest(unittest.TestCase):
                 model="test-model",
                 model_context_limit=10_000,
                 runtime_root=Path(directory),
+                workspace_roots={"project": Path.cwd()},
                 runtime_mode=mode,
             )
             application.create_session("session-1")
@@ -51,6 +87,7 @@ class CompositionTest(unittest.TestCase):
                 model="test-model",
                 model_context_limit=10_000,
                 runtime_root=Path(directory),
+                workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-a")
             application.create_session("session-b")
@@ -68,6 +105,7 @@ class CompositionTest(unittest.TestCase):
                 model="test-model",
                 model_context_limit=10_000,
                 runtime_root=Path(directory),
+                workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-a")
             application.create_session("session-b")
@@ -94,6 +132,7 @@ class CompositionTest(unittest.TestCase):
                 model="test-model",
                 model_context_limit=10_000,
                 runtime_root=Path(directory),
+                workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-1")
             runtime = application._session_runtime._session_run_runtimes[

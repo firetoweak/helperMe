@@ -1,180 +1,138 @@
-from tools.workspace import _resolve_in_workspace, _to_workspace_relative
-from pydantic import BaseModel, Field
-from core.tool_registry import register_tool
-from typing import Any
+from __future__ import annotations
+
 import unicodedata
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from core.tool_registry import ToolSpec
+from tools.workspace import (
+    WorkspaceInputError,
+    WorkspaceSandboxes,
+    workspace_error,
+)
 
 
-# 模糊匹配的文本标准化
+APPLY_PATCH_DESCRIPTION = """
+用途：在指定 workspace root 内对单个文本文件执行一次精确且唯一的局部替换，保留其他内容不变。
+何时使用：已通过 read_file 或 grep 取得真实原文、只需修改一个明确位置时使用；新建或整体覆盖用 write_file，所有相同文本都要替换时用 replace_all。
+关键限制：root 必须是已配置名称，path 必须相对 root；old_block 必须来自最新文件原文并且唯一匹配；模糊候选只用于提示，不会自动写入。
+失败/截断后：OLD_BLOCK_NOT_FOUND 后重新 read_file；OLD_BLOCK_NOT_UNIQUE 后扩大上下文；FUZZY_MATCH_ONLY 时使用返回的 original_block 明确重试；本工具结果不截断。
+""".strip()
+
+REPLACE_ALL_DESCRIPTION = """
+用途：在指定 workspace root 内把单个文本文件中所有精确匹配的 old_block 批量替换为 new_block。
+何时使用：明确希望统一术语、名称或固定字符串的全部出现位置时使用；只改一个位置用 apply_patch，不确定影响范围时先用 grep。
+关键限制：root 必须是已配置名称，path 必须相对 root；会修改全部精确匹配，且不支持模糊匹配；调用前应确认每个命中都应该被修改。
+失败/截断后：OLD_BLOCK_NOT_FOUND 后用 grep/read_file 获取最新原文和数量，再决定是否重试；结果不截断，成功后用 get_changes 核对实际改动。
+""".strip()
+
+
 def normalize_for_match(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = unicodedata.normalize("NFKC", text)
-    return text
+    return unicodedata.normalize("NFKC", text)
+
 
 class ApplyPatchInput(BaseModel):
-    path: str = Field(description="要修改的文本文件路径，相对worksplace的路径")
+    root: str = Field(description="workspace root 的逻辑名称；只能使用 get_workspace_info 返回的 name")
+    path: str = Field(description="root 内要修改的相对文本文件路径")
     old_block: str = Field(description="必须来自文件原文的精确文本块，且只能匹配一个位置")
     new_block: str = Field(description="替换后的文本块")
 
+
 class ReplaceAllInput(BaseModel):
-    path: str = Field(description="要修改的文本文件路径，相对 workspace")
+    root: str = Field(description="workspace root 的逻辑名称；只能使用 get_workspace_info 返回的 name")
+    path: str = Field(description="root 内要修改的相对文本文件路径")
     old_block: str = Field(description="要被全文替换的精确文本块")
     new_block: str = Field(description="替换后的文本块")
 
 
-@register_tool("""
-在 workspace 内对单个文本文件做一次局部替换。
+def _existing_file(workspaces: WorkspaceSandboxes, root: str, path: str):
+    sandbox = workspaces.get(root)
+    resolved = sandbox.resolve(path)
+    if not resolved.exists():
+        return sandbox, None, {"ok": False, "code": "NOT_FOUND", "error": f"路径不存在: {path}"}
+    if not resolved.is_file():
+        return sandbox, None, {"ok": False, "code": "NOT_A_FILE", "error": f"不是文件: {path}"}
+    return sandbox, resolved, None
 
-适用场景：
-- 只想修改文件中的一个明确位置
-- 修改前已经通过 read_file 或 grep 拿到原文片段
-- 需要保留文件其他内容不变
 
-不适用场景：
-- 新建文件或整体覆盖；用 write_file
-- 同一个文本要全部替换；用 replace_all
-- old_block 只是自然语言描述，而不是文件原文
+def create_file_write_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
+    def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
+        try:
+            sandbox, path, err = _existing_file(workspaces, raw.root, raw.path)
+        except WorkspaceInputError as exc:
+            return workspace_error(exc)
+        if err:
+            return err
+        relative_path = sandbox.relative(path)
+        if not raw.old_block:
+            return {"ok": False, "code": "OLD_BLOCK_EMPTY", "path": relative_path}
 
-使用提示：
-- old_block 必须精确且唯一匹配
-- 如果提示 old_block 不存在，应重新 read_file 获取最新原文
-- 如果提示匹配不唯一，应扩大 old_block 的上下文后重试
-- fuzzy candidate 只表示找到候选，不表示已经修改成功
-""", input_model=ApplyPatchInput)
-def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return {"ok": False, "code": "NOT_A_TEXT_FILE", "error": f"无法以文本读取: {relative_path}"}
 
-    p, err = _resolve_in_workspace(raw.path, expect="file")
-    if err:
-        return {"ok":False, **err}
-
-    if not raw.old_block:
-        return {"ok": False, "code": "OLD_BLOCK_EMPTY", "path": _to_workspace_relative(p)}
-
-    try:
-        content = p.read_text(encoding="utf-8")
         count = content.count(raw.old_block)
         if count == 1:
-            new_content = content.replace(raw.old_block, raw.new_block, 1)
-            try:
-                p.write_text(new_content, encoding="utf-8")
-            except OSError as e:
-                return {
-                    "ok": False, 
-                    "code": "WRITE_FAILED",
-                    "error": str(e),
-                    "path": _to_workspace_relative(p),
-                }
-            return {
-                "ok": True,
-                "code": "PATCH_APPLIED",
-                "path": _to_workspace_relative(p),
-                "replacements": 1,
-            }
+            path.write_text(content.replace(raw.old_block, raw.new_block, 1), encoding="utf-8")
+            return {"ok": True, "code": "PATCH_APPLIED", "root": raw.root, "path": relative_path, "replacements": 1}
         if count > 1:
-            return {
-                "ok": False,
-                "code": "OLD_BLOCK_NOT_UNIQUE",
-                "matches": count,
-                "path": _to_workspace_relative(p),
-            }
-        # 模糊匹配
+            return {"ok": False, "code": "OLD_BLOCK_NOT_UNIQUE", "matches": count, "path": relative_path}
+
         old_lines = raw.old_block.splitlines(keepends=True)
         window_size = len(old_lines)
         norm_old = normalize_for_match(raw.old_block)
-
         content_lines = content.splitlines(keepends=True)
         candidates = []
-        for i in range(0, len(content_lines) - window_size + 1):
-            original_block = "".join(content_lines[i:i + window_size])
+        for index in range(0, len(content_lines) - window_size + 1):
+            original_block = "".join(content_lines[index:index + window_size])
             if normalize_for_match(original_block) == norm_old:
-                candidates.append({
-                    "original_block": original_block,
-                    "path": _to_workspace_relative(p),
-                })
+                candidates.append({"original_block": original_block, "path": relative_path})
         if len(candidates) == 1:
             return {
                 "ok": False,
                 "code": "FUZZY_MATCH_ONLY",
-                "hint": "old_block 未精确匹配，但找到一个候选。请用 original_block 重新调用 apply_patch。",
+                "hint": "old_block 未精确匹配，但找到一个候选。请用 original_block 重试。",
                 "candidate": candidates[0],
-                "path": _to_workspace_relative(p),
+                "path": relative_path,
             }
         if len(candidates) > 1:
-            return {
-                "ok": False,
-                "code": "FUZZY_MATCH_NOT_UNIQUE",
-                "matches": len(candidates),
-                "candidates": candidates[:3],
-                "path": _to_workspace_relative(p),
-            }
-        return {
-            "ok": False,
-            "code": "OLD_BLOCK_NOT_FOUND",
-            "path": _to_workspace_relative(p),
-        }
-    except UnicodeDecodeError:
-        return {"ok": False, "error": f"无法以文本读取（可能是二进制文件）: {p.as_posix()}", "code": "NOT_A_TEXT_FILE"}
-    except OSError as e:
-        return {"ok": False, "error": f"文件系统错误: {e}", "code": "FILE_SYSTEM_ERROR"}
-    
+            return {"ok": False, "code": "FUZZY_MATCH_NOT_UNIQUE", "matches": len(candidates), "candidates": candidates[:3], "path": relative_path}
+        return {"ok": False, "code": "OLD_BLOCK_NOT_FOUND", "path": relative_path}
 
+    def replace_all(raw: ReplaceAllInput) -> dict[str, Any]:
+        try:
+            sandbox, path, err = _existing_file(workspaces, raw.root, raw.path)
+        except WorkspaceInputError as exc:
+            return workspace_error(exc)
+        if err:
+            return err
+        relative_path = sandbox.relative(path)
+        if not raw.old_block:
+            return {"ok": False, "code": "OLD_BLOCK_EMPTY", "path": relative_path}
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return {"ok": False, "code": "NOT_A_TEXT_FILE", "error": f"无法以文本读取: {relative_path}"}
+        count = content.count(raw.old_block)
+        if count == 0:
+            return {"ok": False, "code": "OLD_BLOCK_NOT_FOUND", "path": relative_path, "replacements": 0}
+        path.write_text(content.replace(raw.old_block, raw.new_block), encoding="utf-8")
+        return {"ok": True, "code": "REPLACE_ALL_APPLIED", "root": raw.root, "path": relative_path, "replacements": count}
 
-@register_tool("""
-在 workspace 内对单个文本文件执行全文批量替换。
-
-适用场景：
-- 明确希望所有相同 old_block 都被替换
-- 统一术语、名称、格式或固定字符串
-
-不适用场景：
-- 只改一个位置；用 apply_patch
-- 不确定是否所有出现位置都该改；先用 grep 检查
-- 新建文件或整体覆盖；用 write_file
-
-使用提示：
-- old_block 必须是精确文本，不支持模糊匹配
-- 调用前建议用 grep 确认出现位置和数量
-""", input_model=ReplaceAllInput)
-def replace_all(raw: ReplaceAllInput) -> dict[str, Any]:
-    p, err = _resolve_in_workspace(raw.path, expect="file")
-    if err:
-        return {"ok": False, **err}
-    if not raw.old_block:
-        return {
-            "ok": False,
-            "code": "OLD_BLOCK_EMPTY",
-            "path": _to_workspace_relative(p),
-        }
-    try:
-        content = p.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return {
-            "ok": False,
-            "code": "NOT_A_TEXT_FILE",
-            "error": f"无法以文本读取（可能是二进制文件）: {p.as_posix()}",
-            "path": _to_workspace_relative(p),
-        }
-    count = content.count(raw.old_block)
-    if count == 0:
-        return {
-            "ok": False,
-            "code": "OLD_BLOCK_NOT_FOUND",
-            "path": _to_workspace_relative(p),
-            "replacements": 0,
-        }
-    new_content = content.replace(raw.old_block, raw.new_block)
-    try:
-        p.write_text(new_content, encoding="utf-8")
-    except OSError as e:
-        return {
-            "ok": False,
-            "code": "WRITE_FAILED",
-            "error": str(e),
-            "path": _to_workspace_relative(p),
-        }
-    return {
-        "ok": True,
-        "code": "REPLACE_ALL_APPLIED",
-        "path": _to_workspace_relative(p),
-        "replacements": count,
-    }
+    return [
+        ToolSpec(
+            name="apply_patch",
+            description=APPLY_PATCH_DESCRIPTION,
+            input_model=ApplyPatchInput,
+            handler=apply_patch,
+        ),
+        ToolSpec(
+            name="replace_all",
+            description=REPLACE_ALL_DESCRIPTION,
+            input_model=ReplaceAllInput,
+            handler=replace_all,
+        ),
+    ]

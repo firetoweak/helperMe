@@ -19,7 +19,6 @@ from core.tool_registry import EmptyInput, ToolRegistry, ToolSpec
 from core.tools_runtime.run_runtime import RunRuntime
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from tools.artifact_read import create_read_artifact_spec
-from tools.workspace import WORKSPACE
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -152,7 +151,8 @@ class RuntimeArtifactsTest(unittest.TestCase):
             create_agent_application(
                 "test-model",
                 model_context_limit=1000,
-                runtime_root=WORKSPACE / ".runtime",
+                runtime_root=Path.cwd() / ".runtime",
+                workspace_roots={"project": Path.cwd()},
             )
 
     def test_read_artifact_tool_has_no_path_input_and_enforces_limit(self):

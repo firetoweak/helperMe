@@ -1,69 +1,88 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Any
-Expect = Literal["file", "dir", "any"]
+from typing import Mapping
 
-# 简单的worksplace
-WORKSPACE = Path(r"E:\myCard\Helper\helperMe-test1")
 
-def _to_workspace_relative(path: str) -> str:
-    p = Path(path).resolve()
-    return p.relative_to(WORKSPACE.resolve()).as_posix()
+class WorkspaceInputError(ValueError):
+    code = "WORKSPACE_INPUT_ERROR"
 
-def _resolve_in_workspace(
-    path: str,
-    *,
-    must_exist: bool = True,
-    expect: Expect = "any", # 期望的类型，file, dir, any
-    create_parents: bool = False
-) -> tuple[Path | None, dict[str, Any] | None]:
-    """
-    将外部传入路径解析为 workspace 内的安全路径。
 
-    作用：
-    - 支持相对路径，默认相对 WORKSPACE
-    - 规范化路径，消除 . / ..
-    - 阻止路径逃逸到 WORKSPACE 外
-    - 可选检查存在性和文件类型
+class AbsolutePathNotAllowed(WorkspaceInputError):
+    code = "ABSOLUTE_PATH_NOT_ALLOWED"
 
-    成功: (resolved_path, None)
-    失败: (None, {"error": "...", "code": "..."})
-    """
-    ws = WORKSPACE.resolve()
+    def __init__(self, path: str) -> None:
+        super().__init__(f"path 必须是 workspace root 内的相对路径: {path}")
 
-    # 1. 解析路径 是workplace下的绝对路径
-    p = Path(path)
-    if not p.is_absolute():
-        p = ws / p
-  
-    try:
-        p = p.resolve()
-        p.relative_to(ws)
-    except OSError as e:
-        return None, {"error": f"路径无法解析: {path}, {e}", "code": "RESOLVE_FAILED_OS_ERROR"}
-    except ValueError:
-        return None, {"error": f"路径越界 workspace: {p.as_posix()}", "code": "OUT_OF_WORKSPACE"}
 
-    if not must_exist:
-        parent = p.parent
-        if not create_parents :
-            if not parent.exists():
-                return None, {"error": f"父目录不存在: {parent.as_posix()}", "code": "PARENT_NOT_FOUND"}
-            if not parent.is_dir():
-                return None, {"error": f"父路径不是目录: {parent.as_posix()}", "code": "PARENT_NOT_DIR"}
-            return p, None
-        else:
-            try:
-                parent.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                return None, {"error": f"无法创建父目录: {e}", "code": "MKDIR_FAILED"}
-            return p, None
+class PathOutsideWorkspace(WorkspaceInputError):
+    code = "PATH_OUTSIDE_WORKSPACE"
 
-    if not p.exists():
-        return None, {"error": f"路径不存在: {p.as_posix()}", "code": "NOT_FOUND"}
+    def __init__(self, path: str) -> None:
+        super().__init__(f"path 解析后越出 workspace root: {path}")
 
-    if expect == "file" and not p.is_file():
-        return None, {"error": f"不是文件: {p.as_posix()}", "code": "NOT_A_FILE"}
-    if expect == "dir" and not p.is_dir():
-        return None, {"error": f"不是目录: {p.as_posix()}", "code": "NOT_A_DIR"}
 
-    return p, None
+class UnknownWorkspaceRoot(WorkspaceInputError):
+    code = "UNKNOWN_WORKSPACE_ROOT"
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"未知的 workspace root: {name}")
+
+
+@dataclass(frozen=True)
+class WorkspaceSandbox:
+    """单个 workspace root 的路径权限边界。"""
+
+    root: Path
+
+    def __post_init__(self) -> None:
+        resolved_root = self.root.resolve()
+        if not resolved_root.is_dir():
+            raise ValueError(f"workspace root 不是已存在的目录: {resolved_root}")
+        object.__setattr__(self, "root", resolved_root)
+
+    def resolve(self, path: str) -> Path:
+        relative_path = Path(path)
+        if relative_path.is_absolute() or relative_path.drive:
+            raise AbsolutePathNotAllowed(path)
+
+        resolved = (self.root / relative_path).resolve()
+        try:
+            resolved.relative_to(self.root)
+        except ValueError:
+            raise PathOutsideWorkspace(path) from None
+        return resolved
+
+    def relative(self, path: Path | str) -> str:
+        return Path(path).resolve().relative_to(self.root).as_posix()
+
+
+class WorkspaceSandboxes:
+    """按逻辑名称选择彼此独立的单根 Sandbox。"""
+
+    def __init__(self, sandboxes: Mapping[str, WorkspaceSandbox]) -> None:
+        if not sandboxes:
+            raise ValueError("至少需要配置一个 workspace root")
+        if any(not name or not name.strip() for name in sandboxes):
+            raise ValueError("workspace root 名称不能为空")
+        self._sandboxes = dict(sandboxes)
+
+    def get(self, name: str) -> WorkspaceSandbox:
+        try:
+            return self._sandboxes[name]
+        except KeyError:
+            raise UnknownWorkspaceRoot(name) from None
+
+    def info(self) -> list[dict[str, str]]:
+        return [
+            {"name": name, "path": sandbox.root.as_posix()}
+            for name, sandbox in self._sandboxes.items()
+        ]
+
+    def values(self) -> tuple[WorkspaceSandbox, ...]:
+        return tuple(self._sandboxes.values())
+
+
+def workspace_error(exc: WorkspaceInputError) -> dict[str, str | bool]:
+    return {"ok": False, "code": exc.code, "error": str(exc)}
