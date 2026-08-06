@@ -14,7 +14,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def get_default_run_log_path() -> Path:
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return PROJECT_ROOT / f"session_{stamp}.log"
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"session_{stamp}.log"
 
 
 def build_run_trace(
