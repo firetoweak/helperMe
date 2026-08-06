@@ -76,21 +76,22 @@ class WorkspaceToolInputSchemaContractTest(unittest.TestCase):
         self.assertEqual(max_depth_integer_schema["minimum"], 1)
         self.assertEqual(glob_properties["max_results"]["minimum"], 1)
         self.assertEqual(glob_properties["max_results"]["maximum"], 100)
+        self.assertEqual(glob_properties["offset"]["minimum"], 0)
         self.assertEqual(read_properties["offset"]["minimum"], 1)
         self.assertEqual(read_properties["limit"]["minimum"], 1)
         self.assertEqual(read_properties["limit"]["maximum"], 2000)
-        self.assertEqual(grep_properties["context_lines"]["minimum"], 0)
-        self.assertEqual(grep_properties["context_lines"]["maximum"], 20)
+        self.assertEqual(grep_properties["offset"]["minimum"], 0)
         self.assertEqual(grep_properties["max_results"]["minimum"], 1)
         self.assertEqual(grep_properties["max_results"]["maximum"], 100)
 
     def test_invalid_numeric_limits_fail_at_input_boundary(self):
         invalid_inputs = (
             (GlobInput, {"root": "project", "pattern": "*.py", "max_depth": 0}),
+            (GlobInput, {"root": "project", "pattern": "*.py", "offset": -1}),
             (GlobInput, {"root": "project", "pattern": "*.py", "max_results": 0}),
             (ReadFileInput, {"root": "project", "path": "a.py", "offset": 0}),
             (ReadFileInput, {"root": "project", "path": "a.py", "limit": 2001}),
-            (GrepInput, {"root": "project", "query": "x", "context_lines": -1}),
+            (GrepInput, {"root": "project", "query": "x", "offset": -1}),
             (GrepInput, {"root": "project", "query": "x", "max_results": 101}),
         )
 

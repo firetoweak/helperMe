@@ -29,7 +29,7 @@ Phase 5 Context Management
 ├─ ✓ 5.3 Safe Compression
 ├─ ✓ 回补 A / A.1 / B / C
 ├─ ✓ 5.5 Workspace Sandbox
-└─ 5.6 Workspace Retrieval（工具型）
+└─ ✓ 5.6 Workspace Retrieval（工具型）
         ↓
 Phase 6 Goal、能力加载与委派
         ↓
@@ -142,7 +142,7 @@ Phase 5.3 完成验收
         ↓
 Phase 5.5 Workspace Sandbox
         ↓
-Phase 5.6 Workspace Retrieval（工具型）
+✓ Phase 5.6 Workspace Retrieval（工具型）
         ↓
 Phase 6A Goal / Task Management
         ↓
@@ -222,12 +222,12 @@ Phase 8 Multi-Agent
 - 结论：Sandbox 只做路径权限边界；存在性与文件操作仍由具体工具负责。
 - 详述：[phase5_5_Workspace_Sandbox总结.md](5/phase5_5_Workspace_Sandbox总结.md)
 
-### 5.6 Workspace Retrieval（工具型）
+### ✓ 5.6 Workspace Retrieval（工具型）（完成于 2026.08.05）
 
-- 状态：进行中 / 总结待写
+- 状态：完成
 - 目标：在 PathGuard 边界内提供只读回取工具；不自动注入 Context，不改变 Workspace 作为外部事实源的职责。
-- 结论：（待写）
-- 详述：总结待写
+- 结论：glob 按名称找路径、grep 按内容找匹配行、read_file 按行读取正文；结果有界、截断真实且可继续。
+- 详述：[phase5_6_Workspace_Retrieval总结.md](5/phase5_6_Workspace_Retrieval总结.md)
 
 ---
 

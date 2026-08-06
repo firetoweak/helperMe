@@ -75,10 +75,7 @@ class WorkspaceSandboxes:
             raise UnknownWorkspaceRoot(name) from None
 
     def info(self) -> list[dict[str, str]]:
-        return [
-            {"name": name, "path": sandbox.root.as_posix()}
-            for name, sandbox in self._sandboxes.items()
-        ]
+        return [{"name": name} for name in self._sandboxes]
 
     def values(self) -> tuple[WorkspaceSandbox, ...]:
         return tuple(self._sandboxes.values())

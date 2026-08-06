@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import shutil
 import subprocess
-import sys
+import tempfile
+import threading
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -21,9 +24,9 @@ from tools.workspace import (
 
 
 GET_WORKSPACE_INFO_DESCRIPTION = """
-用途：列出当前可用 workspace root 的逻辑名称、物理位置和系统平台。
-何时使用：不知道该选哪个 root、用户询问文件位置或需要平台信息时使用；它用于发现工作区，不代替 glob/read_file 等文件操作工具。
-关键限制：无参数，必须传 {}；返回的绝对位置仅用于说明，其他 Workspace 工具仍必须使用 root 名称和 root 内相对 path。
+用途：列出当前可用 workspace root 的逻辑名称。
+何时使用：不知道该选哪个 root 时使用；它用于发现工作区，不代替 glob/read_file 等文件操作工具。
+关键限制：无参数，必须传 {}；物理路径是内部配置，其他 Workspace 工具必须使用返回的 root 名称和 root 内相对 path。
 失败/截断后：结果不会截断；若缺少预期 root，应检查应用配置，不能猜测 root 名称或改用绝对 path 绕过。
 """.strip()
 
@@ -31,22 +34,32 @@ GLOB_DESCRIPTION = """
 用途：在指定 workspace root 中按名称模式查找文件或目录，返回可继续传给其他文件工具的相对路径。
 何时使用：不知道目标文件位置、需要按扩展名或目录层级定位时使用；搜索文件内容用 grep，读取已知文件用 read_file。
 关键限制：root 必须是已配置名称；path 和 pattern 必须相对 root，不能包含越界；glob 只定位名称，不读取文件内容，指向 root 外的符号链接结果会被排除。
-失败/截断后：truncated=true 时缩小 path、pattern、kind、max_depth 或提高 max_results 后继续；无结果时调整搜索范围；root/path 错误时先用 get_workspace_info 或修正相对路径。
+失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path、pattern、kind、max_depth；无结果时调整搜索范围；root/path 错误时先用 get_workspace_info 或修正相对路径。
 """.strip()
 
 GREP_DESCRIPTION = """
-用途：在指定 workspace root 的文件或目录内按关键词或正则搜索文本，返回命中位置和少量上下文。
-何时使用：不知道内容出现在哪个文件、修改前需要定位原文时使用；找文件名用 glob，阅读已知文件的完整上下文用 read_file。
-关键限制：root 必须是已配置名称，path 必须相对 root；query 按正则解释；结果仅用于定位，不能替代修改前的完整原文读取。
-失败/截断后：truncated=true 时缩小 path/query 或提高 max_results 后继续；命中后用 read_file 读取目标区域；RG_NOT_FOUND/RG_FAILED 时修复搜索后端，不要假定没有匹配。
+用途：在指定 workspace root 的文件或目录内按关键词或正则搜索文本，返回每个匹配行的位置和内容。
+何时使用：不知道内容出现在哪个文件、修改前需要定位原文时使用；找文件名用 glob，阅读匹配位置的完整上下文用 read_file。
+关键限制：root 必须是已配置名称，path 必须相对 root；query 按正则解释；一条 hit 表示一行匹配，正文和 submatches 都是有界预览，不能替代 read_file。
+失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path/query；content_truncated=true 时用 read_file 查看该行；RG_TIMEOUT/RG_NOT_FOUND/RG_FAILED 时不能假定没有匹配。
 """.strip()
 
 READ_FILE_DESCRIPTION = """
 用途：读取指定 workspace root 内已知文本文件的行范围，返回内容、行号和分页状态。
 何时使用：已经知道文件路径、需要查看 grep 命中的完整上下文或在修改前取得真实 old_block 时使用；不知道路径先用 glob/grep，不要用它读取二进制文件。
-关键限制：root 必须是已配置名称，path 必须相对 root；offset 从 1 开始；单次最多受 limit 和字符预算共同限制，不能把局部结果当作完整文件。
-失败/截断后：truncated=true 时必须使用 next_offset 继续，truncated_by 表示行数或字符限制；NOT_FOUND 后重新定位路径，OFFSET_OUT_OF_RANGE 后依据 total_lines 修正，NOT_A_TEXT_FILE 时改用适合该格式的工具。
+关键限制：root 必须是已配置名称，path 必须相对 root；offset 从 1 开始；文件最大 20 MiB，单次最多 2000 行和 8000 字符，不能把局部结果当作完整文件。
+失败/截断后：truncated=true 时使用 next_offset 继续；LINE_TOO_LONG 返回有界 preview 但不声称读取成功；FILE_TOO_LARGE 时先用 grep 定位或改用专用工具。
 """.strip()
+
+
+MAX_READ_FILE_SIZE_BYTES = 20 * 1024 * 1024
+MAX_READ_CHARS = 8_000
+MAX_GREP_HIT_CHARS = 2_000
+MAX_GREP_PAGE_CHARS = 8_000
+MAX_GREP_SUBMATCHES = 100
+MAX_RG_ERROR_CHARS = 4_000
+GREP_TIMEOUT_SECONDS = 30
+GREP_SHUTDOWN_TIMEOUT_SECONDS = 5
 
 
 class RootInput(BaseModel):
@@ -54,10 +67,11 @@ class RootInput(BaseModel):
 
 
 class GlobInput(RootInput):
-    pattern: str = Field(description="文件名或相对 path 的 glob 模式，例如 file_read.py、*.py、tools/*.py")
+    pattern: str = Field(description="glob 模式；不含 / 时递归匹配文件名，含 / 时匹配相对搜索起点的路径，例如 *.py、tools/*.py")
     path: str = Field(default=".", description="root 内的相对搜索起点；默认搜索整个 root")
     kind: Literal["file", "dir", "any"] = Field(default="any", description="结果类型：file 仅文件、dir 仅目录、any 两者都要")
     max_depth: int | None = Field(default=None, ge=1, description="相对搜索起点的深度限制；默认不限制，1 表示只看当前层")
+    offset: int = Field(default=0, ge=0, description="跳过的匹配结果数量，从 0 开始")
     max_results: int = Field(default=10, ge=1, le=100, description="最多返回的结果数量，范围 1 到 100")
 
 
@@ -70,7 +84,7 @@ class ReadFileInput(RootInput):
 class GrepInput(RootInput):
     query: str = Field(description="搜索关键词或正则表达式")
     path: str = Field(default=".", description="root 内的相对搜索路径")
-    context_lines: int = Field(default=2, ge=0, le=20, description="每个匹配前后各返回的上下文行数，范围 0 到 20")
+    offset: int = Field(default=0, ge=0, description="跳过的匹配行数量，从 0 开始")
     max_results: int = Field(default=10, ge=1, le=100, description="最多返回的匹配数量，范围 1 到 100")
 
 
@@ -90,13 +104,31 @@ def _require_existing(
     return resolved, None
 
 
+def _walk_entries(root: Path, max_depth: int | None, depth: int = 1):
+    with os.scandir(root) as iterator:
+        entries = sorted(iterator, key=lambda entry: entry.name)
+    for entry in entries:
+        candidate = Path(entry.path)
+        yield candidate
+        if entry.is_dir(follow_symlinks=False) and (
+            max_depth is None or depth < max_depth
+        ):
+            yield from _walk_entries(candidate, max_depth, depth + 1)
+
+
+def _matches_glob(path: str, pattern: str) -> bool:
+    candidate = PurePosixPath(path)
+    if "/" not in pattern:
+        return PurePosixPath(candidate.name).match(pattern)
+    return PurePosixPath(f"/{path}").match(f"/{pattern}")
+
+
 def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
     def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
         return {
             "ok": True,
             "code": "WORKSPACE_INFO_READ",
             "roots": workspaces.info(),
-            "platform": sys.platform,
         }
 
     def glob(raw: GlobInput) -> dict[str, Any]:
@@ -118,42 +150,48 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         if not pattern.strip():
             return {"ok": False, "error": "pattern 不能为空", "code": "EMPTY_PATTERN"}
 
-        has_path_part = "/" in pattern
-        candidates = search_root.glob(pattern) if has_path_part else search_root.rglob(pattern)
         matches = []
-        for candidate in candidates:
+        skipped = 0
+        for candidate in _walk_entries(search_root, raw.max_depth):
             try:
-                relative_candidate = candidate.relative_to(sandbox.root).as_posix()
-                absolute_candidate = sandbox.resolve(relative_candidate)
+                workspace_path = candidate.relative_to(sandbox.root).as_posix()
+                absolute_candidate = sandbox.resolve(workspace_path)
             except WorkspaceInputError:
                 continue
-            if raw.kind == "dir" and not absolute_candidate.is_dir():
+
+            if not absolute_candidate.exists():
                 continue
-            if raw.kind == "file" and not absolute_candidate.is_file():
+            candidate_kind = "dir" if absolute_candidate.is_dir() else "file"
+            if raw.kind != "any" and candidate_kind != raw.kind:
                 continue
 
-            rel_from_search_root = absolute_candidate.relative_to(search_root)
-            if raw.max_depth is not None and len(rel_from_search_root.parts) > raw.max_depth:
+            relative_search_path = candidate.relative_to(search_root).as_posix()
+            if not _matches_glob(relative_search_path, pattern):
                 continue
-            matches.append({
-                "path": sandbox.relative(absolute_candidate),
-                "kind": "dir" if absolute_candidate.is_dir() else "file",
-            })
 
-        matches.sort(key=lambda item: item["path"])
-        total = len(matches)
+            if skipped < raw.offset:
+                skipped += 1
+                continue
+            matches.append({"path": workspace_path, "kind": candidate_kind})
+            if len(matches) > raw.max_results:
+                break
+
+        truncated = len(matches) > raw.max_results
+        page = matches[:raw.max_results]
         return {
             "ok": True,
             "code": "GLOB_COMPLETED",
             "root": raw.root,
             "pattern": raw.pattern,
             "path": raw.path,
-            "matches": matches[:raw.max_results],
-            "total": total,
-            "truncated": total > raw.max_results,
+            "matches": page,
+            "truncated": truncated,
+            "next_offset": raw.offset + len(page) if truncated else None,
         }
 
     def grep(raw: GrepInput) -> dict[str, Any]:
+        if not raw.query.strip():
+            return {"ok": False, "code": "EMPTY_QUERY", "error": "query 不能为空"}
         if shutil.which("rg") is None:
             return {"ok": False, "code": "RG_NOT_FOUND", "error": "未找到 rg"}
         try:
@@ -164,46 +202,93 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         if err:
             return err
 
-        proc = subprocess.run(
-            ["rg", "--json", "-C", str(raw.context_lines), raw.query, str(path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        if proc.returncode == 2:
-            return {"ok": False, "code": "RG_FAILED", "error": proc.stderr.strip() or "rg 执行失败"}
-
         hits = []
-        current_file = None
-        snippet = []
-        match_line = None
-        for raw_line in proc.stdout.splitlines():
-            if not raw_line.strip():
-                continue
-            obj = json.loads(raw_line)
-            event_type = obj.get("type")
-            data = obj.get("data") or {}
-            if event_type == "begin":
-                current_file = data["path"]["text"]
-                snippet = []
-                match_line = None
-            elif event_type in {"context", "match"}:
-                line_number = data["line_number"]
-                if event_type == "match" and match_line is None:
-                    match_line = line_number
-                snippet.append({
-                    "line": line_number,
-                    "content": data["lines"]["text"].rstrip("\r\n"),
-                    "kind": event_type,
-                })
-            elif event_type == "end" and snippet and match_line is not None:
-                hits.append({
-                    "file": sandbox.relative(current_file),
-                    "line": match_line,
-                    "snippet": snippet,
-                })
-                if len(hits) >= raw.max_results:
-                    break
+        skipped = 0
+        truncated = False
+        page_chars = 0
+        timed_out = threading.Event()
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            proc = subprocess.Popen(
+                ["rg", "--json", "--sort", "path", "--", raw.query, str(path)],
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+                encoding="utf-8",
+            )
+
+            def kill_on_timeout() -> None:
+                if proc.poll() is None:
+                    timed_out.set()
+                    proc.kill()
+
+            timer = threading.Timer(GREP_TIMEOUT_SECONDS, kill_on_timeout)
+            timer.daemon = True
+            timer.start()
+            try:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    if not raw_line.strip():
+                        continue
+                    obj = json.loads(raw_line)
+                    if obj.get("type") != "match":
+                        continue
+                    data = obj.get("data") or {}
+                    if skipped < raw.offset:
+                        skipped += 1
+                        continue
+                    if len(hits) >= raw.max_results:
+                        truncated = True
+                        break
+
+                    full_content = data["lines"]["text"].rstrip("\r\n")
+                    content = full_content[:MAX_GREP_HIT_CHARS]
+                    if hits and page_chars + len(content) > MAX_GREP_PAGE_CHARS:
+                        truncated = True
+                        break
+                    submatches = data["submatches"]
+                    hits.append({
+                        "file": sandbox.relative(data["path"]["text"]),
+                        "line": data["line_number"],
+                        "content": content,
+                        "content_truncated": len(content) < len(full_content),
+                        "submatches": [
+                            {"start": match["start"], "end": match["end"]}
+                            for match in submatches[:MAX_GREP_SUBMATCHES]
+                        ],
+                        "submatches_truncated": len(submatches) > MAX_GREP_SUBMATCHES,
+                    })
+                    page_chars += len(content)
+
+                if truncated and proc.poll() is None:
+                    proc.terminate()
+                try:
+                    return_code = proc.wait(timeout=GREP_SHUTDOWN_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    return_code = proc.wait()
+            finally:
+                timer.cancel()
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                if proc.stdout is not None:
+                    proc.stdout.close()
+
+            stderr_file.seek(0)
+            stderr = stderr_file.read(MAX_RG_ERROR_CHARS).strip()
+
+        if timed_out.is_set():
+            return {
+                "ok": False,
+                "code": "RG_TIMEOUT",
+                "error": f"rg 搜索超过 {GREP_TIMEOUT_SECONDS} 秒",
+            }
+        if not truncated and return_code == 2:
+            return {
+                "ok": False,
+                "code": "RG_FAILED",
+                "error": stderr or "rg 执行失败",
+            }
 
         return {
             "ok": True,
@@ -211,10 +296,9 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             "root": raw.root,
             "path": sandbox.relative(path),
             "query": raw.query,
-            "context_lines": raw.context_lines,
             "hits": hits,
-            "total_hits": len(hits),
-            "truncated": len(hits) >= raw.max_results,
+            "truncated": truncated,
+            "next_offset": raw.offset + len(hits) if truncated else None,
         }
 
     def read_file(raw: ReadFileInput) -> dict[str, Any]:
@@ -226,39 +310,68 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         if err:
             return err
         relative_path = sandbox.relative(path)
-        if raw.offset < 1:
-            return {"ok": False, "code": "INVALID_OFFSET", "error": "offset 必须大于等于 1", "path": relative_path}
-        if raw.limit < 1:
-            return {"ok": False, "code": "INVALID_LIMIT", "error": "limit 必须大于等于 1", "path": relative_path}
-
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-        except UnicodeDecodeError:
-            return {"ok": False, "code": "NOT_A_TEXT_FILE", "error": f"无法以文本读取: {relative_path}"}
-        total_lines = len(lines)
-        if raw.offset > total_lines:
+        file_size = path.stat().st_size
+        if file_size > MAX_READ_FILE_SIZE_BYTES:
             return {
                 "ok": False,
-                "code": "OFFSET_OUT_OF_RANGE",
-                "error": f"起始行号超出文件总行数: {relative_path}",
-                "total_lines": total_lines,
+                "code": "FILE_TOO_LARGE",
+                "error": f"文件超过 20 MiB，不能使用 read_file: {relative_path}",
+                "path": relative_path,
+                "size": file_size,
+                "max_size": MAX_READ_FILE_SIZE_BYTES,
+            }
+
+        selected: list[str] = []
+        content_length = 0
+        end_line = raw.offset - 1
+        truncated_by = None
+        next_offset = None
+        last_seen_line = 0
+
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    last_seen_line = line_number
+                    if line_number < raw.offset:
+                        continue
+                    if len(selected) >= raw.limit:
+                        truncated_by = "lines"
+                        next_offset = line_number
+                        break
+                    if content_length + len(line) > MAX_READ_CHARS:
+                        if selected:
+                            truncated_by = "chars"
+                            next_offset = line_number
+                            break
+                        return {
+                            "ok": False,
+                            "code": "LINE_TOO_LONG",
+                            "error": f"第 {line_number} 行超过单次字符上限: {relative_path}",
+                            "path": relative_path,
+                            "line": line_number,
+                            "preview": line[:MAX_READ_CHARS],
+                            "max_chars": MAX_READ_CHARS,
+                        }
+                    selected.append(line)
+                    content_length += len(line)
+                    end_line = line_number
+        except UnicodeDecodeError:
+            return {
+                "ok": False,
+                "code": "NOT_A_TEXT_FILE",
+                "error": f"无法以 UTF-8 文本读取: {relative_path}",
                 "path": relative_path,
             }
 
-        selected = []
-        content_length = 0
-        stopped_by_chars = False
-        for line in lines[raw.offset - 1:]:
-            if len(selected) >= raw.limit:
-                break
-            if content_length + len(line) > 3000 and selected:
-                stopped_by_chars = True
-                break
-            selected.append(line)
-            content_length += len(line)
+        if not selected and last_seen_line < raw.offset:
+            if not (raw.offset == 1 and last_seen_line == 0):
+                return {
+                    "ok": False,
+                    "code": "OFFSET_OUT_OF_RANGE",
+                    "error": f"起始行号超出文件末尾: {relative_path}",
+                    "path": relative_path,
+                }
 
-        end_line = raw.offset - 1 + len(selected)
-        truncated_by = "chars" if stopped_by_chars else "lines" if end_line < total_lines else None
         return {
             "ok": True,
             "code": "FILE_READ",
@@ -267,8 +380,7 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             "content": "".join(selected),
             "start_line": raw.offset,
             "end_line": end_line,
-            "total_lines": total_lines,
-            "next_offset": end_line + 1 if end_line < total_lines else None,
+            "next_offset": next_offset,
             "truncated": truncated_by is not None,
             "truncated_by": truncated_by,
         }
