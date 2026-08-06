@@ -10,7 +10,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "\n- code 是机器可读结果码；hint 是给你的修正建议。"
     "\n- 对会修改外部状态的工具，成功后必须调用对应验证工具确认结果，再最终回答。"
     "\n\n读文件：`data.truncated=true` 时必须用 `data.next_offset` 续读，禁止 patch。"
-    "\n写文件：完成修改后必须调用 get_changes 查看实际改动。最终总结只能基于 get_changes 的 data 中真实出现的改动。"
+    "\n写文件：完成修改后必须调用 get_changes 查看实际改动。关于文件改动的声明只能基于 get_changes 的 data 中真实出现的改动。"
+    "其他任务结论必须基于对应工具结果；get_changes 只验证 Workspace 副作用，不能替代对用户原始问题的回答。"
     "如果计划修改了某处但 diff 中没有出现，必须说明「未完成」，不能声称已经修改。"
 )
 

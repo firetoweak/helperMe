@@ -35,6 +35,7 @@ from core.tool_registry import BUILTIN_TOOL_REGISTRY
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tools.artifact_read import create_read_artifact_spec
 from tools import create_workspace_tool_specs
+from tools.powershell_runner import PowerShellCommandRunner
 from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 
 # 无状态内建工具通过导入注册；Workspace 工具在 composition root 中绑定。
@@ -64,7 +65,8 @@ def create_agent_application(
         raise ValueError("runtime_root 不能位于用户 workspace root 内")
 
     application_tool_registry = BUILTIN_TOOL_REGISTRY.clone()
-    for spec in create_workspace_tool_specs(workspaces):
+    command_runner = PowerShellCommandRunner()
+    for spec in create_workspace_tool_specs(workspaces, command_runner):
         application_tool_registry.register(spec)
 
     llm_client = LLMClient()

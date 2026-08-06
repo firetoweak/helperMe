@@ -1,5 +1,6 @@
 __pycache__/
 .vscode/
+logs/
 *.log
 run.log
 tests/.parallel_logs/

@@ -38,11 +38,13 @@ class CompositionTest(unittest.TestCase):
                 "read_file",
                 '{"root":"project","path":"docs/a.txt"}',
             )
+            command_spec = runtime.tools_executor.registry.get("execute_command")
 
         self.assertEqual(missing_root["code"], "UNKNOWN_WORKSPACE_ROOT")
         self.assertEqual(absolute_path["code"], "ABSOLUTE_PATH_NOT_ALLOWED")
         self.assertEqual(write_result["code"], "FILE_CREATED")
         self.assertEqual(read_result["data"]["content"], "hello")
+        self.assertIsNotNone(command_spec)
 
     def test_runtime_router_is_the_default_runtime_capability(self):
         with tempfile.TemporaryDirectory() as directory:

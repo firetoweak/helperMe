@@ -403,7 +403,7 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
         f"工具链状态：total={tools['total']}, pending={tools['pending']}, failed={tools['failed']}。",
     ]
     if verification["needs_verification"]:
-        lines.append("注意：本次运行中已有写入类工具成功执行，但还没有在最后一次写入后完成 get_changes 验证。")
+        lines.append("注意：本次运行中已有可能修改 Workspace 的工具执行，但还没有在最后一次潜在写入后完成 get_changes 验证。")
     lines.append("这不是任务成功完成，而是预算耗尽后的安全停止。")
     return "\n".join(lines)
 
@@ -413,8 +413,9 @@ def verification_required_checkpoint() -> Checkpoint:
         kind="runtime_feedback",
         reason="verification_required",
         message=(
-            "检测到写入类工具已经成功执行，但尚未调用 get_changes 验证。"
-            "在最终回答或中断前，必须先完成验证。"
+            "检测到可能修改 Workspace 的工具已经执行，但尚未调用 get_changes 验证。"
+            "在最终回答或中断前，必须先完成验证；验证后仍需基于已有工具结果"
+            "回答用户的原始问题，不能用 Workspace 状态替代任务答案。"
         ),
         data={},
     )

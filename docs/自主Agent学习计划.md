@@ -29,7 +29,8 @@ Phase 5 Context Management
 ├─ ✓ 5.3 Safe Compression
 ├─ ✓ 回补 A / A.1 / B / C
 ├─ ✓ 5.5 Workspace Sandbox
-└─ ✓ 5.6 Workspace Retrieval（工具型）
+├─ ✓ 5.6 Workspace Retrieval（工具型）
+└─ ◇ 5.7 Command Execution
         ↓
 Phase 6 Goal、能力加载与委派
         ↓
@@ -144,6 +145,8 @@ Phase 5.5 Workspace Sandbox
         ↓
 ✓ Phase 5.6 Workspace Retrieval（工具型）
         ↓
+◇ Phase 5.7 Command Execution
+        ↓
 Phase 6A Goal / Task Management
         ↓
 Phase 6B Skill / Toolset Progressive Loading
@@ -228,6 +231,13 @@ Phase 8 Multi-Agent
 - 目标：在 PathGuard 边界内提供只读回取工具；不自动注入 Context，不改变 Workspace 作为外部事实源的职责。
 - 结论：glob 按名称找路径、grep 按内容找匹配行、read_file 按行读取正文；结果有界、截断真实且可继续。
 - 详述：[phase5_6_Workspace_Retrieval总结.md](5/phase5_6_Workspace_Retrieval总结.md)
+
+### ◇ 5.7 Command Execution（Benchmark 待验收）
+
+- 状态：第一版实现与行为测试已完成；Agent Benchmark 待验收
+- 目标：让 Agent 在指定 Workspace 中调用本机 CLI，完成依赖安装、构建、测试、Git 和包管理等真实工程任务。
+- 结论：工具适配、PowerShell Runner 与有界捕获分层；Workspace 只约束 cwd，子进程环境显式构造；命令显式声明 `read_only|may_write`，默认保守按 `may_write` 处理并由 StopGuard 要求 get_changes 验证。
+- 详述：[phase5_7_Command_Execution计划.md](5/phase5_7_Command_Execution计划.md)；[phase5_7_Command_Execution总结.md](5/phase5_7_Command_Execution总结.md)
 
 ---
 
