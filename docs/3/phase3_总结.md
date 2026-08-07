@@ -46,7 +46,7 @@ SessionRuntime 设计暴露出 ToolsState、协议校验、停止安全和结果
 
 ### Context 边界
 
-本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/run trace。分类、提炼和长期约束需要真实消费者，统一留到 Phase 5。
+本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/run trace。Phase 5 最终选择 `Conversation + ContextState + ModelContext` 的安全投影方案，没有复制一套 facts/constraints；长期 Memory 继续后置，避免没有消费者时提前建模。
 
 ### Interrupt
 

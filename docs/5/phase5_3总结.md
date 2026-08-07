@@ -206,7 +206,12 @@ Conversation 始终保持完整，ContextState 在同一 Session 中持续复用
 - compression checkpoint、summary usage 和最终用户提示；
 - Conversation 原始内容和工具协议链不受压缩影响。
 
-尚未完成的端到端 benchmark 是：同一 Session 连续触发两次 Level 2、验证 `S1 + delta → S2`，以及 interrupt/resume 后继续复用摘要状态。
+端到端 Benchmark 已于 2026.08.07 补齐：
+
+- 同一 Session 连续触发两次 Level 2，第二次摘要输入包含 `S1 + delta`，不再包含已被 S1 覆盖的原始前缀，最终提交 S2；Conversation 原始事实保持完整。
+- 首次 Level 2 后在完整工具批次安全点 interrupt，摘要状态由 SessionRuntime 提交；resume 直接复用 S1、工具结果和新增 user message，没有重复摘要已覆盖前缀。
+- 测试使用确定性摘要与模型响应，验证 Runtime 状态流转和精确投影；真实模型摘要的语义质量仍属于上文“当前明确不做”。
+- 验证文件：`tests/core/test_safe_compression_e2e.py`。补齐后全量 235 项测试通过，1 项因当前 Windows 无符号链接权限跳过。
 
 这一阶段最重要的认知是：
 

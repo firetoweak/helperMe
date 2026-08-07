@@ -33,7 +33,9 @@ Executor 能把 TodoList 作为柔性行动参考；
 - TodoList 是 Run 局部状态；TodoMode 是不持有运行状态的生命周期策略。
 - TodoList 与 revision 进入 checkpoint / run trace，不把初始化模型原始响应写回 Conversation。
 
-### 遗留问题
+### 后续收尾
 
-用户 **只读/禁止修改** 约束跟随，当前的agent并不能很好的跟随。
-真实长任务下 `rewrite_todos` 的稳定性测试。
+- 只读/禁止修改不是 TodoList 的状态职责。后续 Runtime Mode Router 已把讨论与明确授权执行分开；工具权限与能力暴露属于应用边界和 Phase 6B，不向 TodoList 塞入一套权限系统。
+- 真实长任务稳定性已在 Phase 5.7 Agent Benchmark 中回补：TodoMode 完成任务初始化、执行中同步、失败测试定位、修改、重测、构建和最终同步；一次非法 rewrite 被边界拒绝后可按契约修正。
+
+因此 Phase 2 按“Run 内柔性行动参考”的原目标完成。跨 Run 目标、任务依赖和委派继续由 Phase 6 承担。

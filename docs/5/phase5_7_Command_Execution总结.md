@@ -1,6 +1,6 @@
 ## Phase 5.7 Command Execution 总结
 
-状态：第一版实现与行为测试完成；真实 Agent Benchmark 待验收。
+状态：完成（第一版实现、行为测试与真实 Agent Benchmark 均已通过，2026.08.07）。
 
 ### 完成内容
 
@@ -36,6 +36,17 @@ Runtime Artifact 解决模型上下文中的大结果，不自动解决子进程
 - 非零退出不破坏后续工具调用。
 - 命令执行后的 StopGuard 验证要求。
 
-### 后续验收
+### Agent Benchmark 验收
 
-使用计划中的临时 Git 项目运行真实 Agent Benchmark，验证 Agent 能自主完成依赖安装、失败测试定位、代码修改、重新测试、构建和最终 Git diff。Benchmark 通过后，再将 Phase 5.7 标记为完成。
+真实 Agent 在临时 Git 项目中自主完成：
+
+```text
+发现项目 → 安装依赖 → 构建 → 运行并观察失败测试
+         → 修改代码 → 重测通过 → 重建通过 → get_changes → 事实一致总结
+```
+
+评估器独立验证测试与构建退出码均为 0，Git 状态仅包含 Agent 声明的代码修改。最终严格检查全部通过。
+
+Benchmark 的中间迭代还暴露出一个重要边界：StopGuard 只能保证潜在写入后调用 `get_changes`，不能保证模型正确理解结果。最终评估器因此增加“完整 Git status 与最终声明一致”的事实检查。这属于 Benchmark/上层评估职责，不把自然语言语义判断塞入 StopGuard。
+
+可重复脚本位于 `tests/benchmarks/phase5_7_agent_benchmark.py`。脚本会在同目录生成 `phase5_7_last_report.json` 作为最近一次运行的本地报告；该报告不纳入版本管理。

@@ -21,7 +21,7 @@ Phase 3 Long-running Agent
         ↓
 Phase 4 Agent Application Layer
         ↓
-Phase 5 Context Management
+Phase 5 Context Management（完成）
 │
 ├─ ✓ 5.1 Context Projection
 ├─ ✓ 5.2 Context Budget
@@ -30,9 +30,9 @@ Phase 5 Context Management
 ├─ ✓ 回补 A / A.1 / B / C
 ├─ ✓ 5.5 Workspace Sandbox
 ├─ ✓ 5.6 Workspace Retrieval（工具型）
-└─ ◇ 5.7 Command Execution
+└─ ✓ 5.7 Command Execution
         ↓
-Phase 6 Goal、能力加载与委派
+Phase 6 Goal、能力加载与委派（进行中：6A）
         ↓
 Phase 7 Scheduler / Watcher / Background Task
         ↓
@@ -41,7 +41,7 @@ Phase 8 Multi-Agent
 Memory（后置，外挂）
 ```
 
-详细执行过程按 Phase 编号见 [`docs/0/`](0/) … [`docs/5/`](5/)。
+详细执行过程按 Phase 编号见 [`docs/0/`](0/) … [`docs/6/`](6/)。
 
 ---
 
@@ -90,7 +90,7 @@ Memory（后置，外挂）
 
 ### ✓ TodoList
 
-- 状态：完成（遗留：只读约束跟随、长任务稳定性）
+- 状态：完成（后续边界与长任务验证已回补）
 - 目标：按 Run 路由 `plain/todo`，把 TodoList 作为柔性行动参考。
 - 结论：删除独立 Planner/Replanner；最终回答前必须通过 Todo Sync Barrier。
 - 详述：[phase2_总结.md](2/phase2_总结.md)
@@ -131,6 +131,10 @@ Memory（后置，外挂）
 
 在同一 Session 内管理长期累积的上下文：Conversation 保存完整事实轨迹，运行时生成可发送给模型的安全投影，不更换 Session 身份。
 
+- 状态：完成（2026.08.07）
+- 总结：[phase5_总结.md](5/phase5_总结.md)
+- 编号说明：原 5.4 Memory Model / Extraction 已后置到 Phase 8 之后；为保持既有文档与提交引用稳定，不重编号 5.5～5.7。
+
 ### 路线图
 
 ```text
@@ -145,7 +149,7 @@ Phase 5.5 Workspace Sandbox
         ↓
 ✓ Phase 5.6 Workspace Retrieval（工具型）
         ↓
-◇ Phase 5.7 Command Execution
+✓ Phase 5.7 Command Execution
         ↓
 Phase 6A Goal / Task Management
         ↓
@@ -185,7 +189,7 @@ Phase 8 Multi-Agent
 
 ### ✓ 5.3 Safe Compression
 
-- 状态：完成验收
+- 状态：完成验收（端到端 Benchmark 已补齐 2026.08.07）
 - 目标：在不修改完整事实轨迹的前提下，生成可继续发送给模型的安全投影。
 - 结论：Level 1 持续性工具脱水 + Level 2 增量摘要；压缩只更新 ContextState，不改 Conversation。
 - 详述：[phase5_3总结.md](5/phase5_3总结.md)
@@ -232,11 +236,11 @@ Phase 8 Multi-Agent
 - 结论：glob 按名称找路径、grep 按内容找匹配行、read_file 按行读取正文；结果有界、截断真实且可继续。
 - 详述：[phase5_6_Workspace_Retrieval总结.md](5/phase5_6_Workspace_Retrieval总结.md)
 
-### ◇ 5.7 Command Execution（Benchmark 待验收）
+### ✓ 5.7 Command Execution（完成于 2026.08.07）
 
-- 状态：第一版实现与行为测试已完成；Agent Benchmark 待验收
+- 状态：完成；第一版实现、行为测试与真实 Agent Benchmark 均已通过
 - 目标：让 Agent 在指定 Workspace 中调用本机 CLI，完成依赖安装、构建、测试、Git 和包管理等真实工程任务。
-- 结论：工具适配、PowerShell Runner 与有界捕获分层；Workspace 只约束 cwd，子进程环境显式构造；命令显式声明 `read_only|may_write`，默认保守按 `may_write` 处理并由 StopGuard 要求 get_changes 验证。
+- 结论：工具适配、PowerShell Runner 与有界捕获分层；Workspace 只约束 cwd，子进程环境显式构造；命令显式声明 `read_only|may_write`，默认保守按 `may_write` 处理并由 StopGuard 要求 get_changes 验证。真实 Agent 已完成发现、安装、失败测试、修改、重测、构建、Git 核对与事实一致总结的闭环。
 - 详述：[phase5_7_Command_Execution计划.md](5/phase5_7_Command_Execution计划.md)；[phase5_7_Command_Execution总结.md](5/phase5_7_Command_Execution总结.md)
 
 ---
@@ -251,8 +255,8 @@ Phase 8 Multi-Agent
 
 - 状态：未开始
 - 目标：管理跨步骤的目标与任务组织。
-- 结论：（待写）
-- 详述：总结待写
+- 当前问题：
+- 详述：
 
 ### 6B Skill / Toolset Progressive Loading
 

@@ -20,15 +20,21 @@
 
 ### 模块状态
 
+以下“缺”记录保留的是 Phase 0 完成时的能力边界，不代表当前项目仍未收尾。后续解决位置在对应条目中注明。
+
 ✓ OpenAI Protocol
 简单的openAI api
 有：标准调用格式，支持配置api 和工具调用
 缺：无流式
 
+当前状态：仍未实现；同步模型调用足以支撑 Phase 0～5，流式不属于前五阶段验收条件。
+
 ✓ Message
 
 有：基础状态，消息拼装
 缺：无trace跟踪
+
+后续状态：Phase 1 已增加 Checkpoint/RunResult，Phase 4 已建立 Run Trace 与日志边界。
 
 ✓ Tool Registry
 
@@ -43,6 +49,8 @@
 有：完整一轮对话工具调用循环，system_prompt
 缺：没有runtime
 
+后续状态：Phase 1 已拆出 RunRuntime，Phase 3 在其上建立 SessionRuntime。
+
 ✓ Workspace
 
 有：基础工作空间；Phase 5.5 已补充由 Composition Root 配置并注入的多根轻量路径沙箱。每个 root 使用独立 WorkspaceSandbox，文件工具只接受 root 名称与 root 内相对路径。
@@ -52,3 +60,5 @@
 
 有：git diff 只能看到相比上次提交前是否改动此文件
 缺：以后优化成真正的改动地方检测
+
+后续状态：`get_changes` 现同时返回 Git short status 与 tracked unstaged diff；可识别 staged、unstaged、untracked 路径。未跟踪文件正文仍不伪装成已核对，这是工具的显式边界。

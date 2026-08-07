@@ -174,7 +174,7 @@ RunRuntime
 - Planner 的独立 retry 策略；
 - 将估算值写入消费记录。
 
-当前控制台暂时显式使用 `MODEL_CONTEXT_LIMIT = 32_768`，后续再接入统一超参数入口。
+当前控制台仍通过组合入口显式传入 `MODEL_CONTEXT_LIMIT`（现值 `200_000`）；未来改为配置文件或用户选择只改变外部配置来源，不改变 ContextBudget 契约。
 
 ### 验证结果
 

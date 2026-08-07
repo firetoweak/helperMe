@@ -1,6 +1,6 @@
 ## Phase 5.7 Command Execution 计划
 
-状态：第一版实现与行为测试已完成；Agent Benchmark 待验收。
+状态：完成（第一版实现、行为测试与真实 Agent Benchmark 均已通过，2026.08.07）。
 
 ### 目标
 
@@ -97,6 +97,16 @@ Git 提交、推送、发布以及其他显著外部状态变更，只能在用�
 - Agent 的最终回答与最后一次测试、构建及 Git diff 的事实一致。
 
 网络安装属于人工集成验收，避免把外部网络波动作为单元测试稳定性的前提。
+
+### Benchmark 结果（2026.08.07）
+
+最终夹具使用已提交 lockfile 的本地依赖项目，预先删除 `node_modules`，确保 Agent 必须执行依赖安装，同时不让安装过程制造基线外 lockfile 噪音。只向 Agent 提供交付目标，不提供命令步骤。
+
+Agent 实际完成：项目发现 → `npm install` → 构建 → 观察失败测试 → 定位并修改代码 → 重测 → 重建 → `get_changes` → 基于真实结果总结。评估器随后独立重跑测试与构建并检查完整 Git status；全部验收项通过。
+
+测试过程中曾发现“调用了 get_changes”不等于“正确理解其结果”，因此最终评估同时校验 Workspace 实际状态与最终声明一致，而不是只检查工具调用序列。
+
+可重复脚本位于 `tests/benchmarks/phase5_7_agent_benchmark.py`。脚本会在同目录生成 `phase5_7_last_report.json` 作为最近一次运行的本地报告；该报告不纳入版本管理。
 
 ### 独立行为验收
 
