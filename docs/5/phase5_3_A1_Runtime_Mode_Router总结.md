@@ -1,6 +1,6 @@
 ## Phase 5.3 回补 A.1：Runtime Mode Router 总结
 
-每个 Run 在追加当前用户消息后，由无状态 Router 读取完整 Conversation，并严格返回 `plain/todo + reason`。`plain` 跳过 Todo 初始化；`todo` 进入原有 TodoMode 生命周期。Router 先判断最后一条用户消息是否明确授权执行：讨论、评价、解释或提出方向选择 `plain`；授权不明确时也选择 `plain`；只有明确要求执行后才判断是否需要 `todo`。
+每个 Run 在追加当前用户消息后，由无状态 Router 读取最小路由投影，并严格返回 `plain/todo + reason`。投影只包含当前用户意图与上一次最终回答，不包含历史 user、tool 消息和 assistant tool calls，避免执行轨迹干扰模式分类；上一次最终回答只用于理解当前消息的指代和背景。该投影直接生成一次性 `ModelContext`，不进入 Agent 的 `ContextPreparation`、`ContextState`、压缩与 RuntimeMode 生命周期。`plain` 跳过 Todo 初始化；`todo` 进入原有 TodoMode 生命周期。Router 先判断最后一条用户消息是否明确授权执行：讨论、评价、解释或提出方向选择 `plain`；授权不明确时也选择 `plain`；只有明确要求执行后才判断是否需要 `todo`。
 
 Router 只选择执行机制，不生成 Todo，也不承担 Planner 职责。路由响应不写入 Conversation，只记录为 `runtime_mode_routed` checkpoint。同一 Session 的不同 Run 会重新路由。
 

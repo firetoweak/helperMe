@@ -25,7 +25,7 @@ TERMINAL_RUN_STATUSES = {
 MODEL_CONTEXT_LIMIT = 200_000
 INPUT_BUDGET_RATIO = 0.9
 DEFAULT_USER_PROJECT_ROOT = Path(
-    r"E:\myCard\Helper\helperMe-test1"
+    r"D:\work\agent"
 )
 
 def _new_session(application: AgentApplication) -> str:

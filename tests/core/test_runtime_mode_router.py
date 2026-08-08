@@ -15,7 +15,7 @@ class RuntimeModeRouterTest(unittest.TestCase):
         prompt = RuntimeModeRouter().system_prompt
 
         self.assertIn("本次 Run", prompt)
-        self.assertIn("完整 Conversation", prompt)
+        self.assertIn("近期可见对话", prompt)
         self.assertIn("plain", prompt)
         self.assertIn("todo", prompt)
         self.assertIn("不确定", prompt)

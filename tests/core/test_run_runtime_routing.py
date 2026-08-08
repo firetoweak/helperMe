@@ -2,7 +2,12 @@ import json
 import unittest
 
 from core.messages import Conversation
-from core.model_call import LLMCallResult, LLMResponse, ToolCall
+from core.model_call import (
+    InvalidLLMResponse,
+    LLMCallResult,
+    LLMResponse,
+    ToolCall,
+)
 from core.runtime_modes import PlainMode
 from core.runtime_modes.router import RunMode, RuntimeModeRouter
 from core.todos import TodoMode
@@ -196,7 +201,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             ],
         )
 
-    def test_router_reads_full_conversation_and_does_not_write_decision_back(self):
+    def test_router_reads_previous_final_answer_and_current_intent_only(self):
         conversation = self._conversation()
         conversation.add_user("历史问题")
         conversation.add_assistant(
@@ -212,12 +217,8 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         self._runner(llm).run(conversation, "简单追问")
 
         routing_messages = llm.seen_messages[0]
-        self.assertTrue(
-            any(
-                message.get("content") == "历史回答标记"
-                for message in routing_messages
-            )
-        )
+        self.assertIn("历史回答标记", str(routing_messages))
+        self.assertNotIn("历史问题", str(routing_messages))
         self.assertTrue(
             any(
                 message.get("content") == "简单追问"
@@ -353,6 +354,66 @@ class RunRuntimeRoutingTest(unittest.TestCase):
                 for message in conversation.protocol_messages()
             ],
         )
+    def test_router_projection_excludes_tool_execution_history(self):
+        conversation = self._conversation()
+        conversation.add_user("历史问题")
+        conversation.add_assistant(
+            LLMResponse(
+                type="tool_calls",
+                calls=[ToolCall("call-old", "read_file", "{}")],
+            )
+        )
+        conversation.add_tools_result(
+            [{"tool_call_id": "call-old", "content": "TOOL_RESULT_MARKER"}]
+        )
+        conversation.add_assistant(
+            LLMResponse(type="text", content="历史最终回答")
+        )
+        llm = RecordingLLMClient(
+            [
+                self._route("plain", "当前是解释性追问"),
+                LLMResponse(type="text", content="追问答案"),
+            ]
+        )
+
+        self._runner(llm).run(conversation, "它是如何执行 CLI 的")
+
+        routing_messages = llm.seen_messages[0]
+        self.assertEqual(
+            [message.get("role") for message in routing_messages],
+            ["system", "user"],
+        )
+        self.assertFalse(
+            any(message.get("role") == "tool" for message in routing_messages)
+        )
+        self.assertNotIn("TOOL_RESULT_MARKER", str(routing_messages))
+        self.assertFalse(
+            any(message.get("tool_calls") for message in routing_messages)
+        )
+        self.assertIn("历史最终回答", str(routing_messages))
+        self.assertNotIn("历史问题", str(routing_messages))
+
+    def test_empty_route_response_falls_back_to_plain_after_retries(self):
+        empty = InvalidLLMResponse(
+            "empty_model_response",
+            "model response contains neither tool calls nor non-empty text",
+        )
+        llm = RecordingLLMClient(
+            [empty, empty, empty, LLMResponse(type="text", content="正常回答")]
+        )
+
+        result = self._runner(llm).run(self._conversation(), "解释 CLI")
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.answer, "正常回答")
+        reasons = [cp.reason for cp in result.checkpoints]
+        self.assertEqual(reasons.count("llm_retry"), 2)
+        self.assertIn("empty_model_response", reasons)
+        fallback = next(
+            cp for cp in result.checkpoints
+            if cp.reason == "runtime_mode_fallback"
+        )
+        self.assertEqual(fallback.data["to_mode"], "plain")
 
 
 if __name__ == "__main__":

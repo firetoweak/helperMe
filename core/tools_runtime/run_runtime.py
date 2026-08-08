@@ -373,61 +373,73 @@ class RunRuntime:
 
         runtime_mode = self.runtime_mode
         if self.mode_router is not None:
-            route_response, current_context_state, compressed = (
-                self._prepare_and_call_role(
-                    conversation=conversation,
-                    system_prompt=self.mode_router.system_prompt,
-                    context_state=current_context_state,
-                    level2_boundary_message_id=level2_boundary_message_id,
-                    stage="routing",
-                    round_index=None,
-                    checkpoints=checkpoints,
-                    tools=[],
-                )
+            route_context = ModelContext(
+                messages=self.mode_router.build_messages(conversation.records)
             )
-            level2_performed = level2_performed or compressed
+            route_response = self._call_llm_with_retry(
+                route_context,
+                [],
+                "routing",
+                None,
+                checkpoints,
+            )
             if isinstance(route_response, Checkpoint):
-                status = (
-                    RunStatus.BLOCKED
-                    if route_response.reason in {
-                        "context_budget_exceeded",
-                        "context_length_exceeded",
-                    }
-                    else RunStatus.FAILED
-                )
-                return self._finish(
-                    status=status,
-                    answer=format_checkpoint(route_response),
-                    checkpoint=route_response,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
-                )
-            try:
-                decision = self.mode_router.accept_response(route_response)
-            except InvalidLLMResponse as exc:
-                checkpoint = runtime_mode_activation_failed_checkpoint(
-                    mode=None,
-                    stage="routing",
-                    reason=exc.code,
-                    error=str(exc),
-                )
-                checkpoints.append(checkpoint)
-                checkpoints.append(
-                    runtime_mode_fallback_checkpoint(
-                        from_mode=None,
-                        to_mode=RunMode.PLAIN.value,
-                        reason=exc.code,
+                if route_response.reason in {
+                    "empty_model_response",
+                    "invalid_llm_response",
+                }:
+                    checkpoints.append(route_response)
+                    checkpoints.append(
+                        runtime_mode_fallback_checkpoint(
+                            from_mode=None,
+                            to_mode=RunMode.PLAIN.value,
+                            reason=route_response.reason,
+                        )
                     )
-                )
-                runtime_mode = self.runtime_modes[RunMode.PLAIN]
+                    runtime_mode = self.runtime_modes[RunMode.PLAIN]
+                else:
+                    status = (
+                        RunStatus.BLOCKED
+                        if route_response.reason in {
+                            "context_budget_exceeded",
+                            "context_length_exceeded",
+                        }
+                        else RunStatus.FAILED
+                    )
+                    return self._finish(
+                        status=status,
+                        answer=format_checkpoint(route_response),
+                        checkpoint=route_response,
+                        checkpoints=checkpoints,
+                        context_state=current_context_state,
+                    )
             else:
-                checkpoints.append(
-                    runtime_mode_routed_checkpoint(
-                        decision.mode.value,
-                        decision.reason,
+                try:
+                    decision = self.mode_router.accept_response(route_response)
+                except InvalidLLMResponse as exc:
+                    checkpoint = runtime_mode_activation_failed_checkpoint(
+                        mode=None,
+                        stage="routing",
+                        reason=exc.code,
+                        error=str(exc),
                     )
-                )
-                runtime_mode = self.runtime_modes[decision.mode]
+                    checkpoints.append(checkpoint)
+                    checkpoints.append(
+                        runtime_mode_fallback_checkpoint(
+                            from_mode=None,
+                            to_mode=RunMode.PLAIN.value,
+                            reason=exc.code,
+                        )
+                    )
+                    runtime_mode = self.runtime_modes[RunMode.PLAIN]
+                else:
+                    checkpoints.append(
+                        runtime_mode_routed_checkpoint(
+                            decision.mode.value,
+                            decision.reason,
+                        )
+                    )
+                    runtime_mode = self.runtime_modes[decision.mode]
 
         mode_state = runtime_mode.create_state()
         start_prompt = runtime_mode.start(mode_state)
