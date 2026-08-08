@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from core.context.budget import BudgetAssessment, ContextBudget
 from core.context.composition import ContextComposition, ToolResultWindowStats
@@ -126,6 +126,7 @@ class ContextPreparationService:
         runtime_instructions: list[str],
         tools: list[dict[str, Any]],
         level2_boundary_message_id: str | None = None,
+        on_summary_request: Callable[[ModelContext], None] | None = None,
     ) -> PreparedContext:
         decision = self.micro_compaction_policy.propose(
             conversation_records=conversation_records,
@@ -172,6 +173,8 @@ class ContextPreparationService:
                 context_state=candidate_state,
             )
         )
+        if on_summary_request is not None:
+            on_summary_request(summary_source)
         generation = self.summary_generator.generate(summary_source)
         if isinstance(generation, SummaryGenerationBlocked):
             return PreparedContext(

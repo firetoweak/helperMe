@@ -316,6 +316,19 @@ class ObservabilityContractTest(unittest.TestCase):
             "started_at": "2026-01-01 00:00:00",
             "ended_at": "2026-01-01 00:00:01",
             "model": "test-model",
+            "system_prompt": "system prompt",
+            "model_requests": [
+                {
+                    "stage": "agent_round",
+                    "round_index": 1,
+                    "attempt": 1,
+                    "runtime_prompts": ["runtime prompt"],
+                    "messages": [
+                        {"role": "system", "content": "system prompt"},
+                        {"role": "user", "content": "hello"},
+                    ],
+                }
+            ],
             "run_id": "run-1",
             "status": "completed",
             "question": "hello",
@@ -342,6 +355,9 @@ class ObservabilityContractTest(unittest.TestCase):
         self.assertIn('"todo_list": {', log)
         self.assertIn('"sync_state": "clean"', log)
         self.assertIn('"revision": 2', log)
+        self.assertIn("System Prompt:\nsystem prompt", log)
+        self.assertIn('"runtime_prompts": [', log)
+        self.assertIn('"content": "hello"', log)
 
     def test_missing_internal_trace_field_is_not_defaulted(self):
         trace = {

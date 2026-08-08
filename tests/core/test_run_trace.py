@@ -16,6 +16,41 @@ from tests.core.llm_test_support import (
 
 
 class RunTraceTest(unittest.TestCase):
+    def test_model_request_records_runtime_prompt_and_full_messages(self):
+        model_calls = Mock()
+        model_calls.call.return_value = call_result(
+            LLMResponse(type="text", content="done"),
+            input_tokens=123,
+            output_tokens=7,
+        )
+        conversation = Conversation()
+        conversation.set_system_prompt("system prompt")
+
+        result = RunRuntime(
+            model_calls,
+            "test-model",
+            PlainMode(),
+            context_preparation_service(),
+            **runtime_tool_dependencies(),
+        ).run(conversation, "hello")
+
+        request = next(
+            checkpoint
+            for checkpoint in result.checkpoints
+            if checkpoint.reason == "llm_request"
+        )
+        self.assertEqual(request.data["stage"], "agent_round")
+        self.assertEqual(request.data["round_index"], 1)
+        self.assertEqual(request.data["attempt"], 1)
+        self.assertEqual(request.data["runtime_prompts"], [])
+        self.assertEqual(
+            request.data["messages"],
+            [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "hello"},
+            ],
+        )
+
     def test_agent_round_emits_context_prepared_with_role_breakdown(self):
         model_calls = Mock()
         model_calls.call.return_value = call_result(

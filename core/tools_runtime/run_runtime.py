@@ -13,6 +13,7 @@ from core.tools_runtime.tools_checkpoint import (
     format_checkpoint,
     invalid_llm_response_checkpoint,
     llm_error_checkpoint,
+    llm_request_checkpoint,
     llm_retry_checkpoint,
     llm_usage_checkpoint,
     message_chain_invalid_checkpoint,
@@ -51,6 +52,7 @@ from core.context import (
     ModelContext,
     SummaryCompaction,
 )
+from core.context.preparation import SUMMARY_INSTRUCTION
 from core.runtime_artifacts import ToolResultExternalizer
 
 class RunStatus(str, Enum):
@@ -145,6 +147,22 @@ class RunRuntime:
         return summary_compaction.after.allowed
 
     @staticmethod
+    def _record_summary_request(
+        model_context: ModelContext,
+        checkpoints: list[Checkpoint],
+        round_index: int | None,
+    ) -> None:
+        checkpoints.append(
+            llm_request_checkpoint(
+                stage="context_summary",
+                round_index=round_index,
+                attempt=1,
+                runtime_prompts=[SUMMARY_INSTRUCTION],
+                messages=model_context.messages,
+            )
+        )
+
+    @staticmethod
     def _record_context_prepared(
         *,
         stage: str,
@@ -188,10 +206,20 @@ class RunRuntime:
         stage: str,
         round_index: int | None,
         checkpoints: list[Checkpoint],
+        runtime_prompts: list[str] | None = None,
         max_llm_retries: int = 3,
     ) -> LLMResponse | Checkpoint:
         last_error = ""
         for attempt in range(1, max_llm_retries + 1):
+            checkpoints.append(
+                llm_request_checkpoint(
+                    stage=stage,
+                    round_index=round_index,
+                    attempt=attempt,
+                    runtime_prompts=runtime_prompts or [],
+                    messages=model_context.messages,
+                )
+            )
             try:
                 outcome = self.model_calls.call(
                     ModelCallRequest(
@@ -284,6 +312,13 @@ class RunRuntime:
                 runtime_instructions=[],
                 tools=tools,
                 level2_boundary_message_id=level2_boundary_message_id,
+                on_summary_request=lambda model_context: (
+                    self._record_summary_request(
+                        model_context,
+                        checkpoints,
+                        round_index,
+                    )
+                ),
             )
         except LLMContextLengthError as exc:
             return (
@@ -347,6 +382,7 @@ class RunRuntime:
             stage,
             round_index,
             checkpoints,
+            runtime_prompts=[system_prompt],
         )
         return response, prepared.context_state, compressed
 
@@ -368,7 +404,13 @@ class RunRuntime:
             if conversation.records
             else None
         )
-        checkpoints.append(run_started_checkpoint(max_rounds))
+        system_prompt = (
+            conversation.records[0].payload.get("content")
+            if conversation.records
+            and conversation.records[0].payload.get("role") == "system"
+            else None
+        )
+        checkpoints.append(run_started_checkpoint(max_rounds, system_prompt))
         conversation.add_user(user_message)
 
         runtime_mode = self.runtime_mode
@@ -382,6 +424,7 @@ class RunRuntime:
                 "routing",
                 None,
                 checkpoints,
+                runtime_prompts=[self.mode_router.system_prompt],
             )
             if isinstance(route_response, Checkpoint):
                 if route_response.reason in {
@@ -541,15 +584,21 @@ class RunRuntime:
                     checkpoints=checkpoints,
                     context_state=current_context_state,
                 )
+            runtime_prompts = runtime_mode.runtime_instructions(mode_state)
             try:
                 prepared = self.context_preparation.prepare(
                     conversation_records=conversation.records,
                     context_state=current_context_state,
-                    runtime_instructions=runtime_mode.runtime_instructions(
-                        mode_state
-                    ),
+                    runtime_instructions=runtime_prompts,
                     tools=tools,
                     level2_boundary_message_id=level2_boundary_message_id,
+                    on_summary_request=lambda model_context: (
+                        self._record_summary_request(
+                            model_context,
+                            checkpoints,
+                            round_index,
+                        )
+                    ),
                 )
             except LLMContextLengthError as exc:
                 checkpoint = context_length_exceeded_checkpoint(
@@ -625,6 +674,7 @@ class RunRuntime:
                 "agent_round",
                 round_index,
                 checkpoints,
+                runtime_prompts=runtime_prompts,
             )
             if isinstance(llm_outcome, Checkpoint):
                 status = (

@@ -27,11 +27,23 @@ def build_run_trace(
     outcome: SessionRunOutcome,
 ) -> dict[str, Any]:
     result = outcome.result
+    run_started = next(
+        checkpoint
+        for checkpoint in result.checkpoints
+        if checkpoint.reason == "run_started"
+    )
+    model_requests = [
+        checkpoint.data
+        for checkpoint in result.checkpoints
+        if checkpoint.reason == "llm_request"
+    ]
     return {
         "type": "agent_run",
         "started_at": started_at,
         "ended_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "model": model,
+        "system_prompt": run_started.data["system_prompt"],
+        "model_requests": model_requests,
         "run_id": outcome.record.run_id,
         "question": question,
         "answer": result.answer,
@@ -40,6 +52,7 @@ def build_run_trace(
         "checkpoints": [
             checkpoint_to_record(checkpoint)
             for checkpoint in result.checkpoints
+            if checkpoint.reason != "llm_request"
         ],
     }
 
@@ -58,6 +71,12 @@ def format_run_log(trace: dict[str, Any]) -> str:
             "-" * 76,
             "Question:",
             str(trace["question"]),
+            "",
+            "System Prompt:",
+            str(trace["system_prompt"]),
+            "",
+            "Model Requests (Runtime Prompts + Full Messages):",
+            json.dumps(trace["model_requests"], ensure_ascii=False, indent=2),
             "",
             "Answer:",
             str(trace["answer"]),

@@ -99,6 +99,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             context_budget=budget,
             summary_generator=generator,
         )
+        observed_requests = []
 
         prepared = service.prepare(
             conversation_records=conversation.records,
@@ -106,9 +107,12 @@ class ContextPreparationServiceTest(unittest.TestCase):
             runtime_instructions=[],
             tools=[],
             level2_boundary_message_id=boundary.message_id,
+            on_summary_request=observed_requests.append,
         )
 
         summary_source = generator.context.messages
+        self.assertEqual(len(observed_requests), 1)
+        self.assertEqual(observed_requests[0].messages, summary_source)
         self.assertNotIn("current goal", str(summary_source))
         self.assertIn("old answer", str(summary_source))
         self.assertEqual(prepared.context_state.summary, "short handoff")

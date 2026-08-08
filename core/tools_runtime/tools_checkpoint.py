@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 from typing import Any
 
 from core.context import (
@@ -25,13 +26,39 @@ def checkpoint_to_record(checkpoint: Checkpoint) -> dict[str, Any]:
     return asdict(checkpoint)
 
 
-def run_started_checkpoint(max_rounds: int) -> Checkpoint:
+def run_started_checkpoint(
+    max_rounds: int,
+    system_prompt: str | None,
+) -> Checkpoint:
     return Checkpoint(
         kind="run",
         reason="run_started",
         message="运行开始。",
         data={
             "max_rounds": max_rounds,
+            "system_prompt": system_prompt,
+        },
+    )
+
+
+def llm_request_checkpoint(
+    *,
+    stage: str,
+    round_index: int | None,
+    attempt: int,
+    runtime_prompts: list[str],
+    messages: list[dict[str, Any]],
+) -> Checkpoint:
+    return Checkpoint(
+        kind="llm",
+        reason="llm_request",
+        message="已记录发送给模型的完整请求消息。",
+        data={
+            "stage": stage,
+            "round_index": round_index,
+            "attempt": attempt,
+            "runtime_prompts": list(runtime_prompts),
+            "messages": deepcopy(messages),
         },
     )
 

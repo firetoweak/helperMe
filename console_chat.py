@@ -83,6 +83,21 @@ def _resolve_log_path() -> Path:
     return get_default_run_log_path()
 
 
+def _latest_input_tokens(outcome: SessionRunOutcome) -> int:
+    usages = [
+        checkpoint.data["input_tokens"]
+        for checkpoint in outcome.result.checkpoints
+        if checkpoint.reason == "llm_usage"
+    ]
+    return usages[-1] if usages else 0
+
+
+def _format_token_limit(tokens: int) -> str:
+    if tokens % 1_000 == 0:
+        return f"{tokens // 1_000}K"
+    return str(tokens)
+
+
 def main() -> None:
     model = os.environ.get("HELPER_MODEL", "qwen27b")
 
@@ -140,6 +155,12 @@ def main() -> None:
 
         print(f"\n助手：{outcome.result.answer}")
         print(f"Run 状态：{last_status.value}")
+        print(
+            "上下文 Token："
+            f"{_latest_input_tokens(outcome)}/"
+            f"{_format_token_limit(MODEL_CONTEXT_LIMIT)}"
+        )
+        print(f"当前模型：{model}")
         print(f"\n日志已写入：{log_path}")
 
         if last_status in TERMINAL_RUN_STATUSES:
