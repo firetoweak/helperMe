@@ -105,6 +105,15 @@ class NoDehydrationPolicy(MicroCompactionPolicy):
         return []
 
 
+class FullDehydrationPolicy(MicroCompactionPolicy):
+    def _recent_start_index(
+        self,
+        records,
+        minimum_index: int,
+    ) -> int:
+        return len(records)
+
+
 @dataclass(frozen=True)
 class ModelObservation:
     messages: list[dict[str, Any]]
@@ -260,7 +269,7 @@ def request_token_count(encoding, messages, tools_schema) -> int:
     return len(encoding.encode_ordinary(serialized))
 
 
-def build_registry():
+def build_registry(artifact_store):
     workspaces = WorkspaceSandboxes({
         "project": WorkspaceSandbox(WORKSPACE_ROOT),
     })
@@ -268,6 +277,7 @@ def build_registry():
     runner = PowerShellCommandRunner()
     for spec in create_workspace_tool_specs(workspaces, runner):
         registry.register(spec)
+    registry.register(create_read_artifact_spec(artifact_store))
     return registry
 
 
@@ -276,7 +286,7 @@ def build_application(
     tools_executor,
     artifact_store,
     *,
-    dehydration_enabled: bool,
+    dehydration_strategy: str,
 ) -> AgentApplication:
     context_budget = ContextBudget(
         estimator=TiktokenTokenEstimator(),
@@ -287,11 +297,12 @@ def build_application(
     )
     model_calls = ModelCallService(llm_client, context_budget)
     context_manager = ContextManager(ToolResultLimit().max_chars)
-    policy_type = (
-        MicroCompactionPolicy
-        if dehydration_enabled
-        else NoDehydrationPolicy
-    )
+    policy_types = {
+        "full": FullDehydrationPolicy,
+        "current": MicroCompactionPolicy,
+        "none": NoDehydrationPolicy,
+    }
+    policy_type = policy_types[dehydration_strategy]
     context_preparation = ContextPreparationService(
         context_manager=context_manager,
         micro_compaction_policy=policy_type(
@@ -447,20 +458,20 @@ def main() -> None:
     if not WORKSPACE_ROOT.is_dir():
         raise RuntimeError(f"实验 Workspace 不存在: {WORKSPACE_ROOT}")
 
-    registry_a = build_registry()
     store_a = ContentAddressedArtifactStore()
+    registry_a = build_registry(store_a)
     recording_llm = RecordingLLMClient(LLMClient())
     recording_tools = RecordingToolsExecutor(ToolsExecutor(registry_a))
     app_a = build_application(
         recording_llm,
         recording_tools,
         store_a,
-        dehydration_enabled=True,
+        dehydration_strategy="current",
     )
     a_report, _ = run_group(app_a, recording_llm.observations)
 
-    registry_b = build_registry()
     store_b = ContentAddressedArtifactStore()
+    registry_b = build_registry(store_b)
     replay_llm = ReplayLLMClient(recording_llm.observations)
     replay_tools = ReplayToolsExecutor(
         registry_b,
@@ -470,7 +481,7 @@ def main() -> None:
         replay_llm,
         replay_tools,
         store_b,
-        dehydration_enabled=False,
+        dehydration_strategy="none",
     )
     b_report, _ = run_group(app_b, replay_llm.observations)
 
