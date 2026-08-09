@@ -28,6 +28,7 @@ from core.model_call.client import (
     LLMContextLengthError,
     LLMTransientError,
 )
+from core.model_call.config import load_model_config
 from core.model_call.service import ModelCallService
 from core.model_call.types import InvalidLLMResponse, LLMCallResult, LLMUsage
 from core.prompt import DEFAULT_AGENT_PROMPT
@@ -53,7 +54,7 @@ from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 import tools  # noqa: F401
 
 
-MODEL = "qwen27b"
+MODEL = load_model_config().name
 MODEL_CONTEXT_LIMIT = 200_000
 INPUT_BUDGET_RATIO = 0.9
 RECENT_PROTECTION_TOKENS = 10_000

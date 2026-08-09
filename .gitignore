@@ -5,3 +5,4 @@ logs/
 run.log
 tests/.parallel_logs/
 tests/benchmarks/phase5_7_last_report.json
+model_config.yaml

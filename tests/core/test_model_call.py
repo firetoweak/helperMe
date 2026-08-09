@@ -1,10 +1,13 @@
 import unittest
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock
+from pathlib import Path
 
 from core.context import ModelContext, make_budget_assessment
 from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
 from core.model_call.client import LLMClient
+from core.model_call.config import load_model_config
 from core.model_call.service import (
     ModelCallBlocked,
     ModelCallRequest,
@@ -71,6 +74,36 @@ class LLMResponseContractTest(unittest.TestCase):
         self.assertEqual(result.usage.input_tokens, 120)
         self.assertEqual(result.usage.output_tokens, 30)
         self.assertEqual(result.usage.total_tokens, 150)
+
+
+class ModelConfigTest(unittest.TestCase):
+    def test_loads_model_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model_config.yaml"
+            path.write_text(
+                "model:\n"
+                "  name: test-model\n"
+                "  base_url: https://example.test/v1\n"
+                "  api_key: test-key\n",
+                encoding="utf-8",
+            )
+
+            config = load_model_config(path)
+
+        self.assertEqual(config.name, "test-model")
+        self.assertEqual(config.base_url, "https://example.test/v1")
+        self.assertEqual(config.api_key, "test-key")
+
+    def test_rejects_missing_required_value(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model_config.yaml"
+            path.write_text(
+                "model:\n  name: test-model\n  base_url: ''\n  api_key: key\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "model.base_url"):
+                load_model_config(path)
 
 
 class ModelCallServiceTest(unittest.TestCase):

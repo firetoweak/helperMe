@@ -50,6 +50,7 @@ def create_agent_application(
     input_budget_ratio: float = 0.75,
     runtime_mode: RuntimeMode | None = None,
     recent_protection_tokens: int = 10_000,
+    llm_client: LLMClient | None = None,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
@@ -69,7 +70,8 @@ def create_agent_application(
     for spec in create_workspace_tool_specs(workspaces, command_runner):
         application_tool_registry.register(spec)
 
-    llm_client = LLMClient()
+    if llm_client is None:
+        llm_client = LLMClient()
     context_budget = ContextBudget(
         estimator=TiktokenTokenEstimator(),
         config=ModelBudgetConfig(

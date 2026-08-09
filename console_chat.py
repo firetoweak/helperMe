@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from core.agent_application import AgentApplication
 from core.composition import create_agent_application
+from core.model_call.client import LLMClient
+from core.model_call.config import load_model_config
 from core.observability import (
     build_run_trace,
     get_default_run_log_path,
@@ -99,7 +101,8 @@ def _format_token_limit(tokens: int) -> str:
 
 
 def main() -> None:
-    model = os.environ.get("HELPER_MODEL", "qwen27b")
+    model_config = load_model_config()
+    model = model_config.name
 
     application = create_agent_application(
         model,
@@ -109,6 +112,7 @@ def main() -> None:
             "project": DEFAULT_USER_PROJECT_ROOT,
         },
         input_budget_ratio=INPUT_BUDGET_RATIO,
+        llm_client=LLMClient(model_config),
     )
     session_id = _new_session(application)
     log_path = _resolve_log_path()

@@ -10,10 +10,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.composition import create_agent_application
+from core.model_call.config import load_model_config
 from core.observability import build_run_trace
 
 
-MODEL = "qwen27b"
+MODEL = load_model_config().name
 USER_GOAL = (
     "这是一个刚检出的项目，目前不能正常交付。请自行检查项目并修复问题，"
     "使它的测试和构建全部通过。完成后请依据实际验证结果和 Git 改动准确总结。"

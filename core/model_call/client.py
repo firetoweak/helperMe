@@ -15,6 +15,7 @@ from openai import (
 )
 
 from core.context.compactor import is_context_limit_error
+from core.model_call.config import ModelConfig, load_model_config
 from core.model_call.types import (
     InvalidLLMResponse,
     LLMCallResult,
@@ -33,7 +34,8 @@ class LLMContextLengthError(RuntimeError):
 
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, config: ModelConfig | None = None):
+        config = config or load_model_config()
         http_client = httpx.Client(
             trust_env=False,
             timeout=httpx.Timeout(
@@ -44,8 +46,8 @@ class LLMClient:
             ),
         )
         self.client = OpenAI(
-            base_url="http://60.13.232.228:3553/v1",
-            api_key="EMPTY",
+            base_url=config.base_url,
+            api_key=config.api_key,
             http_client=http_client,
             max_retries=0,
         )
