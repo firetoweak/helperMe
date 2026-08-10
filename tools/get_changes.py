@@ -55,7 +55,7 @@ def create_get_changes_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
 
         path_args = ["--", sandbox.relative(target)] if target is not None else []
         status_proc = subprocess.run(
-            ["git", "status", "--short", *path_args],
+            ["git", "status", "--short", "--untracked-files=all", *path_args],
             cwd=sandbox.root,
             capture_output=True,
             text=True,

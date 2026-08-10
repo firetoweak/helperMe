@@ -10,6 +10,7 @@ from core.tools_runtime.run_runtime import (
     RunRuntime,
     RunStatus,
 )
+from core.tools_runtime.run_invocation import RunInvocation
 from core.session.state import (
     Session,
     SessionEvent,
@@ -112,18 +113,21 @@ class SessionRuntime:
         self._session_run_runtimes.pop(session_id, None)
         del self.sessions[session_id]
 
+    def get_session(self, session_id: str) -> Session:
+        return self.sessions[session_id]
+
     def start(
         self,
         session_id: str,
         run_id: str,
         user_message: str,
         max_rounds: int = 20,
+        *,
+        invocation: RunInvocation | None = None,
     ) -> SessionRunOutcome:
         if not session_id or not session_id.strip():
             raise ValueError("session_id 不能为空")
-        if not run_id or not run_id.strip():
-            raise ValueError("run_id 不能为空")
-        self._validate_user_message(user_message)
+        self.validate_run_input(run_id, user_message)
 
         if session_id not in self.sessions:
             raise KeyError(f"Session 不存在: {session_id}")
@@ -132,9 +136,11 @@ class SessionRuntime:
         if session.status not in {
             SessionStatus.PENDING,
             SessionStatus.COMPLETED,
+            SessionStatus.BLOCKED,
+            SessionStatus.FAILED,
         }:
             raise ValueError(
-                "Session 状态必须为 pending 或 completed，"
+                "Session 状态必须允许启动新 Run，"
                 f"当前为: {session.status.value}"
             )
 
@@ -145,6 +151,7 @@ class SessionRuntime:
             max_rounds=max_rounds,
             event_kind=SessionEventType.STARTED,
             event_reason="Session started",
+            invocation=invocation,
         )
 
 
@@ -177,12 +184,12 @@ class SessionRuntime:
         run_id: str,
         user_message: str,
         max_rounds: int = 20,
+        *,
+        invocation: RunInvocation | None = None,
     ) -> SessionRunOutcome:
         if not session_id or not session_id.strip():
             raise ValueError("session_id 不能为空")
-        if not run_id or not run_id.strip():
-            raise ValueError("run_id 不能为空")
-        self._validate_user_message(user_message)
+        self.validate_run_input(run_id, user_message)
         if session_id not in self.sessions:
             raise KeyError(f"Session 不存在: {session_id}")
 
@@ -199,7 +206,14 @@ class SessionRuntime:
             max_rounds=max_rounds,
             event_kind=SessionEventType.RESUMED,
             event_reason="Session resumed",
+            invocation=invocation,
         )
+
+    @staticmethod
+    def validate_run_input(run_id: str, user_message: str) -> None:
+        if not run_id or not run_id.strip():
+            raise ValueError("run_id 不能为空")
+        SessionRuntime._validate_user_message(user_message)
 
     @staticmethod
     def _validate_user_message(user_message: str) -> None:
@@ -219,6 +233,7 @@ class SessionRuntime:
         max_rounds: int,
         event_kind: SessionEventType,
         event_reason: str,
+        invocation: RunInvocation | None,
     ) -> SessionRunOutcome:
         if session.id in self.active_controls:
             raise ValueError(f"Session 已有正在执行的 run: {session.id}")
@@ -250,7 +265,22 @@ class SessionRuntime:
                 user_message=user_message,
                 max_rounds=max_rounds,
                 control=run_control,
+                invocation=invocation,
             )
+        except Exception:
+            if session.status is SessionStatus.RUNNING:
+                ended_at = datetime.now(timezone.utc)
+                event = SessionEvent(
+                    kind=SessionEventType.FAILED,
+                    session_id=session.id,
+                    reason="RunRuntime raised an exception",
+                    run_id=run_id,
+                )
+                session.transition_to(SessionStatus.FAILED, event)
+                run_record.status = RunStatus.FAILED.value
+                run_record.ended_at = ended_at
+                run_record.final_reason = "runtime_exception"
+            raise
         finally:
             del self.active_controls[session.id]
 
@@ -262,18 +292,22 @@ class SessionRuntime:
         user_message: str,
         max_rounds: int,
         control: RunControl,
+        invocation: RunInvocation | None,
     ) -> SessionRunOutcome:
         run_runtime = self._session_run_runtimes.get(
             session.id,
             self.run_runtime,
         )
-        result = run_runtime.run(
+        run_arguments = dict(
             conversation=session.conversation,
             user_message=user_message,
             max_rounds=max_rounds,
             control=control,
             context_state=session.context_state,
         )
+        if invocation is not None:
+            run_arguments["invocation"] = invocation
+        result = run_runtime.run(**run_arguments)
         session.context_state = result.context_state
         target_status, event_kind = RUN_STATUS_MAPPING[result.status]
         ended_at = datetime.now(timezone.utc)

@@ -32,7 +32,7 @@ Phase 5 Context Management（完成）
 ├─ ✓ 5.6 Workspace Retrieval（工具型）
 └─ ✓ 5.7 Command Execution
         ↓
-Phase 6 Goal、能力加载与委派（进行中：6A）
+Phase 6 Goal、能力加载与委派（进行中：6A 已完成，下一步 6B）
         ↓
 Phase 7 Scheduler / Watcher / Background Task
         ↓
@@ -260,10 +260,10 @@ Phase 8 Multi-Agent
 
 ### 6A Goal / Task Management
 
-- 状态：未开始
+- 状态：已完成（CompletionGate、真实 RunEvidence、异常恢复与完整 Goal benchmark 均通过）
 - 目标：管理跨步骤的目标与任务组织。
-- 当前问题：
-- 详述：
+- 当前边界：GoalStore 暂为进程内实现；跨进程持久化按实际恢复需求另行设计。
+- 详述：[phase_6A学习.md](6/phase_6A学习.md)
 
 ### 6B Skill / Toolset Progressive Loading
 

@@ -39,3 +39,13 @@ ToolsState.compact_completed() ~~目前只是状态层截断，还没有和 conv
 checkpoint 主要是run内报告，还不是可恢复执行点。
 
 Phase 1 已完成最小可靠 tool-calling runtime：工具调用循环已从 Agent 中抽出，工具链状态可检查、可报告、可在异常/预算耗尽时安全停止。上下文压缩、恢复执行、长期会话不属于本阶段。
+
+### Phase 6A 压力测试回补（2026.08.10）
+
+跨 Run Goal 验收暴露出初版 `RunResult` 只适合报告运行状态，不能承载机器可验证的完成事实。本次回补：
+
+- `RunResult` 增加 `RunEvidence` 快照；工具原始结果在外置或裁剪前写入证据账本，模型自由文本不作为验收事实。
+- `RunInvocation / RunCapability` 成为 Run 级扩展入口，Capability 可以注入临时工具、运行说明、完成门禁，并声明是否允许基础工具。
+- 临时 ToolRegistry 不再只解决“工具何时释放”，还解决“本 Run 有权使用哪些工具”；PlanRevision Run 因此无法调用文件或 Shell 工具。
+
+这次回补确认：ToolsState 负责协议账本，RunEvidence 负责执行事实，RunResult 负责对外结果，三者不能合并。

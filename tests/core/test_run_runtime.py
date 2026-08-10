@@ -66,6 +66,37 @@ class EmptyResponseLLMClient:
 
 
 class RunRuntimeStopGuardTest(unittest.TestCase):
+    def test_run_evidence_preserves_raw_result_before_externalization(self):
+        raw_result = {
+            "ok": True,
+            "code": "LARGE_RESULT",
+            "data": {"payload": "x" * 20_000},
+            "error": None,
+            "hint": None,
+        }
+        llm = RecordingLLMClient(
+            [
+                LLMResponse(calls=(ToolCall("call-1", "demo", "{}"),)),
+                LLMResponse(content="完成"),
+            ]
+        )
+        conversation = Conversation()
+
+        result = RunRuntime(
+            model_call_service(llm),
+            "test-model",
+            PlainMode(),
+            context_preparation_service(),
+            **runtime_tool_dependencies(raw_result),
+        ).run(conversation, "执行工具")
+
+        self.assertEqual(
+            result.evidence.steps[0].result["data"]["payload"],
+            "x" * 20_000,
+        )
+        tool_message = conversation.protocol_messages()[2]
+        self.assertIn("externalized", tool_message["content"])
+
     def test_mixed_response_is_saved_and_emitted_before_tool_execution(self):
         events: list[str] = []
         llm = RecordingLLMClient(

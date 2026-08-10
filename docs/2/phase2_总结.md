@@ -39,3 +39,13 @@ Executor 能把 TodoList 作为柔性行动参考；
 - 真实长任务稳定性已在 Phase 5.7 Agent Benchmark 中回补：TodoMode 完成任务初始化、执行中同步、失败测试定位、修改、重测、构建和最终同步；一次非法 rewrite 被边界拒绝后可按契约修正。
 
 因此 Phase 2 按“Run 内柔性行动参考”的原目标完成。跨 Run 目标、任务依赖和委派继续由 Phase 6 承担。
+
+### Phase 6A 压力测试补充（2026.08.10）
+
+真实 Goal 闭环中出现过 `rewrite_todos` 参数被模型错误序列化、Todo 最终同步失败，但 Task 的真实命令和工作区验收仍然成立。这进一步确认了本章的职责边界：
+
+- TodoList 是 Run 内的柔性行动参考，不是 Task 状态、验收事实或权限系统。
+- Todo Sync Barrier 只保证 Todo 快照内部一致，不能替代测试、命令退出码和 `get_changes`。
+- Todo 工具的外部输入仍按 schema 拒绝；内部不增加猜测、字符串反序列化或补救分支。
+
+因此本次没有把 Todo 提升为 Goal 的完成条件，也没有为模型偶发格式错误放宽工具契约。

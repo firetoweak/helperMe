@@ -132,6 +132,31 @@ class SessionStateTest(unittest.TestCase):
         self.assertEqual(session.status, SessionStatus.RUNNING)
         self.assertIs(session.events[-1], started)
 
+    def test_blocked_and_failed_can_start_a_new_run(self):
+        cases = (
+            (SessionStatus.BLOCKED, SessionEventType.BLOCKED),
+            (SessionStatus.FAILED, SessionEventType.FAILED),
+        )
+
+        for terminal_status, terminal_event_kind in cases:
+            with self.subTest(terminal_status=terminal_status):
+                session = Session(id="session-1")
+                session.transition_to(
+                    SessionStatus.RUNNING,
+                    self.make_event(SessionEventType.STARTED),
+                )
+                session.transition_to(
+                    terminal_status,
+                    self.make_event(terminal_event_kind),
+                )
+
+                session.transition_to(
+                    SessionStatus.RUNNING,
+                    self.make_event(SessionEventType.STARTED, run_id="run-2"),
+                )
+
+                self.assertEqual(session.status, SessionStatus.RUNNING)
+
     def test_running_can_transition_to_each_terminal_status_with_matching_event(self):
         cases = (
             (SessionStatus.INTERRUPTED, SessionEventType.INTERRUPTED),

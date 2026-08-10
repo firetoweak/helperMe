@@ -13,6 +13,11 @@ from core.runtime_modes import (
     RuntimeModeRouter,
 )
 from core.todos import TodoMode
+from core.goals import (
+    GoalApplicationService,
+    GoalCommandBufferRegistry,
+    InMemoryGoalStore,
+)
 from core.session import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
 from core.tools_runtime.run_progress import RunProgressSink
@@ -135,7 +140,13 @@ def create_agent_application(
         run_runtime_factory=create_session_run_runtime,
         delete_session_resources=artifact_drawers.delete,
     )
+    goal_application = GoalApplicationService(
+        session_runtime,
+        InMemoryGoalStore(),
+        GoalCommandBufferRegistry(),
+    )
     return AgentApplication(
         session_runtime=session_runtime,
         system_prompt=DEFAULT_AGENT_PROMPT,
+        goal_application=goal_application,
     )

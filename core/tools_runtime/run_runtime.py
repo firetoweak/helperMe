@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
 import time
@@ -55,6 +56,9 @@ from core.context import (
 from core.context.preparation import SUMMARY_INSTRUCTION
 from core.runtime_artifacts import ToolResultExternalizer
 from core.tools_runtime.run_progress import NullRunProgressSink, RunProgressSink
+from core.tools_runtime.run_evidence import RunEvidence, RunEvidenceRecorder
+from core.tools_runtime.run_invocation import RunInvocation
+from core.tool_registry import ToolRegistry
 
 class RunStatus(str, Enum):
     COMPLETED = "completed"
@@ -79,6 +83,7 @@ class RunResult:
     answer: str
     checkpoints: list[Checkpoint]
     context_state: ContextState
+    evidence: RunEvidence
 
     @property
     def final_reason(self) -> str | None:
@@ -193,6 +198,7 @@ class RunRuntime:
         checkpoint: Checkpoint,
         checkpoints: list[Checkpoint],
         context_state: ContextState,
+        evidence: RunEvidence,
     ) -> RunResult:
         checkpoints.append(checkpoint)
         return RunResult(
@@ -200,6 +206,7 @@ class RunRuntime:
             answer=answer,
             checkpoints=checkpoints,
             context_state=context_state,
+            evidence=evidence,
         )
 
     def _call_llm_with_retry(
@@ -396,11 +403,44 @@ class RunRuntime:
         max_rounds: int = 50,
         control: RunControl | None = None,
         context_state: ContextState | None = None,
+        invocation: RunInvocation | None = None,
     ) -> RunResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
+        evidence_recorder = RunEvidenceRecorder()
         run_control = control or RunControl()
         current_context_state = context_state or ContextState()
+        current_invocation = invocation or RunInvocation()
+        if current_invocation.capabilities:
+            include_base_tools = all(
+                capability.include_base_tools()
+                for capability in current_invocation.capabilities
+            )
+            run_registry = (
+                self.tools_executor.registry.clone()
+                if include_base_tools
+                else ToolRegistry()
+            )
+            for capability in current_invocation.capabilities:
+                for spec in capability.tool_specs():
+                    run_registry.register(spec)
+            run_tools_executor = ToolsExecutor(run_registry)
+        else:
+            run_registry = self.tools_executor.registry
+            run_tools_executor = self.tools_executor
+        evidence_roots = tuple(dict.fromkeys(
+            root
+            for capability in current_invocation.capabilities
+            for root in capability.evidence_roots()
+        ))
+        for root in evidence_roots:
+            evidence_recorder.record_workspace_baseline(
+                root,
+                run_tools_executor.execute(
+                    "get_changes",
+                    json.dumps({"root": root}),
+                ),
+            )
         level2_performed = False
         level2_boundary_message_id = (
             conversation.records[-1].message_id
@@ -458,6 +498,7 @@ class RunRuntime:
                         checkpoint=route_response,
                         checkpoints=checkpoints,
                         context_state=current_context_state,
+                        evidence=evidence_recorder.snapshot(),
                     )
             else:
                 try:
@@ -519,6 +560,7 @@ class RunRuntime:
                     checkpoint=start_response,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
             try:
                 start_data = runtime_mode.accept_start_response(
@@ -539,6 +581,7 @@ class RunRuntime:
                         checkpoint=checkpoint,
                         checkpoints=checkpoints,
                         context_state=current_context_state,
+                        evidence=evidence_recorder.snapshot(),
                     )
                 checkpoint = runtime_mode_activation_failed_checkpoint(
                     mode=RunMode.TODO.value,
@@ -559,7 +602,7 @@ class RunRuntime:
             else:
                 if start_data is not None:
                     checkpoints.append(todo_list_created_checkpoint(start_data))
-        external_tools = self.tools_executor.registry.get_tools()
+        external_tools = run_registry.get_tools()
         runtime_tools = runtime_mode.runtime_tools(mode_state)
         external_names = {
             tool["function"]["name"] for tool in external_tools
@@ -586,8 +629,13 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
-            runtime_prompts = runtime_mode.runtime_instructions(mode_state)
+            runtime_prompts = list(
+                runtime_mode.runtime_instructions(mode_state)
+            )
+            for capability in current_invocation.capabilities:
+                runtime_prompts.extend(capability.runtime_instructions())
             try:
                 prepared = self.context_preparation.prepare(
                     conversation_records=conversation.records,
@@ -615,6 +663,7 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
             except LLMTransientError as exc:
                 checkpoint = llm_error_checkpoint(
@@ -629,6 +678,7 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
             except InvalidLLMResponse as exc:
                 checkpoint = invalid_llm_response_checkpoint(
@@ -643,6 +693,7 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
             current_context_state = prepared.context_state
             if self._record_summary_compaction(
@@ -670,6 +721,7 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
             llm_outcome = self._call_llm_with_retry(
                 prepared.model_context,
@@ -694,6 +746,7 @@ class RunRuntime:
                     checkpoint=llm_outcome,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
             response = llm_outcome
 
@@ -707,6 +760,15 @@ class RunRuntime:
                 )
                 if final_feedback is not None:
                     conversation.add_user(final_feedback)
+                    continue
+                for capability in current_invocation.capabilities:
+                    final_feedback = capability.check_final_candidate(
+                        evidence_recorder.snapshot()
+                    )
+                    if final_feedback is not None:
+                        conversation.add_user(final_feedback)
+                        break
+                if final_feedback is not None:
                     continue
 
                 stop_safety = evaluate_stop_safety(
@@ -724,6 +786,7 @@ class RunRuntime:
                         checkpoint=checkpoint,
                         checkpoints=checkpoints,
                         context_state=current_context_state,
+                        evidence=evidence_recorder.snapshot(),
                     )
 
                 if not stop_safety.business_safe:
@@ -736,9 +799,19 @@ class RunRuntime:
                 if level2_performed:
                     answer = "本轮已执行上下文压缩。\n\n" + answer
                 runtime_mode.on_run_completed(mode_state)
+                completion_data = runtime_mode.checkpoint_data(mode_state) or {}
+                for capability in current_invocation.capabilities:
+                    capability_data = capability.checkpoint_data() or {}
+                    duplicated_keys = completion_data.keys() & capability_data.keys()
+                    if duplicated_keys:
+                        raise ValueError(
+                            "capability checkpoint data conflicts with existing "
+                            f"data: {sorted(duplicated_keys)}"
+                        )
+                    completion_data.update(capability_data)
                 checkpoint = run_completed_checkpoint(
                     answer=answer,
-                    extra_data=runtime_mode.checkpoint_data(mode_state),
+                    extra_data=completion_data or None,
                 )
                 return self._finish(
                     status=RunStatus.COMPLETED,
@@ -746,6 +819,7 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
 
             calls = response.calls
@@ -762,10 +836,16 @@ class RunRuntime:
                         call.arguments,
                     )
                 else:
-                    tool_result = self.tools_executor.execute(
+                    tool_result = run_tools_executor.execute(
                         call.name,
                         call.arguments,
                     )
+                evidence_recorder.record(
+                    call.id,
+                    call.name,
+                    call.arguments,
+                    tool_result,
+                )
                 outcome = self.tool_result_externalizer.process(tool_result)
                 result_chars_before += outcome.original_chars
                 result_chars_after += outcome.projected_chars
@@ -809,6 +889,7 @@ class RunRuntime:
                         checkpoint=checkpoint,
                         checkpoints=checkpoints,
                         context_state=current_context_state,
+                        evidence=evidence_recorder.snapshot(),
                     )
 
                 if not stop_safety.business_safe:
@@ -826,6 +907,7 @@ class RunRuntime:
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
                 )
 
         checkpoint = budget_stop_checkpoint(max_rounds, tools_state)
@@ -835,4 +917,5 @@ class RunRuntime:
             checkpoint=checkpoint,
             checkpoints=checkpoints,
             context_state=current_context_state,
+            evidence=evidence_recorder.snapshot(),
         )
