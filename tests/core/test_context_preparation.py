@@ -76,7 +76,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
         conversation.set_system_prompt("system")
         conversation.add_user("old " * 30)
         conversation.add_assistant(
-            LLMResponse(type="text", content="old answer " * 20)
+            LLMResponse(content="old answer " * 20)
         )
         boundary = conversation.records[-1]
         conversation.add_user("current goal")
@@ -134,8 +134,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
         conversation.add_user("old task")
         conversation.add_assistant(
             LLMResponse(
-                type="tool_calls",
-                calls=[ToolCall("call-1", "read_file", "{}")],
+                calls=(ToolCall("call-1", "read_file", "{}"),),
             )
         )
         conversation.add_tools_result(
@@ -156,7 +155,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
         )
         tool_id = conversation.records[-1].message_id
         conversation.add_assistant(
-            LLMResponse(type="text", content="old answer")
+            LLMResponse(content="old answer")
         )
         boundary = conversation.records[-1]
         conversation.add_user("current goal")
@@ -207,7 +206,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system")
         conversation.add_user("old task")
-        conversation.add_assistant(LLMResponse(type="text", content="old answer"))
+        conversation.add_assistant(LLMResponse(content="old answer"))
         boundary = conversation.records[-1]
         conversation.add_user("current goal")
         before = make_budget_assessment(900, 750)

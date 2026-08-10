@@ -191,10 +191,9 @@ class RuntimeArtifactsTest(unittest.TestCase):
             def __init__(self):
                 self.responses = [
                     LLMResponse(
-                        type="tool_calls",
-                        calls=[ToolCall("call-1", "big_tool", "{}")],
+                        calls=(ToolCall("call-1", "big_tool", "{}"),),
                     ),
-                    LLMResponse(type="text", content="done"),
+                    LLMResponse(content="done"),
                 ]
 
             def chat(self, messages, model, tools=None):

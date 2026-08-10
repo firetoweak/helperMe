@@ -12,7 +12,6 @@ class ConversationRecordTest(unittest.TestCase):
         conversation.add_user("处理任务")
         conversation.add_assistant(
             LLMResponse(
-                type="text",
                 content="正在处理",
             )
         )
@@ -40,14 +39,13 @@ class ConversationRecordTest(unittest.TestCase):
         conversation.set_system_prompt("system prompt")
         conversation.add_assistant(
             LLMResponse(
-                type="tool_calls",
-                calls=[
+                calls=(
                     ToolCall(
                         id="call-1",
                         name="read_file",
                         arguments='{"path": "notes.txt"}',
                     )
-                ],
+                ,),
             )
         )
         conversation.add_tools_result(
@@ -72,6 +70,20 @@ class ConversationRecordTest(unittest.TestCase):
             assistant_record.message_id,
             tool_record.message_id,
         )
+
+    def test_mixed_assistant_response_preserves_content_and_tool_calls(self):
+        conversation = Conversation()
+        conversation.add_assistant(
+            LLMResponse(
+                content="我先读取关键实现。",
+                calls=(ToolCall("call-1", "read_file", "{}"),),
+            )
+        )
+
+        message = conversation.protocol_messages()[0]
+
+        self.assertEqual(message["content"], "我先读取关键实现。")
+        self.assertEqual(message["tool_calls"][0]["id"], "call-1")
 
     def test_context_manager_projects_payload_without_internal_identity(self):
         conversation = Conversation()

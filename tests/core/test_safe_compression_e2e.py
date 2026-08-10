@@ -103,8 +103,8 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
     def test_same_session_incrementally_summarizes_s1_plus_delta_into_s2(self):
         summary_generator = RecordingSummaryGenerator(["S1", "S2"])
         llm_client = ScriptedLLMClient([
-            LLMResponse(type="text", content="DELTA_ONE " * 60),
-            LLMResponse(type="text", content="second run done"),
+            LLMResponse(content="DELTA_ONE " * 60),
+            LLMResponse(content="second run done"),
         ])
         session_runtime = SessionRuntime(
             run_runtime=make_runtime(
@@ -116,7 +116,7 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
         session = session_runtime.create_session("session-1", "system")
         session.conversation.add_user("OLD_ORIGINAL " * 60)
         session.conversation.add_assistant(
-            LLMResponse(type="text", content="OLD_ANSWER " * 40)
+            LLMResponse(content="OLD_ANSWER " * 40)
         )
 
         first = session_runtime.start("session-1", "run-1", "first goal")
@@ -173,10 +173,9 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
         summary_generator = RecordingSummaryGenerator(["S1"])
         llm_client = ScriptedLLMClient([
             LLMResponse(
-                type="tool_calls",
-                calls=[ToolCall("call-1", "ping", "{}")],
+                calls=(ToolCall("call-1", "ping", "{}"),),
             ),
-            LLMResponse(type="text", content="resumed done"),
+            LLMResponse(content="resumed done"),
         ])
         session_runtime = SessionRuntime(
             run_runtime=make_runtime(
@@ -189,7 +188,7 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
         session = session_runtime.create_session("session-1", "system")
         session.conversation.add_user("OLD_ORIGINAL " * 120)
         session.conversation.add_assistant(
-            LLMResponse(type="text", content="OLD_ANSWER " * 80)
+            LLMResponse(content="OLD_ANSWER " * 80)
         )
         llm_client.before_response = lambda: session_runtime.request_interrupt(
             "session-1",

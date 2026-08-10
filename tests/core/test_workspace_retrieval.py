@@ -310,8 +310,7 @@ class WorkspaceRetrievalTest(unittest.TestCase):
 
         tool_call_id = "call-read-secret"
         conversation.add_assistant(LLMResponse(
-            type="tool_calls",
-            calls=[ToolCall(tool_call_id, "read_file", "{}")],
+            calls=(ToolCall(tool_call_id, "read_file", "{}"),),
         ))
         read_result = self.execute("read_file", {
             "root": "project",

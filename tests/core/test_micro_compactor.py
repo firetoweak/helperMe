@@ -30,13 +30,12 @@ class MicroCompactorTest(unittest.TestCase):
         conversation.add_user("读取文件")
         conversation.add_assistant(
             LLMResponse(
-                type="tool_calls",
-                calls=[ToolCall("call-1", "read_file", '{"path":"a.txt"}')],
+                calls=(ToolCall("call-1", "read_file", '{"path":"a.txt"}'),),
             )
         )
         conversation.add_tools_result([tool_result("call-1", size=500)])
         conversation.add_assistant(
-            LLMResponse(type="text", content="已经读取并分析")
+            LLMResponse(content="已经读取并分析")
         )
         tool_record = conversation.records[3]
         original_payloads = [
@@ -79,8 +78,7 @@ class MicroCompactorTest(unittest.TestCase):
         conversation.add_user("读取文件")
         conversation.add_assistant(
             LLMResponse(
-                type="tool_calls",
-                calls=[ToolCall("call-1", "read_file", '{"path":"a.txt"}')],
+                calls=(ToolCall("call-1", "read_file", '{"path":"a.txt"}'),),
             )
         )
         conversation.add_tools_result([tool_result("call-1")])

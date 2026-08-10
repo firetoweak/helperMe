@@ -92,23 +92,15 @@ class LLMClient:
         )
 
     def _parse_response(self, response: Any) -> LLMResponse:
-        if response.tool_calls:
-            return LLMResponse(
-                type="tool_calls",
-                calls=[
-                    ToolCall(
-                        id=call.id,
-                        name=call.function.name,
-                        arguments=call.function.arguments,
-                    )
-                    for call in response.tool_calls
-                ],
-            )
-
-        if isinstance(response.content, str) and response.content.strip():
-            return LLMResponse(type="text", content=response.content)
-
-        raise InvalidLLMResponse(
-            "empty_model_response",
-            "model response contains neither tool calls nor non-empty text",
+        content = response.content if isinstance(response.content, str) else ""
+        return LLMResponse(
+            content=content,
+            calls=tuple(
+                ToolCall(
+                    id=call.id,
+                    name=call.function.name,
+                    arguments=call.function.arguments,
+                )
+                for call in response.tool_calls or ()
+            ),
         )

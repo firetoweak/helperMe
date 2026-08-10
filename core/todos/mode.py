@@ -28,8 +28,7 @@ class TodoMode:
         response: LLMResponse,
     ) -> dict | None:
         if (
-            response.type != "tool_calls"
-            or len(response.calls) != 1
+            len(response.calls) != 1
             or response.calls[0].name != REWRITE_TODOS_NAME
         ):
             raw_preview = repr(response)[:2000]

@@ -18,28 +18,37 @@ from core.model_call.types import LLMCallResult, LLMUsage
 
 class LLMResponseContractTest(unittest.TestCase):
     def test_text_response_requires_non_empty_content(self):
-        for content in ("", "   ", None):
+        for content in ("", "   "):
             with self.subTest(content=content):
                 with self.assertRaises(InvalidLLMResponse) as raised:
-                    LLMResponse(type="text", content=content)
+                    LLMResponse(content=content)
 
                 self.assertEqual(raised.exception.code, "empty_model_response")
+
+        with self.assertRaises(InvalidLLMResponse) as raised:
+            LLMResponse(content=None)
+        self.assertEqual(raised.exception.code, "invalid_llm_response")
 
     def test_tool_calls_response_requires_non_empty_calls(self):
         for calls in (None, []):
             with self.subTest(calls=calls):
                 with self.assertRaises(InvalidLLMResponse):
-                    LLMResponse(type="tool_calls", calls=calls)
+                    LLMResponse(calls=calls)
 
     def test_valid_response_variants(self):
-        text = LLMResponse(type="text", content="done")
+        text = LLMResponse(content="done")
         tool_calls = LLMResponse(
-            type="tool_calls",
-            calls=[ToolCall(id="call-1", name="read_file", arguments="{}")],
+            calls=(ToolCall(id="call-1", name="read_file", arguments="{}"),),
+        )
+        mixed = LLMResponse(
+            content="我先读取关键文件。",
+            calls=(ToolCall(id="call-2", name="read_file", arguments="{}"),),
         )
 
         self.assertEqual(text.content, "done")
         self.assertEqual(tool_calls.calls[0].id, "call-1")
+        self.assertEqual(mixed.content, "我先读取关键文件。")
+        self.assertEqual(mixed.calls[0].id, "call-2")
 
     def test_client_parser_rejects_empty_sdk_response(self):
         response = SimpleNamespace(tool_calls=None, content=None)
@@ -48,6 +57,21 @@ class LLMResponseContractTest(unittest.TestCase):
             LLMClient._parse_response(None, response)
 
         self.assertEqual(raised.exception.code, "empty_model_response")
+
+    def test_client_parser_preserves_content_with_tool_calls(self):
+        call = SimpleNamespace(
+            id="call-1",
+            function=SimpleNamespace(name="read_file", arguments="{}"),
+        )
+        response = SimpleNamespace(
+            tool_calls=[call],
+            content="我先读取关键实现。",
+        )
+
+        parsed = LLMClient._parse_response(None, response)
+
+        self.assertEqual(parsed.content, "我先读取关键实现。")
+        self.assertEqual(parsed.calls, (ToolCall("call-1", "read_file", "{}"),))
 
     def test_client_returns_response_with_real_usage(self):
         client = object.__new__(LLMClient)
@@ -141,7 +165,7 @@ class ModelCallServiceTest(unittest.TestCase):
             input_budget_tokens=750,
         )
         call_result = LLMCallResult(
-            response=LLMResponse(type="text", content="done"),
+            response=LLMResponse(content="done"),
             usage=LLMUsage(input_tokens=680, output_tokens=20),
         )
         llm_client.chat.return_value = call_result

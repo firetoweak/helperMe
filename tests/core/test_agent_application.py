@@ -233,17 +233,16 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
         responses = iter(
             (
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("call-1", "demo", "{}")],
+                    calls=(ToolCall("call-1", "demo", "{}"),),
                 ),
-                LLMResponse(type="text", content="任务已完成"),
+                LLMResponse(content="任务已完成"),
             )
         )
         application = None
 
         def chat(messages, model, tools=None):
             response = next(responses)
-            if response.type == "tool_calls":
+            if response.calls:
                 application.request_interrupt("session-1", "等待继续")
             return call_result(response)
 
@@ -286,8 +285,8 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
     def test_application_starts_new_run_in_same_session_after_completed(self):
         llm_client = Mock()
         llm_client.chat.side_effect = (
-            call_result(LLMResponse(type="text", content="第一轮完成")),
-            call_result(LLMResponse(type="text", content="第二轮完成")),
+            call_result(LLMResponse(content="第一轮完成")),
+            call_result(LLMResponse(content="第二轮完成")),
         )
         application, session_runtime = self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]

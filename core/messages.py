@@ -32,13 +32,12 @@ class Conversation:
             })
 
     def add_assistant(self, response: LLMResponse) -> None:
-        if response.type == "text":
-            self._append({"role": "assistant", "content": response.content})
-        elif response.type == "tool_calls":
-            self._append({
-                "role": "assistant", 
-                "content": None,
-                "tool_calls": [
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": response.content or None,
+        }
+        if response.calls:
+            message["tool_calls"] = [
                     {
                         "id": call.id,
                         "type": "function",
@@ -49,9 +48,7 @@ class Conversation:
                     } 
                     for call in response.calls
                 ]
-            })
-        else:
-            raise ValueError(f"Unknown type: {response.type}")
+        self._append(message)
 
     def protocol_messages(self) -> list[dict[str, Any]]:
         return [record.payload for record in self.records]

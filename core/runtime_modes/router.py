@@ -109,13 +109,11 @@ mode 只能是 "plain" 或 "todo"。只返回严格 JSON，不要输出 Markdown
 
     def accept_response(self, response: LLMResponse) -> RouteDecision:
         try:
-            if response.type != "text":
+            if response.calls:
                 raise InvalidRouteResponse("route response must be text")
             return parse_route_response(response.content)
         except InvalidRouteResponse as exc:
-            raw_preview = repr(
-                response.content if response.type == "text" else response
-            )[:2000]
+            raw_preview = repr(response.content if not response.calls else response)[:2000]
             raise InvalidLLMResponse(
                 "invalid_runtime_mode_route",
                 f"{exc}; raw_response={raw_preview}",

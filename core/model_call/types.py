@@ -18,47 +18,36 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class LLMResponse:
-    type: str
     content: str = ""
-    calls: list[ToolCall] | None = None
+    calls: tuple[ToolCall, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.type == "text":
-            if not isinstance(self.content, str) or not self.content.strip():
-                raise InvalidLLMResponse(
-                    "empty_model_response",
-                    "text response content must be non-empty",
-                )
-            if self.calls is not None:
+        if not isinstance(self.content, str):
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "response content must be str",
+            )
+        if not isinstance(self.calls, tuple):
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "response calls must be tuple",
+            )
+        if not self.calls and not self.content.strip():
+            raise InvalidLLMResponse(
+                "empty_model_response",
+                "model response contains neither tool calls nor non-empty text",
+            )
+        for index, call in enumerate(self.calls):
+            if not isinstance(call, ToolCall):
                 raise InvalidLLMResponse(
                     "invalid_llm_response",
-                    "text response cannot contain tool calls",
+                    f"tool call[{index}] must be ToolCall",
                 )
-            return
-
-        if self.type == "tool_calls":
-            if not isinstance(self.calls, list) or not self.calls:
+            if not call.id or not call.name or not isinstance(call.arguments, str):
                 raise InvalidLLMResponse(
                     "invalid_llm_response",
-                    "tool_calls response must contain at least one call",
+                    f"tool call[{index}] has invalid id/name/arguments",
                 )
-            for index, call in enumerate(self.calls):
-                if not isinstance(call, ToolCall):
-                    raise InvalidLLMResponse(
-                        "invalid_llm_response",
-                        f"tool call[{index}] must be ToolCall",
-                    )
-                if not call.id or not call.name or not isinstance(call.arguments, str):
-                    raise InvalidLLMResponse(
-                        "invalid_llm_response",
-                        f"tool call[{index}] has invalid id/name/arguments",
-                    )
-            return
-
-        raise InvalidLLMResponse(
-            "invalid_llm_response",
-            f"unknown LLM response type: {self.type}",
-        )
 
 
 @dataclass(frozen=True)

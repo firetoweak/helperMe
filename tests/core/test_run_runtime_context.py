@@ -124,7 +124,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         )
         model_calls = Mock()
         model_calls.call.return_value = call_result(
-            LLMResponse(type="text", content="done")
+            LLMResponse(content="done")
         )
 
         result = RunRuntime(
@@ -192,7 +192,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         llm_client = RecordingLLMClient(
             [
                 LLMTransientError("temporary unavailable"),
-                LLMResponse(type="text", content="done"),
+                LLMResponse(content="done"),
             ]
         )
         mode = StaticInstructionsMode()
@@ -221,8 +221,8 @@ class RunRuntimeContextTest(unittest.TestCase):
     def test_each_round_builds_a_snapshot_with_current_instructions(self):
         llm_client = RecordingLLMClient(
             [
-                LLMResponse(type="text", content="draft"),
-                LLMResponse(type="text", content="done"),
+                LLMResponse(content="draft"),
+                LLMResponse(content="done"),
             ]
         )
         mode = ChangingInstructionsMode()

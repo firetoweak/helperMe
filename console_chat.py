@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,13 @@ TERMINAL_RUN_STATUSES = {
 
 MODEL_CONTEXT_LIMIT = 200_000
 INPUT_BUDGET_RATIO = 0.9
+
+
+class ConsoleProgressSink:
+    def emit(self, text: str) -> None:
+        print(f"\n助手：{text}")
+
+
 def _new_session(application: AgentApplication) -> str:
     session_id = f"session-{uuid4().hex}"
     return application.create_session(session_id)
@@ -97,6 +105,7 @@ def _format_token_limit(tokens: int) -> str:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
     app_config = load_app_config()
     model_config = app_config.model
     model = model_config.name
@@ -110,6 +119,7 @@ def main() -> None:
         },
         input_budget_ratio=INPUT_BUDGET_RATIO,
         llm_client=LLMClient(model_config),
+        progress_sink=ConsoleProgressSink(),
     )
     session_id = _new_session(application)
     log_path = _resolve_log_path()

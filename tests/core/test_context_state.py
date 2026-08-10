@@ -50,8 +50,7 @@ class ContextStateProjectionTest(unittest.TestCase):
     def _add_successful_consumed_tool_batch(conversation):
         conversation.add_assistant(
             LLMResponse(
-                type="tool_calls",
-                calls=[ToolCall("call-1", "read_file", '{"path":"a.txt"}')],
+                calls=(ToolCall("call-1", "read_file", '{"path":"a.txt"}'),),
             )
         )
         conversation.add_tools_result(
@@ -71,7 +70,7 @@ class ContextStateProjectionTest(unittest.TestCase):
             ]
         )
         conversation.add_assistant(
-            LLMResponse(type="text", content="已消费工具结果")
+            LLMResponse(content="已消费工具结果")
         )
 
     def test_summary_replaces_compacted_prefix_and_preserves_suffix(self):
@@ -79,7 +78,7 @@ class ContextStateProjectionTest(unittest.TestCase):
         conversation.set_system_prompt("system prompt")
         conversation.add_user("旧任务")
         conversation.add_assistant(
-            LLMResponse(type="text", content="旧进展")
+            LLMResponse(content="旧进展")
         )
         conversation.add_user("继续处理")
         boundary = conversation.records[2].message_id
@@ -181,7 +180,7 @@ class ContextStateProjectionTest(unittest.TestCase):
         conversation.set_system_prompt("system prompt")
         conversation.add_user("旧任务")
         conversation.add_assistant(
-            LLMResponse(type="text", content="旧进展")
+            LLMResponse(content="旧进展")
         )
         summary_boundary = conversation.records[-1].message_id
         conversation.add_user("读取文件")

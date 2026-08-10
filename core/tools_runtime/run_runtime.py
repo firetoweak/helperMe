@@ -54,6 +54,7 @@ from core.context import (
 )
 from core.context.preparation import SUMMARY_INSTRUCTION
 from core.runtime_artifacts import ToolResultExternalizer
+from core.tools_runtime.run_progress import NullRunProgressSink, RunProgressSink
 
 class RunStatus(str, Enum):
     COMPLETED = "completed"
@@ -97,6 +98,7 @@ class RunRuntime:
         context_preparation: ContextPreparationService | None = None,
         tools_executor: ToolsExecutor | None = None,
         tool_result_externalizer: ToolResultExternalizer | None = None,
+        progress_sink: RunProgressSink | None = None,
         *,
         mode_router: RuntimeModeRouter | None = None,
         runtime_modes: dict[RunMode, RuntimeMode] | None = None,
@@ -118,6 +120,7 @@ class RunRuntime:
         self.context_preparation = context_preparation
         self.tools_executor = tools_executor
         self.tool_result_externalizer = tool_result_externalizer
+        self.progress_sink = progress_sink or NullRunProgressSink()
 
     @staticmethod
     def _record_summary_compaction(
@@ -695,7 +698,10 @@ class RunRuntime:
             response = llm_outcome
 
             conversation.add_assistant(response)
-            if response.type == "text":
+            if response.calls:
+                if response.content.strip():
+                    self.progress_sink.emit(response.content)
+            else:
                 final_feedback = runtime_mode.check_final_candidate(
                     mode_state
                 )

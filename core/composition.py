@@ -15,6 +15,7 @@ from core.runtime_modes import (
 from core.todos import TodoMode
 from core.session import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
+from core.tools_runtime.run_progress import RunProgressSink
 from core.context import (
     ContextBudget,
     ContextManager,
@@ -51,6 +52,7 @@ def create_agent_application(
     runtime_mode: RuntimeMode | None = None,
     recent_protection_tokens: int = 10_000,
     llm_client: LLMClient | None = None,
+    progress_sink: RunProgressSink | None = None,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
@@ -125,6 +127,7 @@ def create_agent_application(
                 artifact_store,
                 result_limit,
             ),
+            progress_sink=progress_sink,
             **mode_configuration,
         )
 

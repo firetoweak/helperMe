@@ -54,8 +54,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
     @staticmethod
     def _initial_response() -> LLMResponse:
         return LLMResponse(
-            type="tool_calls",
-            calls=[
+            calls=(
                 ToolCall(
                     "call-init",
                     "rewrite_todos",
@@ -79,15 +78,14 @@ class RunRuntimeTodosTest(unittest.TestCase):
                         ensure_ascii=False,
                     ),
                 )
-            ],
+            ,),
         )
 
     @staticmethod
     def _rewrite_call(*, done: bool = True) -> LLMResponse:
         status = "done" if done else "pending"
         return LLMResponse(
-            type="tool_calls",
-            calls=[
+            calls=(
                 ToolCall(
                     "call-rewrite",
                     "rewrite_todos",
@@ -113,12 +111,12 @@ class RunRuntimeTodosTest(unittest.TestCase):
                         ensure_ascii=False,
                     ),
                 )
-            ],
+            ,),
         )
 
     def test_initial_generator_is_read_only_and_todo_is_runtime_instruction(self):
         llm = RecordingLLMClient(
-            [self._initial_response(), self._rewrite_call(), LLMResponse("text", "完成")]
+            [self._initial_response(), self._rewrite_call(), LLMResponse(content="完成")]
         )
 
         result = self._runner(llm).run(self._conversation(), "完成任务")
@@ -150,16 +148,14 @@ class RunRuntimeTodosTest(unittest.TestCase):
             [
                 self._initial_response(),
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("call-read", "missing_tool", "{}")],
+                    calls=(ToolCall("call-read", "missing_tool", "{}"),),
                 ),
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("call-read-2", "missing_tool", "{}")],
+                    calls=(ToolCall("call-read-2", "missing_tool", "{}"),),
                 ),
-                LLMResponse(type="text", content="过早回答"),
+                LLMResponse(content="过早回答"),
                 self._rewrite_call(),
-                LLMResponse(type="text", content="最终回答"),
+                LLMResponse(content="最终回答"),
             ]
         )
         conversation = self._conversation()
@@ -177,9 +173,9 @@ class RunRuntimeTodosTest(unittest.TestCase):
         llm = RecordingLLMClient(
             [
                 self._initial_response(),
-                LLMResponse(type="text", content="过早回答"),
+                LLMResponse(content="过早回答"),
                 self._rewrite_call(),
-                LLMResponse(type="text", content="最终回答"),
+                LLMResponse(content="最终回答"),
             ]
         )
         conversation = self._conversation()
@@ -196,7 +192,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
         )
 
     def test_invalid_initial_generation_fails_at_boundary(self):
-        llm = RecordingLLMClient([LLMResponse(type="text", content="not json")])
+        llm = RecordingLLMClient([LLMResponse(content="not json")])
 
         result = self._runner(llm).run(self._conversation(), "完成任务")
 
@@ -209,10 +205,10 @@ class RunRuntimeTodosTest(unittest.TestCase):
             [
                 self._initial_response(),
                 self._rewrite_call(),
-                LLMResponse(type="text", content="第一次完成"),
+                LLMResponse(content="第一次完成"),
                 self._initial_response(),
                 self._rewrite_call(),
-                LLMResponse(type="text", content="第二次完成"),
+                LLMResponse(content="第二次完成"),
             ]
         )
         runner = self._runner(llm)
@@ -279,7 +275,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
                 LLMTransientError("todo generator timeout"),
                 self._initial_response(),
                 self._rewrite_call(),
-                LLMResponse(type="text", content="完成"),
+                LLMResponse(content="完成"),
             ]
         )
 

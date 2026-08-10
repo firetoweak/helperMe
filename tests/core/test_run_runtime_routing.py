@@ -47,7 +47,6 @@ class RunRuntimeRoutingTest(unittest.TestCase):
     @staticmethod
     def _route(mode: str, reason: str) -> LLMResponse:
         return LLMResponse(
-            type="text",
             content=json.dumps(
                 {"mode": mode, "reason": reason},
                 ensure_ascii=False,
@@ -57,8 +56,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
     @staticmethod
     def _todo_initialization() -> LLMResponse:
         return LLMResponse(
-            type="tool_calls",
-            calls=[
+            calls=(
                 ToolCall(
                     "call-init",
                     "rewrite_todos",
@@ -82,14 +80,13 @@ class RunRuntimeRoutingTest(unittest.TestCase):
                         ensure_ascii=False,
                     ),
                 )
-            ],
+            ,),
         )
 
     @staticmethod
     def _complete_todos() -> LLMResponse:
         return LLMResponse(
-            type="tool_calls",
-            calls=[
+            calls=(
                 ToolCall(
                     "call-complete",
                     "rewrite_todos",
@@ -113,7 +110,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
                         ensure_ascii=False,
                     ),
                 )
-            ],
+            ,),
         )
 
     @staticmethod
@@ -134,7 +131,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         llm = RecordingLLMClient(
             [
                 self._route("plain", "可以直接回答"),
-                LLMResponse(type="text", content="简单答案"),
+                LLMResponse(content="简单答案"),
             ]
         )
 
@@ -165,7 +162,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
                 self._route("todo", "需要分析多个依赖步骤"),
                 self._todo_initialization(),
                 self._complete_todos(),
-                LLMResponse(type="text", content="复杂任务完成"),
+                LLMResponse(content="复杂任务完成"),
             ]
         )
 
@@ -205,12 +202,12 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         conversation = self._conversation()
         conversation.add_user("历史问题")
         conversation.add_assistant(
-            LLMResponse(type="text", content="历史回答标记")
+            LLMResponse(content="历史回答标记")
         )
         llm = RecordingLLMClient(
             [
                 self._route("plain", "当前追问可以直接回答"),
-                LLMResponse(type="text", content="追问答案"),
+                LLMResponse(content="追问答案"),
             ]
         )
 
@@ -237,11 +234,11 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         llm = RecordingLLMClient(
             [
                 self._route("plain", "第一轮简单"),
-                LLMResponse(type="text", content="第一轮答案"),
+                LLMResponse(content="第一轮答案"),
                 self._route("todo", "第二轮复杂"),
                 self._todo_initialization(),
                 self._complete_todos(),
-                LLMResponse(type="text", content="第二轮答案"),
+                LLMResponse(content="第二轮答案"),
             ]
         )
         runner = self._runner(llm)
@@ -267,9 +264,9 @@ class RunRuntimeRoutingTest(unittest.TestCase):
                 self._route("todo", "明确要求完成复杂任务"),
                 self._todo_initialization(),
                 self._complete_todos(),
-                LLMResponse(type="text", content="复杂任务完成"),
+                LLMResponse(content="复杂任务完成"),
                 self._route("plain", "当前只是在讨论优化方向"),
-                LLMResponse(type="text", content="这个方向可以继续讨论"),
+                LLMResponse(content="这个方向可以继续讨论"),
             ]
         )
         runner = self._runner(llm)
@@ -294,8 +291,8 @@ class RunRuntimeRoutingTest(unittest.TestCase):
     def test_invalid_route_falls_back_to_plain_in_same_run(self):
         llm = RecordingLLMClient(
             [
-                LLMResponse(type="text", content="我觉得这是复杂任务"),
-                LLMResponse(type="text", content="继续正常回答"),
+                LLMResponse(content="我觉得这是复杂任务"),
+                LLMResponse(content="继续正常回答"),
             ]
         )
         conversation = self._conversation()
@@ -326,8 +323,8 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         llm = RecordingLLMClient(
             [
                 self._route("todo", "判断为复杂任务"),
-                LLMResponse(type="text", content=initialization_text),
-                LLMResponse(type="text", content="按普通模式继续回答"),
+                LLMResponse(content=initialization_text),
+                LLMResponse(content="按普通模式继续回答"),
             ]
         )
         conversation = self._conversation()
@@ -359,20 +356,19 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         conversation.add_user("历史问题")
         conversation.add_assistant(
             LLMResponse(
-                type="tool_calls",
-                calls=[ToolCall("call-old", "read_file", "{}")],
+                calls=(ToolCall("call-old", "read_file", "{}"),),
             )
         )
         conversation.add_tools_result(
             [{"tool_call_id": "call-old", "content": "TOOL_RESULT_MARKER"}]
         )
         conversation.add_assistant(
-            LLMResponse(type="text", content="历史最终回答")
+            LLMResponse(content="历史最终回答")
         )
         llm = RecordingLLMClient(
             [
                 self._route("plain", "当前是解释性追问"),
-                LLMResponse(type="text", content="追问答案"),
+                LLMResponse(content="追问答案"),
             ]
         )
 
@@ -399,7 +395,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             "model response contains neither tool calls nor non-empty text",
         )
         llm = RecordingLLMClient(
-            [empty, empty, empty, LLMResponse(type="text", content="正常回答")]
+            [empty, empty, empty, LLMResponse(content="正常回答")]
         )
 
         result = self._runner(llm).run(self._conversation(), "解释 CLI")

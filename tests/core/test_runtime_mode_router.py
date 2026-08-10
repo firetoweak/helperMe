@@ -72,7 +72,7 @@ class RuntimeModeRouterTest(unittest.TestCase):
     def test_router_wraps_invalid_text_with_raw_response(self):
         with self.assertRaises(InvalidLLMResponse) as raised:
             RuntimeModeRouter().accept_response(
-                LLMResponse(type="text", content="先分析一下")
+                LLMResponse(content="先分析一下")
             )
 
         self.assertEqual(raised.exception.code, "invalid_runtime_mode_route")
@@ -82,8 +82,7 @@ class RuntimeModeRouterTest(unittest.TestCase):
         with self.assertRaises(InvalidLLMResponse) as raised:
             RuntimeModeRouter().accept_response(
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("call-1", "read_file", "{}")],
+                    calls=(ToolCall("call-1", "read_file", "{}"),),
                 )
             )
 

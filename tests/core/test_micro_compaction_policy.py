@@ -99,14 +99,13 @@ def add_successful_batch(
 ) -> str:
     conversation.add_assistant(
         LLMResponse(
-            type="tool_calls",
-            calls=[
+            calls=(
                 ToolCall(
                     call_id,
                     "read_file",
                     f'{{"path":"{call_id}.txt"}}',
                 )
-            ],
+            ,),
         )
     )
     conversation.add_tools_result(
@@ -127,7 +126,7 @@ def add_successful_batch(
     )
     tool_message_id = conversation.records[-1].message_id
     conversation.add_assistant(
-        LLMResponse(type="text", content=f"{call_id} consumed")
+        LLMResponse(content=f"{call_id} consumed")
     )
     return tool_message_id
 
@@ -266,8 +265,7 @@ class MicroCompactionPolicyTest(unittest.TestCase):
         existing_id = "art_" + "c" * 32
         conversation.add_assistant(
             LLMResponse(
-                type="tool_calls",
-                calls=[ToolCall("call-ext", "read_file", "{}")],
+                calls=(ToolCall("call-ext", "read_file", "{}"),),
             )
         )
         conversation.add_tools_result(
@@ -293,7 +291,7 @@ class MicroCompactionPolicyTest(unittest.TestCase):
         )
         tool_id = conversation.records[-1].message_id
         conversation.add_assistant(
-            LLMResponse(type="text", content="consumed")
+            LLMResponse(content="consumed")
         )
         conversation.add_user("recent " + ("y" * 800))
 

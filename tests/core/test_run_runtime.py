@@ -32,6 +32,14 @@ class RecordingLLMClient:
         return call_result(self.responses.pop(0))
 
 
+class RecordingProgressSink:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def emit(self, text: str) -> None:
+        self.events.append(f"progress:{text}")
+
+
 class InterruptingLLMClient:
     def __init__(self, control, responses):
         self.control = control
@@ -58,19 +66,52 @@ class EmptyResponseLLMClient:
 
 
 class RunRuntimeStopGuardTest(unittest.TestCase):
+    def test_mixed_response_is_saved_and_emitted_before_tool_execution(self):
+        events: list[str] = []
+        llm = RecordingLLMClient(
+            [
+                LLMResponse(
+                    content="我先检查项目结构。",
+                    calls=(ToolCall("call-1", "demo", "{}"),),
+                ),
+                LLMResponse(content="检查完成"),
+            ]
+        )
+        dependencies = runtime_tool_dependencies(SUCCESS)
+        dependencies["tools_executor"].execute = lambda _name, _arguments: (
+            events.append("tool:demo") or SUCCESS
+        )
+        conversation = Conversation()
+
+        result = RunRuntime(
+            model_call_service(llm),
+            "test-model",
+            PlainMode(),
+            context_preparation_service(),
+            progress_sink=RecordingProgressSink(events),
+            **dependencies,
+        ).run(conversation, "检查项目")
+
+        self.assertEqual(result.answer, "检查完成")
+        self.assertEqual(
+            events,
+            ["progress:我先检查项目结构。", "tool:demo"],
+        )
+        assistant = conversation.protocol_messages()[1]
+        self.assertEqual(assistant["content"], "我先检查项目结构。")
+        self.assertEqual(assistant["tool_calls"][0]["id"], "call-1")
+
     def test_unverified_write_cannot_complete(self):
         llm = RecordingLLMClient(
             [
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("write-1", "write_file", "{}")],
+                    calls=(ToolCall("write-1", "write_file", "{}"),),
                 ),
-                LLMResponse(type="text", content="尚未验证的回答"),
+                LLMResponse(content="尚未验证的回答"),
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("verify-1", "get_changes", "{}")],
+                    calls=(ToolCall("verify-1", "get_changes", "{}"),),
                 ),
-                LLMResponse(type="text", content="最终回答"),
+                LLMResponse(content="最终回答"),
             ]
         )
         conversation = Conversation()
@@ -110,8 +151,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             control,
             [
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("call-1", "demo", "{}")],
+                    calls=(ToolCall("call-1", "demo", "{}"),),
                 )
             ],
         )
@@ -141,12 +181,10 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             control,
             [
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("write-1", "write_file", "{}")],
+                    calls=(ToolCall("write-1", "write_file", "{}"),),
                 ),
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[ToolCall("verify-1", "get_changes", "{}")],
+                    calls=(ToolCall("verify-1", "get_changes", "{}"),),
                 ),
             ],
         )
@@ -224,7 +262,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
                         "model returned empty response",
                     )
                 return call_result(
-                    LLMResponse(type="text", content="done")
+                    LLMResponse(content="done")
                 )
 
         llm_client = RecoveringLLMClient()
@@ -274,7 +312,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
                 self.call_count += 1
                 if self.call_count == 1:
                     raise LLMTransientError("temporary unavailable")
-                return call_result(LLMResponse(type="text", content="done"))
+                return call_result(LLMResponse(content="done"))
 
         llm_client = TransientLLMClient()
         runner = RunRuntime(

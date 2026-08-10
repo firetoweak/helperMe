@@ -19,7 +19,7 @@ class RunTraceTest(unittest.TestCase):
     def test_model_request_records_runtime_prompt_and_full_messages(self):
         model_calls = Mock()
         model_calls.call.return_value = call_result(
-            LLMResponse(type="text", content="done"),
+            LLMResponse(content="done"),
             input_tokens=123,
             output_tokens=7,
         )
@@ -54,7 +54,7 @@ class RunTraceTest(unittest.TestCase):
     def test_agent_round_emits_context_prepared_with_role_breakdown(self):
         model_calls = Mock()
         model_calls.call.return_value = call_result(
-            LLMResponse(type="text", content="done")
+            LLMResponse(content="done")
         )
         conversation = Conversation()
         conversation.set_system_prompt("system")
@@ -104,17 +104,16 @@ class RunTraceTest(unittest.TestCase):
         model_calls.call.side_effect = [
             call_result(
                 LLMResponse(
-                    type="tool_calls",
-                    calls=[
+                    calls=(
                         ToolCall(
                             id="call_1",
                             name="read_file",
                             arguments='{"path":"a.py"}',
                         )
-                    ],
+                    ,),
                 )
             ),
-            call_result(LLMResponse(type="text", content="done")),
+            call_result(LLMResponse(content="done")),
         ]
         deps = runtime_tool_dependencies(execute_result=huge)
         conversation = Conversation()
@@ -179,7 +178,7 @@ class RunTraceTest(unittest.TestCase):
         )
         model_calls = Mock()
         model_calls.call.return_value = call_result(
-            LLMResponse(type="text", content="done")
+            LLMResponse(content="done")
         )
 
         result = RunRuntime(
@@ -207,7 +206,7 @@ class RunTraceTest(unittest.TestCase):
     def test_session_events_do_not_carry_composition(self):
         model_calls = Mock()
         model_calls.call.return_value = call_result(
-            LLMResponse(type="text", content="done")
+            LLMResponse(content="done")
         )
         session_runtime = SessionRuntime(
             RunRuntime(

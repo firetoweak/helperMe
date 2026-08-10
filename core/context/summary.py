@@ -32,7 +32,7 @@ class LLMContextSummaryGenerator:
         )
         if isinstance(outcome, ModelCallBlocked):
             return SummaryGenerationBlocked(outcome.assessment)
-        if outcome.response.type != "text":
+        if outcome.response.calls:
             raise InvalidLLMResponse(
                 "invalid_summary_response",
                 "context summary response type must be text",

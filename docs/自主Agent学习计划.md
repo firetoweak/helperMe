@@ -80,6 +80,13 @@ Memory（后置，外挂）
 - 结论：拆出 ToolsProtocol / StopGuard / RunControl；RunStatus 收敛为 completed/interrupted/blocked/failed。
 - 详述：[phase1_Phase3回补总结.md](1/phase1_Phase3回补总结.md)
 
+### ✓ Phase 1 / Phase 4 回补：阶段性说明（2026.08.10）
+
+- 状态：完成
+- 目标：保留模型同轮返回的 assistant content 与 tool_calls，并在工具执行前即时输出阶段性说明。
+- 结论：不新增阶段解释层；Conversation 保存完整协议事实，RunProgressSink 只负责对外输出。
+- 详述：[phase1_阶段性说明回补总结.md](1/phase1_阶段性说明回补总结.md)
+
 ---
 
 ## Phase 2 · TodoList

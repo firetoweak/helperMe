@@ -155,8 +155,7 @@ class TodoModeTest(unittest.TestCase):
         mode.accept_start_response(
             state,
             LLMResponse(
-                type="tool_calls",
-                calls=[
+                calls=(
                     ToolCall(
                         "call-init",
                         "rewrite_todos",
@@ -168,7 +167,7 @@ class TodoModeTest(unittest.TestCase):
                             reason="初始化",
                         ),
                     )
-                ],
+                ,),
             ),
         )
         return mode, state
