@@ -32,6 +32,12 @@ RunRuntime 在工具执行前向 RunProgressSink 输出 content
 
 这是轻约束：模型仍可能合法返回只有 `tool_calls` 的响应。Runtime 负责不丢内容和及时输出，不伪造模型没有生成的说明。
 
+## 当前并发边界
+
+Composition Root 当前把同一个 `progress_sink` 注入所有 Session 创建的 `RunRuntime`。这符合单会话 Console 的使用方式；如果以后支持多个 Session 并发运行，各 Session 的阶段性说明可能写入同一输出流并交错。
+
+在真正出现并发 Session 消费者时，再把输出目标收敛为 Session 或 Run 级绑定，并携带对应身份进行路由。本次不提前增加并发事件分发机制。
+
 ## 验证
 
 - 单元测试覆盖混合响应解析、Conversation 完整保存、说明先于工具执行，以及纯文本最终回答不进入进度端口。
