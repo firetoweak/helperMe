@@ -201,13 +201,17 @@ class SessionRuntimeStartTest(unittest.TestCase):
                 self.assertEqual(runtime.active_controls, {})
 
     def test_start_propagates_run_runtime_error_and_releases_control(self):
-        self.runtime.create_session("session-1", system_prompt="prompt")
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
         self.run_runtime.run.side_effect = RuntimeError("runner crashed")
 
         with self.assertRaisesRegex(RuntimeError, "runner crashed"):
             self.runtime.start("session-1", "run-1", "完成任务")
 
         self.assertEqual(self.runtime.active_controls, {})
+        self.assertEqual(session.status, SessionStatus.FAILED)
+        self.assertEqual(session.run_records[0].status, RunStatus.FAILED.value)
+        self.assertEqual(session.run_records[0].final_reason, "runtime_exception")
+        self.assertIsNotNone(session.run_records[0].ended_at)
 
     def test_next_run_receives_context_state_committed_by_previous_run(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")
@@ -434,6 +438,11 @@ class SessionRuntimeResumeTest(unittest.TestCase):
             self.runtime.resume(self.session.id, "run-2", "继续")
 
         self.assertEqual(self.runtime.active_controls, {})
+        self.assertEqual(self.session.status, SessionStatus.FAILED)
+        self.assertEqual(
+            self.session.run_records[-1].final_reason,
+            "runtime_exception",
+        )
 
 
 if __name__ == "__main__":

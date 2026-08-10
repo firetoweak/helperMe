@@ -71,13 +71,15 @@ ALLOWED_TRANSITIONS = {
     },
     SessionStatus.INTERRUPTED: {SessionStatus.RUNNING},
     SessionStatus.COMPLETED: {SessionStatus.RUNNING},
-    SessionStatus.BLOCKED: set(),
-    SessionStatus.FAILED: set(),
+    SessionStatus.BLOCKED: {SessionStatus.RUNNING},
+    SessionStatus.FAILED: {SessionStatus.RUNNING},
 }
 
 EVENT_KIND_BY_TRANSITION = {
     (SessionStatus.PENDING, SessionStatus.RUNNING): SessionEventType.STARTED,
     (SessionStatus.COMPLETED, SessionStatus.RUNNING): SessionEventType.STARTED,
+    (SessionStatus.BLOCKED, SessionStatus.RUNNING): SessionEventType.STARTED,
+    (SessionStatus.FAILED, SessionStatus.RUNNING): SessionEventType.STARTED,
     (SessionStatus.RUNNING, SessionStatus.INTERRUPTED): SessionEventType.INTERRUPTED,
     (SessionStatus.INTERRUPTED, SessionStatus.RUNNING): SessionEventType.RESUMED,
     (SessionStatus.RUNNING, SessionStatus.COMPLETED): SessionEventType.COMPLETED,

@@ -50,3 +50,13 @@ Runtime Artifact 解决模型上下文中的大结果，不自动解决子进程
 Benchmark 的中间迭代还暴露出一个重要边界：StopGuard 只能保证潜在写入后调用 `get_changes`，不能保证模型正确理解结果。最终评估器因此增加“完整 Git status 与最终声明一致”的事实检查。这属于 Benchmark/上层评估职责，不把自然语言语义判断塞入 StopGuard。
 
 可重复脚本位于 `tests/benchmarks/phase5_7_agent_benchmark.py`。脚本会在同目录生成 `phase5_7_last_report.json` 作为最近一次运行的本地报告；该报告不纳入版本管理。
+
+### Phase 6A 命令验收回补（2026.08.10）
+
+Phase 5.7 已能可靠执行命令，但当时的独立评估器位于 benchmark 外部，Agent Runtime 本身仍无法证明某个 Task 已满足验收标准。Phase 6A 在上层补充 `CommandRequirement + CompletionGate`，直接核验当前 RunEvidence 中真实的：
+
+- command、root 与 cwd；
+- `COMMAND_COMPLETED`、超时状态和整数退出码；
+- 成功命令的预期退出码，或诊断任务明确声明的“任意真实退出码”。
+
+PowerShell Runner 与 `execute_command` 契约没有因此混入 Goal 语义。命令工具只报告事实，CompletionGate 解释 Task 验收；模型提交的文字 evidence 不能替代真实执行记录。

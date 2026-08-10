@@ -60,3 +60,11 @@ Tool Result         作为事实写入 Conversation
 - 语义检索、向量索引、统一检索层或长期记忆检索。
 - 超大文件读取、超长单行的字符级续读或文件行号索引；超长行改为明确失败并返回有界 preview。
 - 为实时变化的 Workspace 提供跨调用快照一致性；分页期间文件变化时应重新搜索。
+
+### Phase 6A `get_changes` 精度回补（2026.08.10）
+
+Task 工作区门禁需要按具体文件核验 `allowed_paths`，原先的 Git short status 可能把未跟踪目录折叠为 `?? scripts/`，不足以证明实际新增的是 `scripts/build.py`。本次把状态读取调整为 `git status --short --untracked-files=all`，未跟踪文件按稳定相对路径逐项返回。
+
+同时，CompletionGate 不直接把最终工作区状态当作当前 Task 的改动，而是在 Run 开始时记录一次真实 `get_changes` 基线，结束后比较新增的状态路径。这样前一个 Task 已存在的合法改动不会被后一个 Task 误判为越界。
+
+边界保持不变：`get_changes` 负责提供精确事实；基线与 Task 允许路径的业务解释属于 Phase 6A，不下沉到 Workspace 工具。

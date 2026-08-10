@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from core.session import SessionRuntime
+
+if TYPE_CHECKING:
+    from core.goals import GoalApplicationService
 
 
 
@@ -9,12 +14,20 @@ class AgentApplication:
         self,
         session_runtime: SessionRuntime,
         system_prompt: str,
+        goal_application: GoalApplicationService | None = None,
     ):
         if not system_prompt.strip():
             raise ValueError("system_prompt 不能为空")
 
         self._session_runtime = session_runtime
         self._system_prompt = system_prompt
+        self._goal_application = goal_application
+
+    @property
+    def goals(self) -> GoalApplicationService:
+        if self._goal_application is None:
+            raise RuntimeError("Goal capability is not configured")
+        return self._goal_application
 
     def create_session(self, session_id: str) -> str:
         self._session_runtime.create_session(

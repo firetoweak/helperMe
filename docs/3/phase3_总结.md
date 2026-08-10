@@ -66,6 +66,21 @@ resume 接收新的 user_message，但不判断或复制其语义；消息由 Ru
 
 - Agent 不再直接调用或持有 RunRuntime；RunRuntime 由 SessionRuntime 编排。
 - Agent 的 conversation 指向当前 Session 持有的 conversation，pending/completed 时 start，interrupted 时 resume。
-- completed 表示当前 run 已完成并等待下一条 user_message；下一轮在同一 Session、同一 conversation 中重新进入 running。interrupted 才使用 resume；blocked、failed 仍是终态。
+- completed 表示当前 run 已完成并等待下一条 user_message；下一轮在同一 Session、同一 conversation 中重新进入 running。interrupted 使用 resume；Phase 6A 回补后，blocked、failed 也可通过新的 start Run 继续同一 Session。
 - SessionRuntime 使用临时 SessionRunOutcome 向调用方返回 RunResult 与 SessionRunRecord；Outcome 不写入 Session，避免长期状态重复。
 - 跨层测试已验证 Agent -> SessionRuntime -> RunRuntime 的 interrupt/resume、conversation 协议完整性及完整 Session Event 流。
+
+### Phase 6A 异常恢复回补（2026.08.10）
+
+Goal 跨 Run 执行暴露出一个缺口：RunRuntime 若直接抛出内部异常，旧链路可能让 Session 残留在 running，并占用 active control；Goal 的 open run 与 CommandBuffer 也无法释放。
+
+现在异常路径明确为：
+
+```text
+RunRuntime 原始异常
+  → SessionRuntime 记录 failed RunRecord / Event 并释放 active control
+  → GoalApplicationService abort Goal Run 并关闭 CommandBuffer
+  → 原始异常继续向调用方抛出
+```
+
+异常不检查、不包装、不自动重试。Task 保持 active，新 run_id 可以继续执行同一 Task；这属于同进程业务恢复，仍不等于进程重启后的持久化恢复。

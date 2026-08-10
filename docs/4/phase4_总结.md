@@ -44,3 +44,13 @@ Observability <- SessionRunOutcome
 - AgentApplication 不直接创建 LLMClient、RunRuntime，不包含 Prompt 常量和日志写入。
 - Console 保持同 Session 多轮与 interrupt/resume。
 - Phase 3/4 全量 91 项测试通过。
+
+### Phase 6A 应用层回补（2026.08.10）
+
+首版 Goal benchmark 必须访问 `AgentApplication._session_runtime` 才能手工组装 GoalApplicationService，说明 Goal 虽有领域模型，却尚未成为正式应用能力。本次回补：
+
+- Composition Root 统一创建 `GoalStore`、`GoalCommandBufferRegistry` 与 `GoalApplicationService`。
+- `AgentApplication.goals` 提供正式 Goal 用例入口；调用方不再依赖私有 SessionRuntime 组装业务服务。
+- GoalApplicationService 只负责编排 Session Run、Goal 状态和 CompletionGate，不把 Goal 语义下沉到 SessionRuntime。
+
+判断一项能力是否完成应用层集成的标准也更清楚：正常消费者和端到端测试不应为了使用该能力而读取私有依赖。
