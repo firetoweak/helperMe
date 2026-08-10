@@ -20,7 +20,13 @@ class ModelConfig:
     api_key: str
 
 
-def load_model_config(path: Path | None = None) -> ModelConfig:
+@dataclass(frozen=True)
+class AppConfig:
+    model: ModelConfig
+    workspace_root: Path
+
+
+def _load_config_data(path: Path | None) -> dict:
     config_path = path or Path(
         os.environ.get(CONFIG_PATH_ENV, DEFAULT_CONFIG_PATH)
     )
@@ -33,7 +39,13 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
     with config_path.open("r", encoding="utf-8") as config_file:
         data = yaml.safe_load(config_file)
 
-    model = data.get("model") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        raise ValueError("配置必须是映射")
+    return data
+
+
+def _parse_model_config(data: dict) -> ModelConfig:
+    model = data.get("model")
     if not isinstance(model, dict):
         raise ValueError("模型配置必须包含 model 映射")
 
@@ -45,3 +57,23 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         values[field] = value.strip()
 
     return ModelConfig(**values)
+
+
+def load_model_config(path: Path | None = None) -> ModelConfig:
+    return _parse_model_config(_load_config_data(path))
+
+
+def load_app_config(path: Path | None = None) -> AppConfig:
+    data = _load_config_data(path)
+    workspace = data.get("workspace")
+    if not isinstance(workspace, dict):
+        raise ValueError("配置必须包含 workspace 映射")
+
+    workspace_root = workspace.get("root")
+    if not isinstance(workspace_root, str) or not workspace_root.strip():
+        raise ValueError("配置 workspace.root 不能为空")
+
+    return AppConfig(
+        model=_parse_model_config(data),
+        workspace_root=Path(workspace_root.strip()),
+    )

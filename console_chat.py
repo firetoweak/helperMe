@@ -9,7 +9,7 @@ from uuid import uuid4
 from core.agent_application import AgentApplication
 from core.composition import create_agent_application
 from core.model_call.client import LLMClient
-from core.model_call.config import load_model_config
+from core.model_call.config import load_app_config
 from core.observability import (
     build_run_trace,
     get_default_run_log_path,
@@ -26,10 +26,6 @@ TERMINAL_RUN_STATUSES = {
 
 MODEL_CONTEXT_LIMIT = 200_000
 INPUT_BUDGET_RATIO = 0.9
-DEFAULT_USER_PROJECT_ROOT = Path(
-    r"D:\work\agent"
-)
-
 def _new_session(application: AgentApplication) -> str:
     session_id = f"session-{uuid4().hex}"
     return application.create_session(session_id)
@@ -101,7 +97,8 @@ def _format_token_limit(tokens: int) -> str:
 
 
 def main() -> None:
-    model_config = load_model_config()
+    app_config = load_app_config()
+    model_config = app_config.model
     model = model_config.name
 
     application = create_agent_application(
@@ -109,7 +106,7 @@ def main() -> None:
         model_context_limit=MODEL_CONTEXT_LIMIT,
         runtime_root=Path.home() / ".helper-me" / "runtime",
         workspace_roots={
-            "project": DEFAULT_USER_PROJECT_ROOT,
+            "project": app_config.workspace_root,
         },
         input_budget_ratio=INPUT_BUDGET_RATIO,
         llm_client=LLMClient(model_config),

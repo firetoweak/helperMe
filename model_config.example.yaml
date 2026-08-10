@@ -2,3 +2,6 @@ model:
   name: "your-model-name"
   base_url: "https://your-model-endpoint.example/v1"
   api_key: "your-api-key"
+
+workspace:
+  root: 'D:\work\agent'

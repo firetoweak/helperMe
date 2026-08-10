@@ -7,7 +7,7 @@ from pathlib import Path
 from core.context import ModelContext, make_budget_assessment
 from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
 from core.model_call.client import LLMClient
-from core.model_call.config import load_model_config
+from core.model_call.config import load_app_config, load_model_config
 from core.model_call.service import (
     ModelCallBlocked,
     ModelCallRequest,
@@ -84,15 +84,18 @@ class ModelConfigTest(unittest.TestCase):
                 "model:\n"
                 "  name: test-model\n"
                 "  base_url: https://example.test/v1\n"
-                "  api_key: test-key\n",
+                "  api_key: test-key\n"
+                "workspace:\n"
+                "  root: C:\\\\work\\\\agent\n",
                 encoding="utf-8",
             )
 
-            config = load_model_config(path)
+            config = load_app_config(path)
 
-        self.assertEqual(config.name, "test-model")
-        self.assertEqual(config.base_url, "https://example.test/v1")
-        self.assertEqual(config.api_key, "test-key")
+        self.assertEqual(config.model.name, "test-model")
+        self.assertEqual(config.model.base_url, "https://example.test/v1")
+        self.assertEqual(config.model.api_key, "test-key")
+        self.assertEqual(config.workspace_root, Path(r"C:\work\agent"))
 
     def test_rejects_missing_required_value(self):
         with tempfile.TemporaryDirectory() as directory:
