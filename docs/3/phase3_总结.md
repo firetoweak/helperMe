@@ -72,15 +72,15 @@ resume 接收新的 user_message，但不判断或复制其语义；消息由 Ru
 
 ### Phase 6A 异常恢复回补（2026.08.10）
 
-Goal 跨 Run 执行暴露出一个缺口：RunRuntime 若直接抛出内部异常，旧链路可能让 Session 残留在 running，并占用 active control；Goal 的 open run 与 CommandBuffer 也无法释放。
+Goal 跨 Run 执行要求异常路径同样保持 Session 状态完整：RunRuntime 直接抛出内部异常时，Session 不能残留在 running，也不能继续占用 active control。
 
 现在异常路径明确为：
 
 ```text
 RunRuntime 原始异常
   → SessionRuntime 记录 failed RunRecord / Event 并释放 active control
-  → GoalApplicationService abort Goal Run 并关闭 CommandBuffer
+  → GoalApplicationService 释放当前隔离 Run 关联
   → 原始异常继续向调用方抛出
 ```
 
-异常不检查、不包装、不自动重试。Task 保持 active，新 run_id 可以继续执行同一 Task；这属于同进程业务恢复，仍不等于进程重启后的持久化恢复。
+异常不检查、不包装、不自动重试。Goal 保留最后已落账的 Turn/Judgment 状态；这属于同进程业务恢复，仍不等于进程重启后的持久化恢复。

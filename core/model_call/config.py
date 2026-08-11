@@ -21,9 +21,24 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class WorkspaceConfig:
+    root: Path
+    full_access: bool
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    max_rounds: int
+    max_goal_turns: int
+    model_context_limit: int
+    input_budget_ratio: float
+
+
+@dataclass(frozen=True)
 class AppConfig:
     model: ModelConfig
-    workspace_root: Path
+    workspace: WorkspaceConfig
+    runtime: RuntimeConfig
 
 
 def _load_config_data(path: Path | None) -> dict:
@@ -73,7 +88,49 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     if not isinstance(workspace_root, str) or not workspace_root.strip():
         raise ValueError("配置 workspace.root 不能为空")
 
+    full_access = workspace.get("full_access")
+    if type(full_access) is not bool:
+        raise ValueError("配置 workspace.full_access 必须是布尔值")
+
+    runtime = data.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ValueError("配置必须包含 runtime 映射")
+
+    max_rounds = runtime.get("max_rounds")
+    if type(max_rounds) is not int or max_rounds < 1:
+        raise ValueError("配置 runtime.max_rounds 必须是大于 0 的整数")
+
+    max_goal_turns = runtime.get("max_goal_turns")
+    if type(max_goal_turns) is not int or max_goal_turns < 1:
+        raise ValueError(
+            "配置 runtime.max_goal_turns 必须是大于 0 的整数"
+        )
+
+    model_context_limit = runtime.get("model_context_limit")
+    if type(model_context_limit) is not int or model_context_limit < 1:
+        raise ValueError(
+            "配置 runtime.model_context_limit 必须是大于 0 的整数"
+        )
+
+    input_budget_ratio = runtime.get("input_budget_ratio")
+    if (
+        type(input_budget_ratio) not in (int, float)
+        or not 0 < input_budget_ratio <= 1
+    ):
+        raise ValueError(
+            "配置 runtime.input_budget_ratio 必须在 (0, 1] 范围内"
+        )
+
     return AppConfig(
         model=_parse_model_config(data),
-        workspace_root=Path(workspace_root.strip()),
+        workspace=WorkspaceConfig(
+            root=Path(workspace_root.strip()),
+            full_access=full_access,
+        ),
+        runtime=RuntimeConfig(
+            max_rounds=max_rounds,
+            max_goal_turns=max_goal_turns,
+            model_context_limit=model_context_limit,
+            input_budget_ratio=float(input_budget_ratio),
+        ),
     )

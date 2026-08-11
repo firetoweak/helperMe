@@ -12,6 +12,7 @@ from core.runtime_modes import PlainMode
 from core.runtime_modes.router import RunMode, RuntimeModeRouter
 from core.todos import TodoMode
 from core.tools_runtime.run_runtime import RunRuntime
+from core.tools_runtime import RunInvocation
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -155,6 +156,26 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         )
         self.assertEqual(routed.data["mode"], "plain")
         self.assertEqual(routed.data["reason"], "可以直接回答")
+
+    def test_invocation_runtime_mode_overrides_router_for_current_run(self):
+        llm = RecordingLLMClient([LLMResponse(content="能力运行完成")])
+
+        result = self._runner(llm).run(
+            self._conversation(),
+            "执行一个看起来复杂的能力任务",
+            invocation=RunInvocation(runtime_mode=PlainMode()),
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.answer, "能力运行完成")
+        self.assertEqual(len(llm.seen_messages), 1)
+        self.assertNotIn("rewrite_todos", str(llm.seen_tools[0]))
+        self.assertFalse(
+            any(
+                checkpoint.reason == "runtime_mode_routed"
+                for checkpoint in result.checkpoints
+            )
+        )
 
     def test_todo_route_initializes_todos_before_agent_round(self):
         llm = RecordingLLMClient(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -28,6 +30,25 @@ class UnknownWorkspaceRoot(WorkspaceInputError):
 
     def __init__(self, name: str) -> None:
         super().__init__(f"未知的 workspace root: {name}")
+
+
+class FilesystemAccessMode(str, Enum):
+    SCOPED = "scoped"
+    HOST = "host"
+
+
+def discover_host_filesystem_roots() -> dict[str, Path]:
+    if os.name == "nt":
+        roots = {
+            f"drive_{letter.lower()}": Path(f"{letter}:\\")
+            for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            if Path(f"{letter}:\\").is_dir()
+        }
+    else:
+        roots = {"filesystem": Path("/")}
+    if not roots:
+        raise RuntimeError("未发现可访问的宿主机文件系统 root")
+    return roots
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,8 @@
 console_chat.py
     ↓
 AgentApplication                 应用用例：create / start / resume / interrupt / delete
+    ↑ RunHost                    可选 Plugin 发起 Run 的通用窄端口
+    └── plugins/goal             可选 Goal Loop / 独立 Judge 工作流
     ↓
 SessionRuntime                   管理跨 Run 的 Session 状态与 Conversation
     ↓
@@ -22,7 +24,7 @@ RunRuntime                       驱动单次 Agent tool-calling loop
     └─ ToolResultExternalizer    将过大的工具结果外置为 Artifact
 ```
 
-依赖统一在 `core/composition.py` 中组装。业务对象本身不负责读取配置或创建具体依赖，因此运行时控制、模型调用、工具和存储可以分别测试与替换。
+Core 依赖在 `core/composition.py` 中组装；可选能力在各自 Plugin 的 Composition Root 中按需装配。Core 不引用具体 Plugin。
 
 ## 目录结构
 
@@ -34,6 +36,7 @@ helperMe/
 ├─ requirements.txt             # Python 依赖
 ├─ core/                        # Agent 核心领域与运行时
 │  ├─ agent_application.py      # 面向 Console/API 的无状态应用服务
+│  ├─ run_host.py               # 可选 Plugin 发起 Run 的公共端口
 │  ├─ composition.py            # Composition Root，创建并连接所有具体组件
 │  ├─ messages.py               # 完整 Conversation 事实轨迹
 │  ├─ prompt.py                 # Agent 系统提示词
@@ -46,6 +49,8 @@ helperMe/
 │  ├─ todos/                    # TodoList、rewrite_todos 与退出屏障
 │  ├─ context/                  # 上下文投影、预算、压缩、摘要与状态
 │  └─ runtime_artifacts/        # 大型工具结果的外置、分页读取和生命周期
+├─ plugins/
+│  └─ goal/                     # 可选 Goal/Task 领域、Capability 与装配入口
 ├─ tools/                       # Agent 可调用的具体工具适配器
 │  ├─ workspace.py              # 多根工作区及路径沙箱
 │  ├─ file_read.py              # glob、grep、read_file 等只读工具
@@ -58,8 +63,10 @@ helperMe/
 │  └─ demo.py                   # 无状态工具注册示例
 ├─ tests/
 │  ├─ core/                     # 各核心模块的单元与集成测试
+│  ├─ plugins/                  # 可选插件的独立测试
 │  ├─ benchmarks/               # 真实模型、多轮任务和压缩策略实验
-│  └─ test_core_suite.py        # core 测试聚合入口
+│  ├─ test_core_suite.py        # Core 测试聚合入口
+│  └─ test_plugin_suite.py      # Plugin 测试聚合入口
 └─ docs/                        # 按 Phase 保存的学习计划、设计决策和总结
 ```
 
@@ -100,6 +107,13 @@ model:
 
 workspace:
   root: "D:\\work\\agent"
+  full_access: false
+
+runtime:
+  max_rounds: 50
+  max_goal_turns: 8
+  model_context_limit: 200000
+  input_budget_ratio: 0.9
 ```
 
 启动命令行交互：
@@ -107,6 +121,26 @@ workspace:
 ```powershell
 python console_chat.py
 ```
+
+普通输入继续使用 Core Run；输入 `/goal <目标>` 后，可选 Goal Plugin 会自动推导 Completion Contract，并循环执行完整 Agent Turn 与独立 Judge 验证，直到目标完成、暂停或耗尽 `max_goal_turns`。Plan/Todo 保持为单次 Turn 内的柔性认知工具。
+
+默认情况下，文件工具只能访问 `workspace.root`。如需在整次应用生命周期内开启整机文件工具访问，在 `model_config.yaml` 中显式设置：
+
+```yaml
+workspace:
+  full_access: true
+```
+
+该配置对本次 Application 生命周期固定有效；Windows 已挂载磁盘会以 `drive_c`、`drive_d` 等逻辑 root 注册。它不会绕过操作系统权限，且不改变 `execute_command` 本来就能访问 Workspace 外部资源的事实。
+
+单次 Run 最大模型轮次在同一配置文件中设置：
+
+```yaml
+runtime:
+  max_rounds: 80
+```
+
+它同时作用于普通 Run、Contract 编译、Executor Turn 和 Judge Run。`max_goal_turns` 单独限制一个 Goal 自动开启的 Executor Turn 数；`model_context_limit` 与 `input_budget_ratio` 也统一由 `runtime` 配置，不再由 Python 启动参数或控制台常量设置。
 
 运行中按 `Ctrl+C` 会请求 Agent 在安全点中断，而不是直接破坏当前工具调用。运行日志默认写入项目的 `logs/`；可通过 `HELPER_RUN_LOG_PATH` 指定其他路径，也可通过 `HELPER_MODEL_CONFIG` 指定配置文件。
 

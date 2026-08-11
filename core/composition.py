@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
-from core.agent_application import AgentApplication
+from core.agent_application import AgentApplication, DEFAULT_MAX_ROUNDS
 from core.model_call.client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
 from core.runtime_modes import (
@@ -13,11 +13,6 @@ from core.runtime_modes import (
     RuntimeModeRouter,
 )
 from core.todos import TodoMode
-from core.goals import (
-    GoalApplicationService,
-    GoalCommandBufferRegistry,
-    InMemoryGoalStore,
-)
 from core.session import SessionRuntime
 from core.tools_runtime.run_runtime import RunRuntime
 from core.tools_runtime.run_progress import RunProgressSink
@@ -42,7 +37,12 @@ from core.tools_runtime.tools_executor import ToolsExecutor
 from tools.artifact_read import create_read_artifact_spec
 from tools import create_workspace_tool_specs
 from tools.powershell_runner import PowerShellCommandRunner
-from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
+from tools.workspace import (
+    FilesystemAccessMode,
+    WorkspaceSandbox,
+    WorkspaceSandboxes,
+    discover_host_filesystem_roots,
+)
 
 # 无状态内建工具通过导入注册；Workspace 工具在 composition root 中绑定。
 import tools  # noqa: F401
@@ -58,17 +58,35 @@ def create_agent_application(
     recent_protection_tokens: int = 10_000,
     llm_client: LLMClient | None = None,
     progress_sink: RunProgressSink | None = None,
+    filesystem_access_mode: FilesystemAccessMode = (
+        FilesystemAccessMode.SCOPED
+    ),
+    default_max_rounds: int = DEFAULT_MAX_ROUNDS,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
+    effective_workspace_roots = dict(workspace_roots)
+    if filesystem_access_mode is FilesystemAccessMode.HOST:
+        host_roots = discover_host_filesystem_roots()
+        duplicated_names = effective_workspace_roots.keys() & host_roots.keys()
+        if duplicated_names:
+            raise ValueError(
+                "显式 workspace root 与 Host root 名称冲突: "
+                f"{sorted(duplicated_names)}"
+            )
+        effective_workspace_roots.update(host_roots)
+
     workspaces = WorkspaceSandboxes({
         name: WorkspaceSandbox(root)
-        for name, root in workspace_roots.items()
+        for name, root in effective_workspace_roots.items()
     })
     runtime_root = runtime_root.resolve()
-    if any(
-        runtime_root.is_relative_to(workspace.root)
-        for workspace in workspaces.values()
+    if (
+        filesystem_access_mode is FilesystemAccessMode.SCOPED
+        and any(
+            runtime_root.is_relative_to(workspace.root)
+            for workspace in workspaces.values()
+        )
     ):
         raise ValueError("runtime_root 不能位于用户 workspace root 内")
 
@@ -140,13 +158,8 @@ def create_agent_application(
         run_runtime_factory=create_session_run_runtime,
         delete_session_resources=artifact_drawers.delete,
     )
-    goal_application = GoalApplicationService(
-        session_runtime,
-        InMemoryGoalStore(),
-        GoalCommandBufferRegistry(),
-    )
     return AgentApplication(
         session_runtime=session_runtime,
         system_prompt=DEFAULT_AGENT_PROMPT,
-        goal_application=goal_application,
+        default_max_rounds=default_max_rounds,
     )

@@ -1,10 +1,24 @@
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from unittest.mock import Mock
 
-from console_chat import _format_token_limit, _latest_input_tokens
+from console_chat import (
+    _format_token_limit,
+    _latest_input_tokens,
+    main,
+)
 
 
 class ConsoleRunMetadataTest(unittest.TestCase):
+    def test_run_hyperparameters_are_not_cli_options(self):
+        for arguments in (["--max-rounds", "80"], ["--full-access"]):
+            with self.subTest(arguments=arguments):
+                with redirect_stderr(StringIO()), self.assertRaises(
+                    SystemExit
+                ):
+                    main(arguments)
+
     def test_latest_input_tokens_uses_last_model_usage(self):
         outcome = Mock()
         outcome.result.checkpoints = [

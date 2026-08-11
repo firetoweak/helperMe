@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from core.goals.goal import Goal, GoalStatus
+from plugins.goal.goal import Goal, GoalStatus
 
 
 class GoalStore(Protocol):
@@ -53,7 +53,8 @@ class InMemoryGoalStore:
                 for goal_id in reversed(
                     self._session_goal_ids.get(session_id, [])
                 )
-                if self._goals[goal_id].status is not GoalStatus.COMPLETED
+                if self._goals[goal_id].status
+                not in {GoalStatus.COMPLETED, GoalStatus.EXHAUSTED}
             ),
             None,
         )

@@ -110,7 +110,13 @@ class ModelConfigTest(unittest.TestCase):
                 "  base_url: https://example.test/v1\n"
                 "  api_key: test-key\n"
                 "workspace:\n"
-                "  root: C:\\\\work\\\\agent\n",
+                "  root: C:\\\\work\\\\agent\n"
+                "  full_access: true\n"
+                "runtime:\n"
+                "  max_rounds: 80\n"
+                "  max_goal_turns: 6\n"
+                "  model_context_limit: 200000\n"
+                "  input_budget_ratio: 0.85\n",
                 encoding="utf-8",
             )
 
@@ -119,7 +125,34 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(config.model.name, "test-model")
         self.assertEqual(config.model.base_url, "https://example.test/v1")
         self.assertEqual(config.model.api_key, "test-key")
-        self.assertEqual(config.workspace_root, Path(r"C:\work\agent"))
+        self.assertEqual(config.workspace.root, Path(r"C:\work\agent"))
+        self.assertTrue(config.workspace.full_access)
+        self.assertEqual(config.runtime.max_rounds, 80)
+        self.assertEqual(config.runtime.max_goal_turns, 6)
+        self.assertEqual(config.runtime.model_context_limit, 200_000)
+        self.assertEqual(config.runtime.input_budget_ratio, 0.85)
+
+    def test_rejects_invalid_runtime_hyperparameters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model_config.yaml"
+            path.write_text(
+                "model:\n"
+                "  name: test-model\n"
+                "  base_url: https://example.test/v1\n"
+                "  api_key: test-key\n"
+                "workspace:\n"
+                "  root: C:\\\\work\\\\agent\n"
+                "  full_access: false\n"
+                "runtime:\n"
+                "  max_rounds: 0\n"
+                "  max_goal_turns: 6\n"
+                "  model_context_limit: 200000\n"
+                "  input_budget_ratio: 0.9\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "runtime.max_rounds"):
+                load_app_config(path)
 
     def test_rejects_missing_required_value(self):
         with tempfile.TemporaryDirectory() as directory:

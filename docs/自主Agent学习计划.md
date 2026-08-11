@@ -7,6 +7,12 @@
 ## Rule 同步区
 
 - 禁止为了跑通当前局部模块而添加静默兜底、隐式默认值或自动生成关键关联数据。兜底不得掩盖上层调用错误，否则会破坏整体设计并显著增加调试成本。
+- 可选能力只能依赖 Core 的公共端口；Core 不得引用具体 Plugin。Plugin 引出的 Core 改动必须具有与插件领域无关的通用语义。移除某个 Plugin 后，Core 应无需修改并能独立运行。
+- 文件工具访问上限由 `model_config.yaml` 在 Composition 阶段确定，Application 创建后不可变；模型、Run、Skill 与 Plugin 均不得自行升级。`host` 只取消应用路径范围限制，不能绕过操作系统权限，也不等同于命令沙箱。
+- 面向应用的超参数统一由 `model_config.yaml` 提供。默认 Run 轮次上限注入 AgentApplication，普通 Run 与 Plugin Run 均通过 RunHost 解析同一默认值；下层 Runtime 只保留内部调用所需的显式覆盖能力，不维护面向用户的配置入口。
+- Goal 保存 Objective、版本化 Completion Contract、Turn/Judgment 历史与生命周期；Plan 与 TodoList 保持为单次 Turn 内的柔性认知工具。
+- Completion Contract 自动推导并在每个 Executor Turn 开始前冻结。Executor 无权修改；Judge 只能在 Turn 边界修订 inferred 标准和验证方法，不能自动新增、删除或改写 user 标准。
+- Goal 完成必须由隔离 Judge Run 判断。`done` 必须引用证据；结构化命令和 Workspace 要求由 CompletionGate 读取 Judge Run 的真实 RunEvidence 核验，Executor 自述不能替代完成事实。
 
 ## 全局路线图
 
@@ -47,7 +53,7 @@ Memory（后置，外挂）
 
 ## Phase 0 · Agent Core
 
-目标是做一个能够调用工具，并且能够读写文件的 agent 最小 MCP。
+目标是做一个能够调用工具，并且能够读写文件的 agent 最小 MVP。
 
 ### 小节索引
 
@@ -158,7 +164,7 @@ Phase 5.5 Workspace Sandbox
         ↓
 ✓ Phase 5.7 Command Execution
         ↓
-Phase 6A Goal / Task Management
+Phase 6A Goal Loop
         ↓
 Phase 6B Skill / Toolset Progressive Loading
         ↓
@@ -258,17 +264,21 @@ Phase 8 Multi-Agent
 
 ### 小节索引
 
-### 6A Goal / Task Management
+### 6A Goal Loop
 
-- 状态：已完成（CompletionGate、真实 RunEvidence、异常恢复与完整 Goal benchmark 均通过）
-- 目标：管理跨步骤的目标与任务组织。
-- 当前边界：GoalStore 暂为进程内实现；跨进程持久化按实际恢复需求另行设计。
+- 状态：架构重做与自动化回归完成；新真实模型 benchmark 待补。
+- 目标：围绕最终目标自动循环完整 Agent Turn，并由独立 Judge 依据冻结 Contract 和真实证据决定完成、继续或暂停。
+- 当前边界：Goal 只保存 Objective、Completion Contract、Turn/Judgment 历史和生命周期；Plan/Todo 不进入 Goal 聚合。Contract 自动推导，Executor 不可修改，Judge 只能在 Turn 边界修订 inferred 标准。
+- 交互入口：`/goal <objective>` 自动执行 Contract Compilation → Executor → Judge → continuation，直到 completed、paused 或耗尽 `max_goal_turns`。
 - 详述：[phase_6A学习.md](6/phase_6A学习.md)
 
-### 6B Skill / Toolset Progressive Loading
+### 6B Skill / Toolset Progressive Loading + MCP Toolset Adapter
 
 - 状态：未开始
-- 目标：按需渐进加载 Skill / Toolset，避免一次性暴露全部能力。
+- 目标：按需渐进加载 Skill / Toolset，避免一次性暴露全部能力；接入 MCP，验证外部 Toolset 的发现、选择与调用。
+- 前置边界：区分 Plugin 装配、交互命令激活与单次 Run Capability 注入；6B 只处理 Run 期 Capability 的选择、加载和释放。
+- Run 约束：RunInvocation 可覆盖当前 RuntimeMode；受限规划能力使用 PlainMode，避免渐进加载的工具集被 Todo 等模式再次扩张。
+- MCP 定位：MCP 是外部 Toolset 的接入协议，不负责能力加载策略；具体适配放在可选 Plugin，Core 不依赖 MCP。
 - 结论：（待写）
 - 详述：总结待写
 

@@ -2,14 +2,74 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from core.composition import create_agent_application
 from core.runtime_artifacts import ArtifactNotFoundError
 from core.runtime_modes import PlainMode, RunMode, RuntimeModeRouter
 from core.todos import TodoMode
+from tools.workspace import FilesystemAccessMode
 
 
 class CompositionTest(unittest.TestCase):
+    def test_scoped_access_does_not_discover_host_roots(self):
+        with tempfile.TemporaryDirectory() as runtime_directory, patch(
+            "core.composition.discover_host_filesystem_roots"
+        ) as discover:
+            create_agent_application(
+                model="test-model",
+                model_context_limit=10_000,
+                runtime_root=Path(runtime_directory),
+                workspace_roots={"project": Path.cwd()},
+            )
+
+        discover.assert_not_called()
+
+    def test_host_access_adds_discovered_roots_for_every_session(self):
+        with tempfile.TemporaryDirectory() as runtime_directory, \
+                tempfile.TemporaryDirectory() as project_directory, patch(
+                    "core.composition.discover_host_filesystem_roots",
+                    return_value={"drive_z": Path(runtime_directory)},
+                ):
+            application = create_agent_application(
+                model="test-model",
+                model_context_limit=10_000,
+                runtime_root=Path(runtime_directory),
+                workspace_roots={"project": Path(project_directory)},
+                filesystem_access_mode=FilesystemAccessMode.HOST,
+            )
+            application.create_session("session-1")
+            runtime = application._session_runtime._session_run_runtimes[
+                "session-1"
+            ]
+
+            result = runtime.tools_executor.execute(
+                "get_workspace_info",
+                "{}",
+            )
+
+        self.assertEqual(
+            result["data"]["roots"],
+            [{"name": "project"}, {"name": "drive_z"}],
+        )
+
+    def test_host_access_rejects_explicit_root_name_collision(self):
+        with tempfile.TemporaryDirectory() as runtime_directory, \
+                tempfile.TemporaryDirectory() as workspace_directory, patch(
+                    "core.composition.discover_host_filesystem_roots",
+                    return_value={"drive_d": Path(workspace_directory)},
+                ):
+            with self.assertRaisesRegex(ValueError, "名称冲突"):
+                create_agent_application(
+                    model="test-model",
+                    model_context_limit=10_000,
+                    runtime_root=Path(runtime_directory),
+                    workspace_roots={
+                        "drive_d": Path(workspace_directory),
+                    },
+                    filesystem_access_mode=FilesystemAccessMode.HOST,
+                )
+
     def test_workspace_tools_are_bound_by_composition_root(self):
         with tempfile.TemporaryDirectory() as runtime_directory, tempfile.TemporaryDirectory() as workspace_directory:
             workspace_root = Path(workspace_directory)

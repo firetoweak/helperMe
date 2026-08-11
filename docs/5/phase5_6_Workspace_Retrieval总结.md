@@ -48,6 +48,7 @@ Tool Result         作为事实写入 Conversation
 - 使用稳定的名称排序和深度优先遍历，支持结果 offset 分页。
 - 不含 `/` 的 `pattern` 递归匹配名称；含 `/` 时从搜索起点匹配逻辑路径；保留 `kind` 与 `max_depth` 收窄能力。
 - 不递归进入符号链接目录；指向 Workspace 外的符号链接结果被过滤。
+- scoped 范围遍历通常应通过收窄项目 root 避免系统目录；Host 范围遍历遇到拒绝访问时继续其他目录，并返回 `GLOB_PARTIAL`、`complete=false` 与有界 `inaccessible_paths`。结果可以使用，但调用方不得声称搜索完整。
 
 ### 验收
 
@@ -63,8 +64,8 @@ Tool Result         作为事实写入 Conversation
 
 ### Phase 6A `get_changes` 精度回补（2026.08.10）
 
-Task 工作区门禁需要按具体文件核验 `allowed_paths`，原先的 Git short status 可能把未跟踪目录折叠为 `?? scripts/`，不足以证明实际新增的是 `scripts/build.py`。本次把状态读取调整为 `git status --short --untracked-files=all`，未跟踪文件按稳定相对路径逐项返回。
+Goal Judge 的工作区门禁需要按具体文件核验 `allowed_paths`，原先的 Git short status 可能把未跟踪目录折叠为 `?? scripts/`，不足以证明实际新增的是 `scripts/build.py`。本次把状态读取调整为 `git status --short --untracked-files=all`，未跟踪文件按稳定相对路径逐项返回。
 
-同时，CompletionGate 不直接把最终工作区状态当作当前 Task 的改动，而是在 Run 开始时记录一次真实 `get_changes` 基线，结束后比较新增的状态路径。这样前一个 Task 已存在的合法改动不会被后一个 Task 误判为越界。
+Goal 级 CompletionGate 直接核验 Judge Run 读取到的最终工作区状态；`allowed_paths` 表达整个 Goal 允许存在的最终改动，而不是某个 Task 的增量。
 
-边界保持不变：`get_changes` 负责提供精确事实；基线与 Task 允许路径的业务解释属于 Phase 6A，不下沉到 Workspace 工具。
+边界保持不变：`get_changes` 负责提供精确事实；Goal 允许路径的业务解释属于 Phase 6A，不下沉到 Workspace 工具。

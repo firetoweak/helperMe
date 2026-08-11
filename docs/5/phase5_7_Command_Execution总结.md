@@ -53,10 +53,10 @@ Benchmark 的中间迭代还暴露出一个重要边界：StopGuard 只能保证
 
 ### Phase 6A 命令验收回补（2026.08.10）
 
-Phase 5.7 已能可靠执行命令，但当时的独立评估器位于 benchmark 外部，Agent Runtime 本身仍无法证明某个 Task 已满足验收标准。Phase 6A 在上层补充 `CommandRequirement + CompletionGate`，直接核验当前 RunEvidence 中真实的：
+Phase 5.7 已能可靠执行命令，但 Agent Runtime 本身仍无法证明某个 Goal 已满足验收标准。Phase 6A 在独立 Judge Run 上补充 `CommandRequirement + CompletionGate`，直接核验当前 RunEvidence 中真实的：
 
 - command、root 与 cwd；
 - `COMMAND_COMPLETED`、超时状态和整数退出码；
 - 成功命令的预期退出码，或诊断任务明确声明的“任意真实退出码”。
 
-PowerShell Runner 与 `execute_command` 契约没有因此混入 Goal 语义。命令工具只报告事实，CompletionGate 解释 Task 验收；模型提交的文字 evidence 不能替代真实执行记录。
+PowerShell Runner 与 `execute_command` 契约没有因此混入 Goal 语义。命令工具只报告事实，CompletionGate 解释 Goal Contract 的机械验收要求；模型提交的文字 evidence 不能替代真实执行记录。
