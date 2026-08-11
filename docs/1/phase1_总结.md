@@ -46,6 +46,6 @@ Phase 1 已完成最小可靠 tool-calling runtime：工具调用循环已从 Ag
 
 - `RunResult` 增加 `RunEvidence` 快照；工具原始结果在外置或裁剪前写入证据账本，模型自由文本不作为验收事实。
 - `RunInvocation / RunCapability` 成为 Run 级扩展入口，Capability 可以注入临时工具、运行说明、完成门禁，并声明是否允许基础工具。
-- 临时 ToolRegistry 不再只解决“工具何时释放”，还解决“本 Run 有权使用哪些工具”；PlanRevision Run 因此无法调用文件或 Shell 工具。
+- 临时 ToolRegistry 不再只解决“工具何时释放”，还解决“本 Run 有权使用哪些工具”；Contract Compilation Run 因此只能提交 Contract，独立 Judge Run 则可读取真实状态并执行验证。
 
 这次回补确认：ToolsState 负责协议账本，RunEvidence 负责执行事实，RunResult 负责对外结果，三者不能合并。

@@ -45,12 +45,14 @@ Observability <- SessionRunOutcome
 - Console 保持同 Session 多轮与 interrupt/resume。
 - Phase 3/4 全量 91 项测试通过。
 
-### Phase 6A 应用层回补（2026.08.10）
+### Phase 6A Plugin 集成（2026.08.11）
 
-首版 Goal benchmark 必须访问 `AgentApplication._session_runtime` 才能手工组装 GoalApplicationService，说明 Goal 虽有领域模型，却尚未成为正式应用能力。本次回补：
+Goal 作为可选 Plugin 通过公共应用端口运行：
 
-- Composition Root 统一创建 `GoalStore`、`GoalCommandBufferRegistry` 与 `GoalApplicationService`。
-- `AgentApplication.goals` 提供正式 Goal 用例入口；调用方不再依赖私有 SessionRuntime 组装业务服务。
-- GoalApplicationService 只负责编排 Session Run、Goal 状态和 CompletionGate，不把 Goal 语义下沉到 SessionRuntime。
+- Goal Plugin 的 Composition Root 创建 `GoalStore` 与 `GoalApplicationService`，并显式注入通用 `RunHost` 和 `max_goal_turns`。
+- GoalApplicationService 编排 Contract Compilation、Executor Turn、隔离 Judge Run 与 continuation，不把 Goal 语义下沉到 SessionRuntime。
+- `RunInvocation` 只提供通用的 Capability 与 RuntimeMode 单 Run 覆盖，不含 Goal 领域词汇。
+- AgentApplication 实现与 Goal 语义无关的 RunHost 公共端口，GoalApplicationService 只依赖该端口。
+- 架构测试禁止 Core 反向导入 Plugin。
 
-判断一项能力是否完成应用层集成的标准也更清楚：正常消费者和端到端测试不应为了使用该能力而读取私有依赖。
+正常消费者和端到端测试只使用公共端口，不读取私有依赖。

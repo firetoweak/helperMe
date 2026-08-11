@@ -11,6 +11,7 @@ from core.runtime_modes import PlainMode
 from core.session import SessionRuntime
 from core.session.state import SessionEventType, SessionStatus
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
+from core.tools_runtime.run_invocation import RunInvocation
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from tests.core.llm_test_support import (
     call_result,
@@ -106,6 +107,70 @@ class AgentApplicationContractTest(unittest.TestCase):
             "run-2",
             "继续任务",
             9,
+        )
+
+    def test_application_owns_the_default_run_round_limit(self):
+        application = AgentApplication(
+            self.session_runtime,
+            "system prompt",
+            default_max_rounds=73,
+        )
+        outcome = object()
+        self.session_runtime.start.return_value = outcome
+
+        result = application.start("session-1", "run-1", "开始任务")
+
+        self.assertIs(result, outcome)
+        self.session_runtime.start.assert_called_once_with(
+            "session-1",
+            "run-1",
+            "开始任务",
+            73,
+        )
+
+    def test_application_rejects_invalid_default_run_round_limit(self):
+        with self.assertRaisesRegex(ValueError, "必须大于 0"):
+            AgentApplication(
+                self.session_runtime,
+                "system prompt",
+                default_max_rounds=0,
+            )
+
+    def test_run_host_validates_before_plugin_domain_mutation(self):
+        session = Mock(status=SessionStatus.COMPLETED, run_records=[])
+        self.session_runtime.get_session.return_value = session
+
+        self.application.validate_run("session-1", "run-1", "执行任务")
+
+        self.session_runtime.validate_run_input.assert_called_once_with(
+            "run-1",
+            "执行任务",
+        )
+        self.session_runtime.get_session.assert_called_once_with("session-1")
+
+    def test_run_host_selects_resume_for_interrupted_session(self):
+        invocation = RunInvocation()
+        self.session_runtime.get_session.return_value = Mock(
+            status=SessionStatus.INTERRUPTED,
+        )
+        outcome = object()
+        self.session_runtime.resume.return_value = outcome
+
+        result = self.application.execute(
+            "session-1",
+            "run-2",
+            "继续任务",
+            9,
+            invocation,
+        )
+
+        self.assertIs(result, outcome)
+        self.session_runtime.resume.assert_called_once_with(
+            "session-1",
+            "run-2",
+            "继续任务",
+            9,
+            invocation=invocation,
         )
 
     def test_request_interrupt_forwards_session_id_and_reason(self):

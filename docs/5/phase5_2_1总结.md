@@ -212,7 +212,7 @@ ContextManager.build() 不会在投影过程中偷偷写 artifact。发现超限
 
 ### Phase 6A 验收事实回补（2026.08.10）
 
-CompletionGate 证明了“Artifact 保存完整正文”仍不等于“系统拥有稳定验收事实”：Conversation 中的 tool result 可以被外置、脱水或压缩，不能反向作为 Task 完成依据。
+CompletionGate 证明了“Artifact 保存完整正文”仍不等于“系统拥有稳定验收事实”：Conversation 中的 tool result 可以被外置、脱水或压缩，不能反向作为 Goal 完成依据。
 
 RunRuntime 现会在 `ToolResultExternalizer` 处理之前，把原始规范化结果复制到 `RunEvidence`。因此形成两个互不替代的消费者：
 

@@ -1,0 +1,379 @@
+import unittest
+import json
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from core.composition import create_agent_application
+from core.model_call import LLMResponse, ToolCall
+from core.runtime_modes import PlainMode
+from core.tools_runtime.run_evidence import RunEvidence
+from core.tools_runtime.run_runtime import RunStatus
+from plugins.goal.application import GoalApplicationService
+from plugins.goal.capabilities import (
+    ContractCompilationCapability,
+    GoalExecutorCapability,
+    GoalJudgeCapability,
+)
+from plugins.goal.submissions import JudgmentSubmission
+from plugins.goal.goal import (
+    CompletionContractDraft,
+    CompletionCriterion,
+    CriterionAuthority,
+    GoalStatus,
+    JudgmentDecision,
+)
+from plugins.goal.store import InMemoryGoalStore
+from tests.core.llm_test_support import call_result
+
+
+def user_criterion():
+    return CompletionCriterion(
+        "user-goal",
+        "完成用户目标",
+        CriterionAuthority.USER,
+        ("Judge 独立检查最终状态",),
+    )
+
+
+def outcome(status=RunStatus.COMPLETED, answer="完成", reason=None):
+    return SimpleNamespace(
+        result=SimpleNamespace(
+            status=status,
+            answer=answer,
+            final_reason=reason,
+            evidence=RunEvidence(),
+        )
+    )
+
+
+class FakeRunHost:
+    def __init__(self, judgments):
+        self.sessions = {"session-1"}
+        self.used_runs = set()
+        self.judgments = iter(judgments)
+        self.executions = []
+        self.deleted_sessions = []
+
+    def create_session(self, session_id):
+        self.sessions.add(session_id)
+        return session_id
+
+    def delete_session(self, session_id):
+        self.sessions.remove(session_id)
+        self.deleted_sessions.append(session_id)
+
+    def require_session(self, session_id):
+        if session_id not in self.sessions:
+            raise KeyError(session_id)
+
+    def validate_run(self, session_id, run_id, user_message):
+        self.require_session(session_id)
+        if not run_id.strip() or not user_message.strip():
+            raise ValueError("invalid run")
+        if (session_id, run_id) in self.used_runs:
+            raise ValueError("duplicate run")
+
+    def request_interrupt(self, session_id, reason=None):
+        raise AssertionError("test did not expect an interrupt")
+
+    def execute(
+        self,
+        session_id,
+        run_id,
+        user_message,
+        max_rounds,
+        invocation,
+    ):
+        self.validate_run(session_id, run_id, user_message)
+        self.used_runs.add((session_id, run_id))
+        capability = invocation.capabilities[0]
+        self.executions.append((session_id, user_message, capability))
+
+        if isinstance(capability, ContractCompilationCapability):
+            capability.buffer.submit(
+                CompletionContractDraft((user_criterion(),))
+            )
+            return outcome(answer="Contract 已编译")
+        if isinstance(capability, GoalExecutorCapability):
+            return outcome(answer=f"Executor Turn {capability.turn_index}")
+        if isinstance(capability, GoalJudgeCapability):
+            capability.buffer.submit(next(self.judgments))
+            return outcome(answer="Judge 已验收")
+        raise AssertionError(type(capability))
+
+
+class GoalApplicationServiceTest(unittest.TestCase):
+    def ids(self):
+        index = 0
+
+        def next_id():
+            nonlocal index
+            index += 1
+            return str(index)
+
+        return next_id
+
+    def service(self, host, max_turns=3):
+        return GoalApplicationService(
+            host,
+            InMemoryGoalStore(),
+            default_max_turns=max_turns,
+            id_factory=self.ids(),
+        )
+
+    def test_runs_executor_then_independent_judge_until_done(self):
+        host = FakeRunHost(
+            [
+                JudgmentSubmission(
+                    JudgmentDecision.CONTINUE,
+                    "仍缺完整验证",
+                    ("只完成局部检查",),
+                ),
+                JudgmentSubmission(
+                    JudgmentDecision.DONE,
+                    "目标已经完成",
+                    ("独立验证通过",),
+                ),
+            ]
+        )
+        result = self.service(host).start_goal(
+            "session-1",
+            "goal-1",
+            "executor-1",
+            "修复并验证问题",
+        )
+
+        self.assertEqual(result.goal.status, GoalStatus.COMPLETED)
+        self.assertEqual(result.goal.turn_count, 2)
+        self.assertEqual(len(result.turns), 2)
+
+        executor_calls = [
+            item
+            for item in host.executions
+            if isinstance(item[2], GoalExecutorCapability)
+        ]
+        judge_calls = [
+            item
+            for item in host.executions
+            if isinstance(item[2], GoalJudgeCapability)
+        ]
+        self.assertEqual([item[0] for item in executor_calls], ["session-1"] * 2)
+        self.assertTrue(all(item[0] != "session-1" for item in judge_calls))
+        self.assertIn("仍缺完整验证", executor_calls[1][1])
+        self.assertTrue(all(session not in host.sessions for session in host.deleted_sessions))
+
+    def test_continue_at_max_turns_becomes_exhausted(self):
+        host = FakeRunHost(
+            [
+                JudgmentSubmission(
+                    JudgmentDecision.CONTINUE,
+                    "尚未完成",
+                    (),
+                )
+            ]
+        )
+
+        result = self.service(host, max_turns=1).start_goal(
+            "session-1",
+            "goal-1",
+            "executor-1",
+            "完成目标",
+        )
+
+        self.assertEqual(result.goal.status, GoalStatus.EXHAUSTED)
+        self.assertEqual(result.goal.turn_count, 1)
+
+    def test_contract_revision_only_affects_next_executor_turn(self):
+        replacement = CompletionContractDraft(
+            (
+                user_criterion(),
+                CompletionCriterion(
+                    "inferred-check",
+                    "补充独立检查",
+                    CriterionAuthority.INFERRED,
+                    ("检查结果",),
+                ),
+            )
+        )
+        host = FakeRunHost(
+            [
+                JudgmentSubmission(
+                    JudgmentDecision.CONTINUE,
+                    "需要补充检查",
+                    (),
+                    contract_revision=replacement,
+                    revision_reason="发现需要更明确的推导标准",
+                ),
+                JudgmentSubmission(
+                    JudgmentDecision.DONE,
+                    "完成",
+                    ("检查通过",),
+                ),
+            ]
+        )
+
+        result = self.service(host).start_goal(
+            "session-1",
+            "goal-1",
+            "executor-1",
+            "完成目标",
+        )
+
+        executor_contract_versions = [
+            capability.contract.version
+            for _, _, capability in host.executions
+            if isinstance(capability, GoalExecutorCapability)
+        ]
+        self.assertEqual(executor_contract_versions, [1, 2])
+        self.assertEqual(len(result.goal.contract_revisions), 1)
+
+    def test_executor_exception_is_preserved_and_goal_is_paused(self):
+        class ExecutorBug(RuntimeError):
+            pass
+
+        host = FakeRunHost([])
+        execute = host.execute
+
+        def fail_executor(*args, **kwargs):
+            invocation = args[-1] if args else kwargs["invocation"]
+            if isinstance(
+                invocation.capabilities[0],
+                GoalExecutorCapability,
+            ):
+                raise ExecutorBug("original bug")
+            return execute(*args, **kwargs)
+
+        host.execute = fail_executor
+        store = InMemoryGoalStore()
+        service = GoalApplicationService(
+            host,
+            store,
+            default_max_turns=3,
+            id_factory=self.ids(),
+        )
+
+        with self.assertRaisesRegex(ExecutorBug, "original bug"):
+            service.start_goal(
+                "session-1",
+                "goal-1",
+                "executor-1",
+                "完成目标",
+            )
+
+        self.assertEqual(
+            store.get("goal-1").status,
+            GoalStatus.PAUSED,
+        )
+
+
+class GoalLoopRuntimeIntegrationTest(unittest.TestCase):
+    def test_contract_executor_and_independent_judge_run_through_runtime(self):
+        llm = Mock()
+        llm.chat.side_effect = [
+            call_result(
+                LLMResponse(
+                    calls=(
+                        ToolCall(
+                            "contract-call",
+                            "submit_completion_contract",
+                            json.dumps(
+                                {
+                                    "criteria": [
+                                        {
+                                            "id": "user-goal",
+                                            "description": "完成用户目标",
+                                            "authority": "user",
+                                            "evidence_requirements": [
+                                                "Judge 独立检查最终结果"
+                                            ],
+                                        }
+                                    ],
+                                    "verification": {
+                                        "commands": [],
+                                        "workspace": None,
+                                    },
+                                }
+                            ),
+                        ),
+                    )
+                )
+            ),
+            call_result(LLMResponse(content="Contract 已冻结")),
+            call_result(LLMResponse(content="Executor 已完成目标")),
+            call_result(
+                LLMResponse(
+                    calls=(
+                        ToolCall(
+                            "judge-call",
+                            "submit_goal_judgment",
+                            json.dumps(
+                                {
+                                    "decision": "done",
+                                    "reason": "独立检查确认完成",
+                                    "evidence": ["读取最终结果并核对目标"],
+                                    "revised_contract": None,
+                                    "revision_reason": None,
+                                }
+                            ),
+                        ),
+                    )
+                )
+            ),
+            call_result(LLMResponse(content="Judge 验收通过")),
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            runtime = root / "runtime"
+            project.mkdir()
+            application = create_agent_application(
+                "executor-model",
+                model_context_limit=100_000,
+                runtime_root=runtime,
+                workspace_roots={"project": project},
+                runtime_mode=PlainMode(),
+                llm_client=llm,
+            )
+            application.create_session("session-1")
+            service = GoalApplicationService(
+                application,
+                InMemoryGoalStore(),
+                default_max_turns=3,
+            )
+
+            result = service.start_goal(
+                "session-1",
+                "goal-1",
+                "executor-run-1",
+                "完成目标",
+            )
+
+        self.assertEqual(result.goal.status, GoalStatus.COMPLETED)
+        self.assertEqual(
+            [call.args[1] for call in llm.chat.call_args_list],
+            [
+                "executor-model",
+                "executor-model",
+                "executor-model",
+                "executor-model",
+                "executor-model",
+            ],
+        )
+        judge_tools = {
+            item["function"]["name"]
+            for item in llm.chat.call_args_list[3].args[2]
+        }
+        self.assertIn("execute_command", judge_tools)
+        self.assertIn("submit_goal_judgment", judge_tools)
+        self.assertTrue(
+            {"write_file", "apply_patch", "replace_all"}.isdisjoint(
+                judge_tools
+            )
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

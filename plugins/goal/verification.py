@@ -34,13 +34,9 @@ class WorkspaceRequirement:
 
 
 @dataclass(frozen=True)
-class TaskVerification:
+class GoalVerification:
     commands: tuple[CommandRequirement, ...] = ()
     workspace: WorkspaceRequirement | None = None
-
-    def __post_init__(self) -> None:
-        if not self.commands and self.workspace is None:
-            raise ValueError("task verification must contain a requirement")
 
 
 @dataclass(frozen=True)
@@ -50,20 +46,13 @@ class CompletionReview:
 
 
 class CompletionGate:
+    """只验证 Judge Run 中真实发生的机械事实，不解释 Goal 语义。"""
+
     def review(
         self,
-        verification: TaskVerification | None,
-        acceptance_criteria: str | None,
+        verification: GoalVerification,
         evidence: RunEvidence,
     ) -> CompletionReview:
-        if verification is None:
-            if acceptance_criteria:
-                return CompletionReview(
-                    False,
-                    "当前 Task 声明了验收标准，但没有可执行的 verification contract。",
-                )
-            return CompletionReview(True, "Task 未声明额外验收要求。")
-
         failures = [
             failure
             for requirement in verification.commands
@@ -156,19 +145,7 @@ class CompletionGate:
 
         if requirement.allowed_paths:
             actual_paths = CompletionGate._status_paths(data.get("status") or "")
-            baseline = evidence.workspace_baseline(requirement.root)
-            baseline_data = (
-                baseline.result.get("data") or {}
-                if baseline is not None and baseline.result.get("ok") is True
-                else {}
-            )
-            baseline_paths = CompletionGate._status_paths(
-                baseline_data.get("status") or ""
-            )
-            run_delta_paths = actual_paths - baseline_paths
-            unexpected = sorted(
-                run_delta_paths - set(requirement.allowed_paths)
-            )
+            unexpected = sorted(actual_paths - set(requirement.allowed_paths))
             if unexpected:
                 return "Workspace 出现契约外改动：" + ", ".join(unexpected)
         return None

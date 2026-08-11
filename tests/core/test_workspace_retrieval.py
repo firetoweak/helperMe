@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -292,6 +293,39 @@ class WorkspaceRetrievalTest(unittest.TestCase):
             result["data"]["matches"],
             [{"path": "tools/a.py", "kind": "file"}],
         )
+
+    def test_glob_reports_partial_results_for_inaccessible_directory(self):
+        blocked = self.root / "blocked"
+        blocked.mkdir()
+        (self.root / "visible.py").write_text("", encoding="utf-8")
+        original_scandir = os.scandir
+
+        def scandir(path):
+            if Path(path) == blocked:
+                raise PermissionError(13, "access denied", str(path))
+            return original_scandir(path)
+
+        with patch("tools.file_read.os.scandir", side_effect=scandir):
+            result = self.execute("glob", {
+                "root": "project",
+                "path": ".",
+                "pattern": "*.py",
+                "kind": "file",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["code"], "GLOB_PARTIAL")
+        self.assertFalse(result["data"]["complete"])
+        self.assertEqual(
+            result["data"]["matches"],
+            [{"path": "visible.py", "kind": "file"}],
+        )
+        self.assertEqual(
+            result["data"]["inaccessible_paths"],
+            ["blocked"],
+        )
+        self.assertFalse(result["data"]["inaccessible_paths_truncated"])
+        self.assertIn("结果不完整", result["hint"])
 
     def test_workspace_content_enters_model_context_only_after_read_tool_result(self):
         secret = "workspace-secret-not-implicitly-injected"

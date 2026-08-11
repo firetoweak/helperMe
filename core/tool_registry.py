@@ -57,6 +57,18 @@ class ToolRegistry:
         registry._specs = self._specs.copy()
         return registry
 
+    def select(self, names: set[str]) -> "ToolRegistry":
+        unknown = names - self._specs.keys()
+        if unknown:
+            raise ValueError(f"unknown base tools: {sorted(unknown)}")
+        registry = ToolRegistry()
+        registry._specs = {
+            name: spec
+            for name, spec in self._specs.items()
+            if name in names
+        }
+        return registry
+
 
 BUILTIN_TOOL_REGISTRY = ToolRegistry()
 

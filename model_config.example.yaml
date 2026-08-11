@@ -5,3 +5,10 @@ model:
 
 workspace:
   root: 'D:\work\agent'
+  full_access: true
+
+runtime:
+  max_rounds: 500
+  max_goal_turns: 8
+  model_context_limit: 200000
+  input_budget_ratio: 0.9

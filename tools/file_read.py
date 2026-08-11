@@ -34,7 +34,7 @@ GLOB_DESCRIPTION = """
 用途：在指定 workspace root 中按名称模式查找文件或目录，返回可继续传给其他文件工具的相对路径。
 何时使用：不知道目标文件位置、需要按扩展名或目录层级定位时使用；搜索文件内容用 grep，读取已知文件用 read_file。
 关键限制：root 必须是已配置名称；path 和 pattern 必须相对 root，不能包含越界；glob 只定位名称，不读取文件内容，指向 root 外的符号链接结果会被排除。
-失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path、pattern、kind、max_depth；无结果时调整搜索范围；root/path 错误时先用 get_workspace_info 或修正相对路径。
+失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path、pattern、kind、max_depth；GLOB_PARTIAL 与 complete=false 表示结果可用但搜索不完整，必须检查 inaccessible_paths，不能把无匹配当作完整结论；root/path 错误时先用 get_workspace_info 或修正相对路径。
 """.strip()
 
 GREP_DESCRIPTION = """
@@ -58,6 +58,7 @@ MAX_GREP_HIT_CHARS = 2_000
 MAX_GREP_PAGE_CHARS = 8_000
 MAX_GREP_SUBMATCHES = 100
 MAX_RG_ERROR_CHARS = 4_000
+MAX_GLOB_INACCESSIBLE_PATHS = 100
 GREP_TIMEOUT_SECONDS = 30
 GREP_SHUTDOWN_TIMEOUT_SECONDS = 5
 
@@ -104,16 +105,35 @@ def _require_existing(
     return resolved, None
 
 
-def _walk_entries(root: Path, max_depth: int | None, depth: int = 1):
-    with os.scandir(root) as iterator:
-        entries = sorted(iterator, key=lambda entry: entry.name)
+def _walk_entries(
+    root: Path,
+    max_depth: int | None,
+    inaccessible: list[Path],
+    depth: int = 1,
+):
+    try:
+        with os.scandir(root) as iterator:
+            entries = sorted(iterator, key=lambda entry: entry.name)
+    except PermissionError:
+        if len(inaccessible) <= MAX_GLOB_INACCESSIBLE_PATHS:
+            inaccessible.append(root)
+        return
     for entry in entries:
         candidate = Path(entry.path)
         yield candidate
-        if entry.is_dir(follow_symlinks=False) and (
-            max_depth is None or depth < max_depth
-        ):
-            yield from _walk_entries(candidate, max_depth, depth + 1)
+        try:
+            is_dir = entry.is_dir(follow_symlinks=False)
+        except PermissionError:
+            if len(inaccessible) <= MAX_GLOB_INACCESSIBLE_PATHS:
+                inaccessible.append(candidate)
+            continue
+        if is_dir and (max_depth is None or depth < max_depth):
+            yield from _walk_entries(
+                candidate,
+                max_depth,
+                inaccessible,
+                depth + 1,
+            )
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
@@ -152,7 +172,12 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
 
         matches = []
         skipped = 0
-        for candidate in _walk_entries(search_root, raw.max_depth):
+        inaccessible: list[Path] = []
+        for candidate in _walk_entries(
+            search_root,
+            raw.max_depth,
+            inaccessible,
+        ):
             try:
                 workspace_path = candidate.relative_to(sandbox.root).as_posix()
                 absolute_candidate = sandbox.resolve(workspace_path)
@@ -178,15 +203,30 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
 
         truncated = len(matches) > raw.max_results
         page = matches[:raw.max_results]
+        inaccessible_paths = [
+            path.relative_to(sandbox.root).as_posix()
+            for path in inaccessible[:MAX_GLOB_INACCESSIBLE_PATHS]
+        ]
+        complete = not inaccessible
         return {
             "ok": True,
-            "code": "GLOB_COMPLETED",
+            "code": "GLOB_COMPLETED" if complete else "GLOB_PARTIAL",
             "root": raw.root,
             "pattern": raw.pattern,
             "path": raw.path,
             "matches": page,
+            "complete": complete,
+            "inaccessible_paths": inaccessible_paths,
+            "inaccessible_paths_truncated": (
+                len(inaccessible) > MAX_GLOB_INACCESSIBLE_PATHS
+            ),
             "truncated": truncated,
             "next_offset": raw.offset + len(page) if truncated else None,
+            "hint": (
+                "结果不完整；检查 inaccessible_paths，并在需要完整结论时缩小 path。"
+                if not complete
+                else None
+            ),
         }
 
     def grep(raw: GrepInput) -> dict[str, Any]:

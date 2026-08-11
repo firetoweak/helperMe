@@ -58,7 +58,6 @@ from core.runtime_artifacts import ToolResultExternalizer
 from core.tools_runtime.run_progress import NullRunProgressSink, RunProgressSink
 from core.tools_runtime.run_evidence import RunEvidence, RunEvidenceRecorder
 from core.tools_runtime.run_invocation import RunInvocation
-from core.tool_registry import ToolRegistry
 
 class RunStatus(str, Enum):
     COMPLETED = "completed"
@@ -412,14 +411,21 @@ class RunRuntime:
         current_context_state = context_state or ContextState()
         current_invocation = invocation or RunInvocation()
         if current_invocation.capabilities:
-            include_base_tools = all(
-                capability.include_base_tools()
+            selections = [
+                capability.base_tool_names()
                 for capability in current_invocation.capabilities
-            )
+            ]
+            restrictions = [
+                set(selection)
+                for selection in selections
+                if selection is not None
+            ]
             run_registry = (
-                self.tools_executor.registry.clone()
-                if include_base_tools
-                else ToolRegistry()
+                self.tools_executor.registry.select(
+                    set.intersection(*restrictions)
+                )
+                if restrictions
+                else self.tools_executor.registry.clone()
             )
             for capability in current_invocation.capabilities:
                 for spec in capability.tool_specs():
@@ -456,8 +462,11 @@ class RunRuntime:
         checkpoints.append(run_started_checkpoint(max_rounds, system_prompt))
         conversation.add_user(user_message)
 
-        runtime_mode = self.runtime_mode
-        if self.mode_router is not None:
+        runtime_mode = current_invocation.runtime_mode or self.runtime_mode
+        if (
+            current_invocation.runtime_mode is None
+            and self.mode_router is not None
+        ):
             route_context = ModelContext(
                 messages=self.mode_router.build_messages(conversation.records)
             )
