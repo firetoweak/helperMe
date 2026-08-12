@@ -36,11 +36,11 @@ class McpContentService:
                     "uri": str(item.uri),
                     "name": item.name,
                     "description": item.description,
-                    "mimeType": item.mimeType,
+                    "mimeType": item.mime_type,
                 }
                 for item in result.resources
             ],
-            "next_cursor": result.nextCursor,
+            "next_cursor": result.next_cursor,
         }
 
     async def list_resource_templates(
@@ -58,14 +58,14 @@ class McpContentService:
             "server_id": server_id,
             "resource_templates": [
                 {
-                    "uriTemplate": item.uriTemplate,
+                    "uriTemplate": item.uri_template,
                     "name": item.name,
                     "description": item.description,
-                    "mimeType": item.mimeType,
+                    "mimeType": item.mime_type,
                 }
-                for item in result.resourceTemplates
+                for item in result.resource_templates
             ],
-            "next_cursor": result.nextCursor,
+            "next_cursor": result.next_cursor,
         }
 
     async def read_resource(
@@ -79,7 +79,7 @@ class McpContentService:
         for item in result.contents:
             payload: dict[str, Any] = {
                 "uri": str(item.uri),
-                "mimeType": getattr(item, "mimeType", None),
+                "mimeType": getattr(item, "mime_type", None),
             }
             if hasattr(item, "text"):
                 payload["text"] = item.text
@@ -117,7 +117,7 @@ class McpContentService:
                 }
                 for item in result.prompts
             ],
-            "next_cursor": result.nextCursor,
+            "next_cursor": result.next_cursor,
         }
 
     async def get_prompt(

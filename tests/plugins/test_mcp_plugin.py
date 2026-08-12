@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import unittest
+import sys
+import asyncio
 from contextlib import AsyncExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 from mcp.types import (
     CallToolResult,
@@ -12,6 +15,9 @@ from mcp.types import (
     ListResourcesResult,
     ListResourceTemplatesResult,
     ListToolsResult,
+    Prompt,
+    Resource,
+    ResourceTemplate,
     TextContent,
     Tool,
 )
@@ -19,7 +25,11 @@ from mcp.types import (
 from core.agent_workspace import AgentWorkspace
 from core.tool_registry import JsonSchemaParameters
 from core.tools_runtime.progressive_toolsets import ToolsetLoadError
-from plugins.mcp.adapter import adapt_call_result, encode_tool_name
+from plugins.mcp.adapter import (
+    adapt_call_result,
+    build_output_validator,
+    encode_tool_name,
+)
 from plugins.mcp.application import McpApplicationService
 from plugins.mcp.client_manager import ManagedMcpConnection, McpClientManager
 from plugins.mcp.composition import create_mcp_plugin
@@ -45,24 +55,19 @@ class FakeMcpSession:
         self.initialized = False
         self.calls: list[tuple[str, dict | None]] = []
 
-    async def initialize(self) -> Any:
-        if self.fail_initialize is not None:
-            raise self.fail_initialize
-        self.initialized = True
+    @property
+    def protocol_version(self) -> str:
+        return "2026-07-28"
 
-        class _Result:
-            protocolVersion = "2025-11-25"
-
-        return _Result()
-
-    def get_server_capabilities(self) -> Any:
+    @property
+    def server_capabilities(self) -> Any:
         class _Caps:
             def model_dump(self, **kwargs):
                 return {"tools": {}}
 
         return _Caps()
 
-    async def list_tools(self, cursor=None, *, params=None) -> ListToolsResult:
+    async def list_tools(self, *, cursor=None) -> ListToolsResult:
         return ListToolsResult(tools=self.tools)
 
     async def call_tool(self, name: str, arguments=None) -> CallToolResult:
@@ -74,23 +79,27 @@ class FakeMcpSession:
             isError=False,
         )
 
-    async def list_resources(self, cursor=None, *, params=None):
+    async def list_resources(self, *, cursor=None):
         return ListResourcesResult(resources=[])
 
-    async def list_resource_templates(self, cursor=None, *, params=None):
+    async def list_resource_templates(self, *, cursor=None):
         return ListResourceTemplatesResult(resourceTemplates=[])
 
     async def read_resource(self, uri):
         raise NotImplementedError
 
-    async def list_prompts(self, cursor=None, *, params=None):
+    async def list_prompts(self, *, cursor=None):
         return ListPromptsResult(prompts=[])
 
     async def get_prompt(self, name, arguments=None):
         raise NotImplementedError
 
 
-def _tool(name: str, schema: dict | None = None) -> Tool:
+def _tool(
+    name: str,
+    schema: dict | None = None,
+    output_schema: dict | None = None,
+) -> Tool:
     return Tool(
         name=name,
         description=f"tool {name}",
@@ -100,6 +109,7 @@ def _tool(name: str, schema: dict | None = None) -> Tool:
             "properties": {"q": {"type": "string"}},
             "required": ["q"],
         },
+        outputSchema=output_schema,
     )
 
 
@@ -152,6 +162,61 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             StreamableHttpTransportConfig(url="http://example.com/mcp")
 
+    async def test_server_id_rejects_secret_ref_and_path_ambiguity(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            service = McpApplicationService(
+                McpRegistry.from_agent_workspace(workspace),
+                McpSecretStore.from_agent_workspace(workspace),
+                McpClientManager(McpSecretStore.from_agent_workspace(workspace)),
+            )
+            for invalid_id in ("a:b", "a/b", "a\\b", "..", "含中文"):
+                with self.subTest(server_id=invalid_id):
+                    with self.assertRaises(ValueError):
+                        await service.upsert_server(
+                            server_id=invalid_id,
+                            display_name="invalid",
+                            transport="stdio",
+                            transport_config={"command": "python"},
+                            secrets={"TOKEN": "value"},
+                        )
+
+    async def test_existing_secret_namespace_is_restored_when_registry_write_fails(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(secrets)
+            service = McpApplicationService(registry, secrets, manager)
+            await service.upsert_server(
+                server_id="demo",
+                display_name="Demo",
+                transport="stdio",
+                transport_config={"command": "python"},
+                secrets={"TOKEN": "old"},
+            )
+
+            with patch.object(
+                registry,
+                "upsert",
+                AsyncMock(side_effect=OSError("disk full")),
+            ):
+                with self.assertRaises(OSError):
+                    await service.upsert_server(
+                        server_id="demo",
+                        display_name="Demo",
+                        transport="stdio",
+                        transport_config={"command": "python"},
+                        secrets={"TOKEN": "new"},
+                    )
+
+            self.assertEqual(
+                secrets.snapshot_namespace("demo"),
+                {"TOKEN": "old"},
+            )
+
 
 class McpAdapterTest(unittest.TestCase):
     def test_encode_tool_name_is_stable_and_namespaced(self):
@@ -173,6 +238,39 @@ class McpAdapterTest(unittest.TestCase):
         self.assertEqual(adapted["code"], "MCP_TOOL_ERROR")
         self.assertEqual(adapted["data"]["mcp"]["content"][0]["text"], "missing q")
 
+    def test_output_schema_requires_structured_content(self):
+        validator = build_output_validator(
+            "demo",
+            {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+            },
+        )
+        result = CallToolResult(
+            content=[TextContent(type="text", text="missing structured")],
+            isError=False,
+        )
+        adapted = adapt_call_result(result, output_validator=validator)
+        self.assertFalse(adapted["ok"])
+        self.assertEqual(adapted["code"], "MCP_INVALID_TOOL_RESULT")
+
+    def test_tool_error_does_not_need_to_match_output_schema(self):
+        validator = build_output_validator(
+            "demo",
+            {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+            },
+        )
+        result = CallToolResult(
+            content=[TextContent(type="text", text="business error")],
+            isError=True,
+        )
+        adapted = adapt_call_result(result, output_validator=validator)
+        self.assertEqual(adapted["code"], "MCP_TOOL_ERROR")
+
 
 class McpProviderTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -182,9 +280,14 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
         self.registry = McpRegistry.from_agent_workspace(workspace)
         self.secrets = McpSecretStore.from_agent_workspace(workspace)
         self.sessions: dict[str, FakeMcpSession] = {}
+        self.resolved_secrets: dict[str, dict[str, str]] = {}
 
         async def factory(record, secrets_map):
             session = self.sessions[record.id]
+            self.resolved_secrets[record.id] = dict(secrets_map)
+            if session.fail_initialize is not None:
+                raise session.fail_initialize
+            session.initialized = True
             stack = AsyncExitStack()
             await stack.__aenter__()
             return ManagedMcpConnection(
@@ -253,6 +356,22 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sessions["github"].calls, [("search", {"q": "mcp"})])
         self.assertEqual(self.sessions["jira"].calls, [])
 
+    async def test_connection_factory_receives_resolved_secret_values(self):
+        self.sessions["secure"] = FakeMcpSession(tools=[_tool("search")])
+        await self.service.upsert_server(
+            server_id="secure",
+            display_name="Secure",
+            transport="stdio",
+            transport_config={"command": "python"},
+            secrets={"TOKEN": "secret-value"},
+            enabled=True,
+        )
+        await self.service.toolset_provider.tool_specs("mcp:secure")
+        self.assertEqual(
+            self.resolved_secrets["secure"],
+            {"TOKEN": "secret-value"},
+        )
+
     async def test_load_failure_marks_runtime_unavailable_but_keeps_catalog(self):
         self.sessions["broken"] = FakeMcpSession(
             fail_initialize=ConnectionError("boom"),
@@ -284,7 +403,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
             transport_config={"command": "python", "args": ["a.py"]},
             enabled=True,
         )
-        await self.service.toolset_provider.tool_specs("mcp:demo")
+        old_specs = await self.service.toolset_provider.tool_specs("mcp:demo")
         first_session = self.sessions["demo"]
         self.assertTrue(first_session.initialized)
 
@@ -300,6 +419,9 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
         )
         await self.service.toolset_provider.tool_specs("mcp:demo")
         self.assertTrue(replacement.initialized)
+        stale_result = await old_specs[0].handler({"q": "old snapshot"})
+        self.assertFalse(stale_result["ok"])
+        self.assertEqual(stale_result["code"], "MCP_SERVER_CHANGED")
 
     async def test_invalid_schema_fails_whole_toolset(self):
         self.sessions["bad"] = FakeMcpSession(
@@ -322,12 +444,286 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
             await self.service.toolset_provider.tool_specs("mcp:bad")
         self.assertEqual(ctx.exception.code, "MCP_INVALID_TOOL_SCHEMA")
 
+    async def test_invalid_output_schema_fails_whole_toolset(self):
+        self.sessions["bad_output"] = FakeMcpSession(
+            tools=[_tool("broken", output_schema={"type": "invalid"})]
+        )
+        await self.service.upsert_server(
+            server_id="bad_output",
+            display_name="Bad Output",
+            transport="stdio",
+            transport_config={"command": "python"},
+            enabled=True,
+        )
+        with self.assertRaises(ToolsetLoadError) as ctx:
+            await self.service.toolset_provider.tool_specs("mcp:bad_output")
+        self.assertEqual(ctx.exception.code, "MCP_INVALID_TOOL_SCHEMA")
+
+    async def test_content_service_uses_v2_resource_and_prompt_fields(self):
+        session = FakeMcpSession()
+        session.list_resources = AsyncMock(
+            return_value=ListResourcesResult(
+                resources=[
+                    Resource(
+                        name="guide",
+                        uri="file:///guide.md",
+                        mimeType="text/markdown",
+                    )
+                ],
+                nextCursor="resource-next",
+            )
+        )
+        session.list_resource_templates = AsyncMock(
+            return_value=ListResourceTemplatesResult(
+                resourceTemplates=[
+                    ResourceTemplate(
+                        name="user",
+                        uriTemplate="user://{id}",
+                        mimeType="application/json",
+                    )
+                ]
+            )
+        )
+        session.list_prompts = AsyncMock(
+            return_value=ListPromptsResult(
+                prompts=[Prompt(name="review", description="review code")]
+            )
+        )
+        self.sessions["content"] = session
+        await self.service.upsert_server(
+            server_id="content",
+            display_name="Content",
+            transport="stdio",
+            transport_config={"command": "python"},
+            enabled=True,
+        )
+
+        resources = await self.service.content.list_resources("content")
+        templates = await self.service.content.list_resource_templates("content")
+        prompts = await self.service.content.list_prompts("content")
+        self.assertEqual(resources["next_cursor"], "resource-next")
+        self.assertEqual(resources["resources"][0]["mimeType"], "text/markdown")
+        self.assertEqual(
+            templates["resource_templates"][0]["uriTemplate"],
+            "user://{id}",
+        )
+        self.assertEqual(prompts["prompts"][0]["name"], "review")
+
+    async def test_connection_is_closed_when_post_connect_metadata_fails(self):
+        closed = False
+
+        class BrokenMetadataSession(FakeMcpSession):
+            @property
+            def server_capabilities(self):
+                raise RuntimeError("metadata broken")
+
+        async def factory(record, secrets_map):
+            nonlocal closed
+            stack = AsyncExitStack()
+            await stack.__aenter__()
+
+            async def mark_closed():
+                nonlocal closed
+                closed = True
+
+            stack.push_async_callback(mark_closed)
+            return ManagedMcpConnection(
+                session=BrokenMetadataSession(),
+                stack=stack,
+                record=record,
+            )
+
+        manager = McpClientManager(self.secrets, session_factory=factory)
+        service = McpApplicationService(self.registry, self.secrets, manager)
+        await service.upsert_server(
+            server_id="metadata",
+            display_name="Metadata",
+            transport="stdio",
+            transport_config={"command": "python"},
+            enabled=True,
+        )
+        with self.assertRaises(ToolsetLoadError):
+            await service.toolset_provider.tool_specs("mcp:metadata")
+        self.assertTrue(closed)
+        await manager.aclose()
+
+    async def test_cancellation_waits_for_uncached_connection_cleanup(self):
+        factory_entered = asyncio.Event()
+        allow_factory_return = asyncio.Event()
+        closed = asyncio.Event()
+
+        async def factory(record, secrets_map):
+            factory_entered.set()
+            await allow_factory_return.wait()
+            stack = AsyncExitStack()
+            await stack.__aenter__()
+
+            async def mark_closed():
+                closed.set()
+
+            stack.push_async_callback(mark_closed)
+            return ManagedMcpConnection(
+                session=FakeMcpSession(tools=[_tool("ping")]),
+                stack=stack,
+                record=record,
+            )
+
+        manager = McpClientManager(self.secrets, session_factory=factory)
+        service = McpApplicationService(self.registry, self.secrets, manager)
+        await service.upsert_server(
+            server_id="cancelled",
+            display_name="Cancelled",
+            transport="stdio",
+            transport_config={"command": "python"},
+            enabled=True,
+        )
+        load_task = asyncio.create_task(
+            service.toolset_provider.tool_specs("mcp:cancelled")
+        )
+        await factory_entered.wait()
+        await manager._lock.acquire()
+        try:
+            allow_factory_return.set()
+            await asyncio.sleep(0)
+            load_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await load_task
+        finally:
+            manager._lock.release()
+        self.assertTrue(closed.is_set())
+        await manager.aclose()
+
+    async def test_disable_during_open_prevents_stale_connection_cache(self):
+        factory_entered = asyncio.Event()
+        allow_factory_return = asyncio.Event()
+        closed = asyncio.Event()
+
+        async def factory(record, secrets_map):
+            factory_entered.set()
+            await allow_factory_return.wait()
+            stack = AsyncExitStack()
+            await stack.__aenter__()
+
+            async def mark_closed():
+                closed.set()
+
+            stack.push_async_callback(mark_closed)
+            return ManagedMcpConnection(
+                session=FakeMcpSession(tools=[_tool("ping")]),
+                stack=stack,
+                record=record,
+            )
+
+        manager = McpClientManager(self.secrets, session_factory=factory)
+        service = McpApplicationService(self.registry, self.secrets, manager)
+        await service.upsert_server(
+            server_id="disable_race",
+            display_name="Disable race",
+            transport="stdio",
+            transport_config={"command": "python"},
+            enabled=True,
+        )
+        load_task = asyncio.create_task(
+            service.toolset_provider.tool_specs("mcp:disable_race")
+        )
+        await factory_entered.wait()
+        await service.set_server_enabled("disable_race", False)
+        allow_factory_return.set()
+        with self.assertRaises(ToolsetLoadError):
+            await load_task
+        self.assertTrue(closed.is_set())
+        self.assertNotIn("disable_race", manager._connections)
+        await manager.aclose()
+
     async def test_create_mcp_plugin_wires_application_resource(self):
         plugin = create_mcp_plugin(
             AgentWorkspace(Path(self._tmp.name) / ".helperme2"),
         )
         async with plugin.client_manager:
             self.assertIsNotNone(plugin.toolset_provider)
+
+
+class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_v2_stdio_auto_negotiation_and_secret_env(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(secrets)
+            service = McpApplicationService(registry, secrets, manager)
+            fixture = (
+                Path(__file__).parents[1]
+                / "fixtures"
+                / "mcp_stdio_server.py"
+            )
+            await service.upsert_server(
+                server_id="real_stdio",
+                display_name="Real stdio",
+                transport="stdio",
+                transport_config={
+                    "command": sys.executable,
+                    "args": [str(fixture)],
+                },
+                secrets={"MCP_TEST_TOKEN": "stdio-secret"},
+                enabled=True,
+            )
+            try:
+                specs = await service.toolset_provider.tool_specs(
+                    "mcp:real_stdio"
+                )
+                token_spec = next(
+                    spec
+                    for spec in specs
+                    if spec.name.endswith("read_test_token")
+                )
+                result = await token_spec.handler({})
+                self.assertTrue(result["ok"])
+                self.assertEqual(
+                    result["data"]["mcp"]["structured_content"]["token"],
+                    "stdio-secret",
+                )
+                self.assertEqual(
+                    manager.runtime_state("real_stdio").negotiated_version,
+                    "2026-07-28",
+                )
+            finally:
+                await manager.aclose()
+
+    async def test_v2_client_falls_back_to_legacy_initialize(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(secrets)
+            service = McpApplicationService(registry, secrets, manager)
+            fixture = (
+                Path(__file__).parents[1]
+                / "fixtures"
+                / "mcp_legacy_stdio_server.py"
+            )
+            await service.upsert_server(
+                server_id="legacy_stdio",
+                display_name="Legacy stdio",
+                transport="stdio",
+                transport_config={
+                    "command": sys.executable,
+                    "args": [str(fixture)],
+                },
+                enabled=True,
+            )
+            try:
+                specs = await service.toolset_provider.tool_specs(
+                    "mcp:legacy_stdio"
+                )
+                self.assertEqual(specs, ())
+                self.assertEqual(
+                    manager.runtime_state("legacy_stdio").negotiated_version,
+                    "2025-11-25",
+                )
+            finally:
+                await manager.aclose()
 
 
 class McpProgressiveIntegrationTest(unittest.IsolatedAsyncioTestCase):

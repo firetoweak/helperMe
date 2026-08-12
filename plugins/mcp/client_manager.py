@@ -5,21 +5,21 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+import httpx2
+from mcp import Client
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import (
     CallToolResult,
     GetPromptResult,
+    InputRequiredResult,
     ListPromptsResult,
     ListResourcesResult,
     ListResourceTemplatesResult,
     ListToolsResult,
-    PaginatedRequestParams,
     ReadResourceResult,
     Tool,
 )
-from pydantic import AnyUrl
 
 from plugins.mcp.models import (
     McpServerRecord,
@@ -27,56 +27,60 @@ from plugins.mcp.models import (
     StdioTransportConfig,
     StreamableHttpTransportConfig,
     TransportKind,
+    sanitize_error_summary,
 )
 from plugins.mcp.secrets import McpSecretStore
 
 
+async def _finish_cleanup(cleanup: Awaitable[None]) -> None:
+    """即使外层任务正在取消，也等待资源清理真正结束。"""
+    task = asyncio.create_task(cleanup)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+
+
 class McpSession(Protocol):
-    async def initialize(self) -> Any:
+    @property
+    def protocol_version(self) -> str | None:
         ...
 
-    def get_server_capabilities(self) -> Any:
+    @property
+    def server_capabilities(self) -> Any:
         ...
 
-    async def list_tools(
-        self,
-        cursor: str | None = None,
-        *,
-        params: PaginatedRequestParams | None = None,
-    ) -> ListToolsResult:
+    async def list_tools(self, *, cursor: str | None = None) -> ListToolsResult:
         ...
 
     async def call_tool(
         self,
         name: str,
         arguments: dict[str, Any] | None = None,
-    ) -> CallToolResult:
+    ) -> CallToolResult | InputRequiredResult:
         ...
 
     async def list_resources(
         self,
-        cursor: str | None = None,
         *,
-        params: PaginatedRequestParams | None = None,
+        cursor: str | None = None,
     ) -> ListResourcesResult:
         ...
 
     async def list_resource_templates(
         self,
-        cursor: str | None = None,
         *,
-        params: PaginatedRequestParams | None = None,
+        cursor: str | None = None,
     ) -> ListResourceTemplatesResult:
         ...
 
-    async def read_resource(self, uri: AnyUrl) -> ReadResourceResult:
+    async def read_resource(self, uri: str) -> ReadResourceResult:
         ...
 
     async def list_prompts(
         self,
-        cursor: str | None = None,
         *,
-        params: PaginatedRequestParams | None = None,
+        cursor: str | None = None,
     ) -> ListPromptsResult:
         ...
 
@@ -86,6 +90,75 @@ class McpSession(Protocol):
         arguments: dict[str, str] | None = None,
     ) -> GetPromptResult:
         ...
+
+
+@dataclass(frozen=True)
+class _SdkClientFacade:
+    """固定 HelperMe 所需的 v2 Client 子集，并保留 input_required。"""
+
+    client: Client
+
+    @property
+    def protocol_version(self) -> str:
+        return self.client.protocol_version
+
+    @property
+    def server_capabilities(self) -> Any:
+        return self.client.server_capabilities
+
+    async def list_tools(self, *, cursor: str | None = None) -> ListToolsResult:
+        return await self.client.list_tools(cursor=cursor, cache_mode="bypass")
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        return await self.client.session.call_tool(
+            name,
+            arguments,
+            allow_input_required=True,
+        )
+
+    async def list_resources(
+        self,
+        *,
+        cursor: str | None = None,
+    ) -> ListResourcesResult:
+        return await self.client.list_resources(
+            cursor=cursor,
+            cache_mode="bypass",
+        )
+
+    async def list_resource_templates(
+        self,
+        *,
+        cursor: str | None = None,
+    ) -> ListResourceTemplatesResult:
+        return await self.client.list_resource_templates(
+            cursor=cursor,
+            cache_mode="bypass",
+        )
+
+    async def read_resource(self, uri: str) -> ReadResourceResult:
+        return await self.client.read_resource(uri, cache_mode="bypass")
+
+    async def list_prompts(
+        self,
+        *,
+        cursor: str | None = None,
+    ) -> ListPromptsResult:
+        return await self.client.list_prompts(
+            cursor=cursor,
+            cache_mode="bypass",
+        )
+
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: dict[str, str] | None = None,
+    ) -> GetPromptResult:
+        return await self.client.get_prompt(name, arguments)
 
 
 SessionFactory = Callable[
@@ -128,6 +201,7 @@ class McpClientManager:
         self._session_factory = session_factory or self._open_sdk_connection
         self._list_cache_ttl_seconds = list_cache_ttl_seconds
         self._connections: dict[str, _CacheEntry] = {}
+        self._generations: dict[str, int] = {}
         self._runtime: dict[str, McpServerRuntimeState] = {}
         self._lock = asyncio.Lock()
         self._closed = False
@@ -141,8 +215,27 @@ class McpClientManager:
     def runtime_state(self, server_id: str) -> McpServerRuntimeState:
         return self._runtime.setdefault(server_id, McpServerRuntimeState())
 
+    def sanitized_error(
+        self,
+        record: McpServerRecord,
+        exc: BaseException,
+    ) -> str:
+        try:
+            secret_values = tuple(
+                self._secret_store.resolve_many(record.credential_refs).values()
+            )
+        except Exception:
+            secret_values = ()
+        return sanitize_error_summary(
+            str(exc) or exc.__class__.__name__,
+            secret_values=secret_values,
+        )
+
     async def invalidate(self, server_id: str) -> None:
         async with self._lock:
+            self._generations[server_id] = (
+                self._generations.get(server_id, 0) + 1
+            )
             entry = self._connections.pop(server_id, None)
         if entry is not None:
             await entry.connection.aclose()
@@ -152,15 +245,24 @@ class McpClientManager:
         async with self._lock:
             entries = list(self._connections.values())
             self._connections.clear()
+        first_error: BaseException | None = None
         for entry in entries:
-            await entry.connection.aclose()
+            try:
+                await entry.connection.aclose()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     async def test_connection(
         self,
         record: McpServerRecord,
     ) -> McpServerRuntimeState:
-        connection = await self._ensure_connection(record, force_refresh=True)
+        await self._ensure_connection(record, force_refresh=True)
         state = self.runtime_state(record.id)
+        if not record.enabled:
+            await self.invalidate(record.id)
         return state
 
     async def list_tools(self, record: McpServerRecord) -> tuple[Tool, ...]:
@@ -172,9 +274,9 @@ class McpClientManager:
             and connection.tools_cache_expires_at > now
         ):
             return connection.tools_cache
-        tools = await self._paginate_tools(connection.session)
+        tools, ttl_seconds = await self._paginate_tools(connection.session)
         connection.tools_cache = tools
-        connection.tools_cache_expires_at = now + self._list_cache_ttl_seconds
+        connection.tools_cache_expires_at = now + ttl_seconds
         return tools
 
     async def call_tool(
@@ -182,7 +284,7 @@ class McpClientManager:
         record: McpServerRecord,
         tool_name: str,
         arguments: dict[str, Any] | None,
-    ) -> CallToolResult:
+    ) -> CallToolResult | InputRequiredResult:
         connection = await self._ensure_connection(record)
         return await connection.session.call_tool(tool_name, arguments)
 
@@ -193,11 +295,7 @@ class McpClientManager:
         cursor: str | None = None,
     ) -> ListResourcesResult:
         connection = await self._ensure_connection(record)
-        if cursor:
-            return await connection.session.list_resources(
-                params=PaginatedRequestParams(cursor=cursor),
-            )
-        return await connection.session.list_resources()
+        return await connection.session.list_resources(cursor=cursor)
 
     async def list_resource_templates(
         self,
@@ -206,11 +304,7 @@ class McpClientManager:
         cursor: str | None = None,
     ) -> ListResourceTemplatesResult:
         connection = await self._ensure_connection(record)
-        if cursor:
-            return await connection.session.list_resource_templates(
-                params=PaginatedRequestParams(cursor=cursor),
-            )
-        return await connection.session.list_resource_templates()
+        return await connection.session.list_resource_templates(cursor=cursor)
 
     async def read_resource(
         self,
@@ -218,7 +312,7 @@ class McpClientManager:
         uri: str,
     ) -> ReadResourceResult:
         connection = await self._ensure_connection(record)
-        return await connection.session.read_resource(AnyUrl(uri))
+        return await connection.session.read_resource(uri)
 
     async def list_prompts(
         self,
@@ -227,11 +321,7 @@ class McpClientManager:
         cursor: str | None = None,
     ) -> ListPromptsResult:
         connection = await self._ensure_connection(record)
-        if cursor:
-            return await connection.session.list_prompts(
-                params=PaginatedRequestParams(cursor=cursor),
-            )
-        return await connection.session.list_prompts()
+        return await connection.session.list_prompts(cursor=cursor)
 
     async def get_prompt(
         self,
@@ -251,7 +341,6 @@ class McpClientManager:
         if self._closed:
             raise RuntimeError("McpClientManager 已关闭")
         if not record.enabled and not force_refresh:
-            # test_server 允许对未启用 Server 显式探活；普通调用必须 enabled。
             raise PermissionError(f"MCP Server 未启用: {record.id}")
 
         async with self._lock:
@@ -262,23 +351,24 @@ class McpClientManager:
                 and entry.revision == record.revision
             ):
                 return entry.connection
+            generation = self._generations.get(record.id, 0)
             old = self._connections.pop(record.id, None)
 
         if old is not None:
             await old.connection.aclose()
 
         state = self.runtime_state(record.id)
+        connection: ManagedMcpConnection | None = None
         try:
             secrets = self._secret_store.resolve_many(record.credential_refs)
             connection = await self._session_factory(record, secrets)
-            init_result = await connection.session.initialize()
-            capabilities = connection.session.get_server_capabilities()
+            capabilities = connection.session.server_capabilities
             capability_payload = (
                 capabilities.model_dump(mode="json", exclude_none=True)
                 if capabilities is not None and hasattr(capabilities, "model_dump")
                 else {}
             )
-            negotiated = getattr(init_result, "protocolVersion", None)
+            negotiated = connection.session.protocol_version
             connection.negotiated_version = negotiated
             connection.capabilities = capability_payload
             connection.record = record
@@ -287,47 +377,61 @@ class McpClientManager:
                 capabilities=capability_payload,
             )
         except asyncio.CancelledError:
+            if connection is not None:
+                await _finish_cleanup(connection.aclose())
             raise
         except Exception as exc:
-            state.mark_unavailable(str(exc) or exc.__class__.__name__)
+            if connection is not None:
+                await connection.aclose()
+            state.mark_unavailable(self.sanitized_error(record, exc))
             raise
 
-        async with self._lock:
-            current = self._connections.get(record.id)
-            if current is not None and current.revision == record.revision:
-                await connection.aclose()
-                return current.connection
-            if current is not None:
+        try:
+            async with self._lock:
+                if (
+                    self._closed
+                    or self._generations.get(record.id, 0) != generation
+                ):
+                    raise RuntimeError(
+                        f"MCP connection invalidated while opening: {record.id}"
+                    )
+                current = self._connections.get(record.id)
+                if current is not None and current.revision == record.revision:
+                    await connection.aclose()
+                    return current.connection
                 stale = current
                 self._connections[record.id] = _CacheEntry(
                     connection=connection,
                     revision=record.revision,
                 )
-            else:
-                stale = None
-                self._connections[record.id] = _CacheEntry(
-                    connection=connection,
-                    revision=record.revision,
-                )
+        except BaseException:
+            await _finish_cleanup(connection.aclose())
+            raise
         if stale is not None:
             await stale.connection.aclose()
         return connection
 
-    async def _paginate_tools(self, session: McpSession) -> tuple[Tool, ...]:
+    async def _paginate_tools(
+        self,
+        session: McpSession,
+    ) -> tuple[tuple[Tool, ...], float]:
         tools: list[Tool] = []
         cursor: str | None = None
+        ttl_values: list[float] = []
         while True:
-            if cursor:
-                page = await session.list_tools(
-                    params=PaginatedRequestParams(cursor=cursor),
-                )
-            else:
-                page = await session.list_tools()
+            page = await session.list_tools(cursor=cursor)
             tools.extend(page.tools)
-            cursor = page.nextCursor
+            if page.ttl_ms is not None:
+                ttl_values.append(max(0.0, page.ttl_ms / 1000))
+            cursor = page.next_cursor
             if not cursor:
                 break
-        return tuple(tools)
+        ttl_seconds = (
+            min(ttl_values)
+            if ttl_values
+            else self._list_cache_ttl_seconds
+        )
+        return tuple(tools), ttl_seconds
 
     async def _open_sdk_connection(
         self,
@@ -337,42 +441,47 @@ class McpClientManager:
         stack = AsyncExitStack()
         await stack.__aenter__()
         try:
+            read_timeout: float | None = None
             if record.transport is TransportKind.STDIO:
                 assert isinstance(record.transport_config, StdioTransportConfig)
-                env = {
-                    key: secrets[ref]
-                    for key, ref in record.transport_config.env_refs.items()
-                }
                 params = StdioServerParameters(
                     command=record.transport_config.command,
                     args=list(record.transport_config.args),
-                    env=env or None,
+                    env=dict(secrets) or None,
                     cwd=record.transport_config.cwd,
                 )
-                read, write = await stack.enter_async_context(stdio_client(params))
+                transport = stdio_client(params)
             else:
                 assert isinstance(
                     record.transport_config,
                     StreamableHttpTransportConfig,
                 )
-                headers = {
-                    key: secrets[ref]
-                    for key, ref in record.transport_config.header_refs.items()
-                }
-                timeout = record.transport_config.timeout_seconds
-                read, write, _session_id = await stack.enter_async_context(
-                    streamablehttp_client(
-                        record.transport_config.url,
-                        headers=headers or None,
-                        timeout=timeout,
+                read_timeout = record.transport_config.timeout_seconds
+                http_client = await stack.enter_async_context(
+                    httpx2.AsyncClient(
+                        headers=dict(secrets),
+                        timeout=read_timeout,
+                        follow_redirects=False,
                     )
                 )
-            session = await stack.enter_async_context(ClientSession(read, write))
+                transport = streamable_http_client(
+                    record.transport_config.url,
+                    http_client=http_client,
+                )
+            client = await stack.enter_async_context(
+                Client(
+                    transport,
+                    mode="auto",
+                    read_timeout_seconds=read_timeout,
+                )
+            )
+            facade = _SdkClientFacade(client)
             return ManagedMcpConnection(
-                session=session,
+                session=facade,
                 stack=stack,
                 record=record,
+                negotiated_version=facade.protocol_version,
             )
         except BaseException:
-            await stack.aclose()
+            await _finish_cleanup(stack.aclose())
             raise

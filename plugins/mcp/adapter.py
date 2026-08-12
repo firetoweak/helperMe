@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from copy import deepcopy
 from typing import Any, Mapping
 
 from mcp.types import (
@@ -15,6 +16,7 @@ from mcp.types import (
 
 from core.tool_registry import JsonSchemaParameters, ToolSpec
 from core.tools_runtime.progressive_toolsets import ToolsetLoadError
+from jsonschema.validators import validator_for
 from plugins.mcp.models import sanitize_error_summary
 
 
@@ -67,42 +69,36 @@ def build_parameters(tool_name: str, input_schema: Mapping[str, Any]) -> JsonSch
         ) from exc
 
 
+def build_output_validator(
+    tool_name: str,
+    output_schema: Mapping[str, Any] | None,
+) -> Any | None:
+    if output_schema is None:
+        return None
+    schema = deepcopy(dict(output_schema))
+    try:
+        validator_class = validator_for(schema)
+        validator_class.check_schema(schema)
+        return validator_class(schema)
+    except Exception as exc:
+        raise ToolsetLoadError(
+            "MCP_INVALID_TOOL_SCHEMA",
+            f"工具 {tool_name} 的 outputSchema 非法: {exc}",
+            hint="请修复 MCP Server 的工具 Schema 后重试 load_toolset。",
+            data={"tool_name": tool_name},
+        ) from exc
+
+
 def adapt_call_result(
     result: CallToolResult,
     *,
-    output_schema: Mapping[str, Any] | None = None,
+    output_validator: Any | None = None,
 ) -> dict[str, Any]:
     content = [_serialize_content_block(block) for block in result.content]
-    structured = result.structuredContent
+    structured = result.structured_content
     meta = result.meta
 
-    if output_schema is not None and structured is not None:
-        try:
-            JsonSchemaParameters(
-                _object_schema_for_structured(output_schema)
-            ).validate({"value": structured} if output_schema.get("type") != "object" else structured)
-        except Exception:
-            # outputSchema 可能不是 object；用 jsonschema 直接校验 structured。
-            try:
-                from jsonschema import validate
-
-                validate(instance=structured, schema=dict(output_schema))
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "code": "MCP_INVALID_TOOL_RESULT",
-                    "data": {
-                        "mcp": {
-                            "content": content,
-                            "structured_content": structured,
-                            "meta": meta,
-                        }
-                    },
-                    "error": f"structuredContent 不符合 outputSchema: {exc}",
-                    "hint": "请检查 MCP Server 返回值或 outputSchema。",
-                }
-
-    if result.isError:
+    if result.is_error:
         return {
             "ok": False,
             "code": "MCP_TOOL_ERROR",
@@ -117,6 +113,38 @@ def adapt_call_result(
             "hint": "可根据服务端返回修正参数后重试。",
         }
 
+    if output_validator is not None:
+        if structured is None:
+            return {
+                "ok": False,
+                "code": "MCP_INVALID_TOOL_RESULT",
+                "data": {
+                    "mcp": {
+                        "content": content,
+                        "structured_content": None,
+                        "meta": meta,
+                    }
+                },
+                "error": "工具声明了 outputSchema，但未返回 structuredContent",
+                "hint": "请检查 MCP Server 返回值。",
+            }
+        try:
+            output_validator.validate(structured)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "code": "MCP_INVALID_TOOL_RESULT",
+                "data": {
+                    "mcp": {
+                        "content": content,
+                        "structured_content": structured,
+                        "meta": meta,
+                    }
+                },
+                "error": f"structuredContent 不符合 outputSchema: {exc}",
+                "hint": "请检查 MCP Server 返回值或 outputSchema。",
+            }
+
     return {
         "ok": True,
         "code": "MCP_TOOL_OK",
@@ -130,22 +158,34 @@ def adapt_call_result(
     }
 
 
-def adapt_transport_error(exc: BaseException) -> dict[str, Any]:
+def adapt_transport_error(
+    exc: BaseException,
+    *,
+    error_summary: str | None = None,
+) -> dict[str, Any]:
     return {
         "ok": False,
         "code": "MCP_TRANSPORT_ERROR",
         "data": {},
-        "error": sanitize_error_summary(str(exc) or exc.__class__.__name__),
+        "error": error_summary or sanitize_error_summary(
+            str(exc) or exc.__class__.__name__
+        ),
         "hint": "检查 Server 是否可用、地址/命令是否正确，稍后重试。",
     }
 
 
-def adapt_protocol_error(exc: BaseException) -> dict[str, Any]:
+def adapt_protocol_error(
+    exc: BaseException,
+    *,
+    error_summary: str | None = None,
+) -> dict[str, Any]:
     return {
         "ok": False,
         "code": "MCP_PROTOCOL_ERROR",
         "data": {},
-        "error": sanitize_error_summary(str(exc) or exc.__class__.__name__),
+        "error": error_summary or sanitize_error_summary(
+            str(exc) or exc.__class__.__name__
+        ),
         "hint": "检查 MCP Server 协议兼容性后重试。",
     }
 
@@ -166,13 +206,13 @@ def _serialize_content_block(block: Any) -> dict[str, Any]:
     if isinstance(block, ImageContent):
         return {
             "type": "image",
-            "mimeType": block.mimeType,
+            "mimeType": block.mime_type,
             "data": block.data,
         }
     if isinstance(block, AudioContent):
         return {
             "type": "audio",
-            "mimeType": block.mimeType,
+            "mimeType": block.mime_type,
             "data": block.data,
         }
     if isinstance(block, ResourceLink):
@@ -181,14 +221,14 @@ def _serialize_content_block(block: Any) -> dict[str, Any]:
             "name": block.name,
             "uri": str(block.uri),
             "description": block.description,
-            "mimeType": block.mimeType,
+            "mimeType": block.mime_type,
         }
     if isinstance(block, EmbeddedResource):
         resource = block.resource
         payload: dict[str, Any] = {
             "type": "resource",
             "uri": str(resource.uri),
-            "mimeType": getattr(resource, "mimeType", None),
+            "mimeType": getattr(resource, "mime_type", None),
         }
         if hasattr(resource, "text"):
             payload["text"] = resource.text
@@ -207,16 +247,6 @@ def _text_from_content(content: list[dict[str, Any]]) -> str:
         if item.get("type") == "text" and item.get("text")
     ]
     return "\n".join(texts)
-
-
-def _object_schema_for_structured(schema: Mapping[str, Any]) -> dict[str, Any]:
-    if schema.get("type") == "object":
-        return dict(schema)
-    return {
-        "type": "object",
-        "properties": {"value": dict(schema)},
-        "required": ["value"],
-    }
 
 
 def ensure_unique_encoded_names(specs: list[ToolSpec]) -> None:

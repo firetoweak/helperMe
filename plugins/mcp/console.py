@@ -39,6 +39,8 @@ class McpConsoleAdapter:
                 return await self._test(rest)
             if action == "resources":
                 return await self._resources(rest)
+            if action == "resource-templates":
+                return await self._resource_templates(rest)
             if action == "prompts":
                 return await self._prompts(rest)
             if action == "read-resource":
@@ -136,6 +138,14 @@ class McpConsoleAdapter:
         )
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
+    async def _resource_templates(self, rest: str) -> str:
+        server_id, cursor = self._server_and_cursor(rest)
+        payload = await self._service.content.list_resource_templates(
+            server_id,
+            cursor=cursor,
+        )
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
     async def _read_resource(self, rest: str) -> str:
         parts = rest.split(maxsplit=1)
         if len(parts) != 2:
@@ -178,6 +188,7 @@ class McpConsoleAdapter:
             "  /mcp remove <id>\n"
             "  /mcp test <id>\n"
             "  /mcp resources <id> [--cursor TOKEN]\n"
+            "  /mcp resource-templates <id> [--cursor TOKEN]\n"
             "  /mcp prompts <id> [--cursor TOKEN]\n"
             "  /mcp read-resource <id> <uri>\n"
             "  /mcp get-prompt <id> <name> [json-args]"

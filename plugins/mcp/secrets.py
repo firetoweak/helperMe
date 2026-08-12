@@ -24,7 +24,7 @@ class McpSecretStore:
         server_id: str,
         values: Mapping[str, str],
     ) -> dict[str, str]:
-        """写入整命名空间，返回 secret_ref → 逻辑名映射中的 refs。"""
+        """写入整命名空间，返回逻辑名 → secret_ref 映射。"""
         if not server_id.strip():
             raise ValueError("server_id 不能为空")
         self._root.mkdir(parents=True, exist_ok=True)
@@ -53,6 +53,10 @@ class McpSecretStore:
             for key, secret_ref in refs.items()
         }
 
+    def snapshot_namespace(self, server_id: str) -> dict[str, str]:
+        """返回命名空间快照，供跨 Registry 更新失败时恢复。"""
+        return self._read_namespace(server_id)
+
     def delete_namespace(self, server_id: str) -> None:
         path = self._path_for(server_id)
         if path.exists():
@@ -69,8 +73,7 @@ class McpSecretStore:
         return {str(key): str(value) for key, value in values.items()}
 
     def _path_for(self, server_id: str) -> Path:
-        safe = server_id.replace("/", "_").replace("\\", "_")
-        return self._root / f"{safe}.json"
+        return self._root / f"{server_id}.json"
 
     @staticmethod
     def ref_for(server_id: str, name: str) -> str:

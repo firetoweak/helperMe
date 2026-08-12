@@ -11,6 +11,7 @@
 MVP 已具备：
 
 - `stdio` 与 Streamable HTTP 接入（官方 Python SDK `mcp`）；
+- SDK v2 `Client(mode="auto")`：优先 `2026-07-28`，自动回退 Legacy initialize；
 - Registry / SecretStore 持久化与 revision 失效；
 - 用户控制面 `/mcp` 管理命令；
 - enabled Server 进入 Toolset 目录，`load_toolset` 时懒连接并发现；
@@ -75,7 +76,7 @@ Client 缓存键为 `(server_id, revision)`。upsert / enable / remove / 凭证�
 /mcp disable <id>
 /mcp remove <id>
 /mcp test <id>
-/mcp resources|prompts|read-resource|get-prompt ...
+/mcp resources|resource-templates|prompts|read-resource|get-prompt ...
 ```
 
 信任模型为 trust-on-enable：
@@ -92,14 +93,16 @@ Client 缓存键为 `(server_id, revision)`。upsert / enable / remove / 凭证�
 descriptors()          同步读 Registry（零网络）
 load_toolset(mcp:id)   await list_tools → ToolSpec 快照
 下一轮                 模型可见 mcp__{server}__{tool}
-tools/call             handler 闭包持有 (server_id, 原名)
+tools/call             handler 闭包持有 (server_id, revision, 原名)
 ```
 
 约束落实情况：
 
 - Toolset ID = `mcp:` + record.id；
 - `inputSchema` 原样进入 `JsonSchemaParameters`；非法 Schema 导致整个 Toolset 加载失败；
+- `outputSchema` 在加载时编译，结果缺少或违反 `structuredContent` 时明确失败；
 - 跨 Server 同名工具通过命名空间共存；
+- Run 内 revision 变化返回 `MCP_SERVER_CHANGED`，不让旧 Schema 调用新 Server；
 - `isError` / transport / protocol / `input_required` 分别映射为明确错误码；
 - Server instructions / Resource / Prompt 不升格为 system instruction。
 
@@ -107,18 +110,20 @@ tools/call             handler 闭包持有 (server_id, 原名)
 
 自动化：
 
-- Core：`287 passed, 1 skipped`
-- MCP Plugin：`11 passed`（`tests/plugins/test_mcp_plugin.py`）
-- Goal Plugin：`16 passed`
+- MCP Plugin：`23 passed`（`tests/plugins/test_mcp_plugin.py`）
+- Core + Plugin 全量：`327 passed, 1 skipped`。
 
-覆盖主路径：Registry/Secret 往返、目录不含 disabled、命名空间路由、加载失败不污染快照、revision 失效、非法 Schema 失败、HTTPS 约束。
+覆盖主路径：Registry/Secret 往返与失败回滚、目录不含 disabled、命名空间路由、加载失败不污染快照、revision 失效、非法输入/输出 Schema、HTTPS 约束、取消清理和配置失效竞态。
+
+真实 stdio 集成已覆盖：
+
+- v2 Server 协商 `2026-07-28`，Secret 正确注入子进程环境并完成工具调用；
+- Legacy Server 在 `server/discover` 不可用时回退 `2025-11-25 initialize`。
 
 尚未覆盖设计验收中的：
 
-- 真实 `2026-07-28` 与 Legacy Server 矩阵；
-- 真实 stdio / Streamable HTTP 端到端与分页长列表；
+- 真实 Streamable HTTP 端到端与分页长列表；
 - Secret 不泄露到 Artifact/日志的专项扫描；
-- 取消传播到进行中 MCP 请求的专项用例。
 
 ## 使用要点
 
@@ -132,7 +137,7 @@ tools/call             handler 闭包持有 (server_id, 原名)
 
 对话中：模型看到 enabled 目录后调用 `load_toolset("mcp:demo")`，下一轮使用 `mcp__demo__...` 工具。
 
-依赖：`requirements.txt` 增加 `mcp>=1.27.0`。当前 SDK 仍以 Legacy `ClientSession.initialize` 为主；协议时代兼容交给 SDK，HelperMe 不自研 dual-era。
+依赖：`mcp>=2.0.0,<3` 与 `httpx2>=2.5.0,<3`。HelperMe 使用 SDK v2 高层 `Client(mode="auto")` 完成现代协议发现与 Legacy 回退，不自研 dual-era。
 
 ## 后续
 

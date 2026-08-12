@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import anyio
+from mcp.types import InputRequiredResult
+
 from core.tool_registry import ToolSpec
 from core.tools_runtime.progressive_toolsets import (
     ToolsetDescriptor,
@@ -13,6 +16,7 @@ from plugins.mcp.adapter import (
     adapt_protocol_error,
     adapt_transport_error,
     build_parameters,
+    build_output_validator,
     encode_tool_name,
     ensure_unique_encoded_names,
     input_required_unsupported,
@@ -68,22 +72,29 @@ class McpToolsetProvider:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            summary = self._client_manager.sanitized_error(record, exc)
+            self._client_manager.runtime_state(server_id).mark_unavailable(summary)
+            await self._client_manager.invalidate(server_id)
             raise ToolsetLoadError(
                 "MCP_TRANSPORT_ERROR",
-                str(exc) or exc.__class__.__name__,
+                summary,
                 hint="检查 Server 是否可用后重试 load_toolset。",
                 data={"server_id": server_id},
             ) from exc
 
         specs: list[ToolSpec] = []
         for tool in tools:
-            parameters = build_parameters(tool.name, tool.inputSchema)
+            parameters = build_parameters(tool.name, tool.input_schema)
             encoded = encode_tool_name(record.id, tool.name)
-            output_schema = tool.outputSchema
+            output_validator = build_output_validator(
+                tool.name,
+                tool.output_schema,
+            )
             handler = self._make_handler(
                 record_id=record.id,
+                expected_revision=record.revision,
                 tool_name=tool.name,
-                output_schema=output_schema,
+                output_validator=output_validator,
             )
             specs.append(
                 ToolSpec(
@@ -100,8 +111,9 @@ class McpToolsetProvider:
         self,
         *,
         record_id: str,
+        expected_revision: int,
         tool_name: str,
-        output_schema: dict[str, Any] | None,
+        output_validator: Any | None,
     ):
         async def handler(arguments: dict[str, Any]) -> dict[str, Any]:
             record = await self._registry.get(record_id)
@@ -113,6 +125,18 @@ class McpToolsetProvider:
                     "error": f"MCP Server 不可用或已停用: {record_id}",
                     "hint": "请用户通过 /mcp 重新启用该 Server。",
                 }
+            if record.revision != expected_revision:
+                return {
+                    "ok": False,
+                    "code": "MCP_SERVER_CHANGED",
+                    "data": {
+                        "server_id": record_id,
+                        "loaded_revision": expected_revision,
+                        "current_revision": record.revision,
+                    },
+                    "error": "MCP Server 配置已变化，当前 Toolset 快照已过期",
+                    "hint": "请在新的 Run 中重新加载该 Toolset。",
+                }
             try:
                 result = await self._client_manager.call_tool(
                     record,
@@ -121,29 +145,33 @@ class McpToolsetProvider:
                 )
             except asyncio.CancelledError:
                 raise
-            except TimeoutError as exc:
+            except (
+                TimeoutError,
+                OSError,
+                anyio.EndOfStream,
+                anyio.BrokenResourceError,
+                anyio.ClosedResourceError,
+            ) as exc:
+                summary = self._client_manager.sanitized_error(record, exc)
                 self._client_manager.runtime_state(record_id).mark_unavailable(
-                    str(exc)
+                    summary
                 )
-                return adapt_transport_error(exc)
-            except OSError as exc:
-                self._client_manager.runtime_state(record_id).mark_unavailable(
-                    str(exc)
-                )
-                return adapt_transport_error(exc)
+                await self._client_manager.invalidate(record_id)
+                return adapt_transport_error(exc, error_summary=summary)
             except Exception as exc:
                 # SDK/协议层错误
-                message = str(exc) or exc.__class__.__name__
+                message = self._client_manager.sanitized_error(record, exc)
                 if "input_required" in message.lower():
                     return input_required_unsupported()
-                return adapt_protocol_error(exc)
+                return adapt_protocol_error(exc, error_summary=message)
 
-            # 未来 resultType=input_required 时 SDK 可能用字段表达
-            result_type = getattr(result, "resultType", None)
-            if result_type == "input_required":
+            if isinstance(result, InputRequiredResult):
                 return input_required_unsupported()
 
-            return adapt_call_result(result, output_schema=output_schema)
+            return adapt_call_result(
+                result,
+                output_validator=output_validator,
+            )
 
         return handler
 

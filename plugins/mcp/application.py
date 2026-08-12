@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -12,6 +13,7 @@ from plugins.mcp.models import (
     StreamableHttpTransportConfig,
     TransportKind,
     utc_now,
+    validate_server_id,
 )
 from plugins.mcp.registry import McpRegistry
 from plugins.mcp.secrets import McpSecretStore
@@ -48,6 +50,7 @@ class McpApplicationService:
             client_manager,
         )
         self.toolset_provider = McpToolsetProvider(registry, client_manager)
+        self._management_lock = asyncio.Lock()
 
     async def list_servers(
         self,
@@ -78,6 +81,29 @@ class McpApplicationService:
         secrets: Mapping[str, str] | None = None,
         enabled: bool = False,
     ) -> McpServerRecord:
+        async with self._management_lock:
+            return await self._upsert_server_locked(
+                server_id=server_id,
+                display_name=display_name,
+                description=description,
+                transport=transport,
+                transport_config=transport_config,
+                secrets=secrets,
+                enabled=enabled,
+            )
+
+    async def _upsert_server_locked(
+        self,
+        *,
+        server_id: str,
+        display_name: str,
+        description: str,
+        transport: str,
+        transport_config: Mapping[str, Any],
+        secrets: Mapping[str, str] | None,
+        enabled: bool,
+    ) -> McpServerRecord:
+        validate_server_id(server_id)
         kind = TransportKind(transport)
         existing = await self.registry.get(server_id)
         prepared_secrets = dict(secrets or {})
@@ -131,9 +157,10 @@ class McpApplicationService:
                 ),
             )
 
-        created_secrets = bool(prepared_secrets)
-        if created_secrets:
-            # 先写 Secret，再原子替换 Registry；失败则回滚新建 Secret。
+        updated_secrets = bool(prepared_secrets)
+        previous_secrets = self.secret_store.snapshot_namespace(server_id)
+        if updated_secrets:
+            # 先写 Secret，再原子替换 Registry；失败则恢复旧命名空间。
             refs = self.secret_store.put_namespace(server_id, prepared_secrets)
             if kind is TransportKind.STDIO:
                 assert isinstance(config, StdioTransportConfig)
@@ -164,8 +191,11 @@ class McpApplicationService:
         try:
             stored = await self.registry.upsert(record)
         except Exception:
-            if created_secrets and existing is None:
-                self.secret_store.delete_namespace(server_id)
+            if updated_secrets:
+                if previous_secrets:
+                    self.secret_store.put_namespace(server_id, previous_secrets)
+                else:
+                    self.secret_store.delete_namespace(server_id)
             raise
         await self.client_manager.invalidate(server_id)
         return stored
@@ -175,15 +205,17 @@ class McpApplicationService:
         server_id: str,
         enabled: bool,
     ) -> McpServerRecord:
-        record = await self.registry.set_enabled(server_id, enabled)
-        await self.client_manager.invalidate(server_id)
-        return record
+        async with self._management_lock:
+            record = await self.registry.set_enabled(server_id, enabled)
+            await self.client_manager.invalidate(server_id)
+            return record
 
     async def remove_server(self, server_id: str) -> McpServerRecord:
-        record = await self.registry.remove(server_id)
-        self.secret_store.delete_namespace(server_id)
-        await self.client_manager.invalidate(server_id)
-        return record
+        async with self._management_lock:
+            record = await self.registry.remove(server_id)
+            self.secret_store.delete_namespace(server_id)
+            await self.client_manager.invalidate(server_id)
+            return record
 
     async def test_server(self, server_id: str) -> McpServerRuntimeState:
         record = await self.registry.get(server_id)

@@ -3,8 +3,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Any, Literal, Mapping
 from urllib.parse import urlparse
+
+
+_SERVER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def validate_server_id(server_id: str) -> str:
+    if not _SERVER_ID_PATTERN.fullmatch(server_id):
+        raise ValueError(
+            "server id 必须匹配 "
+            "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+        )
+    return server_id
 
 
 def utc_now() -> datetime:
@@ -73,8 +86,7 @@ class McpServerRecord:
     updated_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        if not self.id.strip():
-            raise ValueError("server id 不能为空")
+        validate_server_id(self.id)
         if not self.display_name.strip():
             raise ValueError("display_name 不能为空")
         if self.revision < 1:
@@ -181,6 +193,8 @@ class McpServerRuntimeState:
 
     def mark_unavailable(self, error_summary: str) -> None:
         self.status = RuntimeAvailability.UNAVAILABLE
+        self.negotiated_version = None
+        self.capabilities = {}
         self.last_error_summary = sanitize_error_summary(error_summary)
         self.last_checked_at = utc_now()
 
@@ -198,8 +212,19 @@ class McpServerRuntimeState:
         }
 
 
-def sanitize_error_summary(message: str, *, limit: int = 240) -> str:
+def sanitize_error_summary(
+    message: str,
+    *,
+    secret_values: tuple[str, ...] = (),
+    limit: int = 240,
+) -> str:
     text = " ".join(str(message).split())
+    for secret in sorted(
+        (value for value in secret_values if value),
+        key=len,
+        reverse=True,
+    ):
+        text = text.replace(secret, "***")
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
