@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from core.agent_workspace import AgentWorkspace
 from core.runtime_artifacts import (
     ArtifactNotFoundError,
     FileArtifactDrawers,
@@ -146,14 +147,27 @@ class RuntimeArtifactsTest(unittest.TestCase):
         with self.assertRaisesRegex(OSError, "disk failure"):
             externalizer.process(result)
 
-    def test_runtime_root_must_be_outside_user_workspace(self):
-        with self.assertRaisesRegex(ValueError, "workspace"):
+    def test_agent_workspace_must_be_outside_user_workspace(self):
+        with self.assertRaisesRegex(ValueError, "Workspace"):
             create_agent_application(
                 "test-model",
                 model_context_limit=1000,
-                runtime_root=Path.cwd() / ".runtime",
+                agent_workspace=AgentWorkspace(Path.cwd() / ".helperme"),
                 workspace_roots={"project": Path.cwd()},
             )
+
+    def test_user_workspace_must_be_outside_agent_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent_root = Path(directory)
+            task_root = agent_root / "project"
+            task_root.mkdir()
+            with self.assertRaisesRegex(ValueError, "相互独立"):
+                create_agent_application(
+                    "test-model",
+                    model_context_limit=1000,
+                    agent_workspace=AgentWorkspace(agent_root),
+                    workspace_roots={"project": task_root},
+                )
 
     def test_read_artifact_tool_has_no_path_input_and_enforces_limit(self):
         ref = self.store.save("x" * 4000)

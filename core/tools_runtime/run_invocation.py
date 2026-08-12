@@ -8,6 +8,7 @@ from core.tools_runtime.run_evidence import RunEvidence
 
 if TYPE_CHECKING:
     from core.runtime_modes import RuntimeMode
+    from core.tools_runtime.progressive_toolsets import ToolsetProvider
 
 
 class RunCapability(Protocol):
@@ -33,4 +34,5 @@ class RunCapability(Protocol):
 @dataclass(frozen=True)
 class RunInvocation:
     capabilities: tuple[RunCapability, ...] = ()
+    toolset_provider: ToolsetProvider | None = None
     runtime_mode: RuntimeMode | None = None

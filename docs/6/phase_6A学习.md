@@ -95,6 +95,14 @@ paused   --resume--> 中断前可恢复状态
 
 普通 Run 不携带 Goal Capability，也看不到 Goal 工具。删除 Goal Plugin 后 Core 无需修改即可独立运行。
 
+## Plugin 边界回看
+
+Goal 是第一个 Plugin，当时主要通过“Core 不导入 Goal、Goal 只消费 RunHost 与 RunInvocation”确认代码依赖方向。到 6B 设计第二个 Plugin——MCP 外部能力支架时，Plugin 的完整语义才进一步清晰：Plugin 不是一种具体工具，也不是 Core 的分层目录，而是建立在 Core 公共端口之上的可选 Agent 辅助支架。
+
+Goal 属于工作流型 Plugin：拥有 Goal、Contract、Judge 和跨 Run 状态，通过公共 Run 端口组织 Core 能力。删除 Goal 后，普通 Agent 仍可运行，只失去目标循环能力。Goal 的领域对象、存储和控制台入口均保留在 `plugins/goal`，因此当前实现符合这套更明确的边界。
+
+这次回看不要求重构 Goal。它反而验证了一个可复用判断：若未来 Plugin 暴露出 Core 公共端口不足，只补充与该 Plugin 领域无关的通用语义；不得把 Goal、MCP 或其他具体能力的生命周期写进 Core。
+
 ## 当前验证
 
 新测试覆盖：

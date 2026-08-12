@@ -163,7 +163,7 @@ def main() -> None:
     application = create_agent_application(
         model=MODEL,
         model_context_limit=200_000,
-        runtime_root=runtime_root,
+        agent_workspace=AgentWorkspace(runtime_root),
         workspace_roots={"project": project_root},
         input_budget_ratio=0.9,
     )
@@ -278,3 +278,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+from core.agent_workspace import AgentWorkspace

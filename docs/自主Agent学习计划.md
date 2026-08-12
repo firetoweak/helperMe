@@ -8,6 +8,9 @@
 
 - 禁止为了跑通当前局部模块而添加静默兜底、隐式默认值或自动生成关键关联数据。兜底不得掩盖上层调用错误，否则会破坏整体设计并显著增加调试成本。
 - 可选能力只能依赖 Core 的公共端口；Core 不得引用具体 Plugin。Plugin 引出的 Core 改动必须具有与插件领域无关的通用语义。移除某个 Plugin 后，Core 应无需修改并能独立运行。
+- Plugin 是构建在 Core 公共端口之上的 Agent 辅助支架，负责可选的领域工作流、外部能力接入及其状态；它可以组合 Core 能力，但不得把自己的领域名词、生命周期或存储模型写回 Core。判断边界时不看能力是否“常用”，只看删除该 Plugin 后 Core 是否仍能独立运行。
+- 源码仓库、Agent Workspace 与用户任务 Workspace 必须分离。源码仓库只保存实现；`~/.helperme` 是 Agent Workspace，保存 Session Artifact、Plugin 安装内容和 Agent 状态；用户任务 Workspace 由配置指定。Agent Workspace 不进入普通文件工具的 Workspace Roots，Plugin 只能通过自身受控端口访问其专属目录。
+- Plugin 的持久安装与 Run 期加载是两个生命周期：安装结果保存在 Agent Workspace；单次 Run 只按需加载已安装能力，并在 Run 结束后释放临时加载状态。协议适配器只负责外部能力发现与调用，不负责 Core 的能力选择策略。
 - 文件工具访问上限由 `model_config.yaml` 在 Composition 阶段确定，Application 创建后不可变；模型、Run、Skill 与 Plugin 均不得自行升级。`host` 只取消应用路径范围限制，不能绕过操作系统权限，也不等同于命令沙箱。
 - 面向应用的超参数统一由 `model_config.yaml` 提供。默认 Run 轮次上限注入 AgentApplication，普通 Run 与 Plugin Run 均通过 RunHost 解析同一默认值；下层 Runtime 只保留内部调用所需的显式覆盖能力，不维护面向用户的配置入口。
 - Goal 保存 Objective、版本化 Completion Contract、Turn/Judgment 历史与生命周期；Plan 与 TodoList 保持为单次 Turn 内的柔性认知工具。
@@ -274,13 +277,13 @@ Phase 8 Multi-Agent
 
 ### 6B Skill / Toolset Progressive Loading + MCP Toolset Adapter
 
-- 状态：未开始
+- 状态：进行中；Toolset 渐进加载的 Core 最小原型与自动化回归完成，真实 Plugin、Skill 和 MCP Adapter 待接入
 - 目标：按需渐进加载 Skill / Toolset，避免一次性暴露全部能力；接入 MCP，验证外部 Toolset 的发现、选择与调用。
 - 前置边界：区分 Plugin 装配、交互命令激活与单次 Run Capability 注入；6B 只处理 Run 期 Capability 的选择、加载和释放。
 - Run 约束：RunInvocation 可覆盖当前 RuntimeMode；受限规划能力使用 PlainMode，避免渐进加载的工具集被 Todo 等模式再次扩张。
 - MCP 定位：MCP 是外部 Toolset 的接入协议，不负责能力加载策略；具体适配放在可选 Plugin，Core 不依赖 MCP。
-- 结论：（待写）
-- 详述：总结待写
+- 当前结论：Core 管理单次 Run 的加载状态与逐轮工具装配，Plugin 通过 `ToolsetProvider` 提供精简目录和具体工具；模型调用 `load_toolset` 后，工具从下一轮可见，Run 结束后自然释放。
+- 详述：[phase_6B学习.md](6/phase_6B学习.md)
 
 ### 6C SubAgent Delegation
 

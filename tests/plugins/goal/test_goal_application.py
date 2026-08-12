@@ -332,7 +332,7 @@ class GoalLoopRuntimeIntegrationTest(unittest.TestCase):
             application = create_agent_application(
                 "executor-model",
                 model_context_limit=100_000,
-                runtime_root=runtime,
+                agent_workspace=AgentWorkspace(runtime),
                 workspace_roots={"project": project},
                 runtime_mode=PlainMode(),
                 llm_client=llm,
@@ -377,3 +377,4 @@ class GoalLoopRuntimeIntegrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+from core.agent_workspace import AgentWorkspace

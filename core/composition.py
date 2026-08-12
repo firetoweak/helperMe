@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
+from core.agent_workspace import AgentWorkspace
 from core.agent_application import AgentApplication, DEFAULT_MAX_ROUNDS
 from core.model_call.client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
@@ -51,7 +52,7 @@ import tools  # noqa: F401
 def create_agent_application(
     model: str,
     model_context_limit: int,
-    runtime_root: Path,
+    agent_workspace: AgentWorkspace,
     workspace_roots: Mapping[str, Path],
     input_budget_ratio: float = 0.75,
     runtime_mode: RuntimeMode | None = None,
@@ -80,15 +81,17 @@ def create_agent_application(
         name: WorkspaceSandbox(root)
         for name, root in effective_workspace_roots.items()
     })
-    runtime_root = runtime_root.resolve()
-    if (
-        filesystem_access_mode is FilesystemAccessMode.SCOPED
-        and any(
-            runtime_root.is_relative_to(workspace.root)
-            for workspace in workspaces.values()
-        )
+    configured_workspace_paths = [
+        root.resolve()
+        for root in workspace_roots.values()
+    ]
+    if any(
+        agent_workspace.root.is_relative_to(workspace_root)
+        or workspace_root.is_relative_to(agent_workspace.root)
+        for workspace_root in configured_workspace_paths
     ):
-        raise ValueError("runtime_root 不能位于用户 workspace root 内")
+        raise ValueError("Agent Workspace 必须与用户 Workspace 相互独立")
+    agent_workspace.initialize()
 
     application_tool_registry = BUILTIN_TOOL_REGISTRY.clone()
     command_runner = PowerShellCommandRunner()
@@ -111,7 +114,7 @@ def create_agent_application(
     result_limit = ToolResultLimit()
     context_manager = ContextManager(result_limit.max_chars)
     summary_generator = LLMContextSummaryGenerator(model_calls, model)
-    artifact_drawers = FileArtifactDrawers(runtime_root / "sessions")
+    artifact_drawers = FileArtifactDrawers(agent_workspace.sessions_root)
     mode_configuration = (
         {"runtime_mode": runtime_mode}
         if runtime_mode is not None

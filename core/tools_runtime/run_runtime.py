@@ -58,6 +58,11 @@ from core.runtime_artifacts import ToolResultExternalizer
 from core.tools_runtime.run_progress import NullRunProgressSink, RunProgressSink
 from core.tools_runtime.run_evidence import RunEvidence, RunEvidenceRecorder
 from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.progressive_toolsets import (
+    ToolsetLoadingState,
+    create_load_toolset_spec,
+    toolset_catalog_instruction,
+)
 
 class RunStatus(str, Enum):
     COMPLETED = "completed"
@@ -420,7 +425,7 @@ class RunRuntime:
                 for selection in selections
                 if selection is not None
             ]
-            run_registry = (
+            base_run_registry = (
                 self.tools_executor.registry.select(
                     set.intersection(*restrictions)
                 )
@@ -429,11 +434,18 @@ class RunRuntime:
             )
             for capability in current_invocation.capabilities:
                 for spec in capability.tool_specs():
-                    run_registry.register(spec)
-            run_tools_executor = ToolsExecutor(run_registry)
+                    base_run_registry.register(spec)
+            base_run_tools_executor = ToolsExecutor(base_run_registry)
         else:
-            run_registry = self.tools_executor.registry
-            run_tools_executor = self.tools_executor
+            base_run_registry = self.tools_executor.registry
+            base_run_tools_executor = self.tools_executor
+        toolset_provider = current_invocation.toolset_provider
+        toolset_descriptors = (
+            toolset_provider.descriptors()
+            if toolset_provider is not None
+            else ()
+        )
+        toolset_state = ToolsetLoadingState()
         evidence_roots = tuple(dict.fromkeys(
             root
             for capability in current_invocation.capabilities
@@ -442,7 +454,7 @@ class RunRuntime:
         for root in evidence_roots:
             evidence_recorder.record_workspace_baseline(
                 root,
-                run_tools_executor.execute(
+                base_run_tools_executor.execute(
                     "get_changes",
                     json.dumps({"root": root}),
                 ),
@@ -611,22 +623,39 @@ class RunRuntime:
             else:
                 if start_data is not None:
                     checkpoints.append(todo_list_created_checkpoint(start_data))
-        external_tools = run_registry.get_tools()
-        runtime_tools = runtime_mode.runtime_tools(mode_state)
-        external_names = {
-            tool["function"]["name"] for tool in external_tools
-        }
-        runtime_names = {
-            tool["function"]["name"] for tool in runtime_tools
-        }
-        duplicated_names = external_names & runtime_names
-        if duplicated_names:
-            raise ValueError(
-                f"runtime tool conflicts with external tool: {sorted(duplicated_names)}"
-            )
-        tools = external_tools + runtime_tools
-
         for round_index in range(1, max_rounds + 1):
+            if toolset_provider is None:
+                run_registry = base_run_registry
+                run_tools_executor = base_run_tools_executor
+            else:
+                run_registry = base_run_registry.clone()
+                run_registry.register(
+                    create_load_toolset_spec(
+                        toolset_descriptors,
+                        toolset_state,
+                    )
+                )
+                for descriptor in toolset_descriptors:
+                    if descriptor.id not in toolset_state.loaded_ids:
+                        continue
+                    for spec in toolset_provider.tool_specs(descriptor.id):
+                        run_registry.register(spec)
+                run_tools_executor = ToolsExecutor(run_registry)
+            external_tools = run_registry.get_tools()
+            runtime_tools = runtime_mode.runtime_tools(mode_state)
+            external_names = {
+                tool["function"]["name"] for tool in external_tools
+            }
+            runtime_names = {
+                tool["function"]["name"] for tool in runtime_tools
+            }
+            duplicated_names = external_names & runtime_names
+            if duplicated_names:
+                raise ValueError(
+                    "runtime tool conflicts with external tool: "
+                    f"{sorted(duplicated_names)}"
+                )
+            tools = external_tools + runtime_tools
             validation = validate_tool_message_chain(
                 conversation.protocol_messages()
             )
@@ -645,6 +674,13 @@ class RunRuntime:
             )
             for capability in current_invocation.capabilities:
                 runtime_prompts.extend(capability.runtime_instructions())
+            if toolset_provider is not None:
+                runtime_prompts.append(
+                    toolset_catalog_instruction(
+                        toolset_descriptors,
+                        toolset_state,
+                    )
+                )
             try:
                 prepared = self.context_preparation.prepare(
                     conversation_records=conversation.records,

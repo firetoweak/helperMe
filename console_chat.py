@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from core.agent_workspace import AgentWorkspace
 from core.agent_application import AgentApplication
 from core.composition import create_agent_application
 from core.model_call.client import LLMClient
@@ -113,7 +114,7 @@ def main(argv: list[str] | None = None) -> None:
     application = create_agent_application(
         model,
         model_context_limit=runtime_config.model_context_limit,
-        runtime_root=Path.home() / ".helper-me" / "runtime",
+        agent_workspace=AgentWorkspace.default(),
         workspace_roots={
             "project": app_config.workspace.root,
         },

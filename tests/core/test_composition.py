@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from core.agent_workspace import AgentWorkspace
 from core.composition import create_agent_application
 from core.runtime_artifacts import ArtifactNotFoundError
 from core.runtime_modes import PlainMode, RunMode, RuntimeModeRouter
@@ -19,7 +20,7 @@ class CompositionTest(unittest.TestCase):
             create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(runtime_directory),
+                agent_workspace=AgentWorkspace(Path(runtime_directory)),
                 workspace_roots={"project": Path.cwd()},
             )
 
@@ -34,7 +35,7 @@ class CompositionTest(unittest.TestCase):
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(runtime_directory),
+                agent_workspace=AgentWorkspace(Path(runtime_directory)),
                 workspace_roots={"project": Path(project_directory)},
                 filesystem_access_mode=FilesystemAccessMode.HOST,
             )
@@ -63,7 +64,7 @@ class CompositionTest(unittest.TestCase):
                 create_agent_application(
                     model="test-model",
                     model_context_limit=10_000,
-                    runtime_root=Path(runtime_directory),
+                    agent_workspace=AgentWorkspace(Path(runtime_directory)),
                     workspace_roots={
                         "drive_d": Path(workspace_directory),
                     },
@@ -76,7 +77,7 @@ class CompositionTest(unittest.TestCase):
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(runtime_directory),
+                agent_workspace=AgentWorkspace(Path(runtime_directory)),
                 workspace_roots={"project": workspace_root},
             )
             application.create_session("session-1")
@@ -111,7 +112,7 @@ class CompositionTest(unittest.TestCase):
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(directory),
+                agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-1")
@@ -130,7 +131,7 @@ class CompositionTest(unittest.TestCase):
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(directory),
+                agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
                 runtime_mode=mode,
             )
@@ -148,7 +149,7 @@ class CompositionTest(unittest.TestCase):
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(directory),
+                agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-a")
@@ -166,7 +167,7 @@ class CompositionTest(unittest.TestCase):
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(directory),
+                agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-a")
@@ -193,7 +194,7 @@ class CompositionTest(unittest.TestCase):
             application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
-                runtime_root=Path(directory),
+                agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
             application.create_session("session-1")

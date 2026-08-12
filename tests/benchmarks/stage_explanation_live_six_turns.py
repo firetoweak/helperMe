@@ -39,7 +39,7 @@ def main() -> None:
     application = create_agent_application(
         app_config.model.name,
         model_context_limit=200_000,
-        runtime_root=Path.home() / ".helper-me" / "runtime",
+        agent_workspace=AgentWorkspace.default(),
         workspace_roots={"project": app_config.workspace_root},
         input_budget_ratio=0.9,
         llm_client=LLMClient(app_config.model),
@@ -70,3 +70,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+from core.agent_workspace import AgentWorkspace
