@@ -23,6 +23,9 @@ from core.session import SessionRunOutcome
 from core.tools_runtime.run_runtime import RunStatus
 from plugins.goal.composition import create_goal_plugin
 from plugins.goal.console import GoalCommandError, GoalConsoleAdapter
+from plugins.mcp.composition import create_mcp_plugin
+from plugins.mcp.console import McpCommandError, McpConsoleAdapter
+from core.tools_runtime.run_invocation import RunInvocation
 from tools.workspace import FilesystemAccessMode
 
 
@@ -73,10 +76,12 @@ async def async_main(argv: list[str] | None = None) -> None:
     model = model_config.name
 
     llm_client = LLMClient(model_config)
+    agent_workspace = AgentWorkspace.default()
+    mcp_plugin = create_mcp_plugin(agent_workspace)
     application = create_agent_application(
         model,
         model_context_limit=runtime_config.model_context_limit,
-        agent_workspace=AgentWorkspace.default(),
+        agent_workspace=agent_workspace,
         workspace_roots={
             "project": app_config.workspace.root,
         },
@@ -89,7 +94,7 @@ async def async_main(argv: list[str] | None = None) -> None:
             else FilesystemAccessMode.SCOPED
         ),
         default_max_rounds=runtime_config.max_rounds,
-        application_resources=(llm_client,),
+        application_resources=(llm_client, mcp_plugin.client_manager),
     )
     async with application:
         session_id = _new_session(application)
@@ -99,6 +104,7 @@ async def async_main(argv: list[str] | None = None) -> None:
                 default_max_turns=runtime_config.max_goal_turns,
             )
         )
+        mcp_console = McpConsoleAdapter(mcp_plugin.service)
         log_path = _resolve_log_path()
         last_status: RunStatus | None = None
 
@@ -115,6 +121,7 @@ async def async_main(argv: list[str] | None = None) -> None:
         print(f"单个 Goal 最大 Turn 数：{runtime_config.max_goal_turns}")
         print("输入任务开始；运行期间按 Ctrl+C 请求安全中断。")
         print("在输入提示处按 Ctrl+C 或 Ctrl+D 退出。")
+        print("MCP 管理：输入 /mcp help")
         print(f"日志路径：{log_path}")
 
         while True:
@@ -133,10 +140,22 @@ async def async_main(argv: list[str] | None = None) -> None:
             if not user_message:
                 continue
 
+            try:
+                mcp_reply = await mcp_console.execute_if_handled(user_message)
+            except McpCommandError as exc:
+                print(f"\nMCP 命令错误：{exc}")
+                continue
+            if mcp_reply is not None:
+                print(f"\nMCP：\n{mcp_reply}")
+                continue
+
             started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             run_id = f"run-{uuid4().hex}"
 
             goal_loop_outcome = None
+            run_invocation = RunInvocation(
+                toolset_provider=mcp_plugin.toolset_provider,
+            )
 
             async def execute() -> SessionRunOutcome:
                 nonlocal goal_loop_outcome
@@ -152,7 +171,12 @@ async def async_main(argv: list[str] | None = None) -> None:
                     if last_status == RunStatus.INTERRUPTED
                     else application.start
                 )
-                return await use_case(session_id, run_id, user_message)
+                return await use_case(
+                    session_id,
+                    run_id,
+                    user_message,
+                    invocation=run_invocation,
+                )
 
             def request_interrupt() -> None:
                 if not goal_console.request_pause(session_id):

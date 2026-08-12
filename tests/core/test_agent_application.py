@@ -95,6 +95,7 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
             "run-1",
             "开始任务",
             7,
+            invocation=None,
         )
 
     async def test_resume_forwards_explicit_use_case_arguments_and_returns_outcome(self):
@@ -114,6 +115,7 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
             "run-2",
             "继续任务",
             9,
+            invocation=None,
         )
 
     async def test_application_owns_the_default_run_round_limit(self):
@@ -134,6 +136,7 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
             "run-1",
             "开始任务",
             73,
+            invocation=None,
         )
 
     async def test_application_rejects_invalid_default_run_round_limit(self):

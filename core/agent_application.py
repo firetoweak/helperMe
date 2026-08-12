@@ -91,22 +91,40 @@ class AgentApplication:
         )
         return session_id
 
-    async def start(self, session_id, run_id, message, max_rounds=None):
+    async def start(
+        self,
+        session_id,
+        run_id,
+        message,
+        max_rounds=None,
+        *,
+        invocation: RunInvocation | None = None,
+    ):
         self._require_started()
         return await self._session_runtime.start(
             session_id,
             run_id,
             message,
             self._resolve_max_rounds(max_rounds),
+            invocation=invocation,
         )
 
-    async def resume(self, session_id, run_id, message, max_rounds=None):
+    async def resume(
+        self,
+        session_id,
+        run_id,
+        message,
+        max_rounds=None,
+        *,
+        invocation: RunInvocation | None = None,
+    ):
         self._require_started()
         return await self._session_runtime.resume(
             session_id,
             run_id,
             message,
             self._resolve_max_rounds(max_rounds),
+            invocation=invocation,
         )
 
     def require_session(self, session_id: str) -> None:

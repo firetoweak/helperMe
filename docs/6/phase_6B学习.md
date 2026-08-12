@@ -92,12 +92,29 @@ Core 管“如何加载”，Plugin 管“加载什么”。
 
 引入统一 AgentWorkspace 后，Core 全量自动化回归通过：262 tests passed，1 skipped（当前 Windows 环境无创建符号链接权限）；Plugin 回归 16 tests passed。
 
+## MCP Plugin MVP
+
+第二个 Plugin 实例已落地，验证了“Core 不认识 MCP、Plugin 组合公共端口”的边界。
+
+| 能力 | 实现位置 |
+| --- | --- |
+| 持久安装 | `McpRegistry` + `McpSecretStore`（`~/.helperme/plugins/mcp/`） |
+| 用户控制面 | `/mcp` Console 命令；非 Agent Tool |
+| 懒连接 | `McpClientManager`（官方 SDK；Application resource） |
+| 渐进暴露 | `McpToolsetProvider` → `load_toolset("mcp:{id}")` |
+| Resources/Prompts | `McpContentService` 显式读取，不进 `load_toolset` |
+
+Core 同步回补：`tool_specs` 异步化、`ToolsetLoadError`、`CompositeToolsetProvider`。
+
+信任边界：普通对话不能安装或修改 MCP；启用即信任；目录零网络 I/O；运行态与 Registry 分离。
+
+完整实现记录见 [MCP接入实现总结.md](MCP接入实现总结.md)；设计基线见 [MCP接入设计草稿.md](MCP接入设计草稿.md)。
+
 ## 下一步边界
 
-下一步先用一个真实 Plugin 实现 `ToolsetProvider`，验证 Composition 注入边界；随后实现 MCP Toolset Adapter，把 MCP 发现结果适配成 Descriptor 和 ToolSpec。MCP 只负责外部 Toolset 的发现与调用，不负责模型何时选择和加载。
+- Skill 渐进加载：复用 Run 生命周期，不与 Toolset 数据模型提前合并；
+- 真实 MCP Server 兼容 benchmark（stdio / HTTP、现代与 Legacy）；
+- 可选：对话内只读查询已安装列表（仍禁止写 Registry）；
+- OAuth、Approval、Resource 自动注入等后置能力按设计第 15 节按需开启。
 
-运行目录进一步区分为三类：源码仓库只保存 HelperMe 实现；用户任务 Workspace 由配置指定；Agent Workspace 固定为用户主目录下的 `.helperme`，保存 Session Artifact、Plugin 安装内容与运行状态。三者不能混用。Core 的 `AgentWorkspace` 只提供通用 `sessions/plugins/state` 布局，不认识 MCP；未来 MCP Plugin 使用自己的 Plugin 子目录。
-
-Skill 负责“如何使用能力”的指令，Tool 负责实际动作。Skill 的渐进加载应复用本节的 Run 生命周期，但不在 Toolset 最小原型中提前合并两者的数据模型。
-
-MCP Adapter 必须直接使用 `JsonSchemaParameters` 接入外部 `inputSchema`。禁止动态生成 Pydantic Model，也禁止通过补字段、删除约束或改写引用来静默归一化外部 Schema。完整决策与后续增强记录见 [ToolSpec格式回补总结.md](ToolSpec格式回补总结.md)。
+MCP Adapter 必须继续直接使用 `JsonSchemaParameters`。禁止动态生成 Pydantic Model，也禁止静默改写外部 Schema。见 [ToolSpec格式回补总结.md](ToolSpec格式回补总结.md)。

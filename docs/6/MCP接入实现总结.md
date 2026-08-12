@@ -1,0 +1,148 @@
+# MCP 接入实现总结
+
+## 背景
+
+依据 [MCP接入设计草稿.md](MCP接入设计草稿.md) 落地 Phase 6B 的 MCP Plugin MVP。实现目标是：把用户明确安装并信任的 MCP Server，适配为可持久配置、可按需加载、可安全调用的外部能力，同时保持 Core 不依赖 MCP。
+
+设计基线未改写；本文件记录实现结果、模块映射、验证结论与相对设计的已知差距。
+
+## 实现结论
+
+MVP 已具备：
+
+- `stdio` 与 Streamable HTTP 接入（官方 Python SDK `mcp`）；
+- Registry / SecretStore 持久化与 revision 失效；
+- 用户控制面 `/mcp` 管理命令；
+- enabled Server 进入 Toolset 目录，`load_toolset` 时懒连接并发现；
+- 工具名命名空间、`JsonSchemaParameters` 原样 Schema、ToolResult 适配；
+- Resources / Templates / Prompts 的显式 ContentService；
+- Application 退出时关闭 ClientManager。
+
+明确未做（与设计一致）：
+
+- 普通对话安装 / 修改 / 启停 / 删除 MCP；
+- OAuth、官方 Registry、HTTP+SSE、MRTR、`subscriptions/listen`；
+- Resources 自动注入 Context；
+- 通用 Tool Approval；
+- 多模态内容直接进入模型输入。
+
+## Core 回补
+
+为承载远程发现，做了与 MCP 无关的通用改动：
+
+| 改动 | 说明 |
+| --- | --- |
+| `ToolsetProvider.tool_specs` → `async` | `load_toolset` 内 `await`；本地 Provider 可立即返回 |
+| `ToolsetLoadError` | 加载失败转为模型可修正工具错误，且不写入 `loaded_specs` |
+| `CompositeToolsetProvider` | Composition 层合并多 Provider，构造期检查 ID 冲突 |
+
+删除 MCP Plugin 后，上述 Core 能力仍可独立服务其他 Provider。
+
+## Plugin 模块映射
+
+```text
+plugins/mcp/
+  models.py            McpServerRecord / RuntimeState / Transport 配置
+  registry.py          ~/.helperme/plugins/mcp/servers.json
+  secrets.py           按 server_id 隔离的本地 SecretStore
+  client_manager.py    SDK Client 懒创建、缓存、失效、关闭
+  adapter.py           工具名编码、Schema、CallToolResult 适配
+  toolset_provider.py  目录只读 Registry；load 时发现
+  content.py           Resources / Templates / Prompts 用例
+  application.py       list / upsert / enable / remove / test
+  console.py           /mcp 命令适配
+  composition.py       create_mcp_plugin
+```
+
+持久与运行分离：
+
+| 实体 | 生命周期 | 内容 |
+| --- | --- | --- |
+| `McpServerRecord` | Agent Workspace 持久 | identity、transport、credential_refs、enabled、revision、timestamps |
+| `McpSecretStore` | 持久，独立文件 | 凭证真值；Registry 只存 ref |
+| `McpServerRuntimeState` | 进程内可丢 | availability、capabilities、last_error、last_checked_at |
+
+Client 缓存键为 `(server_id, revision)`。upsert / enable / remove / 凭证变化会失效旧连接。
+
+## 信任与控制面
+
+管理操作不是 Agent Tool。Console 提供：
+
+```text
+/mcp list [--runtime]
+/mcp upsert <json>
+/mcp enable <id>
+/mcp disable <id>
+/mcp remove <id>
+/mcp test <id>
+/mcp resources|prompts|read-resource|get-prompt ...
+```
+
+信任模型为 trust-on-enable：
+
+- 用户必须显式安装并启用；
+- 模型只能 `load_toolset` 已启用 Server；
+- 普通对话无法改 Registry。
+
+`console_chat` 将 `McpClientManager` 注入 Application resources，并把 `McpToolsetProvider` 放入普通 Run 的 `RunInvocation`。
+
+## Toolset 与调用路径
+
+```text
+descriptors()          同步读 Registry（零网络）
+load_toolset(mcp:id)   await list_tools → ToolSpec 快照
+下一轮                 模型可见 mcp__{server}__{tool}
+tools/call             handler 闭包持有 (server_id, 原名)
+```
+
+约束落实情况：
+
+- Toolset ID = `mcp:` + record.id；
+- `inputSchema` 原样进入 `JsonSchemaParameters`；非法 Schema 导致整个 Toolset 加载失败；
+- 跨 Server 同名工具通过命名空间共存；
+- `isError` / transport / protocol / `input_required` 分别映射为明确错误码；
+- Server instructions / Resource / Prompt 不升格为 system instruction。
+
+## 验证
+
+自动化：
+
+- Core：`287 passed, 1 skipped`
+- MCP Plugin：`11 passed`（`tests/plugins/test_mcp_plugin.py`）
+- Goal Plugin：`16 passed`
+
+覆盖主路径：Registry/Secret 往返、目录不含 disabled、命名空间路由、加载失败不污染快照、revision 失效、非法 Schema 失败、HTTPS 约束。
+
+尚未覆盖设计验收中的：
+
+- 真实 `2026-07-28` 与 Legacy Server 矩阵；
+- 真实 stdio / Streamable HTTP 端到端与分页长列表；
+- Secret 不泄露到 Artifact/日志的专项扫描；
+- 取消传播到进行中 MCP 请求的专项用例。
+
+## 使用要点
+
+安装示例：
+
+```text
+/mcp upsert {"id":"demo","display_name":"Demo","description":"示例","transport":"stdio","transport_config":{"command":"python","args":["server.py"]},"enabled":true}
+/mcp test demo
+/mcp list
+```
+
+对话中：模型看到 enabled 目录后调用 `load_toolset("mcp:demo")`，下一轮使用 `mcp__demo__...` 工具。
+
+依赖：`requirements.txt` 增加 `mcp>=1.27.0`。当前 SDK 仍以 Legacy `ClientSession.initialize` 为主；协议时代兼容交给 SDK，HelperMe 不自研 dual-era。
+
+## 后续
+
+出现真实需求后再做：
+
+- 只读“查询已安装列表”的对话能力（仍禁止写 Registry）；
+- OAuth Auth Client + Token Store；
+- 真实 Server 兼容 benchmark；
+- `subscriptions/listen`、MRTR、Tasks、MCP Apps；
+- Resource 自动注入 ContextPreparation；
+- 通用 Tool Approval。
+
+这些不得把 MCP 领域名词写进 Core，也不能让 RuntimeState / Client 成为第二套配置真相。

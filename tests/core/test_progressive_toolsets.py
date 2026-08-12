@@ -35,7 +35,7 @@ class FakeToolsetProvider:
             ToolsetDescriptor("database", "查询结构化数据"),
         )
 
-    def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
+    async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
         self.requested_ids.append(toolset_id)
         if toolset_id == "weather":
             async def get_weather(input_data):
@@ -233,6 +233,14 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, RunStatus.COMPLETED)
         self.assertEqual(result.evidence.steps[0].result["code"], "TOOLSET_NOT_FOUND")
         self.assertNotIn("get_weather", tool_names(client.requests[1]))
+
+    async def test_composite_provider_rejects_duplicate_ids(self):
+        from core.tools_runtime import CompositeToolsetProvider
+
+        with self.assertRaises(ValueError):
+            CompositeToolsetProvider(
+                (FakeToolsetProvider(), FakeToolsetProvider()),
+            )
 
 
 if __name__ == "__main__":
