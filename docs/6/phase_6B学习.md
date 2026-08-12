@@ -75,6 +75,7 @@ Core 管“如何加载”，Plugin 管“加载什么”。
 
 ## 当前实现
 
+- `core/tool_registry.py`：已完成 MCP 接入前置回补；`ToolSpec` 通过 `ToolParameters` 同时获得模型 Schema 与运行时校验，支持 `PydanticParameters` 和原生 `JsonSchemaParameters`。
 - `core/tools_runtime/progressive_toolsets.py`：Descriptor、Provider 公共端口、Run 内加载状态和 `load_toolset` 工具。
 - `core/tools_runtime/run_invocation.py`：增加单次 Run 的可选 `toolset_provider`。
 - `core/tools_runtime/run_runtime.py`：按轮重新装配已加载 Toolset 的工具和目录指令。
@@ -98,3 +99,5 @@ Core 管“如何加载”，Plugin 管“加载什么”。
 运行目录进一步区分为三类：源码仓库只保存 HelperMe 实现；用户任务 Workspace 由配置指定；Agent Workspace 固定为用户主目录下的 `.helperme`，保存 Session Artifact、Plugin 安装内容与运行状态。三者不能混用。Core 的 `AgentWorkspace` 只提供通用 `sessions/plugins/state` 布局，不认识 MCP；未来 MCP Plugin 使用自己的 Plugin 子目录。
 
 Skill 负责“如何使用能力”的指令，Tool 负责实际动作。Skill 的渐进加载应复用本节的 Run 生命周期，但不在 Toolset 最小原型中提前合并两者的数据模型。
+
+MCP Adapter 必须直接使用 `JsonSchemaParameters` 接入外部 `inputSchema`。禁止动态生成 Pydantic Model，也禁止通过补字段、删除约束或改写引用来静默归一化外部 Schema。完整决策与后续增强记录见 [ToolSpec格式回补总结.md](ToolSpec格式回补总结.md)。

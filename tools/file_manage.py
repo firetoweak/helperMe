@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.tool_registry import ToolSpec
+from core.tool_registry import ToolSpec, PydanticParameters
 from tools.workspace import (
     WorkspaceInputError,
     WorkspaceSandboxes,
@@ -55,7 +55,7 @@ def create_file_manage_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         ToolSpec(
             name="write_file",
             description=WRITE_FILE_DESCRIPTION,
-            input_model=WriteFileInput,
+            parameters=PydanticParameters(WriteFileInput),
             handler=write_file,
         )
     ]

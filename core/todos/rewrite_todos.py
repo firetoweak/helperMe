@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from core.tool_registry import ToolRegistry, ToolSpec
+from core.tool_registry import PydanticParameters, ToolRegistry, ToolSpec
 from core.tools_runtime.tools_executor import ToolsExecutor
 from core.todos.todo_list import TodoDraft, TodoList, TodoStatus
 
@@ -100,6 +100,6 @@ def _create_spec(todo_list: TodoList) -> ToolSpec:
     return ToolSpec(
         name=REWRITE_TODOS_NAME,
         description=REWRITE_TODOS_DESCRIPTION,
-        input_model=RewriteTodosInput,
+        parameters=PydanticParameters(RewriteTodosInput),
         handler=apply,
     )

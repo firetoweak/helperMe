@@ -4,7 +4,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from core.tool_registry import EmptyInput, ToolRegistry, ToolSpec
+from jsonschema.exceptions import SchemaError
+
+from core.tool_registry import (
+    EmptyInput,
+    JsonSchemaParameters,
+    PydanticParameters,
+    ToolRegistry,
+    ToolSpec,
+)
 from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import ToolsExecutor, normalize_tool_result
 from core.tools_runtime.tools_protocol import (
@@ -51,7 +59,7 @@ class ToolRegistryEarlyFailTest(unittest.TestCase):
         original = ToolSpec(
             tool_name,
             "original",
-            EmptyInput,
+            PydanticParameters(EmptyInput),
             original_handler,
         )
         registry.register(original)
@@ -61,12 +69,83 @@ class ToolRegistryEarlyFailTest(unittest.TestCase):
                 ToolSpec(
                     tool_name,
                     "replacement",
-                    EmptyInput,
+                    PydanticParameters(EmptyInput),
                     original_handler,
                 )
             )
 
         self.assertIs(registry.get(tool_name), original)
+
+    def test_invalid_json_schema_fails_during_parameters_creation(self):
+        with self.assertRaises(SchemaError):
+            JsonSchemaParameters({"type": "not-a-json-schema-type"})
+
+
+class JsonSchemaToolTest(unittest.TestCase):
+    def setUp(self):
+        self.schema = {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+                "days": {"type": "integer", "minimum": 1},
+            },
+            "required": ["city"],
+            "additionalProperties": False,
+        }
+        self.received_arguments = []
+        self.registry = ToolRegistry()
+        self.registry.register(
+            ToolSpec(
+                name="external_weather",
+                description="external JSON Schema tool",
+                parameters=JsonSchemaParameters(self.schema),
+                handler=self._handle,
+            )
+        )
+        self.executor = ToolsExecutor(self.registry)
+
+    def _handle(self, arguments):
+        self.received_arguments.append(arguments)
+        return {"ok": True, "code": "OK", "data": arguments}
+
+    def test_exposes_original_schema_and_passes_original_dict_to_handler(self):
+        exposed_schema = self.registry.get_tools()[0]["function"]["parameters"]
+        arguments = {"city": "北京", "days": 2}
+
+        result = self.executor.execute(
+            "external_weather",
+            json.dumps(arguments, ensure_ascii=False),
+        )
+
+        self.assertEqual(exposed_schema, self.schema)
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.received_arguments, [arguments])
+
+    def test_schema_validation_failure_is_recoverable_tool_error(self):
+        result = self.executor.execute(
+            "external_weather",
+            json.dumps({"days": 0}),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "VALIDATION_ERROR")
+        self.assertEqual(self.received_arguments, [])
+
+    def test_non_object_arguments_are_recoverable_tool_error(self):
+        result = self.executor.execute("external_weather", "[]")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "VALIDATION_ERROR")
+        self.assertEqual(self.received_arguments, [])
+
+    def test_schema_is_snapshotted_without_normalization(self):
+        parameters = JsonSchemaParameters(self.schema)
+        self.schema["properties"]["city"]["type"] = "integer"
+
+        self.assertEqual(
+            parameters.schema()["properties"]["city"]["type"],
+            "string",
+        )
 
 
 class ToolsExecutorEarlyFailTest(unittest.TestCase):
@@ -76,7 +155,7 @@ class ToolsExecutorEarlyFailTest(unittest.TestCase):
 
     def register(self, name, handler):
         self.registry.register(
-            ToolSpec(name, "test tool", EmptyInput, handler)
+            ToolSpec(name, "test tool", PydanticParameters(EmptyInput), handler)
         )
 
     def test_preserves_explicit_success_and_failure(self):

@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.tool_registry import ToolSpec
+from core.tool_registry import ToolSpec, PydanticParameters
 from tools.workspace import (
     WorkspaceInputError,
     WorkspaceSandboxes,
@@ -86,7 +86,7 @@ def create_get_changes_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         ToolSpec(
             name="get_changes",
             description=GET_CHANGES_DESCRIPTION,
-            input_model=GetChangesInput,
+            parameters=PydanticParameters(GetChangesInput),
             handler=get_changes,
         )
     ]

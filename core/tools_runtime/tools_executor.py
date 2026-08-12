@@ -1,9 +1,7 @@
 import json
 from typing import Any
 
-from pydantic import ValidationError
-
-from core.tool_registry import ToolRegistry
+from core.tool_registry import ToolArgumentsError, ToolRegistry
 
 RESERVED_KEYS = frozenset({"ok", "code", "data", "error", "hint"})
 
@@ -62,7 +60,9 @@ class ToolsExecutor:
 
         try:
             payload = json.loads(tool_arguments)
-            data = spec.input_model.model_validate(payload)
+            if not isinstance(payload, dict):
+                raise ToolArgumentsError("tool arguments 必须是 JSON object")
+            data = spec.parameters.validate(payload)
             result = spec.handler(data)
             return normalize_tool_result(result)
         except json.JSONDecodeError as exc:
@@ -74,12 +74,12 @@ class ToolsExecutor:
                     "hint": "修正工具 arguments 的 JSON 格式后重试。",
                 }
             )
-        except ValidationError as exc:
+        except ToolArgumentsError as exc:
             return normalize_tool_result(
                 {
                     "ok": False,
                     "code": "VALIDATION_ERROR",
-                    "error": exc.errors(include_context=False),
+                    "error": exc.details,
                     "hint": "按工具 schema 修正参数后重试。",
                 }
             )

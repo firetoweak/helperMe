@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
-from core.tool_registry import ToolSpec
+from core.tool_registry import PydanticParameters, ToolSpec
 from core.tools_runtime.run_evidence import RunEvidence
 from plugins.goal.submissions import (
     ContractCompilationBuffer,
@@ -165,7 +165,7 @@ def create_submit_completion_contract_spec(
     return ToolSpec(
         name=SUBMIT_COMPLETION_CONTRACT,
         description="根据用户 Goal 提交可验收的 Completion Contract。",
-        input_model=CompletionContractInput,
+        parameters=PydanticParameters(CompletionContractInput),
         handler=submit,
     )
 
@@ -213,7 +213,7 @@ def create_submit_goal_judgment_spec(
             "提交 Goal 级验收结论。done 必须建立在实际验证和充分证据上；"
             "证据不足返回 continue；用户标准客观上无法满足时返回 pause。"
         ),
-        input_model=GoalJudgmentInput,
+        parameters=PydanticParameters(GoalJudgmentInput),
         handler=submit,
     )
 

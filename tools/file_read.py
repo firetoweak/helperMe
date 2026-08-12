@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from core.tool_registry import EmptyInput, ToolSpec
+from core.tool_registry import EmptyInput, PydanticParameters, ToolSpec
 from tools.workspace import (
     AbsolutePathNotAllowed,
     PathOutsideWorkspace,
@@ -429,25 +429,25 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         ToolSpec(
             name="get_workspace_info",
             description=GET_WORKSPACE_INFO_DESCRIPTION,
-            input_model=EmptyInput,
+            parameters=PydanticParameters(EmptyInput),
             handler=get_workspace_info,
         ),
         ToolSpec(
             name="glob",
             description=GLOB_DESCRIPTION,
-            input_model=GlobInput,
+            parameters=PydanticParameters(GlobInput),
             handler=glob,
         ),
         ToolSpec(
             name="grep",
             description=GREP_DESCRIPTION,
-            input_model=GrepInput,
+            parameters=PydanticParameters(GrepInput),
             handler=grep,
         ),
         ToolSpec(
             name="read_file",
             description=READ_FILE_DESCRIPTION,
-            input_model=ReadFileInput,
+            parameters=PydanticParameters(ReadFileInput),
             handler=read_file,
         ),
     ]

@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from core.tool_registry import ToolSpec
+from core.tool_registry import ToolSpec, PydanticParameters
 from tools.powershell_runner import (
     CommandStartError,
     CommandResult,
@@ -129,6 +129,6 @@ def create_command_execution_spec(
     return ToolSpec(
         name="execute_command",
         description=EXECUTE_COMMAND_DESCRIPTION,
-        input_model=ExecuteCommandInput,
+        parameters=PydanticParameters(ExecuteCommandInput),
         handler=execute_command,
     )

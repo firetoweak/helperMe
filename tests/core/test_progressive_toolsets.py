@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.tool_registry import ToolSpec
+from core.tool_registry import PydanticParameters, ToolSpec
 from core.tools_runtime import (
     LOAD_TOOLSET,
     RunInvocation,
@@ -42,7 +42,7 @@ class FakeToolsetProvider:
                 ToolSpec(
                     name="get_weather",
                     description="查询指定地点的当前天气",
-                    input_model=WeatherInput,
+                    parameters=PydanticParameters(WeatherInput),
                     handler=lambda input_data: {
                         "ok": True,
                         "code": "WEATHER_FOUND",

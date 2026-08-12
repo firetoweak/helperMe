@@ -16,7 +16,7 @@ from core.composition import create_agent_application
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.tool_registry import EmptyInput, ToolRegistry, ToolSpec
+from core.tool_registry import EmptyInput, PydanticParameters, ToolRegistry, ToolSpec
 from core.tools_runtime.run_runtime import RunRuntime
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from tools.artifact_read import create_read_artifact_spec
@@ -222,7 +222,12 @@ class RuntimeArtifactsTest(unittest.TestCase):
 
         registry = ToolRegistry()
         registry.register(
-            ToolSpec("big_tool", "returns a big result", EmptyInput, big_tool)
+            ToolSpec(
+                "big_tool",
+                "returns a big result",
+                PydanticParameters(EmptyInput),
+                big_tool,
+            )
         )
         registry.register(create_read_artifact_spec(self.store))
         limit = ToolResultLimit(max_chars=500, preview_chars=80)

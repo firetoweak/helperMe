@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.tool_registry import ToolSpec
+from core.tool_registry import ToolSpec, PydanticParameters
 from tools.workspace import (
     WorkspaceInputError,
     WorkspaceSandboxes,
@@ -126,13 +126,13 @@ def create_file_write_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         ToolSpec(
             name="apply_patch",
             description=APPLY_PATCH_DESCRIPTION,
-            input_model=ApplyPatchInput,
+            parameters=PydanticParameters(ApplyPatchInput),
             handler=apply_patch,
         ),
         ToolSpec(
             name="replace_all",
             description=REPLACE_ALL_DESCRIPTION,
-            input_model=ReplaceAllInput,
+            parameters=PydanticParameters(ReplaceAllInput),
             handler=replace_all,
         ),
     ]

@@ -16,7 +16,7 @@ from core.model_call.service import ModelCallService
 from core.runtime_artifacts import ToolResultExternalizer, ToolResultLimit
 from core.runtime_modes import PlainMode
 from core.session import SessionRuntime
-from core.tool_registry import EmptyInput, ToolRegistry, ToolSpec
+from core.tool_registry import EmptyInput, PydanticParameters, ToolRegistry, ToolSpec
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tests.core.llm_test_support import (
@@ -163,7 +163,7 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
         registry.register(ToolSpec(
             name="ping",
             description="返回 pong。",
-            input_model=EmptyInput,
+            parameters=PydanticParameters(EmptyInput),
             handler=lambda _raw: {
                 "ok": True,
                 "code": "PONG",

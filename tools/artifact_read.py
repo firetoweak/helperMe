@@ -9,7 +9,7 @@ from core.runtime_artifacts import (
     ArtifactOffsetOutOfRangeError,
     ArtifactStore,
 )
-from core.tool_registry import ToolSpec
+from core.tool_registry import ToolSpec, PydanticParameters
 
 
 class ReadArtifactInput(BaseModel):
@@ -56,6 +56,6 @@ def create_read_artifact_spec(store: ArtifactStore) -> ToolSpec:
 关键限制：只能使用工具结果真实提供的 artifact_id；offset 是字符偏移，limit 最大为 3000；Artifact 只在所属 Session 抽屉内有效。
 失败/截断后：truncated=true 时使用 next_offset 继续；ARTIFACT_NOT_FOUND 时停止猜测 id；ARTIFACT_OFFSET_OUT_OF_RANGE 时依据错误修正 offset。
 """.strip(),
-        input_model=ReadArtifactInput,
+        parameters=PydanticParameters(ReadArtifactInput),
         handler=read_artifact,
     )

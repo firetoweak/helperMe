@@ -5,7 +5,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from core.tool_registry import ToolSpec
+from core.tool_registry import PydanticParameters, ToolSpec
 
 
 LOAD_TOOLSET = "load_toolset"
@@ -59,7 +59,7 @@ def create_load_toolset_spec(
     return ToolSpec(
         name=LOAD_TOOLSET,
         description="为当前 Run 加载一个 Toolset；其中的工具从下一轮开始可用。",
-        input_model=LoadToolsetInput,
+        parameters=PydanticParameters(LoadToolsetInput),
         handler=load_toolset,
     )
 
