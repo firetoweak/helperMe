@@ -1,99 +1,35 @@
 from __future__ import annotations
 
+import asyncio  # 兼容既有重试测试的 patch 边界；重试实现位于 model_turn。
 import json
-import asyncio
-from dataclasses import dataclass
-from enum import Enum
 from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
-    context_budget_exceeded_checkpoint,
-    context_compressed_checkpoint,
-    context_length_exceeded_checkpoint,
-    context_prepared_checkpoint,
     format_checkpoint,
-    invalid_llm_response_checkpoint,
-    llm_error_checkpoint,
-    llm_request_checkpoint,
-    llm_retry_checkpoint,
-    llm_usage_checkpoint,
     message_chain_invalid_checkpoint,
-    todo_list_created_checkpoint,
     run_completed_checkpoint,
     run_interrupted_checkpoint,
-    runtime_mode_activation_failed_checkpoint,
-    runtime_mode_fallback_checkpoint,
-    runtime_mode_routed_checkpoint,
     run_started_checkpoint,
     tool_batch_completed_checkpoint,
     verification_required_checkpoint,
 )
 from core.messages import Conversation
-from core.model_call.client import LLMContextLengthError, LLMTransientError
-from core.model_call.service import (
-    ModelCallBlocked,
-    ModelCallRequest,
-    ModelCallService,
-)
-from core.model_call.types import InvalidLLMResponse, LLMResponse, LLMUsage
-from core.context.projection import project_system_prompt
+from core.model_call.service import ModelCallService
 from core.tools_runtime.stop_guard import evaluate_stop_safety
-from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
-from core.tools_runtime.tools_protocol import (
-    build_tool_messages,
-    validate_tool_message_chain,
-)
+from core.tools_runtime.tools_executor import ToolsExecutor
+from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.tools_state import ToolsState
 from core.runtime_modes import RunMode, RuntimeMode, RuntimeModeRouter
-from core.context import (
-    ContextComposition,
-    ContextPreparationService,
-    ContextState,
-    MicroCompactionTrace,
-    ModelContext,
-    SummaryCompaction,
-)
-from core.context.preparation import SUMMARY_INSTRUCTION
+from core.context import ContextPreparationService, ContextState
 from core.runtime_artifacts import ToolResultExternalizer
 from core.tools_runtime.run_progress import NullRunProgressSink, RunProgressSink
 from core.tools_runtime.run_evidence import RunEvidence, RunEvidenceRecorder
 from core.tools_runtime.run_invocation import RunInvocation
-from core.tools_runtime.progressive_toolsets import (
-    ToolsetLoadingState,
-    create_load_toolset_spec,
-    toolset_catalog_instruction,
-)
-
-class RunStatus(str, Enum):
-    COMPLETED = "completed"
-    INTERRUPTED = "interrupted"
-    BLOCKED = "blocked"
-    FAILED = "failed"
-
-
-@dataclass
-class RunControl:
-    interrupt_requested: bool = False
-    interrupt_reason: str | None = None
-
-    def request_interrupt(self, reason: str | None = None) -> None:
-        self.interrupt_requested = True
-        self.interrupt_reason = reason
-
-
-@dataclass
-class RunResult:
-    status: RunStatus
-    answer: str
-    checkpoints: list[Checkpoint]
-    context_state: ContextState
-    evidence: RunEvidence
-
-    @property
-    def final_reason(self) -> str | None:
-        if self.status == RunStatus.COMPLETED or not self.checkpoints:
-            return None
-        return self.checkpoints[-1].reason
+from core.tools_runtime.model_turn import ModelTurnRunner
+from core.tools_runtime.mode_activation import ModeActivator
+from core.tools_runtime.run_types import RunControl, RunResult, RunStatus
+from core.tools_runtime.tool_batch import SerialToolBatchExecutor
+from core.tools_runtime.tool_environment import RunToolEnvironment
 
 
 class RunRuntime:
@@ -132,69 +68,6 @@ class RunRuntime:
         self.progress_sink = progress_sink or NullRunProgressSink()
 
     @staticmethod
-    def _record_summary_compaction(
-        summary_compaction: SummaryCompaction | None,
-        checkpoints: list[Checkpoint],
-        round_index: int | None = None,
-    ) -> bool:
-        if summary_compaction is None:
-            return False
-        checkpoints.append(
-            llm_usage_checkpoint(
-                stage="context_summary",
-                round_index=round_index,
-                usage=LLMUsage(
-                    input_tokens=summary_compaction.generation.input_tokens,
-                    output_tokens=summary_compaction.generation.output_tokens,
-                ),
-            )
-        )
-        checkpoints.append(
-            context_compressed_checkpoint(
-                boundary_message_id=summary_compaction.boundary_message_id,
-                before=summary_compaction.before,
-                after=summary_compaction.after,
-            )
-        )
-        return summary_compaction.after.allowed
-
-    @staticmethod
-    def _record_summary_request(
-        model_context: ModelContext,
-        checkpoints: list[Checkpoint],
-        round_index: int | None,
-    ) -> None:
-        checkpoints.append(
-            llm_request_checkpoint(
-                stage="context_summary",
-                round_index=round_index,
-                attempt=1,
-                runtime_prompts=[SUMMARY_INSTRUCTION],
-                messages=model_context.messages,
-            )
-        )
-
-    @staticmethod
-    def _record_context_prepared(
-        *,
-        stage: str,
-        composition: ContextComposition | None,
-        micro_compaction_trace: MicroCompactionTrace | None,
-        checkpoints: list[Checkpoint],
-        round_index: int | None = None,
-    ) -> None:
-        if composition is None or micro_compaction_trace is None:
-            return
-        checkpoints.append(
-            context_prepared_checkpoint(
-                stage=stage,
-                composition=composition,
-                micro_compaction=micro_compaction_trace,
-                round_index=round_index,
-            )
-        )
-
-    @staticmethod
     def _finish(
         *,
         status: RunStatus,
@@ -213,193 +86,6 @@ class RunRuntime:
             evidence=evidence,
         )
 
-    async def _call_llm_with_retry(
-        self,
-        model_context: ModelContext,
-        tools: list[dict],
-        stage: str,
-        round_index: int | None,
-        checkpoints: list[Checkpoint],
-        runtime_prompts: list[str] | None = None,
-        max_llm_retries: int = 3,
-    ) -> LLMResponse | Checkpoint:
-        last_error = ""
-        for attempt in range(1, max_llm_retries + 1):
-            checkpoints.append(
-                llm_request_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    attempt=attempt,
-                    runtime_prompts=runtime_prompts or [],
-                    messages=model_context.messages,
-                )
-            )
-            try:
-                outcome = await self.model_calls.call(
-                    ModelCallRequest(
-                        context=model_context,
-                        tools=tools,
-                    ),
-                    self.model,
-                )
-                if isinstance(outcome, ModelCallBlocked):
-                    return context_budget_exceeded_checkpoint(
-                        stage=stage,
-                        round_index=round_index,
-                        assessment=outcome.assessment,
-                    )
-                checkpoints.append(
-                    llm_usage_checkpoint(
-                        stage=stage,
-                        round_index=round_index,
-                        usage=outcome.usage,
-                    )
-                )
-                return outcome.response
-            except InvalidLLMResponse as exc:
-                if exc.code == "empty_model_response" and attempt < max_llm_retries:
-                    checkpoints.append(
-                        llm_retry_checkpoint(
-                            stage=stage,
-                            round_index=round_index,
-                            attempt=attempt,
-                            max_attempts=max_llm_retries,
-                            error=str(exc),
-                        )
-                    )
-                    await asyncio.sleep(min(attempt, 3))
-                    continue
-                return invalid_llm_response_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    reason=exc.code,
-                    error=str(exc),
-                )
-            except LLMContextLengthError as exc:
-                return context_length_exceeded_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    error=str(exc),
-                )
-            except LLMTransientError as exc:
-                last_error = str(exc)
-                if attempt < max_llm_retries:
-                    checkpoints.append(
-                        llm_retry_checkpoint(
-                            stage=stage,
-                            round_index=round_index,
-                            attempt=attempt,
-                            max_attempts=max_llm_retries,
-                            error=last_error,
-                        )
-                    )
-                    await asyncio.sleep(min(attempt, 3))
-                    continue
-
-                checkpoint = llm_error_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    attempts=max_llm_retries,
-                    error=last_error,
-                )
-                return checkpoint
-
-    async def _prepare_and_call_role(
-        self,
-        *,
-        conversation: Conversation,
-        system_prompt: str,
-        context_state: ContextState,
-        level2_boundary_message_id: str | None,
-        stage: str,
-        round_index: int | None,
-        checkpoints: list[Checkpoint],
-        tools: list[dict],
-    ) -> tuple[LLMResponse | Checkpoint, ContextState, bool]:
-        try:
-            prepared = await self.context_preparation.prepare(
-                conversation_records=project_system_prompt(
-                    conversation.records,
-                    system_prompt,
-                ),
-                context_state=context_state,
-                runtime_instructions=[],
-                tools=tools,
-                level2_boundary_message_id=level2_boundary_message_id,
-                on_summary_request=lambda model_context: (
-                    self._record_summary_request(
-                        model_context,
-                        checkpoints,
-                        round_index,
-                    )
-                ),
-            )
-        except LLMContextLengthError as exc:
-            return (
-                context_length_exceeded_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    error=str(exc),
-                ),
-                context_state,
-                False,
-            )
-        except LLMTransientError as exc:
-            return (
-                llm_error_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    attempts=1,
-                    error=str(exc),
-                ),
-                context_state,
-                False,
-            )
-        except InvalidLLMResponse as exc:
-            return (
-                invalid_llm_response_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    reason=exc.code,
-                    error=str(exc),
-                ),
-                context_state,
-                False,
-            )
-
-        compressed = self._record_summary_compaction(
-            prepared.summary_compaction,
-            checkpoints,
-            round_index,
-        )
-        self._record_context_prepared(
-            stage=stage,
-            composition=prepared.composition,
-            micro_compaction_trace=prepared.micro_compaction_trace,
-            checkpoints=checkpoints,
-            round_index=round_index,
-        )
-        if prepared.blocked_assessment is not None:
-            return (
-                context_budget_exceeded_checkpoint(
-                    stage=stage,
-                    round_index=round_index,
-                    assessment=prepared.blocked_assessment,
-                ),
-                prepared.context_state,
-                compressed,
-            )
-
-        response = await self._call_llm_with_retry(
-            prepared.model_context,
-            tools,
-            stage,
-            round_index,
-            checkpoints,
-            runtime_prompts=[system_prompt],
-        )
-        return response, prepared.context_state, compressed
-
     async def run(
         self,
         conversation: Conversation,
@@ -415,46 +101,22 @@ class RunRuntime:
         run_control = control or RunControl()
         current_context_state = context_state or ContextState()
         current_invocation = invocation or RunInvocation()
-        if current_invocation.capabilities:
-            selections = [
-                capability.base_tool_names()
-                for capability in current_invocation.capabilities
-            ]
-            restrictions = [
-                set(selection)
-                for selection in selections
-                if selection is not None
-            ]
-            base_run_registry = (
-                self.tools_executor.registry.select(
-                    set.intersection(*restrictions)
-                )
-                if restrictions
-                else self.tools_executor.registry.clone()
-            )
-            for capability in current_invocation.capabilities:
-                for spec in capability.tool_specs():
-                    base_run_registry.register(spec)
-            base_run_tools_executor = ToolsExecutor(base_run_registry)
-        else:
-            base_run_registry = self.tools_executor.registry
-            base_run_tools_executor = self.tools_executor
-        toolset_provider = current_invocation.toolset_provider
-        toolset_descriptors = (
-            toolset_provider.descriptors()
-            if toolset_provider is not None
-            else ()
+        model_turn_runner = ModelTurnRunner(
+            self.model_calls,
+            self.model,
+            self.context_preparation,
         )
-        toolset_state = ToolsetLoadingState()
-        evidence_roots = tuple(dict.fromkeys(
-            root
-            for capability in current_invocation.capabilities
-            for root in capability.evidence_roots()
-        ))
-        for root in evidence_roots:
+        tool_environment = RunToolEnvironment(
+            self.tools_executor,
+            current_invocation,
+        )
+        tool_batch_executor = SerialToolBatchExecutor(
+            self.tool_result_externalizer,
+        )
+        for root in tool_environment.evidence_roots():
             evidence_recorder.record_workspace_baseline(
                 root,
-                await base_run_tools_executor.execute(
+                await tool_environment.base_executor.execute(
                     "get_changes",
                     json.dumps({"root": root}),
                 ),
@@ -474,188 +136,45 @@ class RunRuntime:
         checkpoints.append(run_started_checkpoint(max_rounds, system_prompt))
         conversation.add_user(user_message)
 
-        runtime_mode = current_invocation.runtime_mode or self.runtime_mode
-        if (
-            current_invocation.runtime_mode is None
-            and self.mode_router is not None
-        ):
-            route_context = ModelContext(
-                messages=self.mode_router.build_messages(conversation.records)
+        activation = await ModeActivator(
+            model_turn_runner=model_turn_runner,
+            default_mode=self.runtime_mode,
+            mode_router=self.mode_router,
+            runtime_modes=self.runtime_modes,
+        ).activate(
+            conversation=conversation,
+            requested_mode=current_invocation.runtime_mode,
+            context_state=current_context_state,
+            level2_boundary_message_id=level2_boundary_message_id,
+        )
+        checkpoints.extend(activation.checkpoints)
+        current_context_state = activation.context_state
+        level2_performed = level2_performed or activation.compressed
+        if activation.terminal_checkpoint is not None:
+            checkpoint = activation.terminal_checkpoint
+            status = (
+                RunStatus.BLOCKED
+                if checkpoint.reason in {
+                    "context_budget_exceeded",
+                    "context_length_exceeded",
+                }
+                else RunStatus.FAILED
             )
-            route_response = await self._call_llm_with_retry(
-                route_context,
-                [],
-                "routing",
-                None,
-                checkpoints,
-                runtime_prompts=[self.mode_router.system_prompt],
+            return self._finish(
+                status=status,
+                answer=format_checkpoint(checkpoint),
+                checkpoint=checkpoint,
+                checkpoints=checkpoints,
+                context_state=current_context_state,
+                evidence=evidence_recorder.snapshot(),
             )
-            if isinstance(route_response, Checkpoint):
-                if route_response.reason in {
-                    "empty_model_response",
-                    "invalid_llm_response",
-                }:
-                    checkpoints.append(route_response)
-                    checkpoints.append(
-                        runtime_mode_fallback_checkpoint(
-                            from_mode=None,
-                            to_mode=RunMode.PLAIN.value,
-                            reason=route_response.reason,
-                        )
-                    )
-                    runtime_mode = self.runtime_modes[RunMode.PLAIN]
-                else:
-                    status = (
-                        RunStatus.BLOCKED
-                        if route_response.reason in {
-                            "context_budget_exceeded",
-                            "context_length_exceeded",
-                        }
-                        else RunStatus.FAILED
-                    )
-                    return self._finish(
-                        status=status,
-                        answer=format_checkpoint(route_response),
-                        checkpoint=route_response,
-                        checkpoints=checkpoints,
-                        context_state=current_context_state,
-                        evidence=evidence_recorder.snapshot(),
-                    )
-            else:
-                try:
-                    decision = self.mode_router.accept_response(route_response)
-                except InvalidLLMResponse as exc:
-                    checkpoint = runtime_mode_activation_failed_checkpoint(
-                        mode=None,
-                        stage="routing",
-                        reason=exc.code,
-                        error=str(exc),
-                    )
-                    checkpoints.append(checkpoint)
-                    checkpoints.append(
-                        runtime_mode_fallback_checkpoint(
-                            from_mode=None,
-                            to_mode=RunMode.PLAIN.value,
-                            reason=exc.code,
-                        )
-                    )
-                    runtime_mode = self.runtime_modes[RunMode.PLAIN]
-                else:
-                    checkpoints.append(
-                        runtime_mode_routed_checkpoint(
-                            decision.mode.value,
-                            decision.reason,
-                        )
-                    )
-                    runtime_mode = self.runtime_modes[decision.mode]
-
-        mode_state = runtime_mode.create_state()
-        start_prompt = runtime_mode.start(mode_state)
-        if start_prompt is not None:
-            start_tools = runtime_mode.runtime_tools(mode_state)
-            start_response, current_context_state, compressed = (
-                await self._prepare_and_call_role(
-                    conversation=conversation,
-                    system_prompt=start_prompt,
-                    context_state=current_context_state,
-                    level2_boundary_message_id=level2_boundary_message_id,
-                    stage="todo_initialization",
-                    round_index=None,
-                    checkpoints=checkpoints,
-                    tools=start_tools,
-                )
-            )
-            level2_performed = level2_performed or compressed
-            if isinstance(start_response, Checkpoint):
-                status = (
-                    RunStatus.BLOCKED
-                    if start_response.reason in {
-                        "context_budget_exceeded",
-                        "context_length_exceeded",
-                    }
-                    else RunStatus.FAILED
-                )
-                return self._finish(
-                    status=status,
-                    answer=format_checkpoint(start_response),
-                    checkpoint=start_response,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
-                    evidence=evidence_recorder.snapshot(),
-                )
-            try:
-                start_data = await runtime_mode.accept_start_response(
-                    mode_state,
-                    start_response
-                )
-            except InvalidLLMResponse as exc:
-                if self.mode_router is None:
-                    checkpoint = invalid_llm_response_checkpoint(
-                        stage="todo_initialization",
-                        round_index=None,
-                        reason=exc.code,
-                        error=str(exc),
-                    )
-                    return self._finish(
-                        status=RunStatus.FAILED,
-                        answer=format_checkpoint(checkpoint),
-                        checkpoint=checkpoint,
-                        checkpoints=checkpoints,
-                        context_state=current_context_state,
-                        evidence=evidence_recorder.snapshot(),
-                    )
-                checkpoint = runtime_mode_activation_failed_checkpoint(
-                    mode=RunMode.TODO.value,
-                    stage="todo_initialization",
-                    reason=exc.code,
-                    error=str(exc),
-                )
-                checkpoints.append(checkpoint)
-                checkpoints.append(
-                    runtime_mode_fallback_checkpoint(
-                        from_mode=RunMode.TODO.value,
-                        to_mode=RunMode.PLAIN.value,
-                        reason=exc.code,
-                    )
-                )
-                runtime_mode = self.runtime_modes[RunMode.PLAIN]
-                mode_state = runtime_mode.create_state()
-            else:
-                if start_data is not None:
-                    checkpoints.append(todo_list_created_checkpoint(start_data))
+        runtime_mode = activation.runtime_mode
+        mode_state = activation.mode_state
+        if runtime_mode is None:
+            raise AssertionError("mode activation completed without a runtime mode")
         for round_index in range(1, max_rounds + 1):
-            if toolset_provider is None:
-                run_registry = base_run_registry
-                run_tools_executor = base_run_tools_executor
-            else:
-                run_registry = base_run_registry.clone()
-                run_registry.register(
-                    create_load_toolset_spec(
-                        toolset_descriptors,
-                        toolset_state,
-                    )
-                )
-                for descriptor in toolset_descriptors:
-                    if descriptor.id not in toolset_state.loaded_ids:
-                        continue
-                    for spec in toolset_provider.tool_specs(descriptor.id):
-                        run_registry.register(spec)
-                run_tools_executor = ToolsExecutor(run_registry)
-            external_tools = run_registry.get_tools()
-            runtime_tools = runtime_mode.runtime_tools(mode_state)
-            external_names = {
-                tool["function"]["name"] for tool in external_tools
-            }
-            runtime_names = {
-                tool["function"]["name"] for tool in runtime_tools
-            }
-            duplicated_names = external_names & runtime_names
-            if duplicated_names:
-                raise ValueError(
-                    "runtime tool conflicts with external tool: "
-                    f"{sorted(duplicated_names)}"
-                )
-            tools = external_tools + runtime_tools
+            tool_snapshot = tool_environment.snapshot(runtime_mode, mode_state)
+            tools = tool_snapshot.model_tools
             validation = validate_tool_message_chain(
                 conversation.protocol_messages()
             )
@@ -669,113 +188,20 @@ class RunRuntime:
                     context_state=current_context_state,
                     evidence=evidence_recorder.snapshot(),
                 )
-            runtime_prompts = list(
-                runtime_mode.runtime_instructions(mode_state)
-            )
-            for capability in current_invocation.capabilities:
-                runtime_prompts.extend(capability.runtime_instructions())
-            if toolset_provider is not None:
-                runtime_prompts.append(
-                    toolset_catalog_instruction(
-                        toolset_descriptors,
-                        toolset_state,
-                    )
-                )
-            try:
-                prepared = await self.context_preparation.prepare(
-                    conversation_records=conversation.records,
-                    context_state=current_context_state,
-                    runtime_instructions=runtime_prompts,
-                    tools=tools,
-                    level2_boundary_message_id=level2_boundary_message_id,
-                    on_summary_request=lambda model_context: (
-                        self._record_summary_request(
-                            model_context,
-                            checkpoints,
-                            round_index,
-                        )
-                    ),
-                )
-            except LLMContextLengthError as exc:
-                checkpoint = context_length_exceeded_checkpoint(
-                    stage="context_summary",
-                    round_index=round_index,
-                    error=str(exc),
-                )
-                return self._finish(
-                    status=RunStatus.BLOCKED,
-                    answer=format_checkpoint(checkpoint),
-                    checkpoint=checkpoint,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
-                    evidence=evidence_recorder.snapshot(),
-                )
-            except LLMTransientError as exc:
-                checkpoint = llm_error_checkpoint(
-                    stage="context_summary",
-                    round_index=round_index,
-                    attempts=1,
-                    error=str(exc),
-                )
-                return self._finish(
-                    status=RunStatus.FAILED,
-                    answer=format_checkpoint(checkpoint),
-                    checkpoint=checkpoint,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
-                    evidence=evidence_recorder.snapshot(),
-                )
-            except InvalidLLMResponse as exc:
-                checkpoint = invalid_llm_response_checkpoint(
-                    stage="context_summary",
-                    round_index=round_index,
-                    reason=exc.code,
-                    error=str(exc),
-                )
-                return self._finish(
-                    status=RunStatus.FAILED,
-                    answer=format_checkpoint(checkpoint),
-                    checkpoint=checkpoint,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
-                    evidence=evidence_recorder.snapshot(),
-                )
-            current_context_state = prepared.context_state
-            if self._record_summary_compaction(
-                prepared.summary_compaction,
-                checkpoints,
-                round_index,
-            ):
-                level2_performed = True
-            self._record_context_prepared(
+            turn_outcome = await model_turn_runner.prepare_and_call(
+                conversation_records=conversation.records,
+                context_state=current_context_state,
+                runtime_instructions=tool_snapshot.runtime_prompts,
+                tools=tools,
+                level2_boundary_message_id=level2_boundary_message_id,
                 stage="agent_round",
-                composition=prepared.composition,
-                micro_compaction_trace=prepared.micro_compaction_trace,
-                checkpoints=checkpoints,
                 round_index=round_index,
+                preparation_failure_stage="context_summary",
             )
-            if prepared.blocked_assessment is not None:
-                checkpoint = context_budget_exceeded_checkpoint(
-                    stage="context_summary",
-                    round_index=round_index,
-                    assessment=prepared.blocked_assessment,
-                )
-                return self._finish(
-                    status=RunStatus.BLOCKED,
-                    answer=format_checkpoint(checkpoint),
-                    checkpoint=checkpoint,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
-                    evidence=evidence_recorder.snapshot(),
-                )
-            llm_outcome = await self._call_llm_with_retry(
-                prepared.model_context,
-                tools,
-                "agent_round",
-                round_index,
-                checkpoints,
-                runtime_prompts=runtime_prompts,
-            )
+            checkpoints.extend(turn_outcome.checkpoints)
+            current_context_state = turn_outcome.context_state
+            level2_performed = level2_performed or turn_outcome.compressed
+            llm_outcome = turn_outcome.result
             if isinstance(llm_outcome, Checkpoint):
                 status = (
                     RunStatus.BLOCKED
@@ -868,41 +294,18 @@ class RunRuntime:
                 )
 
             calls = response.calls
-            batch_steps = tools_state.add_calls(calls)
-            result_chars_before = 0
-            result_chars_after = 0
-            externalized_count = 0
-
-            for call in calls:
-                if runtime_mode.handles_tool(call.name):
-                    tool_result = await runtime_mode.execute_tool(
-                        mode_state,
-                        call.name,
-                        call.arguments,
-                    )
-                else:
-                    tool_result = await run_tools_executor.execute(
-                        call.name,
-                        call.arguments,
-                    )
-                evidence_recorder.record(
-                    call.id,
-                    call.name,
-                    call.arguments,
-                    tool_result,
-                )
-                outcome = self.tool_result_externalizer.process(tool_result)
-                result_chars_before += outcome.original_chars
-                result_chars_after += outcome.projected_chars
-                if outcome.externalized:
-                    externalized_count += 1
-                tools_state.add_result(call.id, outcome.result)
-
-            tool_results = build_tool_messages(batch_steps, encode_tool_result)
-            conversation.add_tools_result(tool_results)
+            batch = await tool_batch_executor.execute(
+                calls=calls,
+                tools_executor=tool_snapshot.executor,
+                runtime_mode=runtime_mode,
+                mode_state=mode_state,
+                tools_state=tools_state,
+                evidence_recorder=evidence_recorder,
+            )
+            conversation.add_tools_result(batch.messages)
             batch_feedback = runtime_mode.after_tool_batch(
                 mode_state,
-                batch_steps,
+                batch.steps,
             )
             if batch_feedback is not None:
                 conversation.add_user(batch_feedback)
@@ -912,9 +315,9 @@ class RunRuntime:
                     tools_state,
                     len(calls),
                     runtime_mode.checkpoint_data(mode_state),
-                    result_chars_before=result_chars_before,
-                    result_chars_after=result_chars_after,
-                    externalized_count=externalized_count,
+                    result_chars_before=batch.result_chars_before,
+                    result_chars_after=batch.result_chars_after,
+                    externalized_count=batch.externalized_count,
                 )
             )
 

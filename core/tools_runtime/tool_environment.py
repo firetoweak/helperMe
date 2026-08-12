@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from core.runtime_modes import RuntimeMode
+from core.tools_runtime.progressive_toolsets import (
+    ToolsetLoadingState,
+    create_load_toolset_spec,
+    toolset_catalog_instruction,
+)
+from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.tools_executor import ToolsExecutor
+
+
+@dataclass(frozen=True)
+class ToolEnvironmentSnapshot:
+    executor: ToolsExecutor
+    model_tools: list[dict]
+    runtime_prompts: list[str]
+
+
+class RunToolEnvironment:
+    """管理一次 Run 内的工具选择、渐进加载和逐轮可见快照。"""
+
+    def __init__(self, tools_executor: ToolsExecutor, invocation: RunInvocation) -> None:
+        self.invocation = invocation
+        if invocation.capabilities:
+            selections = [
+                capability.base_tool_names()
+                for capability in invocation.capabilities
+            ]
+            restrictions = [
+                set(selection)
+                for selection in selections
+                if selection is not None
+            ]
+            self.base_registry = (
+                tools_executor.registry.select(set.intersection(*restrictions))
+                if restrictions
+                else tools_executor.registry.clone()
+            )
+            for capability in invocation.capabilities:
+                for spec in capability.tool_specs():
+                    self.base_registry.register(spec)
+            self.base_executor = ToolsExecutor(self.base_registry)
+        else:
+            self.base_registry = tools_executor.registry
+            self.base_executor = tools_executor
+
+        self.toolset_provider = invocation.toolset_provider
+        self.toolset_descriptors = (
+            self.toolset_provider.descriptors()
+            if self.toolset_provider is not None
+            else ()
+        )
+        self.toolset_state = ToolsetLoadingState()
+
+    def evidence_roots(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            root
+            for capability in self.invocation.capabilities
+            for root in capability.evidence_roots()
+        ))
+
+    def snapshot(self, runtime_mode: RuntimeMode, mode_state: Any) -> ToolEnvironmentSnapshot:
+        if self.toolset_provider is None:
+            run_registry = self.base_registry
+            run_executor = self.base_executor
+        else:
+            run_registry = self.base_registry.clone()
+            run_registry.register(
+                create_load_toolset_spec(
+                    self.toolset_descriptors,
+                    self.toolset_state,
+                )
+            )
+            for descriptor in self.toolset_descriptors:
+                if descriptor.id not in self.toolset_state.loaded_ids:
+                    continue
+                for spec in self.toolset_provider.tool_specs(descriptor.id):
+                    run_registry.register(spec)
+            run_executor = ToolsExecutor(run_registry)
+
+        external_tools = run_registry.get_tools()
+        runtime_tools = runtime_mode.runtime_tools(mode_state)
+        external_names = {
+            tool["function"]["name"] for tool in external_tools
+        }
+        runtime_names = {
+            tool["function"]["name"] for tool in runtime_tools
+        }
+        duplicated_names = external_names & runtime_names
+        if duplicated_names:
+            raise ValueError(
+                "runtime tool conflicts with external tool: "
+                f"{sorted(duplicated_names)}"
+            )
+
+        runtime_prompts = list(runtime_mode.runtime_instructions(mode_state))
+        for capability in self.invocation.capabilities:
+            runtime_prompts.extend(capability.runtime_instructions())
+        if self.toolset_provider is not None:
+            runtime_prompts.append(
+                toolset_catalog_instruction(
+                    self.toolset_descriptors,
+                    self.toolset_state,
+                )
+            )
+
+        return ToolEnvironmentSnapshot(
+            executor=run_executor,
+            model_tools=external_tools + runtime_tools,
+            runtime_prompts=runtime_prompts,
+        )
