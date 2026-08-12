@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 import json
 from pathlib import Path
@@ -98,7 +99,7 @@ def model_request_metrics(observation) -> dict[str, Any]:
     }
 
 
-def run_turn(group: dict[str, Any], turn: int, question: str) -> dict[str, Any]:
+async def run_turn(group: dict[str, Any], turn: int, question: str) -> dict[str, Any]:
     if not group["available"]:
         return {
             "turn": turn,
@@ -110,7 +111,7 @@ def run_turn(group: dict[str, Any], turn: int, question: str) -> dict[str, Any]:
     llm_before = len(group["llm"].observations)
     tools_before = len(group["tools"].observations)
     started = perf_counter()
-    outcome = group["application"].start(
+    outcome = await group["application"].start(
         group["session_id"],
         f"run-{turn}-{uuid4().hex}",
         question,
@@ -255,7 +256,7 @@ def median(values: list[float]) -> float:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def main() -> None:
+async def async_main() -> None:
     if not WORKSPACE_ROOT.is_dir():
         raise RuntimeError(f"实验 Workspace 不存在: {WORKSPACE_ROOT}")
 
@@ -270,7 +271,7 @@ def main() -> None:
     ):
         for strategy in order:
             execution_order.append({"turn": turn, "strategy": strategy})
-            result = run_turn(groups[strategy], turn, question)
+            result = await run_turn(groups[strategy], turn, question)
             groups[strategy]["turns"].append(result)
             print(json.dumps({
                 "turn": turn,
@@ -338,4 +339,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(async_main())

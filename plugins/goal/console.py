@@ -21,7 +21,7 @@ class GoalConsoleAdapter:
             lambda: f"goal-{uuid4().hex}"
         )
 
-    def execute_if_handled(
+    async def execute_if_handled(
         self,
         session_id: str,
         run_id: str,
@@ -33,7 +33,7 @@ class GoalConsoleAdapter:
         if objective is not None:
             if active is not None:
                 raise GoalCommandError(f"当前 Goal 尚未结束：{active.id}")
-            return self._service.start_goal(
+            return await self._service.start_goal(
                 session_id,
                 self._goal_id_factory(),
                 run_id,
@@ -42,7 +42,7 @@ class GoalConsoleAdapter:
 
         if active is None:
             return None
-        return self._service.continue_goal(
+        return await self._service.continue_goal(
             session_id,
             active.id,
             run_id,

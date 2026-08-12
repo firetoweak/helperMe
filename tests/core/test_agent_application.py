@@ -1,7 +1,7 @@
 import ast
 import inspect
 import unittest
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import tools  # noqa: F401
 from core.agent_application import AgentApplication
@@ -30,15 +30,17 @@ SUCCESS = {
 }
 
 
-class AgentApplicationContractTest(unittest.TestCase):
+class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.session_runtime = Mock()
+        self.session_runtime.start = AsyncMock()
+        self.session_runtime.resume = AsyncMock()
         self.application = AgentApplication(
             session_runtime=self.session_runtime,
             system_prompt="system prompt",
         )
 
-    def test_constructor_rejects_empty_system_prompt(self):
+    async def test_constructor_rejects_empty_system_prompt(self):
         for system_prompt in ("", "   "):
             with self.subTest(system_prompt=system_prompt):
                 with self.assertRaises(ValueError):
@@ -47,7 +49,7 @@ class AgentApplicationContractTest(unittest.TestCase):
                         system_prompt=system_prompt,
                     )
 
-    def test_application_does_not_hold_current_session_state(self):
+    async def test_application_does_not_hold_current_session_state(self):
         forbidden_attributes = {
             "session",
             "current_session",
@@ -60,7 +62,7 @@ class AgentApplicationContractTest(unittest.TestCase):
             vars(self.application),
         )
 
-    def test_create_session_initializes_prompt_and_returns_only_session_id(self):
+    async def test_create_session_initializes_prompt_and_returns_only_session_id(self):
         self.session_runtime.create_session.return_value = Mock()
 
         result = self.application.create_session("session-1")
@@ -71,11 +73,11 @@ class AgentApplicationContractTest(unittest.TestCase):
             system_prompt="system prompt",
         )
 
-    def test_start_forwards_explicit_use_case_arguments_and_returns_outcome(self):
+    async def test_start_forwards_explicit_use_case_arguments_and_returns_outcome(self):
         outcome = object()
         self.session_runtime.start.return_value = outcome
 
-        result = self.application.start(
+        result = await self.application.start(
             "session-1",
             "run-1",
             "开始任务",
@@ -90,11 +92,11 @@ class AgentApplicationContractTest(unittest.TestCase):
             7,
         )
 
-    def test_resume_forwards_explicit_use_case_arguments_and_returns_outcome(self):
+    async def test_resume_forwards_explicit_use_case_arguments_and_returns_outcome(self):
         outcome = object()
         self.session_runtime.resume.return_value = outcome
 
-        result = self.application.resume(
+        result = await self.application.resume(
             "session-1",
             "run-2",
             "继续任务",
@@ -109,7 +111,7 @@ class AgentApplicationContractTest(unittest.TestCase):
             9,
         )
 
-    def test_application_owns_the_default_run_round_limit(self):
+    async def test_application_owns_the_default_run_round_limit(self):
         application = AgentApplication(
             self.session_runtime,
             "system prompt",
@@ -118,7 +120,7 @@ class AgentApplicationContractTest(unittest.TestCase):
         outcome = object()
         self.session_runtime.start.return_value = outcome
 
-        result = application.start("session-1", "run-1", "开始任务")
+        result = await application.start("session-1", "run-1", "开始任务")
 
         self.assertIs(result, outcome)
         self.session_runtime.start.assert_called_once_with(
@@ -128,7 +130,7 @@ class AgentApplicationContractTest(unittest.TestCase):
             73,
         )
 
-    def test_application_rejects_invalid_default_run_round_limit(self):
+    async def test_application_rejects_invalid_default_run_round_limit(self):
         with self.assertRaisesRegex(ValueError, "必须大于 0"):
             AgentApplication(
                 self.session_runtime,
@@ -136,7 +138,7 @@ class AgentApplicationContractTest(unittest.TestCase):
                 default_max_rounds=0,
             )
 
-    def test_run_host_validates_before_plugin_domain_mutation(self):
+    async def test_run_host_validates_before_plugin_domain_mutation(self):
         session = Mock(status=SessionStatus.COMPLETED, run_records=[])
         self.session_runtime.get_session.return_value = session
 
@@ -148,7 +150,7 @@ class AgentApplicationContractTest(unittest.TestCase):
         )
         self.session_runtime.get_session.assert_called_once_with("session-1")
 
-    def test_run_host_selects_resume_for_interrupted_session(self):
+    async def test_run_host_selects_resume_for_interrupted_session(self):
         invocation = RunInvocation()
         self.session_runtime.get_session.return_value = Mock(
             status=SessionStatus.INTERRUPTED,
@@ -156,7 +158,7 @@ class AgentApplicationContractTest(unittest.TestCase):
         outcome = object()
         self.session_runtime.resume.return_value = outcome
 
-        result = self.application.execute(
+        result = await self.application.execute(
             "session-1",
             "run-2",
             "继续任务",
@@ -173,7 +175,7 @@ class AgentApplicationContractTest(unittest.TestCase):
             invocation=invocation,
         )
 
-    def test_request_interrupt_forwards_session_id_and_reason(self):
+    async def test_request_interrupt_forwards_session_id_and_reason(self):
         result = self.application.request_interrupt(
             "session-1",
             "console_interrupt",
@@ -185,19 +187,19 @@ class AgentApplicationContractTest(unittest.TestCase):
             "console_interrupt",
         )
 
-    def test_delete_session_forwards_explicit_use_case(self):
+    async def test_delete_session_forwards_explicit_use_case(self):
         result = self.application.delete_session("session-1")
 
         self.assertIsNone(result)
         self.session_runtime.delete_session.assert_called_once_with("session-1")
 
-    def test_session_runtime_errors_are_not_hidden(self):
+    async def test_session_runtime_errors_are_not_hidden(self):
         self.session_runtime.start.side_effect = KeyError("Session 不存在")
 
         with self.assertRaises(KeyError):
-            self.application.start("missing", "run-1", "开始任务")
+            await self.application.start("missing", "run-1", "开始任务")
 
-    def test_application_module_has_no_infrastructure_dependencies(self):
+    async def test_application_module_has_no_infrastructure_dependencies(self):
         source = inspect.getsource(inspect.getmodule(AgentApplication))
         tree = ast.parse(source)
         imported_modules = {
@@ -225,9 +227,83 @@ class AgentApplicationContractTest(unittest.TestCase):
         )
 
 
-class AgentApplicationSessionIsolationTest(unittest.TestCase):
-    def test_one_application_operates_two_sessions_without_conversation_leak(self):
-        def run(*, conversation, user_message, max_rounds, control, context_state):
+class RecordingApplicationResource:
+    def __init__(self, name, events, enter_error=None):
+        self.name = name
+        self.events = events
+        self.enter_error = enter_error
+
+    async def __aenter__(self):
+        self.events.append(f"enter:{self.name}")
+        if self.enter_error is not None:
+            raise self.enter_error
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.events.append(f"exit:{self.name}")
+
+
+class AgentApplicationResourceLifecycleTest(
+    unittest.IsolatedAsyncioTestCase
+):
+    async def test_resources_are_closed_in_reverse_order(self):
+        events = []
+        application = AgentApplication(
+            Mock(),
+            "system prompt",
+            resources=(
+                RecordingApplicationResource("first", events),
+                RecordingApplicationResource("second", events),
+            ),
+        )
+
+        async with application:
+            self.assertEqual(events, ["enter:first", "enter:second"])
+
+        self.assertEqual(
+            events,
+            ["enter:first", "enter:second", "exit:second", "exit:first"],
+        )
+
+    async def test_partial_enter_failure_closes_entered_resources(self):
+        events = []
+        error = RuntimeError("resource failed")
+        application = AgentApplication(
+            Mock(),
+            "system prompt",
+            resources=(
+                RecordingApplicationResource("first", events),
+                RecordingApplicationResource("second", events, error),
+            ),
+        )
+
+        with self.assertRaises(RuntimeError) as captured:
+            async with application:
+                self.fail("resource failure must prevent application use")
+
+        self.assertIs(captured.exception, error)
+        self.assertEqual(events, ["enter:first", "enter:second", "exit:first"])
+
+    async def test_close_does_not_hide_body_exception(self):
+        events = []
+        error = RuntimeError("run failed")
+        application = AgentApplication(
+            Mock(),
+            "system prompt",
+            resources=(RecordingApplicationResource("mcp", events),),
+        )
+
+        with self.assertRaises(RuntimeError) as captured:
+            async with application:
+                raise error
+
+        self.assertIs(captured.exception, error)
+        self.assertEqual(events, ["enter:mcp", "exit:mcp"])
+
+
+class AgentApplicationSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_one_application_operates_two_sessions_without_conversation_leak(self):
+        async def run(*, conversation, user_message, max_rounds, control, context_state):
             conversation.add_user(user_message)
             return Mock(
                 status=RunStatus.COMPLETED,
@@ -236,6 +312,7 @@ class AgentApplicationSessionIsolationTest(unittest.TestCase):
             )
 
         run_runtime = Mock()
+        run_runtime.run = AsyncMock()
         run_runtime.run.side_effect = run
         session_runtime = SessionRuntime(run_runtime=run_runtime)
         application = AgentApplication(
@@ -245,8 +322,8 @@ class AgentApplicationSessionIsolationTest(unittest.TestCase):
 
         application.create_session("session-a")
         application.create_session("session-b")
-        application.start("session-a", "run-a", "A 的消息")
-        application.start("session-b", "run-b", "B 的消息")
+        await application.start("session-a", "run-a", "A 的消息")
+        await application.start("session-b", "run-b", "B 的消息")
 
         messages_a = (
             session_runtime.sessions["session-a"]
@@ -273,7 +350,7 @@ class AgentApplicationSessionIsolationTest(unittest.TestCase):
         )
 
 
-class AgentApplicationSessionRuntimeTest(unittest.TestCase):
+class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
     def _build_application(self, llm_client: Mock):
         session_runtime = SessionRuntime(
             RunRuntime(
@@ -291,10 +368,11 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
         application.create_session("session-1")
         return application, session_runtime
 
-    def test_application_starts_and_resumes_through_session_runtime(
+    async def test_application_starts_and_resumes_through_session_runtime(
         self,
     ):
         llm_client = Mock()
+        llm_client.chat = AsyncMock()
         responses = iter(
             (
                 LLMResponse(
@@ -305,7 +383,7 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
         )
         application = None
 
-        def chat(messages, model, tools=None):
+        async def chat(messages, model, tools=None):
             response = next(responses)
             if response.calls:
                 application.request_interrupt("session-1", "等待继续")
@@ -315,7 +393,7 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
         application, session_runtime = self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]
 
-        interrupted = application.start("session-1", "run-1", "开始任务")
+        interrupted = await application.start("session-1", "run-1", "开始任务")
 
         self.assertEqual(interrupted.result.status, RunStatus.INTERRUPTED)
         self.assertEqual(session.status, SessionStatus.INTERRUPTED)
@@ -325,7 +403,7 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
             ).ok
         )
 
-        completed = application.resume("session-1", "run-2", "继续执行")
+        completed = await application.resume("session-1", "run-2", "继续执行")
 
         self.assertEqual(completed.result.answer, "任务已完成")
         self.assertEqual(completed.result.status, RunStatus.COMPLETED)
@@ -347,8 +425,9 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
             ).ok
         )
 
-    def test_application_starts_new_run_in_same_session_after_completed(self):
+    async def test_application_starts_new_run_in_same_session_after_completed(self):
         llm_client = Mock()
+        llm_client.chat = AsyncMock()
         llm_client.chat.side_effect = (
             call_result(LLMResponse(content="第一轮完成")),
             call_result(LLMResponse(content="第二轮完成")),
@@ -356,8 +435,8 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
         application, session_runtime = self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]
 
-        first = application.start("session-1", "run-1", "第一轮")
-        second = application.start("session-1", "run-2", "第二轮")
+        first = await application.start("session-1", "run-1", "第一轮")
+        second = await application.start("session-1", "run-2", "第二轮")
 
         self.assertEqual(first.result.answer, "第一轮完成")
         self.assertEqual(second.result.answer, "第二轮完成")
@@ -374,8 +453,8 @@ class AgentApplicationSessionRuntimeTest(unittest.TestCase):
         )
 
 
-class ObservabilityContractTest(unittest.TestCase):
-    def test_todo_revision_checkpoint_is_written_to_run_log(self):
+class ObservabilityContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_todo_revision_checkpoint_is_written_to_run_log(self):
         trace = {
             "started_at": "2026-01-01 00:00:00",
             "ended_at": "2026-01-01 00:00:01",
@@ -423,7 +502,7 @@ class ObservabilityContractTest(unittest.TestCase):
         self.assertIn('"runtime_prompts": [', log)
         self.assertIn('"content": "hello"', log)
 
-    def test_missing_internal_trace_field_is_not_defaulted(self):
+    async def test_missing_internal_trace_field_is_not_defaulted(self):
         trace = {
             "started_at": "2026-01-01 00:00:00",
             "ended_at": "2026-01-01 00:00:01",

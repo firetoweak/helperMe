@@ -144,14 +144,14 @@ def _matches_glob(path: str, pattern: str) -> bool:
 
 
 def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
-    def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
+    async def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
         return {
             "ok": True,
             "code": "WORKSPACE_INFO_READ",
             "roots": workspaces.info(),
         }
 
-    def glob(raw: GlobInput) -> dict[str, Any]:
+    async def glob(raw: GlobInput) -> dict[str, Any]:
         try:
             sandbox = workspaces.get(raw.root)
             search_root, err = _require_existing(sandbox, raw.path, expect="dir")
@@ -229,7 +229,7 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             ),
         }
 
-    def grep(raw: GrepInput) -> dict[str, Any]:
+    async def grep(raw: GrepInput) -> dict[str, Any]:
         if not raw.query.strip():
             return {"ok": False, "code": "EMPTY_QUERY", "error": "query 不能为空"}
         if shutil.which("rg") is None:
@@ -341,7 +341,7 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             "next_offset": raw.offset + len(hits) if truncated else None,
         }
 
-    def read_file(raw: ReadFileInput) -> dict[str, Any]:
+    async def read_file(raw: ReadFileInput) -> dict[str, Any]:
         try:
             sandbox = workspaces.get(raw.root)
             path, err = _require_existing(sandbox, raw.path, expect="file")

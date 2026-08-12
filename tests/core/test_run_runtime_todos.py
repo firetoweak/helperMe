@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from core.context import make_budget_assessment
 from core.messages import Conversation
@@ -23,7 +23,7 @@ class RecordingLLMClient:
         self.seen_messages = []
         self.seen_tools = []
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         self.seen_messages.append([message.copy() for message in messages])
         self.seen_tools.append(list(tools or []))
         response = self.responses.pop(0)
@@ -34,7 +34,7 @@ class RecordingLLMClient:
         return call_result(response)
 
 
-class RunRuntimeTodosTest(unittest.TestCase):
+class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _conversation() -> Conversation:
         conversation = Conversation()
@@ -114,12 +114,12 @@ class RunRuntimeTodosTest(unittest.TestCase):
             ,),
         )
 
-    def test_initial_generator_is_read_only_and_todo_is_runtime_instruction(self):
+    async def test_initial_generator_is_read_only_and_todo_is_runtime_instruction(self):
         llm = RecordingLLMClient(
             [self._initial_response(), self._rewrite_call(), LLMResponse(content="完成")]
         )
 
-        result = self._runner(llm).run(self._conversation(), "完成任务")
+        result = await self._runner(llm).run(self._conversation(), "完成任务")
 
         self.assertEqual(result.status, "completed")
         initialization_tool_names = {
@@ -143,7 +143,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
             "completed",
         )
 
-    def test_dirty_todos_do_not_block_execution_but_block_final_answer(self):
+    async def test_dirty_todos_do_not_block_execution_but_block_final_answer(self):
         llm = RecordingLLMClient(
             [
                 self._initial_response(),
@@ -160,7 +160,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
         )
         conversation = self._conversation()
 
-        result = self._runner(llm).run(conversation, "完成任务", max_rounds=5)
+        result = await self._runner(llm).run(conversation, "完成任务", max_rounds=5)
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.answer, "最终回答")
@@ -169,7 +169,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
             conversation.protocol_messages()[-4]["content"],
         )
 
-    def test_clean_but_unresolved_todos_block_final_answer(self):
+    async def test_clean_but_unresolved_todos_block_final_answer(self):
         llm = RecordingLLMClient(
             [
                 self._initial_response(),
@@ -180,7 +180,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
         )
         conversation = self._conversation()
 
-        result = self._runner(llm).run(conversation, "完成任务", max_rounds=3)
+        result = await self._runner(llm).run(conversation, "完成任务", max_rounds=3)
 
         self.assertEqual(result.status, "completed")
         self.assertTrue(
@@ -191,16 +191,16 @@ class RunRuntimeTodosTest(unittest.TestCase):
             )
         )
 
-    def test_invalid_initial_generation_fails_at_boundary(self):
+    async def test_invalid_initial_generation_fails_at_boundary(self):
         llm = RecordingLLMClient([LLMResponse(content="not json")])
 
-        result = self._runner(llm).run(self._conversation(), "完成任务")
+        result = await self._runner(llm).run(self._conversation(), "完成任务")
 
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.final_reason, "invalid_todo_initialization")
         self.assertIn("raw_response=LLMResponse", result.answer)
 
-    def test_reused_runtime_creates_an_independent_todo_state_per_run(self):
+    async def test_reused_runtime_creates_an_independent_todo_state_per_run(self):
         llm = RecordingLLMClient(
             [
                 self._initial_response(),
@@ -213,8 +213,8 @@ class RunRuntimeTodosTest(unittest.TestCase):
         )
         runner = self._runner(llm)
 
-        first = runner.run(self._conversation(), "第一次任务")
-        second = runner.run(self._conversation(), "第二次任务")
+        first = await runner.run(self._conversation(), "第一次任务")
+        second = await runner.run(self._conversation(), "第二次任务")
 
         self.assertEqual(first.status, "completed")
         self.assertEqual(second.status, "completed")
@@ -229,12 +229,13 @@ class RunRuntimeTodosTest(unittest.TestCase):
                 "active",
             )
 
-    def test_initialization_budget_failure_reports_todo_stage(self):
+    async def test_initialization_budget_failure_reports_todo_stage(self):
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.return_value = ModelCallBlocked(
             make_budget_assessment(820, 750)
         )
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             TodoMode(),
@@ -248,12 +249,13 @@ class RunRuntimeTodosTest(unittest.TestCase):
             "todo_initialization",
         )
 
-    def test_initialization_model_hard_limit_reports_todo_stage(self):
+    async def test_initialization_model_hard_limit_reports_todo_stage(self):
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.side_effect = LLMContextLengthError(
             "maximum context length exceeded"
         )
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             TodoMode(),
@@ -268,8 +270,8 @@ class RunRuntimeTodosTest(unittest.TestCase):
             "todo_initialization",
         )
 
-    @patch("core.tools_runtime.run_runtime.time.sleep")
-    def test_initialization_transient_failure_reuses_retry_chain(self, sleep):
+    @patch("core.tools_runtime.run_runtime.asyncio.sleep", new_callable=AsyncMock)
+    async def test_initialization_transient_failure_reuses_retry_chain(self, sleep):
         llm = RecordingLLMClient(
             [
                 LLMTransientError("todo generator timeout"),
@@ -279,7 +281,7 @@ class RunRuntimeTodosTest(unittest.TestCase):
             ]
         )
 
-        result = self._runner(llm).run(self._conversation(), "完成任务")
+        result = await self._runner(llm).run(self._conversation(), "完成任务")
 
         self.assertEqual(result.status, "completed")
         retry = next(

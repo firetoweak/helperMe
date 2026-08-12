@@ -27,7 +27,7 @@ class GetChangesInput(BaseModel):
 
 
 def create_get_changes_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
-    def get_changes(raw: GetChangesInput) -> dict[str, Any]:
+    async def get_changes(raw: GetChangesInput) -> dict[str, Any]:
         try:
             sandbox = workspaces.get(raw.root)
             target = sandbox.resolve(raw.path) if raw.path is not None else None

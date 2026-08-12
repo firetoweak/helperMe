@@ -65,7 +65,7 @@ def create_command_execution_spec(
     workspaces: WorkspaceSandboxes,
     runner: PowerShellCommandRunner,
 ) -> ToolSpec:
-    def execute_command(raw: ExecuteCommandInput) -> dict[str, Any]:
+    async def execute_command(raw: ExecuteCommandInput) -> dict[str, Any]:
         if not raw.command.strip():
             return {
                 "ok": False,
@@ -93,7 +93,7 @@ def create_command_execution_spec(
             }
 
         try:
-            result = runner.run(raw.command, cwd, raw.timeout_seconds)
+            result = await runner.run(raw.command, cwd, raw.timeout_seconds)
         except PowerShellNotFoundError as exc:
             return {
                 "ok": False,

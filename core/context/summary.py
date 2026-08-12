@@ -22,11 +22,11 @@ class LLMContextSummaryGenerator:
         self.model_calls = model_calls
         self.model = model
 
-    def generate(
+    async def generate(
         self,
         model_context: ModelContext,
     ) -> SummaryGeneration | SummaryGenerationBlocked:
-        outcome = self.model_calls.call(
+        outcome = await self.model_calls.call(
             ModelCallRequest(context=model_context, tools=[]),
             self.model,
         )

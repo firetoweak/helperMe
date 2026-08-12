@@ -11,7 +11,7 @@ class PlainMode:
     def start(self, state: None) -> str | None:
         return None
 
-    def accept_start_response(
+    async def accept_start_response(
         self,
         state: None,
         response: LLMResponse,
@@ -44,7 +44,7 @@ class PlainMode:
     def handles_tool(self, name: str) -> bool:
         return False
 
-    def execute_tool(
+    async def execute_tool(
         self,
         state: None,
         name: str,

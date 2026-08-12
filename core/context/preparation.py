@@ -34,7 +34,7 @@ class SummaryGenerationBlocked:
 
 
 class ContextSummaryGenerator(Protocol):
-    def generate(
+    async def generate(
         self,
         model_context: ModelContext,
     ) -> SummaryGeneration | SummaryGenerationBlocked:
@@ -119,7 +119,7 @@ class ContextPreparationService:
         self.context_budget = context_budget
         self.summary_generator = summary_generator
 
-    def prepare(
+    async def prepare(
         self,
         conversation_records: list[ConversationMessage],
         context_state: ContextState,
@@ -175,7 +175,7 @@ class ContextPreparationService:
         )
         if on_summary_request is not None:
             on_summary_request(summary_source)
-        generation = self.summary_generator.generate(summary_source)
+        generation = await self.summary_generator.generate(summary_source)
         if isinstance(generation, SummaryGenerationBlocked):
             return PreparedContext(
                 model_context=model_context,

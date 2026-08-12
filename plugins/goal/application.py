@@ -75,7 +75,7 @@ class GoalApplicationService:
         )
         self._active_run_sessions: dict[str, str] = {}
 
-    def start_goal(
+    async def start_goal(
         self,
         session_id: str,
         goal_id: str,
@@ -97,7 +97,7 @@ class GoalApplicationService:
             )
 
         contract_buffer = ContractCompilationBuffer()
-        contract_outcome = self._execute_isolated(
+        contract_outcome = await self._execute_isolated(
             owner_session_id=session_id,
             purpose="contract",
             user_message=f"为以下 Goal 编译 Completion Contract：\n{objective}",
@@ -124,7 +124,7 @@ class GoalApplicationService:
             resolved_max_turns,
         )
         self._goals.add(session_id, goal)
-        turns = self._drive(
+        turns = await self._drive(
             session_id=session_id,
             goal=goal,
             first_executor_run_id=first_executor_run_id,
@@ -133,7 +133,7 @@ class GoalApplicationService:
         )
         return GoalLoopOutcome(goal, contract_outcome, tuple(turns))
 
-    def continue_goal(
+    async def continue_goal(
         self,
         session_id: str,
         goal_id: str,
@@ -147,7 +147,7 @@ class GoalApplicationService:
         elif goal.status not in {GoalStatus.ACTIVE, GoalStatus.JUDGING}:
             raise ValueError(f"goal cannot continue from {goal.status.value}")
 
-        turns = self._drive(
+        turns = await self._drive(
             session_id=session_id,
             goal=goal,
             first_executor_run_id=executor_run_id,
@@ -170,7 +170,7 @@ class GoalApplicationService:
         )
         return True
 
-    def _drive(
+    async def _drive(
         self,
         *,
         session_id: str,
@@ -186,7 +186,7 @@ class GoalApplicationService:
         while goal.status in {GoalStatus.ACTIVE, GoalStatus.JUDGING}:
             if goal.status is GoalStatus.JUDGING:
                 outcomes.append(
-                    self._judge_current_turn(session_id, goal, None, max_rounds)
+                    await self._judge_current_turn(session_id, goal, None, max_rounds)
                 )
                 continue
 
@@ -197,7 +197,7 @@ class GoalApplicationService:
             )
             turn = goal.start_turn(next_run_id)
             try:
-                executor_outcome = self._execute(
+                executor_outcome = await self._execute(
                     owner_session_id=session_id,
                     actual_session_id=session_id,
                     run_id=next_run_id,
@@ -237,7 +237,7 @@ class GoalApplicationService:
                 executor_outcome.result.answer,
             )
             outcomes.append(
-                self._judge_current_turn(
+                await self._judge_current_turn(
                     session_id,
                     goal,
                     executor_outcome,
@@ -250,7 +250,7 @@ class GoalApplicationService:
 
         return outcomes
 
-    def _judge_current_turn(
+    async def _judge_current_turn(
         self,
         session_id: str,
         goal: Goal,
@@ -267,7 +267,7 @@ class GoalApplicationService:
             raise RuntimeError("judging turn has no executor answer")
 
         buffer = JudgmentBuffer()
-        judge_outcome = self._execute_isolated(
+        judge_outcome = await self._execute_isolated(
             owner_session_id=session_id,
             purpose="judge",
             user_message="独立验证当前 Goal 是否完成。",
@@ -312,7 +312,7 @@ class GoalApplicationService:
         goal.record_judgment(judgment)
         return GoalTurnOutcome(executor_outcome, judge_outcome, judgment)
 
-    def _execute_isolated(
+    async def _execute_isolated(
         self,
         *,
         owner_session_id: str,
@@ -327,7 +327,7 @@ class GoalApplicationService:
         isolated_run_id = run_id or f"{purpose}-run-{suffix}"
         self._run_host.create_session(isolated_session_id)
         try:
-            return self._execute(
+            return await self._execute(
                 owner_session_id=owner_session_id,
                 actual_session_id=isolated_session_id,
                 run_id=isolated_run_id,
@@ -338,7 +338,7 @@ class GoalApplicationService:
         finally:
             self._run_host.delete_session(isolated_session_id)
 
-    def _execute(
+    async def _execute(
         self,
         *,
         owner_session_id: str,
@@ -350,7 +350,7 @@ class GoalApplicationService:
     ) -> SessionRunOutcome:
         self._active_run_sessions[owner_session_id] = actual_session_id
         try:
-            return self._run_host.execute(
+            return await self._run_host.execute(
                 actual_session_id,
                 run_id,
                 user_message,

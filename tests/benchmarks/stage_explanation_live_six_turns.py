@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 import sys
 from uuid import uuid4
@@ -32,7 +33,7 @@ class RecordingConsoleProgressSink:
         print(f"\n阶段性说明：{text}")
 
 
-def main() -> None:
+async def async_main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     app_config = load_app_config()
     sink = RecordingConsoleProgressSink()
@@ -50,7 +51,7 @@ def main() -> None:
     for turn, prompt in enumerate(PROMPTS, start=1):
         sink.current_turn = turn
         print(f"\n\n=== Round {turn} ===\n用户：{prompt}")
-        outcome = application.start(
+        outcome = await application.start(
             session_id,
             f"run-{uuid4().hex}",
             prompt,
@@ -69,5 +70,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(async_main())
 from core.agent_workspace import AgentWorkspace

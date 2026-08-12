@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from core.context import (
     ContextManager,
@@ -31,7 +31,7 @@ class RecordingLLMClient:
         self.responses = list(responses)
         self.messages = []
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         self.messages.append(messages)
         response = self.responses.pop(0)
         if isinstance(response, Exception):
@@ -40,7 +40,7 @@ class RecordingLLMClient:
 
 
 class ContextLimitLLMClient:
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         raise LLMContextLengthError("maximum context length exceeded")
 
 
@@ -55,7 +55,7 @@ class ChangingInstructionsMode:
     def start(self, state):
         return None
 
-    def accept_start_response(self, state, response):
+    async def accept_start_response(self, state, response):
         raise AssertionError("no start model call")
 
     def runtime_instructions(self, state):
@@ -80,7 +80,7 @@ class ChangingInstructionsMode:
     def handles_tool(self, name):
         return False
 
-    def execute_tool(self, state, name, arguments):
+    async def execute_tool(self, state, name, arguments):
         raise AssertionError("mode has no runtime tools")
 
     def checkpoint_data(self, state):
@@ -92,8 +92,8 @@ class StaticInstructionsMode(ChangingInstructionsMode):
         return None
 
 
-class RunRuntimeContextTest(unittest.TestCase):
-    def test_level2_records_checkpoint_and_notifies_user(self):
+class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
+    async def test_level2_records_checkpoint_and_notifies_user(self):
         before = make_budget_assessment(900, 750)
         after = make_budget_assessment(500, 750)
         state = ContextState(
@@ -108,6 +108,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             tool_window=empty_tool_window_stats(),
         )
         context_preparation = Mock()
+        context_preparation.prepare = AsyncMock()
         context_preparation.prepare.return_value = PreparedContext(
             model_context=ModelContext(
                 messages=[{"role": "user", "content": "hello"}]
@@ -123,11 +124,12 @@ class RunRuntimeContextTest(unittest.TestCase):
             ),
         )
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.return_value = call_result(
             LLMResponse(content="done")
         )
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -143,8 +145,9 @@ class RunRuntimeContextTest(unittest.TestCase):
             [checkpoint.reason for checkpoint in result.checkpoints],
         )
 
-    def test_project_budget_exceeded_blocks_before_model_call(self):
+    async def test_project_budget_exceeded_blocks_before_model_call(self):
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.return_value = ModelCallBlocked(
             make_budget_assessment(
                 estimated_input_tokens=801,
@@ -153,7 +156,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -169,7 +172,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         )
         self.assertEqual(result.checkpoints[-1].data["overflow_tokens"], 51)
 
-    def test_context_limit_error_blocks_without_retry(self):
+    async def test_context_limit_error_blocks_without_retry(self):
         runner = RunRuntime(
             model_call_service(ContextLimitLLMClient()),
             "test-model",
@@ -179,7 +182,7 @@ class RunRuntimeContextTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = runner.run(conversation, "hello", max_rounds=3)
+        result = await runner.run(conversation, "hello", max_rounds=3)
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.final_reason, "context_length_exceeded")
@@ -187,8 +190,8 @@ class RunRuntimeContextTest(unittest.TestCase):
         self.assertEqual(result.checkpoints[-1].reason, "context_length_exceeded")
         self.assertIn("上下文超过模型限制", result.answer)
 
-    @patch("core.tools_runtime.run_runtime.time.sleep")
-    def test_retry_reuses_one_model_context_snapshot(self, _sleep):
+    @patch("core.tools_runtime.run_runtime.asyncio.sleep", new_callable=AsyncMock)
+    async def test_retry_reuses_one_model_context_snapshot(self, _sleep):
         llm_client = RecordingLLMClient(
             [
                 LLMTransientError("temporary unavailable"),
@@ -197,10 +200,13 @@ class RunRuntimeContextTest(unittest.TestCase):
         )
         mode = StaticInstructionsMode()
         context_preparation = Mock(wraps=context_preparation_service())
+        context_preparation.prepare = AsyncMock(
+            wraps=context_preparation_service().prepare
+        )
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,
@@ -218,7 +224,7 @@ class RunRuntimeContextTest(unittest.TestCase):
             "system prompt",
         )
 
-    def test_each_round_builds_a_snapshot_with_current_instructions(self):
+    async def test_each_round_builds_a_snapshot_with_current_instructions(self):
         llm_client = RecordingLLMClient(
             [
                 LLMResponse(content="draft"),
@@ -227,10 +233,13 @@ class RunRuntimeContextTest(unittest.TestCase):
         )
         mode = ChangingInstructionsMode()
         context_preparation = Mock(wraps=context_preparation_service())
+        context_preparation.prepare = AsyncMock(
+            wraps=context_preparation_service().prepare
+        )
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from core.messages import Conversation
 from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
@@ -28,7 +28,7 @@ class RecordingLLMClient:
     def __init__(self, responses):
         self.responses = list(responses)
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         return call_result(self.responses.pop(0))
 
 
@@ -46,7 +46,7 @@ class InterruptingLLMClient:
         self.responses = list(responses)
         self.calls = 0
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         self.calls += 1
         if self.calls == 1:
             self.control.request_interrupt("测试中断")
@@ -57,7 +57,7 @@ class EmptyResponseLLMClient:
     def __init__(self):
         self.call_count = 0
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         self.call_count += 1
         raise InvalidLLMResponse(
             "empty_model_response",
@@ -65,8 +65,8 @@ class EmptyResponseLLMClient:
         )
 
 
-class RunRuntimeStopGuardTest(unittest.TestCase):
-    def test_run_evidence_preserves_raw_result_before_externalization(self):
+class RunRuntimeStopGuardTest(unittest.IsolatedAsyncioTestCase):
+    async def test_run_evidence_preserves_raw_result_before_externalization(self):
         raw_result = {
             "ok": True,
             "code": "LARGE_RESULT",
@@ -82,7 +82,7 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_call_service(llm),
             "test-model",
             PlainMode(),
@@ -97,7 +97,7 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
         tool_message = conversation.protocol_messages()[2]
         self.assertIn("externalized", tool_message["content"])
 
-    def test_mixed_response_is_saved_and_emitted_before_tool_execution(self):
+    async def test_mixed_response_is_saved_and_emitted_before_tool_execution(self):
         events: list[str] = []
         llm = RecordingLLMClient(
             [
@@ -109,12 +109,14 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
             ]
         )
         dependencies = runtime_tool_dependencies(SUCCESS)
-        dependencies["tools_executor"].execute = lambda _name, _arguments: (
-            events.append("tool:demo") or SUCCESS
-        )
+        async def execute(_name, _arguments):
+            events.append("tool:demo")
+            return SUCCESS
+
+        dependencies["tools_executor"].execute = execute
         conversation = Conversation()
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_call_service(llm),
             "test-model",
             PlainMode(),
@@ -132,7 +134,7 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
         self.assertEqual(assistant["content"], "我先检查项目结构。")
         self.assertEqual(assistant["tool_calls"][0]["id"], "call-1")
 
-    def test_unverified_write_cannot_complete(self):
+    async def test_unverified_write_cannot_complete(self):
         llm = RecordingLLMClient(
             [
                 LLMResponse(
@@ -147,7 +149,7 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_call_service(llm),
             "test-model",
             PlainMode(),
@@ -175,8 +177,8 @@ class RunRuntimeStopGuardTest(unittest.TestCase):
         )
 
 
-class RunRuntimeInterruptTest(unittest.TestCase):
-    def test_interrupts_after_complete_tool_batch(self):
+class RunRuntimeInterruptTest(unittest.IsolatedAsyncioTestCase):
+    async def test_interrupts_after_complete_tool_batch(self):
         control = RunControl()
         llm = InterruptingLLMClient(
             control,
@@ -188,7 +190,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_call_service(llm),
             "test-model",
             PlainMode(),
@@ -206,7 +208,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
             validate_tool_message_chain(conversation.protocol_messages()).ok
         )
 
-    def test_interrupt_waits_for_verification(self):
+    async def test_interrupt_waits_for_verification(self):
         control = RunControl()
         llm = InterruptingLLMClient(
             control,
@@ -221,7 +223,7 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_call_service(llm),
             "test-model",
             PlainMode(),
@@ -248,9 +250,9 @@ class RunRuntimeInterruptTest(unittest.TestCase):
         )
 
 
-class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
-    @patch("core.tools_runtime.run_runtime.time.sleep")
-    def test_empty_response_retries_then_fails_without_conversation_pollution(
+class RunRuntimeInvalidLLMResponseTest(unittest.IsolatedAsyncioTestCase):
+    @patch("core.tools_runtime.run_runtime.asyncio.sleep", new_callable=AsyncMock)
+    async def test_empty_response_retries_then_fails_without_conversation_pollution(
         self,
         _sleep,
     ):
@@ -264,7 +266,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
         )
         conversation = Conversation()
 
-        result = runner.run(conversation, "hello")
+        result = await runner.run(conversation, "hello")
 
         self.assertEqual(result.status, RunStatus.FAILED)
         self.assertEqual(result.final_reason, "empty_model_response")
@@ -279,13 +281,13 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
         ]
         self.assertEqual(len(retry_checkpoints), 2)
 
-    @patch("core.tools_runtime.run_runtime.time.sleep")
-    def test_empty_response_retry_can_recover(self, _sleep):
+    @patch("core.tools_runtime.run_runtime.asyncio.sleep", new_callable=AsyncMock)
+    async def test_empty_response_retry_can_recover(self, _sleep):
         class RecoveringLLMClient:
             def __init__(self):
                 self.call_count = 0
 
-            def chat(self, messages, model, tools=None):
+            async def chat(self, messages, model, tools=None):
                 self.call_count += 1
                 if self.call_count == 1:
                     raise InvalidLLMResponse(
@@ -305,17 +307,17 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
             **runtime_tool_dependencies(),
         )
 
-        result = runner.run(Conversation(), "hello")
+        result = await runner.run(Conversation(), "hello")
 
         self.assertEqual(result.status, RunStatus.COMPLETED)
         self.assertEqual(llm_client.call_count, 2)
 
-    def test_internal_llm_client_bug_is_not_retried_or_converted(self):
+    async def test_internal_llm_client_bug_is_not_retried_or_converted(self):
         class BrokenLLMClient:
             def __init__(self):
                 self.call_count = 0
 
-            def chat(self, messages, model, tools=None):
+            async def chat(self, messages, model, tools=None):
                 self.call_count += 1
                 raise RuntimeError("client bug")
 
@@ -329,17 +331,17 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "client bug"):
-            runner.run(Conversation(), "hello")
+            await runner.run(Conversation(), "hello")
 
         self.assertEqual(llm_client.call_count, 1)
 
-    @patch("core.tools_runtime.run_runtime.time.sleep")
-    def test_explicit_transient_llm_error_is_retried(self, _sleep):
+    @patch("core.tools_runtime.run_runtime.asyncio.sleep", new_callable=AsyncMock)
+    async def test_explicit_transient_llm_error_is_retried(self, _sleep):
         class TransientLLMClient:
             def __init__(self):
                 self.call_count = 0
 
-            def chat(self, messages, model, tools=None):
+            async def chat(self, messages, model, tools=None):
                 self.call_count += 1
                 if self.call_count == 1:
                     raise LLMTransientError("temporary unavailable")
@@ -354,7 +356,7 @@ class RunRuntimeInvalidLLMResponseTest(unittest.TestCase):
             **runtime_tool_dependencies(),
         )
 
-        result = runner.run(Conversation(), "hello")
+        result = await runner.run(Conversation(), "hello")
 
         self.assertEqual(result.status, RunStatus.COMPLETED)
         self.assertEqual(llm_client.call_count, 2)

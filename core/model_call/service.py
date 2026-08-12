@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.context import BudgetAssessment, ContextBudget, ModelContext
-from core.model_call.client import LLMClient
 from core.model_call.types import LLMCallResult
+
+if TYPE_CHECKING:
+    from core.model_call.client import LLMClient
 
 
 @dataclass(frozen=True)
@@ -31,7 +33,7 @@ class ModelCallService:
         self.llm_client = llm_client
         self.context_budget = context_budget
 
-    def call(
+    async def call(
         self,
         request: ModelCallRequest,
         model: str,
@@ -43,7 +45,7 @@ class ModelCallService:
         if not assessment.allowed:
             return ModelCallBlocked(assessment)
 
-        result = self.llm_client.chat(
+        result = await self.llm_client.chat(
             request.context.messages,
             model,
             request.tools,

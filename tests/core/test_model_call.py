@@ -1,7 +1,7 @@
 import unittest
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from pathlib import Path
 
 from core.context import ModelContext, make_budget_assessment
@@ -16,8 +16,8 @@ from core.model_call.service import (
 from core.model_call.types import LLMCallResult, LLMUsage
 
 
-class LLMResponseContractTest(unittest.TestCase):
-    def test_text_response_requires_non_empty_content(self):
+class LLMResponseContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_text_response_requires_non_empty_content(self):
         for content in ("", "   "):
             with self.subTest(content=content):
                 with self.assertRaises(InvalidLLMResponse) as raised:
@@ -29,13 +29,13 @@ class LLMResponseContractTest(unittest.TestCase):
             LLMResponse(content=None)
         self.assertEqual(raised.exception.code, "invalid_llm_response")
 
-    def test_tool_calls_response_requires_non_empty_calls(self):
+    async def test_tool_calls_response_requires_non_empty_calls(self):
         for calls in (None, []):
             with self.subTest(calls=calls):
                 with self.assertRaises(InvalidLLMResponse):
                     LLMResponse(calls=calls)
 
-    def test_valid_response_variants(self):
+    async def test_valid_response_variants(self):
         text = LLMResponse(content="done")
         tool_calls = LLMResponse(
             calls=(ToolCall(id="call-1", name="read_file", arguments="{}"),),
@@ -50,7 +50,7 @@ class LLMResponseContractTest(unittest.TestCase):
         self.assertEqual(mixed.content, "我先读取关键文件。")
         self.assertEqual(mixed.calls[0].id, "call-2")
 
-    def test_client_parser_rejects_empty_sdk_response(self):
+    async def test_client_parser_rejects_empty_sdk_response(self):
         response = SimpleNamespace(tool_calls=None, content=None)
 
         with self.assertRaises(InvalidLLMResponse) as raised:
@@ -58,7 +58,7 @@ class LLMResponseContractTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "empty_model_response")
 
-    def test_client_parser_preserves_content_with_tool_calls(self):
+    async def test_client_parser_preserves_content_with_tool_calls(self):
         call = SimpleNamespace(
             id="call-1",
             function=SimpleNamespace(name="read_file", arguments="{}"),
@@ -73,9 +73,9 @@ class LLMResponseContractTest(unittest.TestCase):
         self.assertEqual(parsed.content, "我先读取关键实现。")
         self.assertEqual(parsed.calls, (ToolCall("call-1", "read_file", "{}"),))
 
-    def test_client_returns_response_with_real_usage(self):
+    async def test_client_returns_response_with_real_usage(self):
         client = object.__new__(LLMClient)
-        client.completions_create = Mock(
+        client.completions_create = AsyncMock(
             return_value=SimpleNamespace(
                 choices=[
                     SimpleNamespace(
@@ -92,7 +92,7 @@ class LLMResponseContractTest(unittest.TestCase):
             )
         )
 
-        result = client.chat([], "test-model", tools=None)
+        result = await client.chat([], "test-model", tools=None)
 
         self.assertEqual(result.response.content, "done")
         self.assertEqual(result.usage.input_tokens, 120)
@@ -100,8 +100,8 @@ class LLMResponseContractTest(unittest.TestCase):
         self.assertEqual(result.usage.total_tokens, 150)
 
 
-class ModelConfigTest(unittest.TestCase):
-    def test_loads_model_config(self):
+class ModelConfigTest(unittest.IsolatedAsyncioTestCase):
+    async def test_loads_model_config(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "model_config.yaml"
             path.write_text(
@@ -132,7 +132,7 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(config.runtime.model_context_limit, 200_000)
         self.assertEqual(config.runtime.input_budget_ratio, 0.85)
 
-    def test_rejects_invalid_runtime_hyperparameters(self):
+    async def test_rejects_invalid_runtime_hyperparameters(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "model_config.yaml"
             path.write_text(
@@ -154,7 +154,7 @@ class ModelConfigTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runtime.max_rounds"):
                 load_app_config(path)
 
-    def test_rejects_missing_required_value(self):
+    async def test_rejects_missing_required_value(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "model_config.yaml"
             path.write_text(
@@ -166,9 +166,10 @@ class ModelConfigTest(unittest.TestCase):
                 load_model_config(path)
 
 
-class ModelCallServiceTest(unittest.TestCase):
-    def test_budget_exceeded_does_not_call_model(self):
+class ModelCallServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_budget_exceeded_does_not_call_model(self):
         llm_client = Mock()
+        llm_client.chat = AsyncMock()
         context_budget = Mock()
         assessment = make_budget_assessment(
             estimated_input_tokens=801,
@@ -180,7 +181,7 @@ class ModelCallServiceTest(unittest.TestCase):
             tools=[],
         )
 
-        outcome = ModelCallService(
+        outcome = await ModelCallService(
             llm_client=llm_client,
             context_budget=context_budget,
         ).call(request, "test-model")
@@ -190,8 +191,9 @@ class ModelCallServiceTest(unittest.TestCase):
         llm_client.chat.assert_not_called()
         context_budget.observe_actual_usage.assert_not_called()
 
-    def test_success_calibrates_with_real_input_usage(self):
+    async def test_success_calibrates_with_real_input_usage(self):
         llm_client = Mock()
+        llm_client.chat = AsyncMock()
         context_budget = Mock()
         context_budget.assess.return_value = make_budget_assessment(
             estimated_input_tokens=700,
@@ -208,7 +210,7 @@ class ModelCallServiceTest(unittest.TestCase):
         tools = [{"type": "function"}]
         request = ModelCallRequest(context=context, tools=tools)
 
-        outcome = ModelCallService(
+        outcome = await ModelCallService(
             llm_client=llm_client,
             context_budget=context_budget,
         ).call(request, "test-model")

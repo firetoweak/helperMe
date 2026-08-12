@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from core.agent_workspace import AgentWorkspace
 from core.agent_application import AgentApplication, DEFAULT_MAX_ROUNDS
@@ -63,6 +64,9 @@ def create_agent_application(
         FilesystemAccessMode.SCOPED
     ),
     default_max_rounds: int = DEFAULT_MAX_ROUNDS,
+    application_resources: tuple[
+        AbstractAsyncContextManager[Any], ...
+    ] = (),
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
@@ -165,4 +169,5 @@ def create_agent_application(
         session_runtime=session_runtime,
         system_prompt=DEFAULT_AGENT_PROMPT,
         default_max_rounds=default_max_rounds,
+        resources=application_resources,
     )

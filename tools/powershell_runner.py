@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import codecs
+import asyncio
 import os
 import shutil
 import subprocess
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,39 +143,6 @@ class _BoundedTextCapture:
         )
 
 
-def _drain_stream(
-    stream,
-    capture: _BoundedTextCapture,
-    errors: list[BaseException],
-) -> None:
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    try:
-        while chunk := stream.read(4_096):
-            capture.feed(decoder.decode(chunk))
-        capture.feed(decoder.decode(b"", final=True))
-    except BaseException as exc:
-        errors.append(exc)
-    finally:
-        stream.close()
-
-
-def _terminate_process_tree(proc: subprocess.Popen[bytes]) -> None:
-    if proc.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=5,
-        )
-    if proc.poll() is None:
-        proc.kill()
-    proc.wait()
-
-
 class PowerShellCommandRunner:
     """在固定 PowerShell 中执行单次前台、非交互命令。"""
 
@@ -191,7 +158,12 @@ class PowerShellCommandRunner:
         self.environment_policy = environment_policy or CommandEnvironmentPolicy()
         self.capture_limit = capture_limit or CaptureLimit()
 
-    def run(self, command: str, cwd: Path, timeout_seconds: int) -> CommandResult:
+    async def run(
+        self,
+        command: str,
+        cwd: Path,
+        timeout_seconds: int,
+    ) -> CommandResult:
         executable = shutil.which(self.executable)
         if executable is None:
             raise PowerShellNotFoundError(self.executable)
@@ -207,20 +179,18 @@ class PowerShellCommandRunner:
         )
         started = time.perf_counter()
         try:
-            proc = subprocess.Popen(
-                [
-                    executable,
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    utf8_command,
-                ],
+            proc = await asyncio.create_subprocess_exec(
+                executable,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                utf8_command,
                 cwd=cwd,
                 env=child_env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 creationflags=creationflags,
             )
         except OSError as exc:
@@ -230,35 +200,39 @@ class PowerShellCommandRunner:
 
         stdout_capture = _BoundedTextCapture(self.capture_limit)
         stderr_capture = _BoundedTextCapture(self.capture_limit)
-        reader_errors: list[BaseException] = []
+        async def drain(stream, capture: _BoundedTextCapture) -> None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            while chunk := await stream.read(4_096):
+                capture.feed(decoder.decode(chunk))
+            capture.feed(decoder.decode(b"", final=True))
+
         readers = (
-            threading.Thread(
-                target=_drain_stream,
-                args=(proc.stdout, stdout_capture, reader_errors),
-                name="command-stdout",
-                daemon=True,
-            ),
-            threading.Thread(
-                target=_drain_stream,
-                args=(proc.stderr, stderr_capture, reader_errors),
-                name="command-stderr",
-                daemon=True,
-            ),
+            asyncio.create_task(drain(proc.stdout, stdout_capture)),
+            asyncio.create_task(drain(proc.stderr, stderr_capture)),
         )
-        for reader in readers:
-            reader.start()
 
         timed_out = False
         try:
-            proc.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
+            await asyncio.wait_for(proc.wait(), timeout_seconds)
+        except TimeoutError:
             timed_out = True
-            _terminate_process_tree(proc)
+            if os.name == "nt":
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill",
+                    "/PID",
+                    str(proc.pid),
+                    "/T",
+                    "/F",
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await killer.wait()
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
 
-        for reader in readers:
-            reader.join()
-        if reader_errors:
-            raise reader_errors[0]
+        await asyncio.gather(*readers)
 
         return CommandResult(
             exit_code=None if timed_out else proc.returncode,

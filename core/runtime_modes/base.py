@@ -12,7 +12,7 @@ class RuntimeMode(Protocol):
     def start(self, state: Any) -> str | None:
         ...
 
-    def accept_start_response(
+    async def accept_start_response(
         self,
         state: Any,
         response: LLMResponse,
@@ -41,7 +41,7 @@ class RuntimeMode(Protocol):
     def handles_tool(self, name: str) -> bool:
         ...
 
-    def execute_tool(
+    async def execute_tool(
         self,
         state: Any,
         name: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import shutil
 import subprocess
 import sys
@@ -133,7 +134,7 @@ def tool_timeline(messages: list[dict]) -> list[dict]:
     return timeline
 
 
-def main() -> None:
+async def async_main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     benchmark_root = Path(tempfile.mkdtemp(prefix="helperme-phase5-7-"))
@@ -169,7 +170,7 @@ def main() -> None:
     )
     session_id = application.create_session(f"benchmark-{uuid4().hex}")
     started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    outcome = application.start(
+    outcome = await application.start(
         session_id,
         f"run-{uuid4().hex}",
         USER_GOAL,
@@ -277,5 +278,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(async_main())
 from core.agent_workspace import AgentWorkspace

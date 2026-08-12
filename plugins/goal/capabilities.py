@@ -144,7 +144,7 @@ def _format_contract(contract: CompletionContract) -> str:
 def create_submit_completion_contract_spec(
     buffer: ContractCompilationBuffer,
 ) -> ToolSpec:
-    def submit(data: CompletionContractInput) -> dict:
+    async def submit(data: CompletionContractInput) -> dict:
         try:
             buffer.submit(_to_contract(data))
         except ValueError as exc:
@@ -174,7 +174,7 @@ def create_submit_goal_judgment_spec(
     contract: CompletionContract,
     buffer: JudgmentBuffer,
 ) -> ToolSpec:
-    def submit(data: GoalJudgmentInput) -> dict:
+    async def submit(data: GoalJudgmentInput) -> dict:
         try:
             revision = (
                 _to_contract(data.revised_contract)

@@ -3,7 +3,7 @@ import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from core.composition import create_agent_application
 from core.model_call import LLMResponse, ToolCall
@@ -78,7 +78,7 @@ class FakeRunHost:
     def request_interrupt(self, session_id, reason=None):
         raise AssertionError("test did not expect an interrupt")
 
-    def execute(
+    async def execute(
         self,
         session_id,
         run_id,
@@ -104,7 +104,7 @@ class FakeRunHost:
         raise AssertionError(type(capability))
 
 
-class GoalApplicationServiceTest(unittest.TestCase):
+class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
     def ids(self):
         index = 0
 
@@ -123,7 +123,7 @@ class GoalApplicationServiceTest(unittest.TestCase):
             id_factory=self.ids(),
         )
 
-    def test_runs_executor_then_independent_judge_until_done(self):
+    async def test_runs_executor_then_independent_judge_until_done(self):
         host = FakeRunHost(
             [
                 JudgmentSubmission(
@@ -138,7 +138,7 @@ class GoalApplicationServiceTest(unittest.TestCase):
                 ),
             ]
         )
-        result = self.service(host).start_goal(
+        result = await self.service(host).start_goal(
             "session-1",
             "goal-1",
             "executor-1",
@@ -164,7 +164,7 @@ class GoalApplicationServiceTest(unittest.TestCase):
         self.assertIn("仍缺完整验证", executor_calls[1][1])
         self.assertTrue(all(session not in host.sessions for session in host.deleted_sessions))
 
-    def test_continue_at_max_turns_becomes_exhausted(self):
+    async def test_continue_at_max_turns_becomes_exhausted(self):
         host = FakeRunHost(
             [
                 JudgmentSubmission(
@@ -175,7 +175,7 @@ class GoalApplicationServiceTest(unittest.TestCase):
             ]
         )
 
-        result = self.service(host, max_turns=1).start_goal(
+        result = await self.service(host, max_turns=1).start_goal(
             "session-1",
             "goal-1",
             "executor-1",
@@ -185,7 +185,7 @@ class GoalApplicationServiceTest(unittest.TestCase):
         self.assertEqual(result.goal.status, GoalStatus.EXHAUSTED)
         self.assertEqual(result.goal.turn_count, 1)
 
-    def test_contract_revision_only_affects_next_executor_turn(self):
+    async def test_contract_revision_only_affects_next_executor_turn(self):
         replacement = CompletionContractDraft(
             (
                 user_criterion(),
@@ -214,7 +214,7 @@ class GoalApplicationServiceTest(unittest.TestCase):
             ]
         )
 
-        result = self.service(host).start_goal(
+        result = await self.service(host).start_goal(
             "session-1",
             "goal-1",
             "executor-1",
@@ -229,21 +229,21 @@ class GoalApplicationServiceTest(unittest.TestCase):
         self.assertEqual(executor_contract_versions, [1, 2])
         self.assertEqual(len(result.goal.contract_revisions), 1)
 
-    def test_executor_exception_is_preserved_and_goal_is_paused(self):
+    async def test_executor_exception_is_preserved_and_goal_is_paused(self):
         class ExecutorBug(RuntimeError):
             pass
 
         host = FakeRunHost([])
         execute = host.execute
 
-        def fail_executor(*args, **kwargs):
+        async def fail_executor(*args, **kwargs):
             invocation = args[-1] if args else kwargs["invocation"]
             if isinstance(
                 invocation.capabilities[0],
                 GoalExecutorCapability,
             ):
                 raise ExecutorBug("original bug")
-            return execute(*args, **kwargs)
+            return await execute(*args, **kwargs)
 
         host.execute = fail_executor
         store = InMemoryGoalStore()
@@ -255,7 +255,7 @@ class GoalApplicationServiceTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ExecutorBug, "original bug"):
-            service.start_goal(
+            await service.start_goal(
                 "session-1",
                 "goal-1",
                 "executor-1",
@@ -268,9 +268,10 @@ class GoalApplicationServiceTest(unittest.TestCase):
         )
 
 
-class GoalLoopRuntimeIntegrationTest(unittest.TestCase):
-    def test_contract_executor_and_independent_judge_run_through_runtime(self):
+class GoalLoopRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_contract_executor_and_independent_judge_run_through_runtime(self):
         llm = Mock()
+        llm.chat = AsyncMock()
         llm.chat.side_effect = [
             call_result(
                 LLMResponse(
@@ -344,7 +345,7 @@ class GoalLoopRuntimeIntegrationTest(unittest.TestCase):
                 default_max_turns=3,
             )
 
-            result = service.start_goal(
+            result = await service.start_goal(
                 "session-1",
                 "goal-1",
                 "executor-run-1",

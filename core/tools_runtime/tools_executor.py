@@ -35,7 +35,11 @@ class ToolsExecutor:
     def __init__(self, registry: ToolRegistry) -> None:
         self.registry = registry
 
-    def execute(self, tool_name: str, tool_arguments: str) -> dict[str, Any]:
+    async def execute(
+        self,
+        tool_name: str,
+        tool_arguments: str,
+    ) -> dict[str, Any]:
         spec = self.registry.get(tool_name)
         if spec is None:
             return normalize_tool_result(
@@ -63,7 +67,7 @@ class ToolsExecutor:
             if not isinstance(payload, dict):
                 raise ToolArgumentsError("tool arguments 必须是 JSON object")
             data = spec.parameters.validate(payload)
-            result = spec.handler(data)
+            result = await spec.handler(data)
             return normalize_tool_result(result)
         except json.JSONDecodeError as exc:
             return normalize_tool_result(

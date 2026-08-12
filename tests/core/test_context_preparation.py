@@ -20,8 +20,8 @@ from core.model_call import LLMResponse, ToolCall
 from tests.core.llm_test_support import CharacterEstimator, MemoryArtifactStore
 
 
-class ContextPreparationServiceTest(unittest.TestCase):
-    def test_builds_snapshot_from_policy_candidate_without_mutating_input_state(self):
+class ContextPreparationServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_builds_snapshot_from_policy_candidate_without_mutating_input_state(self):
         conversation = Conversation()
         conversation.set_system_prompt("system")
         conversation.add_user("old")
@@ -49,7 +49,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             summary_generator=Mock(),
         )
 
-        prepared = service.prepare(
+        prepared = await service.prepare(
             conversation_records=conversation.records,
             context_state=original_state,
             runtime_instructions=["runtime"],
@@ -71,7 +71,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
         )
         policy.propose.assert_called_once()
 
-    def test_level2_summarizes_only_history_before_current_run(self):
+    async def test_level2_summarizes_only_history_before_current_run(self):
         conversation = Conversation()
         conversation.set_system_prompt("system")
         conversation.add_user("old " * 30)
@@ -101,7 +101,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
         )
         observed_requests = []
 
-        prepared = service.prepare(
+        prepared = await service.prepare(
             conversation_records=conversation.records,
             context_state=ContextState(),
             runtime_instructions=[],
@@ -128,7 +128,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             prepared.summary_compaction.after.composition,
         )
 
-    def test_level2_prunes_tool_artifacts_covered_by_summary(self):
+    async def test_level2_prunes_tool_artifacts_covered_by_summary(self):
         conversation = Conversation()
         conversation.set_system_prompt("system")
         conversation.add_user("old task")
@@ -187,7 +187,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             summary_generator=RecordingSummaryGenerator("handoff"),
         )
 
-        prepared = service.prepare(
+        prepared = await service.prepare(
             conversation_records=conversation.records,
             context_state=ContextState(),
             runtime_instructions=[],
@@ -202,7 +202,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             artifact_keep,
         )
 
-    def test_level2_rejects_summary_state_when_reassessment_is_still_over_budget(self):
+    async def test_level2_rejects_summary_state_when_reassessment_is_still_over_budget(self):
         conversation = Conversation()
         conversation.set_system_prompt("system")
         conversation.add_user("old task")
@@ -228,7 +228,7 @@ class ContextPreparationServiceTest(unittest.TestCase):
             summary_generator=RecordingSummaryGenerator("handoff"),
         )
 
-        prepared = service.prepare(
+        prepared = await service.prepare(
             conversation_records=conversation.records,
             context_state=ContextState(),
             runtime_instructions=[],
@@ -246,7 +246,7 @@ class RecordingSummaryGenerator:
         self.summary = summary
         self.context = None
 
-    def generate(self, model_context):
+    async def generate(self, model_context):
         self.context = model_context
         return SummaryGeneration(
             summary=self.summary,

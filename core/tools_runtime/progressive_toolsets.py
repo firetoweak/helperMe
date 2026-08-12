@@ -40,7 +40,7 @@ def create_load_toolset_spec(
 ) -> ToolSpec:
     available_ids = {descriptor.id for descriptor in descriptors}
 
-    def load_toolset(input_data: LoadToolsetInput) -> dict:
+    async def load_toolset(input_data: LoadToolsetInput) -> dict:
         if input_data.toolset_id not in available_ids:
             return {
                 "ok": False,

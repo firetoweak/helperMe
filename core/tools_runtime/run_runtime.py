@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from dataclasses import dataclass
 from enum import Enum
-import time
 from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
@@ -213,7 +213,7 @@ class RunRuntime:
             evidence=evidence,
         )
 
-    def _call_llm_with_retry(
+    async def _call_llm_with_retry(
         self,
         model_context: ModelContext,
         tools: list[dict],
@@ -235,7 +235,7 @@ class RunRuntime:
                 )
             )
             try:
-                outcome = self.model_calls.call(
+                outcome = await self.model_calls.call(
                     ModelCallRequest(
                         context=model_context,
                         tools=tools,
@@ -267,7 +267,7 @@ class RunRuntime:
                             error=str(exc),
                         )
                     )
-                    time.sleep(min(attempt, 3))
+                    await asyncio.sleep(min(attempt, 3))
                     continue
                 return invalid_llm_response_checkpoint(
                     stage=stage,
@@ -293,7 +293,7 @@ class RunRuntime:
                             error=last_error,
                         )
                     )
-                    time.sleep(min(attempt, 3))  # 1s, 2s, 3s...
+                    await asyncio.sleep(min(attempt, 3))
                     continue
 
                 checkpoint = llm_error_checkpoint(
@@ -304,7 +304,7 @@ class RunRuntime:
                 )
                 return checkpoint
 
-    def _prepare_and_call_role(
+    async def _prepare_and_call_role(
         self,
         *,
         conversation: Conversation,
@@ -317,7 +317,7 @@ class RunRuntime:
         tools: list[dict],
     ) -> tuple[LLMResponse | Checkpoint, ContextState, bool]:
         try:
-            prepared = self.context_preparation.prepare(
+            prepared = await self.context_preparation.prepare(
                 conversation_records=project_system_prompt(
                     conversation.records,
                     system_prompt,
@@ -390,7 +390,7 @@ class RunRuntime:
                 compressed,
             )
 
-        response = self._call_llm_with_retry(
+        response = await self._call_llm_with_retry(
             prepared.model_context,
             tools,
             stage,
@@ -400,7 +400,7 @@ class RunRuntime:
         )
         return response, prepared.context_state, compressed
 
-    def run(
+    async def run(
         self,
         conversation: Conversation,
         user_message: str,
@@ -454,7 +454,7 @@ class RunRuntime:
         for root in evidence_roots:
             evidence_recorder.record_workspace_baseline(
                 root,
-                base_run_tools_executor.execute(
+                await base_run_tools_executor.execute(
                     "get_changes",
                     json.dumps({"root": root}),
                 ),
@@ -482,7 +482,7 @@ class RunRuntime:
             route_context = ModelContext(
                 messages=self.mode_router.build_messages(conversation.records)
             )
-            route_response = self._call_llm_with_retry(
+            route_response = await self._call_llm_with_retry(
                 route_context,
                 [],
                 "routing",
@@ -554,7 +554,7 @@ class RunRuntime:
         if start_prompt is not None:
             start_tools = runtime_mode.runtime_tools(mode_state)
             start_response, current_context_state, compressed = (
-                self._prepare_and_call_role(
+                await self._prepare_and_call_role(
                     conversation=conversation,
                     system_prompt=start_prompt,
                     context_state=current_context_state,
@@ -584,7 +584,7 @@ class RunRuntime:
                     evidence=evidence_recorder.snapshot(),
                 )
             try:
-                start_data = runtime_mode.accept_start_response(
+                start_data = await runtime_mode.accept_start_response(
                     mode_state,
                     start_response
                 )
@@ -682,7 +682,7 @@ class RunRuntime:
                     )
                 )
             try:
-                prepared = self.context_preparation.prepare(
+                prepared = await self.context_preparation.prepare(
                     conversation_records=conversation.records,
                     context_state=current_context_state,
                     runtime_instructions=runtime_prompts,
@@ -768,7 +768,7 @@ class RunRuntime:
                     context_state=current_context_state,
                     evidence=evidence_recorder.snapshot(),
                 )
-            llm_outcome = self._call_llm_with_retry(
+            llm_outcome = await self._call_llm_with_retry(
                 prepared.model_context,
                 tools,
                 "agent_round",
@@ -875,13 +875,13 @@ class RunRuntime:
 
             for call in calls:
                 if runtime_mode.handles_tool(call.name):
-                    tool_result = runtime_mode.execute_tool(
+                    tool_result = await runtime_mode.execute_tool(
                         mode_state,
                         call.name,
                         call.arguments,
                     )
                 else:
-                    tool_result = run_tools_executor.execute(
+                    tool_result = await run_tools_executor.execute(
                         call.name,
                         call.arguments,
                     )

@@ -63,7 +63,9 @@ def runtime_tool_dependencies(execute_result: dict | None = None) -> dict:
     registry.register(create_read_artifact_spec(store))
     executor = ToolsExecutor(registry)
     if execute_result is not None:
-        executor.execute = lambda _name, _arguments: execute_result
+        async def execute(_name, _arguments):
+            return execute_result
+        executor.execute = execute
     return {
         "tools_executor": executor,
         "tool_result_externalizer": ToolResultExternalizer(
@@ -132,7 +134,7 @@ def context_preparation_service(
 
 
 class MockSummaryGenerator:
-    def generate(self, model_context):
+    async def generate(self, model_context):
         raise AssertionError("测试未预期执行 Level 2")
 
 

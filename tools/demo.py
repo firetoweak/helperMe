@@ -9,7 +9,7 @@ from datetime import date
 失败/截断后：结果不会截断；调用失败时保留失败，不得编造日期。
 """.strip(),
 )
-def get_today_date(_: EmptyInput) -> dict:
+async def get_today_date(_: EmptyInput) -> dict:
     return {
         "ok": True,
         "code": "DATE_READ",

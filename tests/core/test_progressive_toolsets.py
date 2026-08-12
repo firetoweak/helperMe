@@ -38,19 +38,21 @@ class FakeToolsetProvider:
     def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
         self.requested_ids.append(toolset_id)
         if toolset_id == "weather":
+            async def get_weather(input_data):
+                return {
+                    "ok": True,
+                    "code": "WEATHER_FOUND",
+                    "data": {
+                        "location": input_data.location,
+                        "temperature": 26,
+                    },
+                }
             return (
                 ToolSpec(
                     name="get_weather",
                     description="查询指定地点的当前天气",
                     parameters=PydanticParameters(WeatherInput),
-                    handler=lambda input_data: {
-                        "ok": True,
-                        "code": "WEATHER_FOUND",
-                        "data": {
-                            "location": input_data.location,
-                            "temperature": 26,
-                        },
-                    },
+                    handler=get_weather,
                 ),
             )
         if toolset_id == "database":
@@ -64,7 +66,7 @@ class RecordingLLMClient:
         self.provider = provider
         self.requests = []
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         self.requests.append(
             {
                 "messages": messages,
@@ -84,7 +86,7 @@ def tool_names(request: dict) -> set[str]:
     }
 
 
-class ProgressiveToolsetsTest(unittest.TestCase):
+class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def runner(client: RecordingLLMClient) -> RunRuntime:
         return RunRuntime(
@@ -101,7 +103,7 @@ class ProgressiveToolsetsTest(unittest.TestCase):
         conversation.set_system_prompt("system prompt")
         return conversation
 
-    def test_toolset_is_loaded_for_the_next_round_only(self):
+    async def test_toolset_is_loaded_for_the_next_round_only(self):
         provider = FakeToolsetProvider()
         client = RecordingLLMClient(
             [
@@ -128,7 +130,7 @@ class ProgressiveToolsetsTest(unittest.TestCase):
             provider,
         )
 
-        result = self.runner(client).run(
+        result = await self.runner(client).run(
             self.conversation(),
             "查询北京天气",
             invocation=RunInvocation(toolset_provider=provider),
@@ -149,7 +151,7 @@ class ProgressiveToolsetsTest(unittest.TestCase):
             [LOAD_TOOLSET, "get_weather"],
         )
 
-    def test_loaded_toolset_does_not_leak_into_the_next_run(self):
+    async def test_loaded_toolset_does_not_leak_into_the_next_run(self):
         first_client = RecordingLLMClient(
             [
                 LLMResponse(
@@ -166,16 +168,16 @@ class ProgressiveToolsetsTest(unittest.TestCase):
         )
         runner = self.runner(first_client)
         invocation = RunInvocation(toolset_provider=FakeToolsetProvider())
-        runner.run(self.conversation(), "加载天气能力", invocation=invocation)
+        await runner.run(self.conversation(), "加载天气能力", invocation=invocation)
 
         second_client = RecordingLLMClient([LLMResponse(content="再次运行")])
         runner.model_calls = model_call_service(second_client)
-        runner.run(self.conversation(), "新的请求", invocation=invocation)
+        await runner.run(self.conversation(), "新的请求", invocation=invocation)
 
         self.assertNotIn("get_weather", tool_names(second_client.requests[0]))
         self.assertIn(LOAD_TOOLSET, tool_names(second_client.requests[0]))
 
-    def test_unknown_toolset_is_a_recoverable_tool_input_error(self):
+    async def test_unknown_toolset_is_a_recoverable_tool_input_error(self):
         client = RecordingLLMClient(
             [
                 LLMResponse(
@@ -191,7 +193,7 @@ class ProgressiveToolsetsTest(unittest.TestCase):
             ]
         )
 
-        result = self.runner(client).run(
+        result = await self.runner(client).run(
             self.conversation(),
             "加载不存在的能力",
             invocation=RunInvocation(toolset_provider=FakeToolsetProvider()),

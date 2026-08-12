@@ -22,7 +22,7 @@ class TodoMode:
     def start(self, state: TodoList) -> str | None:
         return TODO_INITIALIZATION_PROMPT
 
-    def accept_start_response(
+    async def accept_start_response(
         self,
         state: TodoList,
         response: LLMResponse,
@@ -39,7 +39,7 @@ class TodoMode:
             )
 
         call = response.calls[0]
-        result = execute_rewrite_todos(state, call.arguments)
+        result = await execute_rewrite_todos(state, call.arguments)
         if result["ok"] is not True:
             raw_preview = repr(response)[:2000]
             raise InvalidLLMResponse(
@@ -74,7 +74,7 @@ class TodoMode:
     def handles_tool(self, name: str) -> bool:
         return name == REWRITE_TODOS_NAME
 
-    def execute_tool(
+    async def execute_tool(
         self,
         state: TodoList,
         name: str,
@@ -82,7 +82,7 @@ class TodoMode:
     ) -> dict:
         if name != REWRITE_TODOS_NAME:
             raise ValueError(f"unknown todo runtime tool: {name}")
-        return execute_rewrite_todos(state, arguments)
+        return await execute_rewrite_todos(state, arguments)
 
     def checkpoint_data(self, state: TodoList) -> dict | None:
         return {"todo_list": state.to_dict()}

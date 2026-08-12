@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -129,10 +130,10 @@ class RecordingLLMClient:
         self.delegate = delegate
         self.observations: list[ModelObservation] = []
 
-    def chat(self, messages, model, tools=None) -> LLMCallResult:
+    async def chat(self, messages, model, tools=None) -> LLMCallResult:
         request_tools = tools or []
         try:
-            result = self.delegate.chat(messages, model, tools)
+            result = await self.delegate.chat(messages, model, tools)
         except (
             LLMTransientError,
             LLMContextLengthError,
@@ -165,7 +166,7 @@ class ReplayLLMClient:
         self.index = 0
         self.encoding = tiktoken.get_encoding("o200k_base")
 
-    def chat(self, messages, model, tools=None) -> LLMCallResult:
+    async def chat(self, messages, model, tools=None) -> LLMCallResult:
         if self.index >= len(self.recorded):
             raise AssertionError("B 组模型调用次数超过 A 组轨迹")
         expected = self.recorded[self.index]
@@ -228,8 +229,8 @@ class RecordingToolsExecutor:
         self.registry = delegate.registry
         self.observations: list[ToolObservation] = []
 
-    def execute(self, name: str, arguments: str) -> dict[str, Any]:
-        result = self.delegate.execute(name, arguments)
+    async def execute(self, name: str, arguments: str) -> dict[str, Any]:
+        result = await self.delegate.execute(name, arguments)
         self.observations.append(
             ToolObservation(name, arguments, deepcopy(result))
         )
@@ -242,7 +243,7 @@ class ReplayToolsExecutor:
         self.recorded = recorded
         self.index = 0
 
-    def execute(self, name: str, arguments: str) -> dict[str, Any]:
+    async def execute(self, name: str, arguments: str) -> dict[str, Any]:
         if self.index >= len(self.recorded):
             raise AssertionError("B 组工具调用次数超过 A 组轨迹")
         expected = self.recorded[self.index]
@@ -364,7 +365,7 @@ def request_metrics(observation: ModelObservation) -> dict[str, Any]:
     }
 
 
-def run_group(
+async def run_group(
     application: AgentApplication,
     llm_observations: list[ModelObservation],
 ) -> tuple[list[dict[str, Any]], str]:
@@ -372,7 +373,7 @@ def run_group(
     reports: list[dict[str, Any]] = []
     for turn, question in enumerate(QUESTIONS, 1):
         before = len(llm_observations)
-        outcome = application.start(
+        outcome = await application.start(
             session_id,
             f"run-{turn}-{uuid4().hex}",
             question,
@@ -453,7 +454,7 @@ def summarize(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
-def main() -> None:
+async def async_main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     if not WORKSPACE_ROOT.is_dir():
@@ -469,7 +470,7 @@ def main() -> None:
         store_a,
         dehydration_strategy="current",
     )
-    a_report, _ = run_group(app_a, recording_llm.observations)
+    a_report, _ = await run_group(app_a, recording_llm.observations)
 
     store_b = ContentAddressedArtifactStore()
     registry_b = build_registry(store_b)
@@ -484,7 +485,7 @@ def main() -> None:
         store_b,
         dehydration_strategy="none",
     )
-    b_report, _ = run_group(app_b, replay_llm.observations)
+    b_report, _ = await run_group(app_b, replay_llm.observations)
 
     if replay_llm.index != len(recording_llm.observations):
         raise AssertionError("B 组未完整消费 A 组模型轨迹")
@@ -529,4 +530,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(async_main())

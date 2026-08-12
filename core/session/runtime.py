@@ -116,7 +116,7 @@ class SessionRuntime:
     def get_session(self, session_id: str) -> Session:
         return self.sessions[session_id]
 
-    def start(
+    async def start(
         self,
         session_id: str,
         run_id: str,
@@ -144,7 +144,7 @@ class SessionRuntime:
                 f"当前为: {session.status.value}"
             )
 
-        return self._begin_and_execute_run(
+        return await self._begin_and_execute_run(
             session=session,
             run_id=run_id,
             user_message=user_message,
@@ -178,7 +178,7 @@ class SessionRuntime:
         control.request_interrupt(reason)
 
 
-    def resume(
+    async def resume(
         self,
         session_id: str,
         run_id: str,
@@ -199,7 +199,7 @@ class SessionRuntime:
                 f"Session 状态必须为 interrupted，当前为: {session.status.value}"
             )
 
-        return self._begin_and_execute_run(
+        return await self._begin_and_execute_run(
             session=session,
             run_id=run_id,
             user_message=user_message,
@@ -225,7 +225,7 @@ class SessionRuntime:
                 f"{len(user_message)} > {MAX_USER_MESSAGE_CHARS}"
             )
 
-    def _begin_and_execute_run(
+    async def _begin_and_execute_run(
         self,
         session: Session,
         run_id: str,
@@ -259,7 +259,7 @@ class SessionRuntime:
         self.active_controls[session.id] = run_control
 
         try:
-            return self._execute_run(
+            return await self._execute_run(
                 session=session,
                 run_record=run_record,
                 user_message=user_message,
@@ -285,7 +285,7 @@ class SessionRuntime:
             del self.active_controls[session.id]
 
 
-    def _execute_run(
+    async def _execute_run(
         self,
         session: Session,
         run_record: SessionRunRecord,
@@ -307,7 +307,7 @@ class SessionRuntime:
         )
         if invocation is not None:
             run_arguments["invocation"] = invocation
-        result = run_runtime.run(**run_arguments)
+        result = await run_runtime.run(**run_arguments)
         session.context_state = result.context_state
         target_status, event_kind = RUN_STATUS_MAPPING[result.status]
         ended_at = datetime.now(timezone.utc)

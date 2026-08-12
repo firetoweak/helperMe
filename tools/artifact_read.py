@@ -19,7 +19,7 @@ class ReadArtifactInput(BaseModel):
 
 
 def create_read_artifact_spec(store: ArtifactStore) -> ToolSpec:
-    def read_artifact(raw: ReadArtifactInput) -> dict[str, Any]:
+    async def read_artifact(raw: ReadArtifactInput) -> dict[str, Any]:
         try:
             chunk = store.read(raw.artifact_id, raw.offset, raw.limit)
         except ArtifactNotFoundError:

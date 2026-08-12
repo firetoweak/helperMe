@@ -9,7 +9,7 @@ from openai import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
-    OpenAI,
+    AsyncOpenAI,
     OpenAIError,
     RateLimitError,
 )
@@ -36,7 +36,7 @@ class LLMContextLengthError(RuntimeError):
 class LLMClient:
     def __init__(self, config: ModelConfig | None = None):
         config = config or load_model_config()
-        http_client = httpx.Client(
+        http_client = httpx.AsyncClient(
             trust_env=False,
             timeout=httpx.Timeout(
                 connect=10.0,
@@ -45,16 +45,16 @@ class LLMClient:
                 pool=10.0,
             ),
         )
-        self.client = OpenAI(
+        self.client = AsyncOpenAI(
             base_url=config.base_url,
             api_key=config.api_key,
             http_client=http_client,
             max_retries=0,
         )
 
-    def chat(self, messages, model, tools=None) -> LLMCallResult:
+    async def chat(self, messages, model, tools=None) -> LLMCallResult:
         try:
-            completion = self.completions_create(model, messages, tools)
+            completion = await self.completions_create(model, messages, tools)
         except OpenAIError as exc:
             error = str(exc)
             if is_context_limit_error(error):
@@ -77,14 +77,14 @@ class LLMClient:
             ),
         )
 
-    def completions_create(
+    async def completions_create(
         self,
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> Any:
         """发送一次请求并返回完整 SDK completion，不修改 messages。"""
-        return self.client.chat.completions.create(
+        return await self.client.chat.completions.create(
             model=model,
             messages=messages,
             tools=tools,

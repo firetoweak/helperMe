@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Protocol
+from collections.abc import Awaitable, Callable
+from typing import Any, Mapping, Protocol
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
@@ -87,7 +88,7 @@ class ToolSpec:
     name: str
     description: str
     parameters: ToolParameters
-    handler: Callable[[Any], dict[str, Any]]
+    handler: Callable[[Any], Awaitable[dict[str, Any]]]
 
     def to_openai_tool(self) -> dict[str, Any]:
         """导出当前 OpenAI-compatible 模型接口所需的工具格式。"""
@@ -146,7 +147,7 @@ def pydantic_tool_spec(
     name: str,
     description: str,
     input_model: type[BaseModel],
-    handler: Callable[[BaseModel], dict[str, Any]],
+    handler: Callable[[BaseModel], Awaitable[dict[str, Any]]],
 ) -> ToolSpec:
     return ToolSpec(
         name=name,
@@ -160,8 +161,8 @@ def register_tool(description: str, input_model: type[BaseModel] = EmptyInput):
     """装饰器：注册工具，自动生成 TOOLS schema 和 handler 映射。"""
 
     def decorator(
-        fn: Callable[[BaseModel], dict[str, Any]],
-    ) -> Callable[[BaseModel], dict[str, Any]]:
+        fn: Callable[[BaseModel], Awaitable[dict[str, Any]]],
+    ) -> Callable[[BaseModel], Awaitable[dict[str, Any]]]:
         spec = pydantic_tool_spec(
             name=fn.__name__,
             description=description,

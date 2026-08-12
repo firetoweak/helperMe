@@ -28,7 +28,7 @@ class WriteFileInput(BaseModel):
 
 
 def create_file_manage_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
-    def write_file(raw: WriteFileInput) -> dict[str, Any]:
+    async def write_file(raw: WriteFileInput) -> dict[str, Any]:
         try:
             sandbox = workspaces.get(raw.root)
             path = sandbox.resolve(raw.path)

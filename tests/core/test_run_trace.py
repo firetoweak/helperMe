@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from core.context import ContextState, make_budget_assessment
 from core.messages import Conversation
@@ -15,9 +15,10 @@ from tests.core.llm_test_support import (
 )
 
 
-class RunTraceTest(unittest.TestCase):
-    def test_model_request_records_runtime_prompt_and_full_messages(self):
+class RunTraceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_model_request_records_runtime_prompt_and_full_messages(self):
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.return_value = call_result(
             LLMResponse(content="done"),
             input_tokens=123,
@@ -26,7 +27,7 @@ class RunTraceTest(unittest.TestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -51,15 +52,16 @@ class RunTraceTest(unittest.TestCase):
             ],
         )
 
-    def test_agent_round_emits_context_prepared_with_role_breakdown(self):
+    async def test_agent_round_emits_context_prepared_with_role_breakdown(self):
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.return_value = call_result(
             LLMResponse(content="done")
         )
         conversation = Conversation()
         conversation.set_system_prompt("system")
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -92,7 +94,7 @@ class RunTraceTest(unittest.TestCase):
         self.assertIn("recent_tool_chars", micro["tool_window"])
         self.assertIn("compressible_tool_chars", micro["tool_window"])
 
-    def test_tool_batch_records_externalize_stats_from_outcome(self):
+    async def test_tool_batch_records_externalize_stats_from_outcome(self):
         huge = {
             "ok": True,
             "code": "OK",
@@ -101,6 +103,7 @@ class RunTraceTest(unittest.TestCase):
             "hint": None,
         }
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.side_effect = [
             call_result(
                 LLMResponse(
@@ -119,7 +122,7 @@ class RunTraceTest(unittest.TestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system")
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -139,7 +142,7 @@ class RunTraceTest(unittest.TestCase):
         self.assertEqual(data["batch_size"], 1)
         self.assertGreater(data["result_chars_before"], 16_000)
 
-    def test_level2_checkpoint_includes_before_after_composition(self):
+    async def test_level2_checkpoint_includes_before_after_composition(self):
         before = make_budget_assessment(900, 750)
         after = make_budget_assessment(500, 750)
         from core.context import (
@@ -159,6 +162,7 @@ class RunTraceTest(unittest.TestCase):
             tool_window=empty_tool_window_stats(),
         )
         context_preparation = Mock()
+        context_preparation.prepare = AsyncMock()
         context_preparation.prepare.return_value = PreparedContext(
             model_context=ModelContext(
                 messages=[{"role": "user", "content": "hello"}]
@@ -177,11 +181,12 @@ class RunTraceTest(unittest.TestCase):
             ),
         )
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.return_value = call_result(
             LLMResponse(content="done")
         )
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -203,8 +208,9 @@ class RunTraceTest(unittest.TestCase):
             500,
         )
 
-    def test_session_events_do_not_carry_composition(self):
+    async def test_session_events_do_not_carry_composition(self):
         model_calls = Mock()
+        model_calls.call = AsyncMock()
         model_calls.call.return_value = call_result(
             LLMResponse(content="done")
         )
@@ -218,7 +224,7 @@ class RunTraceTest(unittest.TestCase):
             )
         )
         session_runtime.create_session("s1", "system")
-        outcome = session_runtime.start("s1", "r1", "hello")
+        outcome = await session_runtime.start("s1", "r1", "hello")
 
         self.assertEqual(outcome.result.status, RunStatus.COMPLETED)
         for event in session_runtime.sessions["s1"].events:

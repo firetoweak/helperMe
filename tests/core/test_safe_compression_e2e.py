@@ -31,7 +31,7 @@ class RecordingSummaryGenerator:
         self._summaries = list(summaries)
         self.contexts = []
 
-    def generate(self, model_context):
+    async def generate(self, model_context):
         self.contexts.append(model_context)
         return SummaryGeneration(
             summary=self._summaries.pop(0),
@@ -46,7 +46,7 @@ class ScriptedLLMClient:
         self.messages = []
         self.before_response = None
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         self.messages.append(messages)
         if self.before_response is not None:
             callback = self.before_response
@@ -99,8 +99,8 @@ def make_runtime(
     )
 
 
-class SafeCompressionEndToEndTest(unittest.TestCase):
-    def test_same_session_incrementally_summarizes_s1_plus_delta_into_s2(self):
+class SafeCompressionEndToEndTest(unittest.IsolatedAsyncioTestCase):
+    async def test_same_session_incrementally_summarizes_s1_plus_delta_into_s2(self):
         summary_generator = RecordingSummaryGenerator(["S1", "S2"])
         llm_client = ScriptedLLMClient([
             LLMResponse(content="DELTA_ONE " * 60),
@@ -119,9 +119,9 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
             LLMResponse(content="OLD_ANSWER " * 40)
         )
 
-        first = session_runtime.start("session-1", "run-1", "first goal")
+        first = await session_runtime.start("session-1", "run-1", "first goal")
         first_boundary = session.context_state.summarized_through_message_id
-        second = session_runtime.start("session-1", "run-2", "second goal")
+        second = await session_runtime.start("session-1", "run-2", "second goal")
 
         self.assertEqual(first.result.status, RunStatus.COMPLETED)
         self.assertEqual(first.result.context_state.summary, "S1")
@@ -158,17 +158,20 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
         self.assertIn("OLD_ORIGINAL", conversation_text)
         self.assertIn("OLD_ANSWER", conversation_text)
 
-    def test_interrupt_resume_reuses_committed_summary_state(self):
+    async def test_interrupt_resume_reuses_committed_summary_state(self):
         registry = ToolRegistry()
+        async def ping(_raw):
+            return {
+                "ok": True,
+                "code": "PONG",
+                "data": {"value": "pong"},
+            }
+
         registry.register(ToolSpec(
             name="ping",
             description="返回 pong。",
             parameters=PydanticParameters(EmptyInput),
-            handler=lambda _raw: {
-                "ok": True,
-                "code": "PONG",
-                "data": {"value": "pong"},
-            },
+            handler=ping,
         ))
         summary_generator = RecordingSummaryGenerator(["S1"])
         llm_client = ScriptedLLMClient([
@@ -195,13 +198,13 @@ class SafeCompressionEndToEndTest(unittest.TestCase):
             "benchmark_interrupt",
         )
 
-        interrupted = session_runtime.start(
+        interrupted = await session_runtime.start(
             "session-1",
             "run-1",
             "start work",
         )
         interrupted_state = session.context_state
-        resumed = session_runtime.resume(
+        resumed = await session_runtime.resume(
             "session-1",
             "run-2",
             "continue work",

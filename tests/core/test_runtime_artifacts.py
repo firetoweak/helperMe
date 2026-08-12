@@ -27,7 +27,7 @@ from tests.core.llm_test_support import (
 )
 
 
-class RuntimeArtifactsTest(unittest.TestCase):
+class RuntimeArtifactsTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
@@ -36,7 +36,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_small_result_passes_through_without_artifact(self):
+    async def test_small_result_passes_through_without_artifact(self):
         result = {
             "ok": True,
             "code": "OK",
@@ -55,7 +55,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
         self.assertEqual(outcome.original_chars, outcome.projected_chars)
         self.assertEqual(list(self.root.iterdir()), [])
 
-    def test_large_result_is_saved_and_replaced_by_opaque_reference(self):
+    async def test_large_result_is_saved_and_replaced_by_opaque_reference(self):
         result = {
             "ok": True,
             "code": "BIG_RESULT",
@@ -81,7 +81,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
         chunk = self.store.read(artifact_id, 0, len(original))
         self.assertEqual(chunk.content, original)
 
-    def test_store_reads_by_character_offset(self):
+    async def test_store_reads_by_character_offset(self):
         ref = self.store.save("abcdefghij")
 
         first = self.store.read(ref.artifact_id, 0, 4)
@@ -91,11 +91,11 @@ class RuntimeArtifactsTest(unittest.TestCase):
         self.assertEqual(first.next_offset, 4)
         self.assertIsNone(second.next_offset)
 
-    def test_store_rejects_unknown_artifact(self):
+    async def test_store_rejects_unknown_artifact(self):
         with self.assertRaises(ArtifactNotFoundError):
             self.store.read("art_00000000000000000000000000000000", 0, 1)
 
-    def test_session_drawer_survives_store_reconstruction(self):
+    async def test_session_drawer_survives_store_reconstruction(self):
         drawers = FileArtifactDrawers(self.root / "sessions")
         ref = drawers.for_session("session-1").save("persistent content")
 
@@ -108,7 +108,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
             "persistent content",
         )
 
-    def test_session_drawers_are_isolated_and_deleted_as_a_whole(self):
+    async def test_session_drawers_are_isolated_and_deleted_as_a_whole(self):
         drawers = FileArtifactDrawers(self.root / "sessions")
         session_a = drawers.for_session("session-a")
         session_b = drawers.for_session("session-b")
@@ -127,7 +127,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
             "B content",
         )
 
-    def test_externalizer_does_not_hide_store_failure(self):
+    async def test_externalizer_does_not_hide_store_failure(self):
         class FailingStore:
             def save(self, content):
                 raise OSError("disk failure")
@@ -147,7 +147,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
         with self.assertRaisesRegex(OSError, "disk failure"):
             externalizer.process(result)
 
-    def test_agent_workspace_must_be_outside_user_workspace(self):
+    async def test_agent_workspace_must_be_outside_user_workspace(self):
         with self.assertRaisesRegex(ValueError, "Workspace"):
             create_agent_application(
                 "test-model",
@@ -156,7 +156,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
                 workspace_roots={"project": Path.cwd()},
             )
 
-    def test_user_workspace_must_be_outside_agent_workspace(self):
+    async def test_user_workspace_must_be_outside_agent_workspace(self):
         with tempfile.TemporaryDirectory() as directory:
             agent_root = Path(directory)
             task_root = agent_root / "project"
@@ -169,13 +169,13 @@ class RuntimeArtifactsTest(unittest.TestCase):
                     workspace_roots={"project": task_root},
                 )
 
-    def test_read_artifact_tool_has_no_path_input_and_enforces_limit(self):
+    async def test_read_artifact_tool_has_no_path_input_and_enforces_limit(self):
         ref = self.store.save("x" * 4000)
         registry = ToolRegistry()
         registry.register(create_read_artifact_spec(self.store))
         executor = ToolsExecutor(registry)
 
-        result = executor.execute(
+        result = await executor.execute(
             "read_artifact",
             json.dumps(
                 {
@@ -185,7 +185,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
                 }
             ),
         )
-        invalid = executor.execute(
+        invalid = await executor.execute(
             "read_artifact",
             json.dumps(
                 {
@@ -200,7 +200,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
         self.assertEqual(result["data"]["next_offset"], 3000)
         self.assertEqual(invalid["code"], "VALIDATION_ERROR")
 
-    def test_run_runtime_only_puts_artifact_reference_in_conversation(self):
+    async def test_run_runtime_only_puts_artifact_reference_in_conversation(self):
         class LLMClient:
             def __init__(self):
                 self.responses = [
@@ -210,10 +210,10 @@ class RuntimeArtifactsTest(unittest.TestCase):
                     LLMResponse(content="done"),
                 ]
 
-            def chat(self, messages, model, tools=None):
+            async def chat(self, messages, model, tools=None):
                 return call_result(self.responses.pop(0))
 
-        def big_tool(_):
+        async def big_tool(_):
             return {
                 "ok": True,
                 "code": "BIG_RESULT",
@@ -233,7 +233,7 @@ class RuntimeArtifactsTest(unittest.TestCase):
         limit = ToolResultLimit(max_chars=500, preview_chars=80)
         conversation = Conversation()
 
-        result = RunRuntime(
+        result = await RunRuntime(
             model_calls=model_call_service(LLMClient()),
             model="test-model",
             runtime_mode=PlainMode(),

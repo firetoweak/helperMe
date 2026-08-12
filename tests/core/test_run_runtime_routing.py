@@ -27,7 +27,7 @@ class RecordingLLMClient:
         self.seen_messages = []
         self.seen_tools = []
 
-    def chat(self, messages, model, tools=None):
+    async def chat(self, messages, model, tools=None):
         self.seen_messages.append([message.copy() for message in messages])
         self.seen_tools.append(list(tools or []))
         response = self.responses.pop(0)
@@ -38,7 +38,7 @@ class RecordingLLMClient:
         return call_result(response)
 
 
-class RunRuntimeRoutingTest(unittest.TestCase):
+class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _conversation() -> Conversation:
         conversation = Conversation()
@@ -128,7 +128,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             **runtime_tool_dependencies(),
         )
 
-    def test_plain_route_skips_todo_initialization(self):
+    async def test_plain_route_skips_todo_initialization(self):
         llm = RecordingLLMClient(
             [
                 self._route("plain", "可以直接回答"),
@@ -136,7 +136,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             ]
         )
 
-        result = self._runner(llm).run(
+        result = await self._runner(llm).run(
             self._conversation(),
             "1 + 1 等于几？",
         )
@@ -157,10 +157,10 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(routed.data["mode"], "plain")
         self.assertEqual(routed.data["reason"], "可以直接回答")
 
-    def test_invocation_runtime_mode_overrides_router_for_current_run(self):
+    async def test_invocation_runtime_mode_overrides_router_for_current_run(self):
         llm = RecordingLLMClient([LLMResponse(content="能力运行完成")])
 
-        result = self._runner(llm).run(
+        result = await self._runner(llm).run(
             self._conversation(),
             "执行一个看起来复杂的能力任务",
             invocation=RunInvocation(runtime_mode=PlainMode()),
@@ -177,7 +177,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             )
         )
 
-    def test_todo_route_initializes_todos_before_agent_round(self):
+    async def test_todo_route_initializes_todos_before_agent_round(self):
         llm = RecordingLLMClient(
             [
                 self._route("todo", "需要分析多个依赖步骤"),
@@ -187,7 +187,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             ]
         )
 
-        result = self._runner(llm).run(
+        result = await self._runner(llm).run(
             self._conversation(),
             "分析项目并给出修改建议",
             max_rounds=2,
@@ -219,7 +219,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             ],
         )
 
-    def test_router_reads_previous_final_answer_and_current_intent_only(self):
+    async def test_router_reads_previous_final_answer_and_current_intent_only(self):
         conversation = self._conversation()
         conversation.add_user("历史问题")
         conversation.add_assistant(
@@ -232,7 +232,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             ]
         )
 
-        self._runner(llm).run(conversation, "简单追问")
+        await self._runner(llm).run(conversation, "简单追问")
 
         routing_messages = llm.seen_messages[0]
         self.assertIn("历史回答标记", str(routing_messages))
@@ -250,7 +250,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             )
         )
 
-    def test_same_session_can_route_different_runs_to_different_modes(self):
+    async def test_same_session_can_route_different_runs_to_different_modes(self):
         conversation = self._conversation()
         llm = RecordingLLMClient(
             [
@@ -264,8 +264,8 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         )
         runner = self._runner(llm)
 
-        first = runner.run(conversation, "简单问题")
-        second = runner.run(conversation, "现在完成一个复杂任务", max_rounds=2)
+        first = await runner.run(conversation, "简单问题")
+        second = await runner.run(conversation, "现在完成一个复杂任务", max_rounds=2)
 
         first_route = next(
             cp for cp in first.checkpoints
@@ -278,7 +278,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(first_route.data["mode"], "plain")
         self.assertEqual(second_route.data["mode"], "todo")
 
-    def test_discussion_after_todo_run_can_return_to_plain_mode(self):
+    async def test_discussion_after_todo_run_can_return_to_plain_mode(self):
         conversation = self._conversation()
         llm = RecordingLLMClient(
             [
@@ -292,8 +292,8 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         )
         runner = self._runner(llm)
 
-        first = runner.run(conversation, "实现并验证复杂修改", max_rounds=2)
-        second = runner.run(
+        first = await runner.run(conversation, "实现并验证复杂修改", max_rounds=2)
+        second = await runner.run(
             conversation,
             "我觉得更好的优化方向是引入受限工作区。",
         )
@@ -309,7 +309,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         self.assertEqual(llm.seen_tools[4], [])
         self.assertNotIn("rewrite_todos", str(llm.seen_tools[5]))
 
-    def test_invalid_route_falls_back_to_plain_in_same_run(self):
+    async def test_invalid_route_falls_back_to_plain_in_same_run(self):
         llm = RecordingLLMClient(
             [
                 LLMResponse(content="我觉得这是复杂任务"),
@@ -318,7 +318,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         )
         conversation = self._conversation()
 
-        result = self._runner(llm).run(conversation, "判断任务")
+        result = await self._runner(llm).run(conversation, "判断任务")
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.answer, "继续正常回答")
@@ -339,7 +339,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             ],
         )
 
-    def test_todo_activation_failure_falls_back_to_plain_in_same_run(self):
+    async def test_todo_activation_failure_falls_back_to_plain_in_same_run(self):
         initialization_text = "这个问题可以直接讨论，不需要创建 Todo。"
         llm = RecordingLLMClient(
             [
@@ -350,7 +350,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         )
         conversation = self._conversation()
 
-        result = self._runner(llm).run(conversation, "讨论一个复杂架构方向")
+        result = await self._runner(llm).run(conversation, "讨论一个复杂架构方向")
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.answer, "按普通模式继续回答")
@@ -372,7 +372,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
                 for message in conversation.protocol_messages()
             ],
         )
-    def test_router_projection_excludes_tool_execution_history(self):
+    async def test_router_projection_excludes_tool_execution_history(self):
         conversation = self._conversation()
         conversation.add_user("历史问题")
         conversation.add_assistant(
@@ -393,7 +393,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             ]
         )
 
-        self._runner(llm).run(conversation, "它是如何执行 CLI 的")
+        await self._runner(llm).run(conversation, "它是如何执行 CLI 的")
 
         routing_messages = llm.seen_messages[0]
         self.assertEqual(
@@ -410,7 +410,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
         self.assertIn("历史最终回答", str(routing_messages))
         self.assertNotIn("历史问题", str(routing_messages))
 
-    def test_empty_route_response_falls_back_to_plain_after_retries(self):
+    async def test_empty_route_response_falls_back_to_plain_after_retries(self):
         empty = InvalidLLMResponse(
             "empty_model_response",
             "model response contains neither tool calls nor non-empty text",
@@ -419,7 +419,7 @@ class RunRuntimeRoutingTest(unittest.TestCase):
             [empty, empty, empty, LLMResponse(content="正常回答")]
         )
 
-        result = self._runner(llm).run(self._conversation(), "解释 CLI")
+        result = await self._runner(llm).run(self._conversation(), "解释 CLI")
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.answer, "正常回答")

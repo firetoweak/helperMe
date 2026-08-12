@@ -58,7 +58,7 @@ def _existing_file(workspaces: WorkspaceSandboxes, root: str, path: str):
 
 
 def create_file_write_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
-    def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
+    async def apply_patch(raw: ApplyPatchInput) -> dict[str, Any]:
         try:
             sandbox, path, err = _existing_file(workspaces, raw.root, raw.path)
         except WorkspaceInputError as exc:
@@ -102,7 +102,7 @@ def create_file_write_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             return {"ok": False, "code": "FUZZY_MATCH_NOT_UNIQUE", "matches": len(candidates), "candidates": candidates[:3], "path": relative_path}
         return {"ok": False, "code": "OLD_BLOCK_NOT_FOUND", "path": relative_path}
 
-    def replace_all(raw: ReplaceAllInput) -> dict[str, Any]:
+    async def replace_all(raw: ReplaceAllInput) -> dict[str, Any]:
         try:
             sandbox, path, err = _existing_file(workspaces, raw.root, raw.path)
         except WorkspaceInputError as exc:

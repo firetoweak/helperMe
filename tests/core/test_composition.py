@@ -12,8 +12,8 @@ from core.todos import TodoMode
 from tools.workspace import FilesystemAccessMode
 
 
-class CompositionTest(unittest.TestCase):
-    def test_scoped_access_does_not_discover_host_roots(self):
+class CompositionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_scoped_access_does_not_discover_host_roots(self):
         with tempfile.TemporaryDirectory() as runtime_directory, patch(
             "core.composition.discover_host_filesystem_roots"
         ) as discover:
@@ -26,7 +26,7 @@ class CompositionTest(unittest.TestCase):
 
         discover.assert_not_called()
 
-    def test_host_access_adds_discovered_roots_for_every_session(self):
+    async def test_host_access_adds_discovered_roots_for_every_session(self):
         with tempfile.TemporaryDirectory() as runtime_directory, \
                 tempfile.TemporaryDirectory() as project_directory, patch(
                     "core.composition.discover_host_filesystem_roots",
@@ -44,7 +44,7 @@ class CompositionTest(unittest.TestCase):
                 "session-1"
             ]
 
-            result = runtime.tools_executor.execute(
+            result = await runtime.tools_executor.execute(
                 "get_workspace_info",
                 "{}",
             )
@@ -54,7 +54,7 @@ class CompositionTest(unittest.TestCase):
             [{"name": "project"}, {"name": "drive_z"}],
         )
 
-    def test_host_access_rejects_explicit_root_name_collision(self):
+    async def test_host_access_rejects_explicit_root_name_collision(self):
         with tempfile.TemporaryDirectory() as runtime_directory, \
                 tempfile.TemporaryDirectory() as workspace_directory, patch(
                     "core.composition.discover_host_filesystem_roots",
@@ -71,7 +71,7 @@ class CompositionTest(unittest.TestCase):
                     filesystem_access_mode=FilesystemAccessMode.HOST,
                 )
 
-    def test_workspace_tools_are_bound_by_composition_root(self):
+    async def test_workspace_tools_are_bound_by_composition_root(self):
         with tempfile.TemporaryDirectory() as runtime_directory, tempfile.TemporaryDirectory() as workspace_directory:
             workspace_root = Path(workspace_directory)
             application = create_agent_application(
@@ -83,19 +83,19 @@ class CompositionTest(unittest.TestCase):
             application.create_session("session-1")
             runtime = application._session_runtime._session_run_runtimes["session-1"]
 
-            missing_root = runtime.tools_executor.execute(
+            missing_root = await runtime.tools_executor.execute(
                 "read_file",
                 '{"root":"missing","path":"a.txt"}',
             )
-            absolute_path = runtime.tools_executor.execute(
+            absolute_path = await runtime.tools_executor.execute(
                 "read_file",
                 json.dumps({"root": "project", "path": str(workspace_root / "a.txt")}),
             )
-            write_result = runtime.tools_executor.execute(
+            write_result = await runtime.tools_executor.execute(
                 "write_file",
                 '{"root":"project","path":"docs/a.txt","content":"hello"}',
             )
-            read_result = runtime.tools_executor.execute(
+            read_result = await runtime.tools_executor.execute(
                 "read_file",
                 '{"root":"project","path":"docs/a.txt"}',
             )
@@ -107,7 +107,7 @@ class CompositionTest(unittest.TestCase):
         self.assertEqual(read_result["data"]["content"], "hello")
         self.assertIsNotNone(command_spec)
 
-    def test_runtime_router_is_the_default_runtime_capability(self):
+    async def test_runtime_router_is_the_default_runtime_capability(self):
         with tempfile.TemporaryDirectory() as directory:
             application = create_agent_application(
                 model="test-model",
@@ -125,7 +125,7 @@ class CompositionTest(unittest.TestCase):
         self.assertIsInstance(runtime.runtime_modes[RunMode.PLAIN], PlainMode)
         self.assertIsInstance(runtime.runtime_modes[RunMode.TODO], TodoMode)
 
-    def test_explicit_runtime_mode_overrides_default(self):
+    async def test_explicit_runtime_mode_overrides_default(self):
         mode = PlainMode()
         with tempfile.TemporaryDirectory() as directory:
             application = create_agent_application(
@@ -144,7 +144,7 @@ class CompositionTest(unittest.TestCase):
             mode,
         )
 
-    def test_each_session_gets_a_private_run_runtime(self):
+    async def test_each_session_gets_a_private_run_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             application = create_agent_application(
                 model="test-model",
@@ -162,7 +162,7 @@ class CompositionTest(unittest.TestCase):
             runtimes["session-b"].tool_result_externalizer.store,
         )
 
-    def test_read_artifact_is_bound_to_current_session_drawer(self):
+    async def test_read_artifact_is_bound_to_current_session_drawer(self):
         with tempfile.TemporaryDirectory() as directory:
             application = create_agent_application(
                 model="test-model",
@@ -177,11 +177,11 @@ class CompositionTest(unittest.TestCase):
                 "A content"
             )
 
-            own_result = runtimes["session-a"].tools_executor.execute(
+            own_result = await runtimes["session-a"].tools_executor.execute(
                 "read_artifact",
                 json.dumps({"artifact_id": ref.artifact_id}),
             )
-            foreign_result = runtimes["session-b"].tools_executor.execute(
+            foreign_result = await runtimes["session-b"].tools_executor.execute(
                 "read_artifact",
                 json.dumps({"artifact_id": ref.artifact_id}),
             )
@@ -189,7 +189,7 @@ class CompositionTest(unittest.TestCase):
         self.assertEqual(own_result["data"]["content"], "A content")
         self.assertEqual(foreign_result["code"], "ARTIFACT_NOT_FOUND")
 
-    def test_delete_session_removes_its_artifact_drawer(self):
+    async def test_delete_session_removes_its_artifact_drawer(self):
         with tempfile.TemporaryDirectory() as directory:
             application = create_agent_application(
                 model="test-model",

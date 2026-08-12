@@ -48,8 +48,8 @@ def command_result(code, workspace_effect):
     }
 
 
-class ToolRegistryEarlyFailTest(unittest.TestCase):
-    def test_duplicate_registration_fails_without_replacing_original(self):
+class ToolRegistryEarlyFailTest(unittest.IsolatedAsyncioTestCase):
+    async def test_duplicate_registration_fails_without_replacing_original(self):
         tool_name = "duplicate_registration_test_tool"
 
         def original_handler(_):
@@ -76,12 +76,12 @@ class ToolRegistryEarlyFailTest(unittest.TestCase):
 
         self.assertIs(registry.get(tool_name), original)
 
-    def test_invalid_json_schema_fails_during_parameters_creation(self):
+    async def test_invalid_json_schema_fails_during_parameters_creation(self):
         with self.assertRaises(SchemaError):
             JsonSchemaParameters({"type": "not-a-json-schema-type"})
 
 
-class JsonSchemaToolTest(unittest.TestCase):
+class JsonSchemaToolTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.schema = {
             "type": "object",
@@ -104,15 +104,15 @@ class JsonSchemaToolTest(unittest.TestCase):
         )
         self.executor = ToolsExecutor(self.registry)
 
-    def _handle(self, arguments):
+    async def _handle(self, arguments):
         self.received_arguments.append(arguments)
         return {"ok": True, "code": "OK", "data": arguments}
 
-    def test_exposes_original_schema_and_passes_original_dict_to_handler(self):
+    async def test_exposes_original_schema_and_passes_original_dict_to_handler(self):
         exposed_schema = self.registry.get_tools()[0]["function"]["parameters"]
         arguments = {"city": "北京", "days": 2}
 
-        result = self.executor.execute(
+        result = await self.executor.execute(
             "external_weather",
             json.dumps(arguments, ensure_ascii=False),
         )
@@ -121,8 +121,8 @@ class JsonSchemaToolTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(self.received_arguments, [arguments])
 
-    def test_schema_validation_failure_is_recoverable_tool_error(self):
-        result = self.executor.execute(
+    async def test_schema_validation_failure_is_recoverable_tool_error(self):
+        result = await self.executor.execute(
             "external_weather",
             json.dumps({"days": 0}),
         )
@@ -131,14 +131,14 @@ class JsonSchemaToolTest(unittest.TestCase):
         self.assertEqual(result["code"], "VALIDATION_ERROR")
         self.assertEqual(self.received_arguments, [])
 
-    def test_non_object_arguments_are_recoverable_tool_error(self):
-        result = self.executor.execute("external_weather", "[]")
+    async def test_non_object_arguments_are_recoverable_tool_error(self):
+        result = await self.executor.execute("external_weather", "[]")
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "VALIDATION_ERROR")
         self.assertEqual(self.received_arguments, [])
 
-    def test_schema_is_snapshotted_without_normalization(self):
+    async def test_schema_is_snapshotted_without_normalization(self):
         parameters = JsonSchemaParameters(self.schema)
         self.schema["properties"]["city"]["type"] = "integer"
 
@@ -148,7 +148,7 @@ class JsonSchemaToolTest(unittest.TestCase):
         )
 
 
-class ToolsExecutorEarlyFailTest(unittest.TestCase):
+class ToolsExecutorEarlyFailTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.registry = ToolRegistry()
         self.executor = ToolsExecutor(self.registry)
@@ -158,7 +158,7 @@ class ToolsExecutorEarlyFailTest(unittest.TestCase):
             ToolSpec(name, "test tool", PydanticParameters(EmptyInput), handler)
         )
 
-    def test_preserves_explicit_success_and_failure(self):
+    async def test_preserves_explicit_success_and_failure(self):
         success = normalize_tool_result(
             {"ok": True, "code": "READ_OK", "value": 1}
         )
@@ -169,42 +169,58 @@ class ToolsExecutorEarlyFailTest(unittest.TestCase):
         self.assertEqual(success["data"], {"value": 1})
         self.assertEqual(failure["error"], "failed")
 
-    def test_empty_arguments_fail_even_for_no_arg_tool(self):
+    async def test_empty_arguments_fail_even_for_no_arg_tool(self):
         tool_name = "early_fail_no_arg_tool"
 
-        def handler(_):
+        async def handler(_):
             return {"ok": True, "code": "OK"}
 
         self.register(tool_name, handler)
-        result = self.executor.execute(tool_name, "")
+        result = await self.executor.execute(tool_name, "")
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "INVALID_JSON")
 
-    def test_no_arg_tool_accepts_explicit_empty_object(self):
+    async def test_no_arg_tool_accepts_explicit_empty_object(self):
         tool_name = "explicit_no_arg_tool"
 
-        def handler(_):
+        async def handler(_):
             return {"ok": True, "code": "OK"}
 
         self.register(tool_name, handler)
-        result = self.executor.execute(tool_name, "{}")
+        result = await self.executor.execute(tool_name, "{}")
 
         self.assertTrue(result["ok"])
 
-    def test_handler_bug_is_not_converted_to_tool_failure(self):
+    async def test_handler_bug_is_not_converted_to_tool_failure(self):
         tool_name = "crashing_internal_tool"
 
-        def handler(_):
+        async def handler(_):
             raise RuntimeError("handler bug")
 
         self.register(tool_name, handler)
         with self.assertRaisesRegex(RuntimeError, "handler bug"):
-            self.executor.execute(tool_name, "{}")
+            await self.executor.execute(tool_name, "{}")
+
+    async def test_async_handler_is_awaited_without_exception_wrapping(self):
+        tool_name = "async_boundary_tool"
+        entered = False
+
+        async def handler(_):
+            nonlocal entered
+            entered = True
+            return {"ok": True, "code": "ASYNC_OK"}
+
+        self.register(tool_name, handler)
+
+        result = await self.executor.execute(tool_name, "{}")
+
+        self.assertTrue(entered)
+        self.assertEqual(result["code"], "ASYNC_OK")
 
 
-class ToolsStateTest(unittest.TestCase):
-    def test_result_is_the_single_source_for_step_properties(self):
+class ToolsStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_result_is_the_single_source_for_step_properties(self):
         state = ToolsState()
         step = state.add_call("call-1", "demo", "{}")
 
@@ -223,7 +239,7 @@ class ToolsStateTest(unittest.TestCase):
         self.assertEqual(step.code, "DEMO_ERROR")
         self.assertEqual(step.error, "failed")
 
-    def test_result_cannot_be_recorded_twice(self):
+    async def test_result_cannot_be_recorded_twice(self):
         state = ToolsState()
         state.add_call("call-1", "demo", "{}")
         result = {"ok": True, "code": "OK", "data": None, "error": None}
@@ -232,7 +248,7 @@ class ToolsStateTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             state.add_result("call-1", result)
 
-    def test_summary_contains_no_derived_balanced_field(self):
+    async def test_summary_contains_no_derived_balanced_field(self):
         state = ToolsState()
 
         self.assertEqual(
@@ -241,8 +257,8 @@ class ToolsStateTest(unittest.TestCase):
         )
 
 
-class ToolsProtocolTest(unittest.TestCase):
-    def test_complete_tool_chain_is_valid(self):
+class ToolsProtocolTest(unittest.IsolatedAsyncioTestCase):
+    async def test_complete_tool_chain_is_valid(self):
         messages = [
             {
                 "role": "assistant",
@@ -257,7 +273,7 @@ class ToolsProtocolTest(unittest.TestCase):
 
         self.assertTrue(validate_tool_message_chain(messages).ok)
 
-    def test_dangling_tool_call_is_invalid(self):
+    async def test_dangling_tool_call_is_invalid(self):
         messages = [
             {
                 "role": "assistant",
@@ -270,7 +286,7 @@ class ToolsProtocolTest(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.pending_tool_call_ids, ["call-1"])
 
-    def test_build_tool_messages_only_exports_completed_steps(self):
+    async def test_build_tool_messages_only_exports_completed_steps(self):
         state = ToolsState()
         completed = state.add_call("call-1", "demo", "{}")
         state.add_call("call-2", "demo", "{}")
@@ -285,13 +301,13 @@ class ToolsProtocolTest(unittest.TestCase):
         self.assertEqual(messages[0]["tool_call_id"], "call-1")
 
 
-class StopGuardTest(unittest.TestCase):
-    def test_run_without_writes_can_stop(self):
+class StopGuardTest(unittest.IsolatedAsyncioTestCase):
+    async def test_run_without_writes_can_stop(self):
         safety = evaluate_stop_safety([], ToolsState())
 
         self.assertTrue(safety.can_stop)
 
-    def test_successful_write_requires_verification(self):
+    async def test_successful_write_requires_verification(self):
         state = ToolsState()
         state.add_call("write-1", "write_file", "{}")
         state.add_result("write-1", SUCCESS)
@@ -302,7 +318,7 @@ class StopGuardTest(unittest.TestCase):
         self.assertFalse(safety.business_safe)
         self.assertEqual(safety.reason, "verification_required")
 
-    def test_verification_after_last_write_allows_stop(self):
+    async def test_verification_after_last_write_allows_stop(self):
         state = ToolsState()
         state.add_call("write-1", "write_file", "{}")
         state.add_result("write-1", SUCCESS)
@@ -311,7 +327,7 @@ class StopGuardTest(unittest.TestCase):
 
         self.assertTrue(evaluate_stop_safety([], state).can_stop)
 
-    def test_new_write_after_verification_requires_new_verification(self):
+    async def test_new_write_after_verification_requires_new_verification(self):
         state = ToolsState()
         for call_id, name in [
             ("write-1", "write_file"),
@@ -323,7 +339,7 @@ class StopGuardTest(unittest.TestCase):
 
         self.assertFalse(evaluate_stop_safety([], state).can_stop)
 
-    def test_may_write_commands_require_verification(self):
+    async def test_may_write_commands_require_verification(self):
         for code, result in (
             ("COMMAND_COMPLETED", COMMAND_COMPLETED),
             ("COMMAND_TIMEOUT", COMMAND_TIMEOUT),
@@ -335,7 +351,7 @@ class StopGuardTest(unittest.TestCase):
 
                 self.assertFalse(evaluate_stop_safety([], state).can_stop)
 
-    def test_read_only_commands_do_not_require_verification(self):
+    async def test_read_only_commands_do_not_require_verification(self):
         for code in ("COMMAND_COMPLETED", "COMMAND_TIMEOUT"):
             with self.subTest(code=code):
                 state = ToolsState()
@@ -344,7 +360,7 @@ class StopGuardTest(unittest.TestCase):
 
                 self.assertTrue(evaluate_stop_safety([], state).can_stop)
 
-    def test_command_rejected_before_start_does_not_require_verification(self):
+    async def test_command_rejected_before_start_does_not_require_verification(self):
         state = ToolsState()
         state.add_call("command-1", "execute_command", "{}")
         state.add_result(
@@ -355,9 +371,9 @@ class StopGuardTest(unittest.TestCase):
         self.assertTrue(evaluate_stop_safety([], state).can_stop)
 
 
-class GetChangesEarlyFailTest(unittest.TestCase):
+class GetChangesEarlyFailTest(unittest.IsolatedAsyncioTestCase):
     @patch("tools.get_changes.subprocess.run")
-    def test_non_git_workspace_reports_verification_failure(self, run):
+    async def test_non_git_workspace_reports_verification_failure(self, run):
         run.return_value = Mock(returncode=128)
         with tempfile.TemporaryDirectory() as directory:
             workspaces = WorkspaceSandboxes({
@@ -365,7 +381,7 @@ class GetChangesEarlyFailTest(unittest.TestCase):
             })
             get_changes = create_get_changes_specs(workspaces)[0].handler
 
-            result = get_changes(GetChangesInput(root="project"))
+            result = await get_changes(GetChangesInput(root="project"))
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "VERIFICATION_BACKEND_UNAVAILABLE")

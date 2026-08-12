@@ -31,7 +31,7 @@ class RunHost(Protocol):
     ) -> None:
         ...
 
-    def execute(
+    async def execute(
         self,
         session_id: str,
         run_id: str,

@@ -11,6 +11,8 @@
 - Plugin 是构建在 Core 公共端口之上的 Agent 辅助支架，负责可选的领域工作流、外部能力接入及其状态；它可以组合 Core 能力，但不得把自己的领域名词、生命周期或存储模型写回 Core。判断边界时不看能力是否“常用”，只看删除该 Plugin 后 Core 是否仍能独立运行。
 - 源码仓库、Agent Workspace 与用户任务 Workspace 必须分离。源码仓库只保存实现；`~/.helperme` 是 Agent Workspace，保存 Session Artifact、Plugin 安装内容和 Agent 状态；用户任务 Workspace 由配置指定。Agent Workspace 不进入普通文件工具的 Workspace Roots，Plugin 只能通过自身受控端口访问其专属目录。
 - Plugin 的持久安装与 Run 期加载是两个生命周期：安装结果保存在 Agent Workspace；单次 Run 只按需加载已安装能力，并在 Run 结束后释放临时加载状态。协议适配器只负责外部能力发现与调用，不负责 Core 的能力选择策略。
+- Run 期 Progressive Loading 释放的是能力可见性与临时 Registry，不等于关闭 Plugin 的物理资源。Application 级连接、进程和目录缓存由 Plugin/Application 生命周期管理；Toolset 在某个 Run 内一经加载，Schema 快照必须保持稳定。
+- 异步 Application 必须显式进入并退出资源生命周期；Task 取消也必须完成 Session、RunRecord、子进程与异步 Client 的一致清理，再保留原始取消语义。自动化测试全绿不能替代取消与关闭路径的专项验证。
 - 工具参数描述与运行时校验必须由同一个 `ToolParameters` 契约提供。外部 JSON Schema 原样进入通用 Core 契约；MCP Plugin 禁止通过动态生成 Pydantic Model 或静默改写 Schema 绕过该设计。
 - 文件工具访问上限由 `model_config.yaml` 在 Composition 阶段确定，Application 创建后不可变；模型、Run、Skill 与 Plugin 均不得自行升级。`host` 只取消应用路径范围限制，不能绕过操作系统权限，也不等同于命令沙箱。
 - 面向应用的超参数统一由 `model_config.yaml` 提供。默认 Run 轮次上限注入 AgentApplication，普通 Run 与 Plugin Run 均通过 RunHost 解析同一默认值；下层 Runtime 只保留内部调用所需的显式覆盖能力，不维护面向用户的配置入口。
@@ -96,6 +98,13 @@ Memory（后置，外挂）
 - 目标：保留模型同轮返回的 assistant content 与 tool_calls，并在工具执行前即时输出阶段性说明。
 - 结论：不新增阶段解释层；Conversation 保存完整协议事实，RunProgressSink 只负责对外输出。
 - 详述：[phase1_阶段性说明回补总结.md](1/phase1_阶段性说明回补总结.md)
+
+### ✓ Phase 6B 前置回补：异步工具执行链（2026.08.12）
+
+- 状态：完成
+- 目标：在 MCP 接入前统一 Application → Session → Run → Model/Tool 异步主干，同时保持工具批次、Evidence、Artifact 和 StopGuard 语义。
+- 结论：Tool handler 收敛为严格 async；工具批次继续串行；Application 提供通用异步资源生命周期，`asyncio.run()` 只留在最外层入口。
+- 详述：[异步工具执行链回补总结.md](6/异步工具执行链回补总结.md)
 
 ---
 

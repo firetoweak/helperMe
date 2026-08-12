@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from typing import Any
+
 from core.session import SessionRunOutcome, SessionRuntime
 from core.session.state import SessionStatus
 from core.tools_runtime.run_invocation import RunInvocation
@@ -13,6 +16,7 @@ class AgentApplication:
         session_runtime: SessionRuntime,
         system_prompt: str,
         default_max_rounds: int = DEFAULT_MAX_ROUNDS,
+        resources: tuple[AbstractAsyncContextManager[Any], ...] = (),
     ):
         if not system_prompt.strip():
             raise ValueError("system_prompt 不能为空")
@@ -22,6 +26,25 @@ class AgentApplication:
         self._session_runtime = session_runtime
         self._system_prompt = system_prompt
         self._default_max_rounds = default_max_rounds
+        self._resources = resources
+        self._resource_stack = AsyncExitStack()
+
+    async def __aenter__(self) -> "AgentApplication":
+        async with AsyncExitStack() as stack:
+            for resource in self._resources:
+                await stack.enter_async_context(resource)
+            self._resource_stack = stack.pop_all()
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> bool:
+        return await self._resource_stack.__aexit__(
+            exc_type,
+            exc,
+            traceback,
+        )
+
+    async def close(self) -> None:
+        await self._resource_stack.aclose()
 
     def create_session(self, session_id: str) -> str:
         self._session_runtime.create_session(
@@ -30,16 +53,16 @@ class AgentApplication:
         )
         return session_id
 
-    def start(self, session_id, run_id, message, max_rounds=None):
-        return self._session_runtime.start(
+    async def start(self, session_id, run_id, message, max_rounds=None):
+        return await self._session_runtime.start(
             session_id,
             run_id,
             message,
             self._resolve_max_rounds(max_rounds),
         )
 
-    def resume(self, session_id, run_id, message, max_rounds=None):
-        return self._session_runtime.resume(
+    async def resume(self, session_id, run_id, message, max_rounds=None):
+        return await self._session_runtime.resume(
             session_id,
             run_id,
             message,
@@ -62,7 +85,7 @@ class AgentApplication:
         if any(record.run_id == run_id for record in session.run_records):
             raise ValueError(f"重复 run_id: {run_id}")
 
-    def execute(
+    async def execute(
         self,
         session_id: str,
         run_id: str,
@@ -76,7 +99,7 @@ class AgentApplication:
             if session.status is SessionStatus.INTERRUPTED
             else self._session_runtime.start
         )
-        return use_case(
+        return await use_case(
             session_id,
             run_id,
             user_message,

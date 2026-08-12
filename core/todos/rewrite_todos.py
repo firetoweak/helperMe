@@ -55,14 +55,14 @@ def rewrite_todos_tool_schema() -> dict:
     return _create_spec(TodoList()).to_openai_tool()
 
 
-def execute_rewrite_todos(todo_list: TodoList, arguments: str) -> dict:
+async def execute_rewrite_todos(todo_list: TodoList, arguments: str) -> dict:
     registry = ToolRegistry()
     registry.register(_create_spec(todo_list))
-    return ToolsExecutor(registry).execute(REWRITE_TODOS_NAME, arguments)
+    return await ToolsExecutor(registry).execute(REWRITE_TODOS_NAME, arguments)
 
 
 def _create_spec(todo_list: TodoList) -> ToolSpec:
-    def apply(data: RewriteTodosInput) -> dict:
+    async def apply(data: RewriteTodosInput) -> dict:
         try:
             changed = todo_list.apply_snapshot(
                 data.objective,
