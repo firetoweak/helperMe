@@ -28,7 +28,7 @@ from core.tools_runtime.run_invocation import RunInvocation
 from core.tools_runtime.model_turn import ModelTurnRunner
 from core.tools_runtime.mode_activation import ModeActivator
 from core.tools_runtime.run_types import RunControl, RunResult, RunStatus
-from core.tools_runtime.tool_batch import SerialToolBatchExecutor
+from core.tools_runtime.tool_batch import ConcurrentToolBatchExecutor
 from core.tools_runtime.tool_environment import RunToolEnvironment
 
 
@@ -110,7 +110,7 @@ class RunRuntime:
             self.tools_executor,
             current_invocation,
         )
-        tool_batch_executor = SerialToolBatchExecutor(
+        tool_batch_executor = ConcurrentToolBatchExecutor(
             self.tool_result_externalizer,
         )
         for root in tool_environment.evidence_roots():

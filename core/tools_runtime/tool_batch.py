@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -21,8 +22,8 @@ class ToolBatchOutcome:
     externalized_count: int
 
 
-class SerialToolBatchExecutor:
-    """按模型声明顺序执行并提交一批工具调用。"""
+class ConcurrentToolBatchExecutor:
+    """并发执行模型同一轮声明的工具调用，并按声明顺序提交结果。"""
 
     def __init__(self, result_externalizer: ToolResultExternalizer) -> None:
         self.result_externalizer = result_externalizer
@@ -43,18 +44,34 @@ class SerialToolBatchExecutor:
         result_chars_after = 0
         externalized_count = 0
 
-        for call in calls:
+        async def execute_call(call: ToolCall) -> dict[str, Any]:
             if runtime_mode.handles_tool(call.name):
-                tool_result = await runtime_mode.execute_tool(
+                return await runtime_mode.execute_tool(
                     mode_state,
                     call.name,
                     call.arguments,
                 )
-            else:
-                tool_result = await tools_executor.execute(
-                    call.name,
-                    call.arguments,
-                )
+            return await tools_executor.execute(
+                call.name,
+                call.arguments,
+            )
+
+        # 同一 Round 即模型的并行意图。gather 保持返回值与输入顺序一致；
+        # 取消本批次时，取消会继续传播到所有尚未完成的工具调用。
+        tool_results = await asyncio.gather(
+            *(execute_call(call) for call in calls),
+            return_exceptions=True,
+        )
+
+        # handler 缺陷仍是内部异常，不伪装成可恢复的 Tool Result；但必须先等
+        # 同轮兄弟调用全部收束，避免 Run 已失败后仍有后台调用继续产生副作用。
+        for result in tool_results:
+            if isinstance(result, BaseException):
+                raise result
+
+        # 共享账本只在所有调用结束后由当前 Task 顺序提交，避免完成时序
+        # 改变 Evidence、Artifact、ToolsState 和 Conversation 的事实顺序。
+        for call, tool_result in zip(calls, tool_results, strict=True):
             evidence_recorder.record(
                 call.id,
                 call.name,

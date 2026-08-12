@@ -103,7 +103,7 @@ Memory（后置，外挂）
 
 - 状态：完成
 - 目标：在 MCP 接入前统一 Application → Session → Run → Model/Tool 异步主干，同时保持工具批次、Evidence、Artifact 和 StopGuard 语义。
-- 结论：Tool handler 收敛为严格 async；工具批次继续串行；Application 提供通用异步资源生命周期，`asyncio.run()` 只留在最外层入口。
+- 结论：Tool handler 收敛为严格 async；异步回补阶段先保持串行，后续已升级为同轮并发执行、原序提交；Application 提供通用异步资源生命周期，`asyncio.run()` 只留在最外层入口。
 - 详述：[异步工具执行链回补总结.md](6/异步工具执行链回补总结.md)
 
 ---

@@ -19,6 +19,16 @@ DEFAULT_SYSTEM_PROMPT = """
 """.strip()
 
 
+PARALLEL_TOOL_CALLS_RULE = """
+并行工具调用：
+- 同一响应中的工具调用会并发执行。将每一轮视为执行屏障：收到本轮全部调用的结果后，再决定下一轮操作。
+- 当多个操作确定有必要执行，且彼此不依赖对方的结果或副作用时，在同一响应中一起调用；不要把相互独立的操作跨轮串行执行。
+- 如果某个操作依赖另一个操作产生的信息或副作用，将它放到后续轮次，并先观察前一轮结果。
+- Runtime 不会替你推断语义依赖或重新排列调用。一个响应中发出多个工具调用，即表示你确认它们在语义上可以安全并发执行。
+- 优先增加合理的并行宽度，减少不必要的串行深度；但不要仅为增加并行度而制造额外的工具调用。
+""".strip()
+
+
 FILE_RULE = """
 文件任务：
 - 有目标地获取上下文。目标未知时先用 glob 或 grep 定位；定位后只读取与任务相关的文件和片段。多个互不依赖的查找或读取应在同一轮发出。
@@ -28,4 +38,8 @@ FILE_RULE = """
 """.strip()
 
 
-DEFAULT_AGENT_PROMPT = f"{DEFAULT_SYSTEM_PROMPT}\n\n{FILE_RULE}"
+DEFAULT_AGENT_PROMPT = (
+    f"{DEFAULT_SYSTEM_PROMPT}\n\n"
+    f"{PARALLEL_TOOL_CALLS_RULE}\n\n"
+    f"{FILE_RULE}"
+)
