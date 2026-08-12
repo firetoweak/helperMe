@@ -102,7 +102,8 @@ def create_agent_application(
     for spec in create_workspace_tool_specs(workspaces, command_runner):
         application_tool_registry.register(spec)
 
-    if llm_client is None:
+    owns_llm_client = llm_client is None
+    if owns_llm_client:
         llm_client = LLMClient()
     context_budget = ContextBudget(
         estimator=TiktokenTokenEstimator(),
@@ -169,5 +170,7 @@ def create_agent_application(
         session_runtime=session_runtime,
         system_prompt=DEFAULT_AGENT_PROMPT,
         default_max_rounds=default_max_rounds,
-        resources=application_resources,
+        resources=(llm_client, *application_resources)
+        if owns_llm_client
+        else application_resources,
     )

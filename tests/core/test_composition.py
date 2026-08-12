@@ -2,7 +2,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.agent_workspace import AgentWorkspace
 from core.composition import create_agent_application
@@ -13,18 +13,60 @@ from tools.workspace import FilesystemAccessMode
 
 
 class CompositionTest(unittest.IsolatedAsyncioTestCase):
+    async def start_application(self, application):
+        await application.__aenter__()
+        self.addAsyncCleanup(application.close)
+        return application
+
     async def test_scoped_access_does_not_discover_host_roots(self):
         with tempfile.TemporaryDirectory() as runtime_directory, patch(
             "core.composition.discover_host_filesystem_roots"
         ) as discover:
-            create_agent_application(
+            application = create_agent_application(
                 model="test-model",
                 model_context_limit=10_000,
                 agent_workspace=AgentWorkspace(Path(runtime_directory)),
                 workspace_roots={"project": Path.cwd()},
             )
+            await self.start_application(application)
 
         discover.assert_not_called()
+
+    async def test_internally_created_llm_client_is_application_owned(self):
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "core.composition.LLMClient",
+            return_value=client,
+        ):
+            application = create_agent_application(
+                model="test-model",
+                model_context_limit=10_000,
+                agent_workspace=AgentWorkspace(Path(directory)),
+                workspace_roots={"project": Path.cwd()},
+            )
+            async with application:
+                pass
+
+        client.__aenter__.assert_awaited_once()
+        client.__aexit__.assert_awaited_once()
+
+    async def test_injected_llm_client_remains_caller_owned(self):
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            application = create_agent_application(
+                model="test-model",
+                model_context_limit=10_000,
+                agent_workspace=AgentWorkspace(Path(directory)),
+                workspace_roots={"project": Path.cwd()},
+                llm_client=client,
+            )
+            async with application:
+                pass
+
+        client.__aenter__.assert_not_awaited()
+        client.__aexit__.assert_not_awaited()
 
     async def test_host_access_adds_discovered_roots_for_every_session(self):
         with tempfile.TemporaryDirectory() as runtime_directory, \
@@ -39,6 +81,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                 workspace_roots={"project": Path(project_directory)},
                 filesystem_access_mode=FilesystemAccessMode.HOST,
             )
+            await self.start_application(application)
             application.create_session("session-1")
             runtime = application._session_runtime._session_run_runtimes[
                 "session-1"
@@ -80,6 +123,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                 agent_workspace=AgentWorkspace(Path(runtime_directory)),
                 workspace_roots={"project": workspace_root},
             )
+            await self.start_application(application)
             application.create_session("session-1")
             runtime = application._session_runtime._session_run_runtimes["session-1"]
 
@@ -115,6 +159,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                 agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
+            await self.start_application(application)
             application.create_session("session-1")
 
         runtime = application._session_runtime._session_run_runtimes[
@@ -135,6 +180,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                 workspace_roots={"project": Path.cwd()},
                 runtime_mode=mode,
             )
+            await self.start_application(application)
             application.create_session("session-1")
 
         self.assertIs(
@@ -152,6 +198,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                 agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
+            await self.start_application(application)
             application.create_session("session-a")
             application.create_session("session-b")
 
@@ -170,6 +217,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                 agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
+            await self.start_application(application)
             application.create_session("session-a")
             application.create_session("session-b")
             runtimes = application._session_runtime._session_run_runtimes
@@ -197,6 +245,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                 agent_workspace=AgentWorkspace(Path(directory)),
                 workspace_roots={"project": Path.cwd()},
             )
+            await self.start_application(application)
             application.create_session("session-1")
             runtime = application._session_runtime._session_run_runtimes[
                 "session-1"

@@ -211,28 +211,47 @@ class PowerShellCommandRunner:
             asyncio.create_task(drain(proc.stderr, stderr_capture)),
         )
 
+        async def terminate_and_drain() -> None:
+            if proc.returncode is None:
+                if os.name == "nt":
+                    try:
+                        killer = await asyncio.create_subprocess_exec(
+                            "taskkill",
+                            "/PID",
+                            str(proc.pid),
+                            "/T",
+                            "/F",
+                            stdin=asyncio.subprocess.DEVNULL,
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        await killer.wait()
+                    except OSError:
+                        pass
+                if proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                await proc.wait()
+            await asyncio.gather(*readers, return_exceptions=True)
+
         timed_out = False
         try:
-            await asyncio.wait_for(proc.wait(), timeout_seconds)
-        except TimeoutError:
-            timed_out = True
-            if os.name == "nt":
-                killer = await asyncio.create_subprocess_exec(
-                    "taskkill",
-                    "/PID",
-                    str(proc.pid),
-                    "/T",
-                    "/F",
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await killer.wait()
-            if proc.returncode is None:
-                proc.kill()
-            await proc.wait()
-
-        await asyncio.gather(*readers)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout_seconds)
+            except TimeoutError:
+                timed_out = True
+                await terminate_and_drain()
+            else:
+                await asyncio.gather(*readers)
+        except BaseException:
+            cleanup = asyncio.create_task(terminate_and_drain())
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                await cleanup
+            raise
 
         return CommandResult(
             exit_code=None if timed_out else proc.returncode,

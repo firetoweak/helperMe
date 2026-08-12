@@ -168,14 +168,15 @@ async def async_main() -> None:
         workspace_roots={"project": project_root},
         input_budget_ratio=0.9,
     )
-    session_id = application.create_session(f"benchmark-{uuid4().hex}")
-    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    outcome = await application.start(
-        session_id,
-        f"run-{uuid4().hex}",
-        USER_GOAL,
-        max_rounds=50,
-    )
+    async with application:
+        session_id = application.create_session(f"benchmark-{uuid4().hex}")
+        started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        outcome = await application.start(
+            session_id,
+            f"run-{uuid4().hex}",
+            USER_GOAL,
+            max_rounds=50,
+        )
 
     session = application._session_runtime.sessions[session_id]
     messages = session.conversation.protocol_messages()

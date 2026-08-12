@@ -52,6 +52,15 @@ class LLMClient:
             max_retries=0,
         )
 
+    async def __aenter__(self) -> "LLMClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.close()
+
+    async def close(self) -> None:
+        await self.client.close()
+
     async def chat(self, messages, model, tools=None) -> LLMCallResult:
         try:
             completion = await self.completions_create(model, messages, tools)

@@ -1,11 +1,11 @@
+import asyncio
 import json
 import os
 import shutil
 import tempfile
-import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from core.context import ContextManager, ContextRequest, ContextState
 from core.messages import Conversation
@@ -204,37 +204,38 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(hit["submatches_truncated"])
 
     async def test_grep_times_out_and_kills_the_process(self):
-        killed = threading.Event()
+        killed = asyncio.Event()
 
         class BlockingStdout:
-            def __iter__(self):
-                return self
+            async def readline(self):
+                await asyncio.Event().wait()
 
-            def __next__(self):
-                killed.wait(timeout=1)
-                raise StopIteration
-
-            def close(self):
-                pass
+        class EmptyStderr:
+            async def read(self, _size):
+                return b""
 
         class BlockingProcess:
             def __init__(self):
                 self.stdout = BlockingStdout()
-
-            def poll(self):
-                return -9 if killed.is_set() else None
+                self.stderr = EmptyStderr()
+                self.returncode = None
 
             def kill(self):
                 killed.set()
+                self.returncode = -9
 
             def terminate(self):
                 killed.set()
+                self.returncode = -15
 
-            def wait(self, timeout=None):
-                killed.wait(timeout=timeout)
-                return -9
+            async def wait(self):
+                await killed.wait()
+                return self.returncode
 
-        with patch("tools.file_read.subprocess.Popen", return_value=BlockingProcess()), patch(
+        with patch(
+            "tools.file_read.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=BlockingProcess()),
+        ), patch(
             "tools.file_read.GREP_TIMEOUT_SECONDS",
             0.01,
         ):

@@ -72,6 +72,7 @@ async def async_main(argv: list[str] | None = None) -> None:
     runtime_config = app_config.runtime
     model = model_config.name
 
+    llm_client = LLMClient(model_config)
     application = create_agent_application(
         model,
         model_context_limit=runtime_config.model_context_limit,
@@ -80,7 +81,7 @@ async def async_main(argv: list[str] | None = None) -> None:
             "project": app_config.workspace.root,
         },
         input_budget_ratio=runtime_config.input_budget_ratio,
-        llm_client=LLMClient(model_config),
+        llm_client=llm_client,
         progress_sink=ConsoleProgressSink(),
         filesystem_access_mode=(
             FilesystemAccessMode.HOST
@@ -88,6 +89,7 @@ async def async_main(argv: list[str] | None = None) -> None:
             else FilesystemAccessMode.SCOPED
         ),
         default_max_rounds=runtime_config.max_rounds,
+        application_resources=(llm_client,),
     )
     async with application:
         session_id = _new_session(application)

@@ -27,7 +27,11 @@ class ToolsetProvider(Protocol):
 
 @dataclass
 class ToolsetLoadingState:
-    loaded_ids: set[str] = field(default_factory=set)
+    loaded_specs: dict[str, tuple[ToolSpec, ...]] = field(default_factory=dict)
+
+    @property
+    def loaded_ids(self) -> set[str]:
+        return set(self.loaded_specs)
 
 
 class LoadToolsetInput(BaseModel):
@@ -37,6 +41,7 @@ class LoadToolsetInput(BaseModel):
 def create_load_toolset_spec(
     descriptors: tuple[ToolsetDescriptor, ...],
     state: ToolsetLoadingState,
+    provider: ToolsetProvider,
 ) -> ToolSpec:
     available_ids = {descriptor.id for descriptor in descriptors}
 
@@ -49,7 +54,10 @@ def create_load_toolset_spec(
                 "error": f"Toolset {input_data.toolset_id} not found",
                 "hint": "请从可选 Toolset 目录中选择有效 ID。",
             }
-        state.loaded_ids.add(input_data.toolset_id)
+        if input_data.toolset_id not in state.loaded_specs:
+            state.loaded_specs[input_data.toolset_id] = tuple(
+                provider.tool_specs(input_data.toolset_id)
+            )
         return {
             "ok": True,
             "code": "TOOLSET_LOADED",
@@ -73,7 +81,7 @@ def toolset_catalog_instruction(
     ]
     lines.extend(
         f"- {descriptor.id}: {descriptor.description}"
-        + ("（已加载）" if descriptor.id in state.loaded_ids else "")
+        + ("（已加载）" if descriptor.id in state.loaded_specs else "")
         for descriptor in descriptors
     )
     return "\n".join(lines)

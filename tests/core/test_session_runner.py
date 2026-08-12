@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -216,6 +217,32 @@ class SessionRuntimeStartTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.run_records[0].status, RunStatus.FAILED.value)
         self.assertEqual(session.run_records[0].final_reason, "runtime_exception")
         self.assertIsNotNone(session.run_records[0].ended_at)
+
+    async def test_cancelled_run_is_finalized_before_cancellation_propagates(self):
+        session = self.runtime.create_session("session-1", system_prompt="prompt")
+        entered = asyncio.Event()
+
+        async def run(**_kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+        self.run_runtime.run.side_effect = run
+        task = asyncio.create_task(
+            self.runtime.start("session-1", "run-1", "完成任务")
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        record = session.run_records[0]
+        self.assertEqual(session.status, SessionStatus.FAILED)
+        self.assertEqual(session.events[-1].kind, SessionEventType.FAILED)
+        self.assertEqual(record.status, RunStatus.FAILED.value)
+        self.assertEqual(record.final_reason, "task_cancelled")
+        self.assertIsNotNone(record.ended_at)
+        self.assertEqual(self.runtime.active_controls, {})
 
     async def test_next_run_receives_context_state_committed_by_previous_run(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")

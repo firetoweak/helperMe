@@ -73,12 +73,14 @@ class RunToolEnvironment:
                 create_load_toolset_spec(
                     self.toolset_descriptors,
                     self.toolset_state,
+                    self.toolset_provider,
                 )
             )
             for descriptor in self.toolset_descriptors:
-                if descriptor.id not in self.toolset_state.loaded_ids:
+                loaded_specs = self.toolset_state.loaded_specs.get(descriptor.id)
+                if loaded_specs is None:
                     continue
-                for spec in self.toolset_provider.tool_specs(descriptor.id):
+                for spec in loaded_specs:
                     run_registry.register(spec)
             run_executor = ToolsExecutor(run_registry)
 

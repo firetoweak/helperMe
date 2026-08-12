@@ -37,31 +37,34 @@ async def async_main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     app_config = load_app_config()
     sink = RecordingConsoleProgressSink()
+    llm_client = LLMClient(app_config.model)
     application = create_agent_application(
         app_config.model.name,
         model_context_limit=200_000,
         agent_workspace=AgentWorkspace.default(),
         workspace_roots={"project": app_config.workspace_root},
         input_budget_ratio=0.9,
-        llm_client=LLMClient(app_config.model),
+        llm_client=llm_client,
         progress_sink=sink,
+        application_resources=(llm_client,),
     )
-    session_id = application.create_session(f"stage-test-{uuid4().hex}")
+    async with application:
+        session_id = application.create_session(f"stage-test-{uuid4().hex}")
 
-    for turn, prompt in enumerate(PROMPTS, start=1):
-        sink.current_turn = turn
-        print(f"\n\n=== Round {turn} ===\n用户：{prompt}")
-        outcome = await application.start(
-            session_id,
-            f"run-{uuid4().hex}",
-            prompt,
-        )
-        print(f"\n最终回答：{outcome.result.answer}")
-        print(f"Run 状态：{outcome.result.status.value}")
-        if outcome.result.status != RunStatus.COMPLETED:
-            raise RuntimeError(
-                f"Round {turn} 未完成：{outcome.result.status.value}"
+        for turn, prompt in enumerate(PROMPTS, start=1):
+            sink.current_turn = turn
+            print(f"\n\n=== Round {turn} ===\n用户：{prompt}")
+            outcome = await application.start(
+                session_id,
+                f"run-{uuid4().hex}",
+                prompt,
             )
+            print(f"\n最终回答：{outcome.result.answer}")
+            print(f"Run 状态：{outcome.result.status.value}")
+            if outcome.result.status != RunStatus.COMPLETED:
+                raise RuntimeError(
+                    f"Round {turn} 未完成：{outcome.result.status.value}"
+                )
 
     print("\n\n=== 阶段性说明统计 ===")
     for turn in range(1, len(PROMPTS) + 1):

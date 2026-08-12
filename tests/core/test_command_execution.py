@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -165,6 +166,33 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
             time.sleep(2.5)
 
             self.assertTrue(result.timed_out)
+            self.assertFalse(marker.exists())
+
+    async def test_task_cancellation_terminates_child_process_tree(self):
+        runner = PowerShellCommandRunner()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "child-finished.txt"
+            script = root / "child.ps1"
+            script.write_text(
+                "Start-Sleep -Seconds 2\n"
+                f"Set-Content -LiteralPath '{marker}' -Value done\n",
+                encoding="utf-8",
+            )
+            task = asyncio.create_task(
+                runner.run(
+                    f"& powershell.exe -NoProfile -File '{script}'",
+                    root,
+                    10,
+                )
+            )
+            await asyncio.sleep(0.2)
+            task.cancel()
+
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+            await asyncio.sleep(2.5)
             self.assertFalse(marker.exists())
 
     async def test_missing_powershell_is_an_expected_boundary_error(self):

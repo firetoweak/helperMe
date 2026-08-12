@@ -338,6 +338,8 @@ class GoalLoopRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 runtime_mode=PlainMode(),
                 llm_client=llm,
             )
+            await application.__aenter__()
+            self.addAsyncCleanup(application.close)
             application.create_session("session-1")
             service = GoalApplicationService(
                 application,

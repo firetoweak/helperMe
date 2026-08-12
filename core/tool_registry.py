@@ -60,6 +60,10 @@ class JsonSchemaParameters:
         schema = deepcopy(dict(input_schema))
         validator_class = validator_for(schema)
         validator_class.check_schema(schema)
+        if schema.get("type") != "object":
+            raise ValueError(
+                "tool parameters JSON Schema 顶层 type 必须显式为 object"
+            )
         object.__setattr__(self, "_schema", schema)
         object.__setattr__(self, "_validator", validator_class(schema))
 
@@ -81,7 +85,7 @@ class JsonSchemaParameters:
         return payload
 
 
-@dataclass
+@dataclass(frozen=True)
 class ToolSpec:
     """与工具来源和模型 Provider 无关的内部工具定义。"""
 

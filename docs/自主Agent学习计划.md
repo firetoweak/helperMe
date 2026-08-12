@@ -294,7 +294,8 @@ Phase 8 Multi-Agent
 - MCP 定位：MCP 是外部 Toolset 的接入协议，不负责能力加载策略；具体适配放在可选 Plugin，Core 不依赖 MCP。
 - 当前结论：Core 管理单次 Run 的加载状态与逐轮工具装配，Plugin 通过 `ToolsetProvider` 提供精简目录和具体工具；模型调用 `load_toolset` 后，工具从下一轮可见，Run 结束后自然释放。
 - ToolSpec 前置回补：以 `ToolParameters` 绑定模型 Schema 与运行时校验；支持 Pydantic 与原生 JSON Schema，非法 Schema 和重复工具名直接失败。
-- 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)
+- MCP 前置技术债清理：Run 内 Toolset 在加载时冻结；Application、Session、LLM Client 与 PowerShell 取消/关闭路径闭合；`grep`、`get_changes` 改用异步子进程；JSON Schema 顶层 object 契约前置校验。
+- 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)
 
 ### 6C SubAgent Delegation
 

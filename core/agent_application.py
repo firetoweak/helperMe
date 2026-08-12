@@ -28,25 +28,63 @@ class AgentApplication:
         self._default_max_rounds = default_max_rounds
         self._resources = resources
         self._resource_stack = AsyncExitStack()
+        self._lifecycle_state = "new"
 
     async def __aenter__(self) -> "AgentApplication":
-        async with AsyncExitStack() as stack:
-            for resource in self._resources:
-                await stack.enter_async_context(resource)
-            self._resource_stack = stack.pop_all()
+        if self._lifecycle_state != "new":
+            raise RuntimeError(
+                f"AgentApplication 不能进入，当前状态: {self._lifecycle_state}"
+            )
+        try:
+            async with AsyncExitStack() as stack:
+                for resource in self._resources:
+                    await stack.enter_async_context(resource)
+                self._resource_stack = stack.pop_all()
+        except BaseException:
+            self._lifecycle_state = "closed"
+            raise
+        self._lifecycle_state = "started"
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> bool:
-        return await self._resource_stack.__aexit__(
-            exc_type,
-            exc,
-            traceback,
-        )
+        self._require_started()
+        self._ensure_no_active_runs()
+        self._lifecycle_state = "closing"
+        try:
+            return await self._resource_stack.__aexit__(
+                exc_type,
+                exc,
+                traceback,
+            )
+        finally:
+            self._lifecycle_state = "closed"
 
     async def close(self) -> None:
-        await self._resource_stack.aclose()
+        if self._lifecycle_state == "closed":
+            return
+        if self._lifecycle_state == "new":
+            self._lifecycle_state = "closed"
+            return
+        self._ensure_no_active_runs()
+        self._lifecycle_state = "closing"
+        try:
+            await self._resource_stack.aclose()
+        finally:
+            self._lifecycle_state = "closed"
+
+    def _require_started(self) -> None:
+        if self._lifecycle_state != "started":
+            raise RuntimeError(
+                "AgentApplication 必须在 async with 生命周期内使用；"
+                f"当前状态: {self._lifecycle_state}"
+            )
+
+    def _ensure_no_active_runs(self) -> None:
+        if self._session_runtime.active_controls:
+            raise RuntimeError("AgentApplication 仍有活动 Run，不能关闭资源")
 
     def create_session(self, session_id: str) -> str:
+        self._require_started()
         self._session_runtime.create_session(
             session_id=session_id,
             system_prompt=self._system_prompt,
@@ -54,6 +92,7 @@ class AgentApplication:
         return session_id
 
     async def start(self, session_id, run_id, message, max_rounds=None):
+        self._require_started()
         return await self._session_runtime.start(
             session_id,
             run_id,
@@ -62,6 +101,7 @@ class AgentApplication:
         )
 
     async def resume(self, session_id, run_id, message, max_rounds=None):
+        self._require_started()
         return await self._session_runtime.resume(
             session_id,
             run_id,
@@ -70,6 +110,7 @@ class AgentApplication:
         )
 
     def require_session(self, session_id: str) -> None:
+        self._require_started()
         self._session_runtime.get_session(session_id)
 
     def validate_run(
@@ -78,6 +119,7 @@ class AgentApplication:
         run_id: str,
         user_message: str,
     ) -> None:
+        self._require_started()
         self._session_runtime.validate_run_input(run_id, user_message)
         session = self._session_runtime.get_session(session_id)
         if session.status is SessionStatus.RUNNING:
@@ -93,6 +135,7 @@ class AgentApplication:
         max_rounds: int | None,
         invocation: RunInvocation,
     ) -> SessionRunOutcome:
+        self._require_started()
         session = self._session_runtime.get_session(session_id)
         use_case = (
             self._session_runtime.resume
@@ -118,7 +161,9 @@ class AgentApplication:
         return resolved
 
     def request_interrupt(self, session_id, reason=None):
+        self._require_started()
         self._session_runtime.request_interrupt(session_id, reason)
 
     def delete_session(self, session_id: str) -> None:
+        self._require_started()
         self._session_runtime.delete_session(session_id)

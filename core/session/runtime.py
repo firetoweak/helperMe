@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-
+import asyncio
 from dataclasses import dataclass
 from typing import Callable
 
@@ -267,6 +267,20 @@ class SessionRuntime:
                 control=run_control,
                 invocation=invocation,
             )
+        except asyncio.CancelledError:
+            if session.status is SessionStatus.RUNNING:
+                ended_at = datetime.now(timezone.utc)
+                event = SessionEvent(
+                    kind=SessionEventType.FAILED,
+                    session_id=session.id,
+                    reason="Run task was cancelled",
+                    run_id=run_id,
+                )
+                session.transition_to(SessionStatus.FAILED, event)
+                run_record.status = RunStatus.FAILED.value
+                run_record.ended_at = ended_at
+                run_record.final_reason = "task_cancelled"
+            raise
         except Exception:
             if session.status is SessionStatus.RUNNING:
                 ended_at = datetime.now(timezone.utc)

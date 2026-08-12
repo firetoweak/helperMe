@@ -31,14 +31,19 @@ SUCCESS = {
 
 
 class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    async def asyncSetUp(self):
         self.session_runtime = Mock()
+        self.session_runtime.active_controls = {}
         self.session_runtime.start = AsyncMock()
         self.session_runtime.resume = AsyncMock()
         self.application = AgentApplication(
             session_runtime=self.session_runtime,
             system_prompt="system prompt",
         )
+        await self.application.__aenter__()
+
+    async def asyncTearDown(self):
+        await self.application.close()
 
     async def test_constructor_rejects_empty_system_prompt(self):
         for system_prompt in ("", "   "):
@@ -120,7 +125,8 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
         outcome = object()
         self.session_runtime.start.return_value = outcome
 
-        result = await application.start("session-1", "run-1", "开始任务")
+        async with application:
+            result = await application.start("session-1", "run-1", "开始任务")
 
         self.assertIs(result, outcome)
         self.session_runtime.start.assert_called_once_with(
@@ -249,7 +255,7 @@ class AgentApplicationResourceLifecycleTest(
     async def test_resources_are_closed_in_reverse_order(self):
         events = []
         application = AgentApplication(
-            Mock(),
+            Mock(active_controls={}),
             "system prompt",
             resources=(
                 RecordingApplicationResource("first", events),
@@ -269,7 +275,7 @@ class AgentApplicationResourceLifecycleTest(
         events = []
         error = RuntimeError("resource failed")
         application = AgentApplication(
-            Mock(),
+            Mock(active_controls={}),
             "system prompt",
             resources=(
                 RecordingApplicationResource("first", events),
@@ -288,7 +294,7 @@ class AgentApplicationResourceLifecycleTest(
         events = []
         error = RuntimeError("run failed")
         application = AgentApplication(
-            Mock(),
+            Mock(active_controls={}),
             "system prompt",
             resources=(RecordingApplicationResource("mcp", events),),
         )
@@ -298,6 +304,49 @@ class AgentApplicationResourceLifecycleTest(
                 raise error
 
         self.assertIs(captured.exception, error)
+        self.assertEqual(events, ["enter:mcp", "exit:mcp"])
+
+    async def test_business_calls_require_active_lifecycle(self):
+        runtime = Mock(active_controls={})
+        application = AgentApplication(runtime, "system prompt")
+
+        with self.assertRaisesRegex(RuntimeError, "async with"):
+            application.create_session("session-1")
+
+        await application.__aenter__()
+        await application.close()
+
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            application.create_session("session-1")
+
+    async def test_application_cannot_be_entered_twice(self):
+        application = AgentApplication(
+            Mock(active_controls={}),
+            "system prompt",
+        )
+        await application.__aenter__()
+        self.addAsyncCleanup(application.close)
+
+        with self.assertRaisesRegex(RuntimeError, "不能进入"):
+            await application.__aenter__()
+
+    async def test_close_rejects_active_run_without_closing_resources(self):
+        events = []
+        runtime = Mock(active_controls={})
+        application = AgentApplication(
+            runtime,
+            "system prompt",
+            resources=(RecordingApplicationResource("mcp", events),),
+        )
+        await application.__aenter__()
+        runtime.active_controls["session-1"] = Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "活动 Run"):
+            await application.close()
+
+        self.assertEqual(events, ["enter:mcp"])
+        runtime.active_controls.clear()
+        await application.close()
         self.assertEqual(events, ["enter:mcp", "exit:mcp"])
 
 
@@ -320,10 +369,11 @@ class AgentApplicationSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
             system_prompt="system prompt",
         )
 
-        application.create_session("session-a")
-        application.create_session("session-b")
-        await application.start("session-a", "run-a", "A 的消息")
-        await application.start("session-b", "run-b", "B 的消息")
+        async with application:
+            application.create_session("session-a")
+            application.create_session("session-b")
+            await application.start("session-a", "run-a", "A 的消息")
+            await application.start("session-b", "run-b", "B 的消息")
 
         messages_a = (
             session_runtime.sessions["session-a"]
@@ -351,7 +401,7 @@ class AgentApplicationSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    def _build_application(self, llm_client: Mock):
+    async def _build_application(self, llm_client: Mock):
         session_runtime = SessionRuntime(
             RunRuntime(
                 model_calls=model_call_service(llm_client),
@@ -365,6 +415,8 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
             session_runtime=session_runtime,
             system_prompt="system prompt",
         )
+        await application.__aenter__()
+        self.addAsyncCleanup(application.close)
         application.create_session("session-1")
         return application, session_runtime
 
@@ -390,7 +442,7 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
             return call_result(response)
 
         llm_client.chat.side_effect = chat
-        application, session_runtime = self._build_application(llm_client)
+        application, session_runtime = await self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]
 
         interrupted = await application.start("session-1", "run-1", "开始任务")
@@ -432,7 +484,7 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
             call_result(LLMResponse(content="第一轮完成")),
             call_result(LLMResponse(content="第二轮完成")),
         )
-        application, session_runtime = self._build_application(llm_client)
+        application, session_runtime = await self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]
 
         first = await application.start("session-1", "run-1", "第一轮")

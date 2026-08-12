@@ -1,8 +1,9 @@
+import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from jsonschema.exceptions import SchemaError
 
@@ -20,7 +21,7 @@ from core.tools_runtime.tools_protocol import (
     validate_tool_message_chain,
 )
 from core.tools_runtime.tools_state import ToolsState
-from tools.get_changes import GetChangesInput, create_get_changes_specs
+from tools.get_changes import GetChangesInput, _run_git, create_get_changes_specs
 from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 
 
@@ -79,6 +80,12 @@ class ToolRegistryEarlyFailTest(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_json_schema_fails_during_parameters_creation(self):
         with self.assertRaises(SchemaError):
             JsonSchemaParameters({"type": "not-a-json-schema-type"})
+
+    async def test_non_object_json_schema_fails_during_parameters_creation(self):
+        for schema in ({"type": "array"}, {}):
+            with self.subTest(schema=schema):
+                with self.assertRaisesRegex(ValueError, "顶层 type.*object"):
+                    JsonSchemaParameters(schema)
 
 
 class JsonSchemaToolTest(unittest.IsolatedAsyncioTestCase):
@@ -372,9 +379,39 @@ class StopGuardTest(unittest.IsolatedAsyncioTestCase):
 
 
 class GetChangesEarlyFailTest(unittest.IsolatedAsyncioTestCase):
-    @patch("tools.get_changes.subprocess.run")
+    @patch("tools.get_changes.asyncio.create_subprocess_exec", new_callable=AsyncMock)
+    async def test_cancelled_git_process_is_reaped(self, create_process):
+        entered = asyncio.Event()
+        killed = asyncio.Event()
+
+        class BlockingProcess:
+            returncode = None
+
+            async def communicate(self):
+                entered.set()
+                await asyncio.Event().wait()
+
+            def kill(self):
+                self.returncode = -9
+                killed.set()
+
+            async def wait(self):
+                await killed.wait()
+                return self.returncode
+
+        create_process.return_value = BlockingProcess()
+        task = asyncio.create_task(_run_git(["status"], Path.cwd()))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertTrue(killed.is_set())
+
+    @patch("tools.get_changes._run_git", new_callable=AsyncMock)
     async def test_non_git_workspace_reports_verification_failure(self, run):
-        run.return_value = Mock(returncode=128)
+        run.return_value = (128, "", "not a repository")
         with tempfile.TemporaryDirectory() as directory:
             workspaces = WorkspaceSandboxes({
                 "project": WorkspaceSandbox(Path(directory))

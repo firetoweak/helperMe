@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import subprocess
+import asyncio
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -26,6 +27,32 @@ class GetChangesInput(BaseModel):
     path: str | None = Field(default=None, description="root 内可选的相对文件或目录路径；不传则检查整个 root")
 
 
+async def _run_git(args: list[str], cwd: Path) -> tuple[int, str, str]:
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        *args,
+        cwd=cwd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await proc.communicate()
+    except BaseException:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        raise
+    return (
+        proc.returncode,
+        stdout.decode("utf-8", errors="replace"),
+        stderr.decode("utf-8", errors="replace"),
+    )
+
+
 def create_get_changes_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
     async def get_changes(raw: GetChangesInput) -> dict[str, Any]:
         try:
@@ -34,14 +61,11 @@ def create_get_changes_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         except WorkspaceInputError as exc:
             return workspace_error(exc)
 
-        repo_check = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=sandbox.root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
+        repo_returncode, _, _ = await _run_git(
+            ["rev-parse", "--is-inside-work-tree"],
+            sandbox.root,
         )
-        if repo_check.returncode != 0:
+        if repo_returncode != 0:
             return {
                 "ok": False,
                 "code": "VERIFICATION_BACKEND_UNAVAILABLE",
@@ -54,23 +78,21 @@ def create_get_changes_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             }
 
         path_args = ["--", sandbox.relative(target)] if target is not None else []
-        status_proc = subprocess.run(
-            ["git", "status", "--short", "--untracked-files=all", *path_args],
-            cwd=sandbox.root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
+        git_results = await asyncio.gather(
+            _run_git(
+                ["status", "--short", "--untracked-files=all", *path_args],
+                sandbox.root,
+            ),
+            _run_git(["diff", *path_args], sandbox.root),
+            return_exceptions=True,
         )
-        diff_proc = subprocess.run(
-            ["git", "diff", *path_args],
-            cwd=sandbox.root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        ok = status_proc.returncode == 0 and diff_proc.returncode == 0
-        status = status_proc.stdout
-        diff = diff_proc.stdout
+        for result in git_results:
+            if isinstance(result, BaseException):
+                raise result
+        status_result, diff_result = git_results
+        status_returncode, status, _ = status_result
+        diff_returncode, diff, _ = diff_result
+        ok = status_returncode == 0 and diff_returncode == 0
         return {
             "ok": ok,
             "code": "CHANGES_READ" if ok else "GIT_CHANGES_FAILED",

@@ -177,6 +177,37 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("get_weather", tool_names(second_client.requests[0]))
         self.assertIn(LOAD_TOOLSET, tool_names(second_client.requests[0]))
 
+    async def test_loaded_toolset_specs_are_snapshotted_once_per_run(self):
+        provider = FakeToolsetProvider()
+        client = RecordingLLMClient(
+            [
+                LLMResponse(calls=(ToolCall(
+                    "load-1",
+                    LOAD_TOOLSET,
+                    json.dumps({"toolset_id": "weather"}),
+                ),)),
+                LLMResponse(calls=(ToolCall(
+                    "weather-1",
+                    "get_weather",
+                    json.dumps({"location": "北京"}),
+                ),)),
+                LLMResponse(content="完成"),
+            ],
+            provider,
+        )
+
+        await self.runner(client).run(
+            self.conversation(),
+            "查询天气",
+            invocation=RunInvocation(toolset_provider=provider),
+        )
+
+        self.assertEqual(provider.requested_ids, ["weather"])
+        self.assertEqual(
+            [request["provider_requests"] for request in client.requests],
+            [(), ("weather",), ("weather",)],
+        )
+
     async def test_unknown_toolset_is_a_recoverable_tool_input_error(self):
         client = RecordingLLMClient(
             [

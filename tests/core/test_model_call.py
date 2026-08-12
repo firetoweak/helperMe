@@ -99,6 +99,14 @@ class LLMResponseContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage.output_tokens, 30)
         self.assertEqual(result.usage.total_tokens, 150)
 
+    async def test_client_close_releases_sdk_client(self):
+        client = object.__new__(LLMClient)
+        client.client = Mock(close=AsyncMock())
+
+        await client.close()
+
+        client.client.close.assert_awaited_once()
+
 
 class ModelConfigTest(unittest.IsolatedAsyncioTestCase):
     async def test_loads_model_config(self):

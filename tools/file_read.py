@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import shutil
-import subprocess
-import tempfile
-import threading
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -246,78 +244,107 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         skipped = 0
         truncated = False
         page_chars = 0
-        timed_out = threading.Event()
-        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
-            proc = subprocess.Popen(
-                ["rg", "--json", "--sort", "path", "--", raw.query, str(path)],
-                stdout=subprocess.PIPE,
-                stderr=stderr_file,
-                text=True,
-                encoding="utf-8",
-            )
+        proc = await asyncio.create_subprocess_exec(
+            "rg",
+            "--json",
+            "--sort",
+            "path",
+            "--",
+            raw.query,
+            str(path),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=MAX_READ_FILE_SIZE_BYTES,
+        )
+        assert proc.stdout is not None
+        assert proc.stderr is not None
 
-            def kill_on_timeout() -> None:
-                if proc.poll() is None:
-                    timed_out.set()
-                    proc.kill()
+        async def drain_stderr() -> str:
+            captured = bytearray()
+            while chunk := await proc.stderr.read(4_096):
+                remaining = MAX_RG_ERROR_CHARS - len(captured)
+                if remaining > 0:
+                    captured.extend(chunk[:remaining])
+            return captured.decode("utf-8", errors="replace").strip()
 
-            timer = threading.Timer(GREP_TIMEOUT_SECONDS, kill_on_timeout)
-            timer.daemon = True
-            timer.start()
-            try:
-                assert proc.stdout is not None
-                for raw_line in proc.stdout:
-                    if not raw_line.strip():
-                        continue
-                    obj = json.loads(raw_line)
-                    if obj.get("type") != "match":
-                        continue
-                    data = obj.get("data") or {}
-                    if skipped < raw.offset:
-                        skipped += 1
-                        continue
-                    if len(hits) >= raw.max_results:
-                        truncated = True
-                        break
+        stderr_task = asyncio.create_task(drain_stderr())
 
-                    full_content = data["lines"]["text"].rstrip("\r\n")
-                    content = full_content[:MAX_GREP_HIT_CHARS]
-                    if hits and page_chars + len(content) > MAX_GREP_PAGE_CHARS:
-                        truncated = True
-                        break
-                    submatches = data["submatches"]
-                    hits.append({
-                        "file": sandbox.relative(data["path"]["text"]),
-                        "line": data["line_number"],
-                        "content": content,
-                        "content_truncated": len(content) < len(full_content),
-                        "submatches": [
-                            {"start": match["start"], "end": match["end"]}
-                            for match in submatches[:MAX_GREP_SUBMATCHES]
-                        ],
-                        "submatches_truncated": len(submatches) > MAX_GREP_SUBMATCHES,
-                    })
-                    page_chars += len(content)
-
-                if truncated and proc.poll() is None:
-                    proc.terminate()
+        async def stop_process() -> str:
+            if proc.returncode is None:
                 try:
-                    return_code = proc.wait(timeout=GREP_SHUTDOWN_TIMEOUT_SECONDS)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    return_code = proc.wait()
-            finally:
-                timer.cancel()
-                if proc.poll() is None:
-                    proc.kill()
-                    proc.wait()
-                if proc.stdout is not None:
-                    proc.stdout.close()
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(
+                        proc.wait(),
+                        GREP_SHUTDOWN_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                    await proc.wait()
+            return await stderr_task
 
-            stderr_file.seek(0)
-            stderr = stderr_file.read(MAX_RG_ERROR_CHARS).strip()
+        timed_out = False
+        try:
+            try:
+                async with asyncio.timeout(GREP_TIMEOUT_SECONDS):
+                    while raw_bytes := await proc.stdout.readline():
+                        raw_line = raw_bytes.decode("utf-8", errors="replace")
+                        if not raw_line.strip():
+                            continue
+                        obj = json.loads(raw_line)
+                        if obj.get("type") != "match":
+                            continue
+                        data = obj.get("data") or {}
+                        if skipped < raw.offset:
+                            skipped += 1
+                            continue
+                        if len(hits) >= raw.max_results:
+                            truncated = True
+                            break
 
-        if timed_out.is_set():
+                        full_content = data["lines"]["text"].rstrip("\r\n")
+                        content = full_content[:MAX_GREP_HIT_CHARS]
+                        if hits and page_chars + len(content) > MAX_GREP_PAGE_CHARS:
+                            truncated = True
+                            break
+                        submatches = data["submatches"]
+                        hits.append({
+                            "file": sandbox.relative(data["path"]["text"]),
+                            "line": data["line_number"],
+                            "content": content,
+                            "content_truncated": len(content) < len(full_content),
+                            "submatches": [
+                                {"start": match["start"], "end": match["end"]}
+                                for match in submatches[:MAX_GREP_SUBMATCHES]
+                            ],
+                            "submatches_truncated": len(submatches) > MAX_GREP_SUBMATCHES,
+                        })
+                        page_chars += len(content)
+                    if not truncated:
+                        return_code = await proc.wait()
+                        stderr = await stderr_task
+            except TimeoutError:
+                timed_out = True
+                stderr = await stop_process()
+            else:
+                if truncated:
+                    stderr = await stop_process()
+                    return_code = proc.returncode
+        except BaseException:
+            cleanup = asyncio.create_task(stop_process())
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                await cleanup
+            raise
+
+        if timed_out:
             return {
                 "ok": False,
                 "code": "RG_TIMEOUT",
