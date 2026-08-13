@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from core.tools_runtime.run_runtime import (
@@ -11,6 +11,12 @@ from core.tools_runtime.run_runtime import (
     RunStatus,
 )
 from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.progressive_toolsets import (
+    SessionCapabilitySnapshot,
+    SnapshotToolsetProvider,
+    ToolsetProvider,
+)
+from core.approval import ApprovalRequest
 from core.session.state import (
     Session,
     SessionEvent,
@@ -56,6 +62,7 @@ class SessionRuntime:
         *,
         run_runtime_factory: Callable[[str], RunRuntime] | None = None,
         delete_session_resources: Callable[[str], None] | None = None,
+        default_toolset_provider: ToolsetProvider | None = None,
     ):
         if (run_runtime is None) == (run_runtime_factory is None):
             raise ValueError(
@@ -71,6 +78,7 @@ class SessionRuntime:
         self._session_run_runtimes: dict[str, RunRuntime] = {}
         self.sessions: dict[str, Session] = {}
         self.active_controls: dict[str, RunControl] = {}
+        self.default_toolset_provider = default_toolset_provider
 
     def create_session(
         self,
@@ -84,7 +92,16 @@ class SessionRuntime:
         if not system_prompt or not system_prompt.strip():
             raise ValueError("system_prompt 不能为空")
 
-        session = Session(id=session_id)
+        session = Session(
+            id=session_id,
+            capability_snapshot=(
+                SessionCapabilitySnapshot.capture(
+                    self.default_toolset_provider
+                )
+                if self.default_toolset_provider is not None
+                else None
+            ),
+        )
         session.conversation.set_system_prompt(system_prompt)
         event = SessionEvent(
             kind=SessionEventType.CREATED,
@@ -133,6 +150,10 @@ class SessionRuntime:
             raise KeyError(f"Session 不存在: {session_id}")
 
         session = self.sessions[session_id]
+        if session.pending_approval_id is not None:
+            raise ValueError(
+                "Session 正在等待审批，必须先输入 yes 或 no"
+            )
         if session.status not in {
             SessionStatus.PENDING,
             SessionStatus.COMPLETED,
@@ -319,9 +340,23 @@ class SessionRuntime:
             control=control,
             context_state=session.context_state,
         )
+        effective_invocation = invocation or RunInvocation()
+        provider = effective_invocation.toolset_provider
+        if provider is not None and session.capability_snapshot is not None:
+            effective_invocation = replace(
+                effective_invocation,
+                toolset_provider=SnapshotToolsetProvider(
+                    provider,
+                    session.capability_snapshot,
+                ),
+            )
         if invocation is not None:
-            run_arguments["invocation"] = invocation
+            run_arguments["invocation"] = effective_invocation
         result = await run_runtime.run(**run_arguments)
+        if isinstance(result.approval_request, ApprovalRequest):
+            if result.status is not RunStatus.BLOCKED:
+                raise ValueError("ApprovalRequest 必须阻塞当前 Run")
+            session.pending_approval_id = result.approval_request.id
         session.context_state = result.context_state
         target_status, event_kind = RUN_STATUS_MAPPING[result.status]
         ended_at = datetime.now(timezone.utc)

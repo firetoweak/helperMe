@@ -27,6 +27,7 @@ from plugins.mcp.composition import create_mcp_plugin
 from plugins.mcp.console import McpCommandError, McpConsoleAdapter
 from core.tools_runtime.run_invocation import RunInvocation
 from tools.workspace import FilesystemAccessMode
+from core.approval import ApprovalActionRegistry
 
 
 TERMINAL_RUN_STATUSES = {
@@ -78,6 +79,8 @@ async def async_main(argv: list[str] | None = None) -> None:
     llm_client = LLMClient(model_config)
     agent_workspace = AgentWorkspace.default()
     mcp_plugin = create_mcp_plugin(agent_workspace)
+    approval_actions = ApprovalActionRegistry()
+    approval_actions.register(mcp_plugin.install_approval_handler)
     application = create_agent_application(
         model,
         model_context_limit=runtime_config.model_context_limit,
@@ -95,6 +98,9 @@ async def async_main(argv: list[str] | None = None) -> None:
         ),
         default_max_rounds=runtime_config.max_rounds,
         application_resources=(llm_client, mcp_plugin.client_manager),
+        additional_tool_specs=(mcp_plugin.install_proposal_spec,),
+        default_toolset_provider=mcp_plugin.toolset_provider,
+        approval_actions=approval_actions,
     )
     async with application:
         session_id = _new_session(application)
@@ -138,6 +144,33 @@ async def async_main(argv: list[str] | None = None) -> None:
                 break
 
             if not user_message:
+                continue
+
+            pending_approval = application.pending_approval(session_id)
+            if pending_approval is not None:
+                if user_message not in {"yes", "no"}:
+                    print(
+                        "\n当前操作正在等待审批。"
+                        "请输入 yes 确认，输入 no 取消。"
+                    )
+                    continue
+                resolution = await application.resolve_approval(
+                    session_id,
+                    user_message,
+                )
+                if resolution.decision == "rejected":
+                    print("\nMCP 安装已取消。")
+                    last_status = None
+                    continue
+                execution = resolution.execution
+                print(f"\nMCP：\n{execution.message}")
+                if execution.succeeded:
+                    session_id = _new_session(application)
+                    log_path = _resolve_log_path()
+                    last_status = None
+                    print("新 Session 已创建，最新 MCP 配置现已生效。")
+                else:
+                    last_status = None
                 continue
 
             try:
@@ -220,7 +253,10 @@ async def async_main(argv: list[str] | None = None) -> None:
             print(f"当前模型：{model}")
             print(f"\n日志已写入：{log_path}")
 
-            if last_status in TERMINAL_RUN_STATUSES:
+            if (
+                last_status in TERMINAL_RUN_STATUSES
+                and application.pending_approval(session_id) is None
+            ):
                 print("当前 Session 已结束；下一条输入将创建新的 Session。")
                 session_id = _new_session(application)
                 log_path = _resolve_log_path()

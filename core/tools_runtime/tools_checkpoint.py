@@ -77,6 +77,26 @@ def run_completed_checkpoint(answer: str, extra_data: dict[str, Any] | None = No
     )
 
 
+def approval_required_checkpoint(
+    approval_id: str,
+    summary: str,
+    risk: str,
+) -> Checkpoint:
+    return Checkpoint(
+        kind="approval",
+        reason="approval_required",
+        message=(
+            f"{summary}\n\n风险：{risk}\n\n"
+            "输入 yes 确认，输入 no 取消。"
+        ),
+        data={
+            "approval_id": approval_id,
+            "summary": summary,
+            "risk": risk,
+        },
+    )
+
+
 def tool_batch_completed_checkpoint(
     round_index: int,
     tools_state: ToolsState,

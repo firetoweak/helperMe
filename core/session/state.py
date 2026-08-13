@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from core.messages import Conversation
 from core.context import ContextState
+from core.tools_runtime.progressive_toolsets import SessionCapabilitySnapshot
 
 
 class SessionStatus(str, Enum):
@@ -99,6 +100,8 @@ class Session:
     status: SessionStatus = SessionStatus.PENDING
     events: list[SessionEvent] = field(default_factory=list)
     run_records: list[SessionRunRecord] = field(default_factory=list)
+    capability_snapshot: SessionCapabilitySnapshot | None = None
+    pending_approval_id: str | None = None
 
     def transition_to(
         self,

@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from core.tool_registry import ToolArgumentsError, ToolRegistry
+from core.approval import ApprovalRequest
 
 RESERVED_KEYS = frozenset({"ok", "code", "data", "error", "hint"})
 
@@ -39,7 +40,7 @@ class ToolsExecutor:
         self,
         tool_name: str,
         tool_arguments: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | ApprovalRequest:
         spec = self.registry.get(tool_name)
         if spec is None:
             return normalize_tool_result(
@@ -68,6 +69,13 @@ class ToolsExecutor:
                 raise ToolArgumentsError("tool arguments 必须是 JSON object")
             data = spec.parameters.validate(payload)
             result = await spec.handler(data)
+            if isinstance(result, ApprovalRequest):
+                if not spec.control_boundary:
+                    raise ValueError(
+                        "普通工具不能返回 ApprovalRequest: "
+                        f"{tool_name}"
+                    )
+                return result
             return normalize_tool_result(result)
         except json.JSONDecodeError as exc:
             return normalize_tool_result(
@@ -87,3 +95,7 @@ class ToolsExecutor:
                     "hint": "按工具 schema 修正参数后重试。",
                 }
             )
+
+    def is_control_boundary(self, tool_name: str) -> bool:
+        spec = self.registry.get(tool_name)
+        return spec is not None and spec.control_boundary

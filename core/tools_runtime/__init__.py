@@ -6,6 +6,8 @@ from core.tools_runtime.progressive_toolsets import (
     ToolsetDescriptor,
     ToolsetLoadError,
     ToolsetProvider,
+    SessionCapabilitySnapshot,
+    SnapshotToolsetProvider,
 )
 from core.tools_runtime.run_evidence import (
     RunEvidence,
@@ -23,5 +25,7 @@ __all__ = [
     "ToolsetDescriptor",
     "ToolsetLoadError",
     "ToolsetProvider",
+    "SessionCapabilitySnapshot",
+    "SnapshotToolsetProvider",
     "WorkspaceBaseline",
 ]

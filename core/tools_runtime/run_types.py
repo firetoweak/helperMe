@@ -6,6 +6,7 @@ from enum import Enum
 from core.context import ContextState
 from core.tools_runtime.run_evidence import RunEvidence
 from core.tools_runtime.tools_checkpoint import Checkpoint
+from core.approval import ApprovalRequest
 
 
 class RunStatus(str, Enum):
@@ -32,6 +33,7 @@ class RunResult:
     checkpoints: list[Checkpoint]
     context_state: ContextState
     evidence: RunEvidence
+    approval_request: ApprovalRequest | None = None
 
     @property
     def final_reason(self) -> str | None:

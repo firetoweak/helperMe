@@ -136,9 +136,9 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
         runner = PowerShellCommandRunner()
 
         result = await runner.run(
-            'Write-Output "started"; Start-Sleep -Seconds 5',
+            '[Console]::Out.WriteLine("started"); Start-Sleep -Seconds 5',
             Path.cwd(),
-            0.2,
+            1,
         )
 
         self.assertTrue(result.timed_out)
@@ -315,8 +315,11 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_is_a_tool_failure_with_partial_output(self):
         result = await self.execute({
             "root": "project",
-            "command": 'Write-Output "started"; Start-Sleep -Seconds 5',
-            "timeout_seconds": 1,
+            "command": (
+                '[Console]::Out.WriteLine("started"); '
+                "Start-Sleep -Seconds 5"
+            ),
+            "timeout_seconds": 2,
         })
 
         self.assertFalse(result["ok"])

@@ -254,7 +254,7 @@ MVP 通过 Console 命令或 Application API 提供：
 
 这些是 MCP Plugin 的 Application use case，不注册为 `ToolSpec`。原因是 `stdio` 配置等价于持久化一个可执行命令入口，不能由普通 Agent Run 自主写入。
 
-未来若 Core 建立通用 Approval / interrupt-resume 边界，自然语言可以生成一次待确认的管理请求；在此之前不增加 `McpDraft`、`confirm_*` 等 MCP 专用领域对象。
+后续已建立通用 Approval 边界：自然语言生成一次冻结的待确认管理请求，用户输入精确的 `yes/no`，Application 再执行 Plugin Handler。仍不增加 `McpDraft`、`confirm_*` 等 MCP 专用领域对象。
 
 ### 8.2 启用即信任
 
@@ -449,7 +449,7 @@ sanitized_error_type
 - Text、structured、image/resource link、`isError` 均不丢失语义；
 - 非法 Schema、输出违约、认证失败和取消都有专项测试；
 - Registry、日志、Artifact 预览中不泄露 Secret；
-- 普通 Agent Run 无法新增、修改、启停或删除 MCP Server。
+- 普通 Agent Tool 无法新增、修改、启停或删除 MCP Server；Approval Proposal 获批后由 Application 控制面执行。
 
 ## 15. 后续能力
 

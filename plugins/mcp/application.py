@@ -223,8 +223,12 @@ class McpApplicationService:
             raise KeyError(server_id)
         try:
             return await self.client_manager.test_connection(record)
-        except Exception:
-            return self.client_manager.runtime_state(server_id)
+        except Exception as exc:
+            state = self.client_manager.runtime_state(server_id)
+            state.mark_unavailable(
+                self.client_manager.sanitized_error(record, exc)
+            )
+            return state
 
     async def _resolve_refs(
         self,

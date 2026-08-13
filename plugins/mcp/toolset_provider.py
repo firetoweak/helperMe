@@ -53,6 +53,7 @@ class McpToolsetProvider:
                 ToolsetDescriptor(
                     id=record.toolset_id,
                     description=description,
+                    revision=record.revision,
                 )
             )
         return tuple(descriptors)

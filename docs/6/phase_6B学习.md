@@ -106,15 +106,23 @@ Core 管“如何加载”，Plugin 管“加载什么”。
 
 Core 同步回补：`tool_specs` 异步化、`ToolsetLoadError`、`CompositeToolsetProvider`。
 
-信任边界：普通对话不能安装或修改 MCP；启用即信任；目录零网络 I/O；运行态与 Registry 分离。
+信任边界：普通工具不能安装或修改 MCP；Agent 可以在普通对话中收集信息并通过独占控制工具提交冻结 Proposal，用户输入精确的 `yes/no` 后由 Application use case 执行。启用即信任；目录零网络 I/O；运行态与 Registry 分离。
 
 完整实现记录见 [MCP接入实现总结.md](MCP接入实现总结.md)；设计基线见 [MCP接入设计草稿.md](MCP接入设计草稿.md)。
 
 ## 下一步边界
 
 - Skill 渐进加载：复用 Run 生命周期，不与 Toolset 数据模型提前合并；
-- 真实 MCP Server 兼容 benchmark（stdio / HTTP、现代与 Legacy）；
+- 真实 HTTP MCP Server 兼容 benchmark；真实 stdio、现代与 Legacy 已验证；
 - 可选：对话内只读查询已安装列表（仍禁止写 Registry）；
 - OAuth、Approval、Resource 自动注入等后置能力按设计第 15 节按需开启。
 
 MCP Adapter 必须继续直接使用 `JsonSchemaParameters`。禁止动态生成 Pydantic Model，也禁止静默改写外部 Schema。见 [ToolSpec格式回补总结.md](ToolSpec格式回补总结.md)。
+
+## 对话安装与 Session 能力稳定性回补
+
+对话安装不是把 Registry 写权限交给模型。Agent 只负责从用户意图中整理结构化配置、补问缺失字段并提交 `ApprovalRequest`；Proposal 不完整时仍是普通 Conversation，不建立额外 Draft 聚合。Proposal 工具必须独占批次，同批出现其他工具时整批拒绝。
+
+用户输入精确的 `yes/no`，Channel 确定性拦截，不让模型解释授权。批准后 Application 根据冻结 payload 调用已注册的 Plugin Action Handler；MCP 安装按 `disabled → test → enable` 执行，失败配置保持 disabled，且不自动重试。
+
+Session 创建时冻结通用的 `toolset_id → revision`。新增、启用和更新只进入新 Session；禁用、删除和撤权立即阻止后续调用。完整实现与 benchmark 见[《MCP 对话安装与 Session 能力快照总结》](MCP对话安装与Session能力快照总结.md)。

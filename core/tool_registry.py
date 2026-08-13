@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from collections.abc import Awaitable, Callable
 from typing import Any, Mapping, Protocol
 
+from core.approval import ApprovalRequest
+
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
 from pydantic import BaseModel
@@ -92,7 +94,11 @@ class ToolSpec:
     name: str
     description: str
     parameters: ToolParameters
-    handler: Callable[[Any], Awaitable[dict[str, Any]]]
+    handler: Callable[
+        [Any],
+        Awaitable[dict[str, Any] | ApprovalRequest],
+    ]
+    control_boundary: bool = False
 
     def to_openai_tool(self) -> dict[str, Any]:
         """导出当前 OpenAI-compatible 模型接口所需的工具格式。"""
@@ -151,13 +157,18 @@ def pydantic_tool_spec(
     name: str,
     description: str,
     input_model: type[BaseModel],
-    handler: Callable[[BaseModel], Awaitable[dict[str, Any]]],
+    handler: Callable[
+        [BaseModel],
+        Awaitable[dict[str, Any] | ApprovalRequest],
+    ],
+    control_boundary: bool = False,
 ) -> ToolSpec:
     return ToolSpec(
         name=name,
         description=description,
         parameters=PydanticParameters(input_model),
         handler=handler,
+        control_boundary=control_boundary,
     )
 
 

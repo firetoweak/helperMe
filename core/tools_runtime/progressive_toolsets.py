@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Mapping, Protocol
+from types import MappingProxyType
 
 from pydantic import BaseModel
 
@@ -33,6 +34,29 @@ class ToolsetLoadError(Exception):
 class ToolsetDescriptor:
     id: str
     description: str
+    revision: int = 1
+
+
+@dataclass(frozen=True)
+class SessionCapabilitySnapshot:
+    toolsets: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "toolsets",
+            MappingProxyType(dict(self.toolsets)),
+        )
+
+    @classmethod
+    def capture(
+        cls,
+        provider: "ToolsetProvider",
+    ) -> "SessionCapabilitySnapshot":
+        return cls({
+            descriptor.id: descriptor.revision
+            for descriptor in provider.descriptors()
+        })
 
 
 class ToolsetProvider(Protocol):
@@ -41,6 +65,45 @@ class ToolsetProvider(Protocol):
 
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
         ...
+
+
+@dataclass(frozen=True)
+class SnapshotToolsetProvider:
+    provider: ToolsetProvider
+    snapshot: SessionCapabilitySnapshot
+
+    def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
+        return tuple(
+            descriptor
+            for descriptor in self.provider.descriptors()
+            if self.snapshot.toolsets.get(descriptor.id)
+            == descriptor.revision
+        )
+
+    async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
+        current = {
+            descriptor.id: descriptor
+            for descriptor in self.provider.descriptors()
+        }.get(toolset_id)
+        expected_revision = self.snapshot.toolsets.get(toolset_id)
+        if (
+            current is None
+            or expected_revision is None
+            or current.revision != expected_revision
+        ):
+            raise ToolsetLoadError(
+                "TOOLSET_SNAPSHOT_CHANGED",
+                f"Toolset {toolset_id} 不属于当前 Session 能力快照",
+                hint="请新建 Session 后使用最新能力配置。",
+                data={
+                    "toolset_id": toolset_id,
+                    "session_revision": expected_revision,
+                    "current_revision": (
+                        current.revision if current is not None else None
+                    ),
+                },
+            )
+        return await self.provider.tool_specs(toolset_id)
 
 
 @dataclass(frozen=True)

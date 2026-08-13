@@ -10,6 +10,8 @@ from core.tool_registry import PydanticParameters, ToolSpec
 from core.tools_runtime import (
     LOAD_TOOLSET,
     RunInvocation,
+    SessionCapabilitySnapshot,
+    SnapshotToolsetProvider,
     ToolsetDescriptor,
 )
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
@@ -241,6 +243,33 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
             CompositeToolsetProvider(
                 (FakeToolsetProvider(), FakeToolsetProvider()),
             )
+
+    async def test_session_snapshot_admits_only_unchanged_capabilities(self):
+        class MutableProvider(FakeToolsetProvider):
+            def __init__(self):
+                super().__init__()
+                self.items = [ToolsetDescriptor("weather", "天气", 3)]
+
+            def descriptors(self):
+                return tuple(self.items)
+
+        provider = MutableProvider()
+        snapshot = SessionCapabilitySnapshot.capture(provider)
+        scoped = SnapshotToolsetProvider(provider, snapshot)
+
+        provider.items.append(ToolsetDescriptor("new", "新能力", 1))
+        self.assertEqual(
+            [item.id for item in scoped.descriptors()],
+            ["weather"],
+        )
+
+        provider.items[0] = ToolsetDescriptor("weather", "已更新", 4)
+        self.assertEqual(scoped.descriptors(), ())
+        with self.assertRaisesRegex(
+            Exception,
+            "不属于当前 Session 能力快照",
+        ):
+            await scoped.tool_specs("weather")
 
 
 if __name__ == "__main__":

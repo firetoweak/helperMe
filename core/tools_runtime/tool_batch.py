@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from core.approval import ApprovalRequest
 from core.model_call.types import ToolCall
 from core.runtime_artifacts import ToolResultExternalizer
 from core.runtime_modes import RuntimeMode
@@ -20,6 +21,7 @@ class ToolBatchOutcome:
     result_chars_before: int
     result_chars_after: int
     externalized_count: int
+    approval_request: ApprovalRequest | None = None
 
 
 class ConcurrentToolBatchExecutor:
@@ -44,7 +46,26 @@ class ConcurrentToolBatchExecutor:
         result_chars_after = 0
         externalized_count = 0
 
-        async def execute_call(call: ToolCall) -> dict[str, Any]:
+        boundary_calls = tuple(
+            call
+            for call in calls
+            if tools_executor.is_control_boundary(call.name)
+        )
+
+        async def execute_call(
+            call: ToolCall,
+        ) -> dict[str, Any] | ApprovalRequest:
+            if boundary_calls and len(calls) != 1:
+                return {
+                    "ok": False,
+                    "code": "CONTROL_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+                    "data": {
+                        "tool_name": call.name,
+                        "batch_size": len(calls),
+                    },
+                    "error": "控制工具必须单独调用；本批工具均未执行",
+                    "hint": "下一轮只提交需要审批的控制工具。",
+                }
             if runtime_mode.handles_tool(call.name):
                 return await runtime_mode.execute_tool(
                     mode_state,
@@ -71,7 +92,25 @@ class ConcurrentToolBatchExecutor:
 
         # 共享账本只在所有调用结束后由当前 Task 顺序提交，避免完成时序
         # 改变 Evidence、Artifact、ToolsState 和 Conversation 的事实顺序。
-        for call, tool_result in zip(calls, tool_results, strict=True):
+        approval_request = None
+        for call, handler_result in zip(calls, tool_results, strict=True):
+            if isinstance(handler_result, ApprovalRequest):
+                if approval_request is not None:
+                    raise ValueError("同一工具批次产生了多个 ApprovalRequest")
+                approval_request = handler_result
+                tool_result = {
+                    "ok": True,
+                    "code": "APPROVAL_REQUIRED",
+                    "data": {
+                        "approval_id": handler_result.id,
+                        "summary": handler_result.summary,
+                        "risk": handler_result.risk,
+                    },
+                    "error": None,
+                    "hint": "等待用户输入 yes 或 no。",
+                }
+            else:
+                tool_result = handler_result
             evidence_recorder.record(
                 call.id,
                 call.name,
@@ -91,4 +130,5 @@ class ConcurrentToolBatchExecutor:
             result_chars_before=result_chars_before,
             result_chars_after=result_chars_after,
             externalized_count=externalized_count,
+            approval_request=approval_request,
         )

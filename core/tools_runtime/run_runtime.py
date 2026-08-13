@@ -12,6 +12,7 @@ from core.tools_runtime.tools_checkpoint import (
     run_started_checkpoint,
     tool_batch_completed_checkpoint,
     verification_required_checkpoint,
+    approval_required_checkpoint,
 )
 from core.messages import Conversation
 from core.model_call.service import ModelCallService
@@ -30,6 +31,7 @@ from core.tools_runtime.mode_activation import ModeActivator
 from core.tools_runtime.run_types import RunControl, RunResult, RunStatus
 from core.tools_runtime.tool_batch import ConcurrentToolBatchExecutor
 from core.tools_runtime.tool_environment import RunToolEnvironment
+from core.approval import ApprovalRequest
 
 
 class RunRuntime:
@@ -76,6 +78,7 @@ class RunRuntime:
         checkpoints: list[Checkpoint],
         context_state: ContextState,
         evidence: RunEvidence,
+        approval_request: ApprovalRequest | None = None,
     ) -> RunResult:
         checkpoints.append(checkpoint)
         return RunResult(
@@ -84,6 +87,7 @@ class RunRuntime:
             checkpoints=checkpoints,
             context_state=context_state,
             evidence=evidence,
+            approval_request=approval_request,
         )
 
     async def run(
@@ -320,6 +324,24 @@ class RunRuntime:
                     externalized_count=batch.externalized_count,
                 )
             )
+
+            if batch.approval_request is not None:
+                request = batch.approval_request
+                conversation.record_approval_request(request)
+                checkpoint = approval_required_checkpoint(
+                    request.id,
+                    request.summary,
+                    request.risk,
+                )
+                return self._finish(
+                    status=RunStatus.BLOCKED,
+                    answer=checkpoint.message,
+                    checkpoint=checkpoint,
+                    checkpoints=checkpoints,
+                    context_state=current_context_state,
+                    evidence=evidence_recorder.snapshot(),
+                    approval_request=request,
+                )
 
             if run_control.interrupt_requested:
                 stop_safety = evaluate_stop_safety(

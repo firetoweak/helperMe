@@ -19,12 +19,12 @@ MVP 已具备：
 - Resources / Templates / Prompts 的显式 ContentService；
 - Application 退出时关闭 ClientManager。
 
-明确未做（与设计一致）：
+初版明确未做；其中对话安装与通用 Approval 已在后续回补中完成：
 
-- 普通对话安装 / 修改 / 启停 / 删除 MCP；
+- 普通对话直接安装 / 修改 / 启停 / 删除 MCP；后续只允许对话生成冻结 Proposal，由 Application 在用户 `yes` 后安装；
 - OAuth、官方 Registry、HTTP+SSE、MRTR、`subscriptions/listen`；
 - Resources 自动注入 Context；
-- 通用 Tool Approval；
+- 通用高风险 Tool Approval；当前只实现控制型 Proposal Approval；
 - 多模态内容直接进入模型输入。
 
 ## Core 回补
@@ -83,7 +83,7 @@ Client 缓存键为 `(server_id, revision)`。upsert / enable / remove / 凭证�
 
 - 用户必须显式安装并启用；
 - 模型只能 `load_toolset` 已启用 Server；
-- 普通对话无法改 Registry。
+- 普通工具无法改 Registry；对话 Proposal 获批后仍由 Application 控制面修改。
 
 `console_chat` 将 `McpClientManager` 注入 Application resources，并把 `McpToolsetProvider` 放入普通 Run 的 `RunInvocation`。
 
@@ -137,17 +137,19 @@ tools/call             handler 闭包持有 (server_id, revision, 原名)
 
 对话中：模型看到 enabled 目录后调用 `load_toolset("mcp:demo")`，下一轮使用 `mcp__demo__...` 工具。
 
-依赖：`mcp>=2.0.0,<3` 与 `httpx2>=2.5.0,<3`。HelperMe 使用 SDK v2 高层 `Client(mode="auto")` 完成现代协议发现与 Legacy 回退，不自研 dual-era。
+依赖：`mcp>=2.0.0,<3`、`httpx2>=2.5.0,<3`，以及 Core LLM Client 直接使用的 `httpx>=0.27.0,<1`。HelperMe 使用 SDK v2 高层 `Client(mode="auto")` 完成现代协议发现与 Legacy 回退，不自研 dual-era。
 
 ## 后续
 
 出现真实需求后再做：
 
-- 只读“查询已安装列表”的对话能力（仍禁止写 Registry）；
+- 只读“查询已安装列表”的对话能力；
 - OAuth Auth Client + Token Store；
-- 真实 Server 兼容 benchmark；
+- 真实 HTTP Server 兼容 benchmark；stdio modern/legacy 与对话安装闭环已完成；
 - `subscriptions/listen`、MRTR、Tasks、MCP Apps；
 - Resource 自动注入 ContextPreparation；
-- 通用 Tool Approval。
+- 更广泛的高风险 Tool Approval。
 
 这些不得把 MCP 领域名词写进 Core，也不能让 RuntimeState / Client 成为第二套配置真相。
+
+后续对话安装、Session 能力快照和真实 stdio benchmark 见[《MCP 对话安装与 Session 能力快照总结》](MCP对话安装与Session能力快照总结.md)。

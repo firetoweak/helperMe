@@ -11,6 +11,7 @@
 console_chat.py
     ↓
 AgentApplication                 应用用例：create / start / resume / interrupt / delete
+    ├─ Approval                  冻结控制面操作并以 yes/no 解析用户授权
     ↑ RunHost                    可选 Plugin 发起 Run 的通用窄端口
     └── plugins/goal             可选 Goal Loop / 独立 Judge 工作流
     ↓
@@ -50,7 +51,8 @@ helperMe/
 │  ├─ context/                  # 上下文投影、预算、压缩、摘要与状态
 │  └─ runtime_artifacts/        # 大型工具结果的外置、分页读取和生命周期
 ├─ plugins/
-│  └─ goal/                     # 可选 Goal/Task 领域、Capability 与装配入口
+│  ├─ goal/                     # 可选 Goal/Task 领域、Capability 与装配入口
+│  └─ mcp/                      # MCP Registry、Client、Toolset 与对话安装
 ├─ tools/                       # Agent 可调用的具体工具适配器
 │  ├─ workspace.py              # 多根工作区及路径沙箱
 │  ├─ file_read.py              # glob、grep、read_file 等只读工具
@@ -124,6 +126,8 @@ python console_chat.py
 
 普通输入继续使用 Core Run；输入 `/goal <目标>` 后，可选 Goal Plugin 会自动推导 Completion Contract，并循环执行完整 Agent Turn 与独立 Judge 验证，直到目标完成、暂停或耗尽 `max_goal_turns`。Plan/Todo 保持为单次 Turn 内的柔性认知工具。
 
+也可以直接用自然语言要求安装 MCP。Agent 会补问缺失信息并展示冻结后的单进程 stdio 或 HTTP 配置；输入精确的 `yes` 才会由 Application 注册、测试并启用，输入 `no` 取消。成功后控制台自动创建新 Session，使最新能力配置生效。Secret 与复合 Shell 不进入该对话安装入口。
+
 默认情况下，文件工具只能访问 `workspace.root`。如需在整次应用生命周期内开启整机文件工具访问，在 `model_config.yaml` 中显式设置：
 
 ```yaml
@@ -153,6 +157,12 @@ python -m unittest tests.test_core_suite
 ```
 
 `tests/core/` 负责可重复的单元与集成验证；`tests/benchmarks/` 用于需要真实模型或特定场景的实验，不属于默认测试套件。
+
+对话安装 MCP 的真实 stdio 闭环：
+
+```powershell
+python -m tests.benchmarks.phase6b_mcp_install_benchmark
+```
 
 ## 设计约束
 

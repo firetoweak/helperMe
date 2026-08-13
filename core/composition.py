@@ -35,6 +35,9 @@ from core.runtime_artifacts import (
     ToolResultLimit,
 )
 from core.tool_registry import BUILTIN_TOOL_REGISTRY
+from core.tool_registry import ToolSpec
+from core.approval import ApprovalActionRegistry
+from core.tools_runtime.progressive_toolsets import ToolsetProvider
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tools.artifact_read import create_read_artifact_spec
 from tools import create_workspace_tool_specs
@@ -67,6 +70,9 @@ def create_agent_application(
     application_resources: tuple[
         AbstractAsyncContextManager[Any], ...
     ] = (),
+    additional_tool_specs: tuple[ToolSpec, ...] = (),
+    default_toolset_provider: ToolsetProvider | None = None,
+    approval_actions: ApprovalActionRegistry | None = None,
 ) -> AgentApplication:
     if not model or not model.strip():
         raise ValueError("model 不能为空")
@@ -98,6 +104,8 @@ def create_agent_application(
     agent_workspace.initialize()
 
     application_tool_registry = BUILTIN_TOOL_REGISTRY.clone()
+    for spec in additional_tool_specs:
+        application_tool_registry.register(spec)
     command_runner = PowerShellCommandRunner()
     for spec in create_workspace_tool_specs(workspaces, command_runner):
         application_tool_registry.register(spec)
@@ -165,6 +173,7 @@ def create_agent_application(
     session_runtime = SessionRuntime(
         run_runtime_factory=create_session_run_runtime,
         delete_session_resources=artifact_drawers.delete,
+        default_toolset_provider=default_toolset_provider,
     )
     return AgentApplication(
         session_runtime=session_runtime,
@@ -173,4 +182,5 @@ def create_agent_application(
         resources=(llm_client, *application_resources)
         if owns_llm_client
         else application_resources,
+        approval_actions=approval_actions,
     )

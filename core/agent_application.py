@@ -6,6 +6,11 @@ from typing import Any
 from core.session import SessionRunOutcome, SessionRuntime
 from core.session.state import SessionStatus
 from core.tools_runtime.run_invocation import RunInvocation
+from core.approval import (
+    ApprovalActionRegistry,
+    ApprovalRequest,
+    ApprovalResolution,
+)
 
 DEFAULT_MAX_ROUNDS = 50
 
@@ -17,6 +22,7 @@ class AgentApplication:
         system_prompt: str,
         default_max_rounds: int = DEFAULT_MAX_ROUNDS,
         resources: tuple[AbstractAsyncContextManager[Any], ...] = (),
+        approval_actions: ApprovalActionRegistry | None = None,
     ):
         if not system_prompt.strip():
             raise ValueError("system_prompt 不能为空")
@@ -29,6 +35,7 @@ class AgentApplication:
         self._resources = resources
         self._resource_stack = AsyncExitStack()
         self._lifecycle_state = "new"
+        self._approval_actions = approval_actions or ApprovalActionRegistry()
 
     async def __aenter__(self) -> "AgentApplication":
         if self._lifecycle_state != "new":
@@ -130,6 +137,55 @@ class AgentApplication:
     def require_session(self, session_id: str) -> None:
         self._require_started()
         self._session_runtime.get_session(session_id)
+
+    def pending_approval(
+        self,
+        session_id: str,
+    ) -> ApprovalRequest | None:
+        self._require_started()
+        session = self._session_runtime.get_session(session_id)
+        if session.pending_approval_id is None:
+            return None
+        return session.conversation.get_approval_request(
+            session.pending_approval_id
+        )
+
+    async def resolve_approval(
+        self,
+        session_id: str,
+        confirmation: str,
+    ) -> ApprovalResolution:
+        self._require_started()
+        if confirmation not in {"yes", "no"}:
+            raise ValueError("approval confirmation 必须是 yes 或 no")
+        session = self._session_runtime.get_session(session_id)
+        approval_id = session.pending_approval_id
+        if approval_id is None:
+            raise ValueError("Session 当前没有待审批请求")
+        request = session.conversation.get_approval_request(approval_id)
+        session.conversation.add_user(confirmation)
+        if confirmation == "no":
+            resolution = ApprovalResolution(
+                approval_id=approval_id,
+                decision="rejected",
+            )
+            event_message = (
+                f"Approval `{approval_id}` 已被用户拒绝，未执行任何操作。"
+            )
+        else:
+            execution = await self._approval_actions.execute(request)
+            resolution = ApprovalResolution(
+                approval_id=approval_id,
+                decision="approved",
+                execution=execution,
+            )
+            event_message = (
+                f"Approval `{approval_id}` 执行结果：{execution.message}"
+            )
+        session.conversation.record_approval_resolution(resolution)
+        session.conversation.add_system_event(event_message)
+        session.pending_approval_id = None
+        return resolution
 
     def validate_run(
         self,

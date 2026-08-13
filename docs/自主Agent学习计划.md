@@ -15,6 +15,8 @@
 - 异步 Application 必须显式进入并退出资源生命周期；Task 取消也必须完成 Session、RunRecord、子进程与异步 Client 的一致清理，再保留原始取消语义。自动化测试全绿不能替代取消与关闭路径的专项验证。
 - 工具参数描述与运行时校验必须由同一个 `ToolParameters` 契约提供。外部 JSON Schema 原样进入通用 Core 契约；MCP Plugin 禁止通过动态生成 Pydantic Model 或静默改写 Schema 绕过该设计。
 - MCP Server 的安装、启停与删除属于用户信任边界，只能走 Plugin 控制面（如 `/mcp`）或 Application API；不得注册为普通 Agent Tool。Run 只消费已启用 Server；Toolset 目录不得做网络 I/O，连接与发现发生在 `load_toolset`。
+- 自然语言可以由 Agent 整理为冻结的 Approval Proposal，但 Proposal 工具必须独占工具批次且不能直接执行控制面操作；只有用户输入精确确认字符后，Application use case 才执行已注册的 Plugin Action Handler。Secret 不进入 Conversation 中的 Approval payload。
+- 任何持久能力配置的新增、启用或更新只对新 Session 生效；Session 创建时冻结 `toolset_id → revision`。禁用、删除和撤权在下一调用边界立即生效，已加载旧 revision 的调用必须明确失败，不能静默切换配置。
 - 文件工具访问上限由 `model_config.yaml` 在 Composition 阶段确定，Application 创建后不可变；模型、Run、Skill 与 Plugin 均不得自行升级。`host` 只取消应用路径范围限制，不能绕过操作系统权限，也不等同于命令沙箱。
 - 面向应用的超参数统一由 `model_config.yaml` 提供。默认 Run 轮次上限注入 AgentApplication，普通 Run 与 Plugin Run 均通过 RunHost 解析同一默认值；下层 Runtime 只保留内部调用所需的显式覆盖能力，不维护面向用户的配置入口。
 - Goal 保存 Objective、版本化 Completion Contract、Turn/Judgment 历史与生命周期；Plan 与 TodoList 保持为单次 Turn 内的柔性认知工具。
@@ -45,7 +47,7 @@ Phase 5 Context Management（完成）
 ├─ ✓ 5.6 Workspace Retrieval（工具型）
 └─ ✓ 5.7 Command Execution
         ↓
-Phase 6 Goal、能力加载与委派（进行中：6A 完成；6B Toolset+MCP MVP 完成，Skill/真实 Server benchmark 待续）
+Phase 6 Goal、能力加载与委派（进行中：6A 完成；6B Toolset+MCP MVP、对话安装与真实 stdio benchmark 完成，Skill 待续）
         ↓
 Phase 7 Scheduler / Watcher / Background Task
         ↓
@@ -288,7 +290,7 @@ Phase 8 Multi-Agent
 
 ### 6B Skill / Toolset Progressive Loading + MCP Toolset Adapter
 
-- 状态：进行中；Toolset 渐进加载完成；MCP Plugin MVP 已落地并完成实现总结
+- 状态：进行中；Toolset 渐进加载、MCP Plugin MVP、对话审批安装和真实 stdio 闭环 benchmark 已完成；Skill 待续
 - 目标：按需渐进加载 Skill / Toolset，避免一次性暴露全部能力；接入 MCP，验证外部 Toolset 的发现、选择与调用。
 - 前置边界：区分 Plugin 装配、交互命令激活与单次 Run Capability 注入；6B 只处理 Run 期 Capability 的选择、加载和释放。
 - Run 约束：RunInvocation 可覆盖当前 RuntimeMode；受限规划能力使用 PlainMode，避免渐进加载的工具集被 Todo 等模式再次扩张。
@@ -297,7 +299,8 @@ Phase 8 Multi-Agent
 - ToolSpec 前置回补：以 `ToolParameters` 绑定模型 Schema 与运行时校验；支持 Pydantic 与原生 JSON Schema，非法 Schema 和重复工具名直接失败。
 - MCP 前置技术债清理：Run 内 Toolset 在加载时冻结；Application、Session、LLM Client 与 PowerShell 取消/关闭路径闭合；`grep`、`get_changes` 改用异步子进程；JSON Schema 顶层 object 契约前置校验。
 - MCP 接入 MVP：管理走 `/mcp` 控制面；Registry/Secret 与 RuntimeState 分离；目录零网络 I/O；`tool_specs` 异步化；工具名 `mcp__{server}__{tool}`；Resources/Prompts 显式读取。
-- 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)；[MCP接入设计草稿.md](6/MCP接入设计草稿.md)；[MCP接入实现总结.md](6/MCP接入实现总结.md)
+- 对话安装回补：Agent 通过多轮对话构造单进程 stdio/HTTP Proposal；用户输入 `yes/no`；Application 执行 `disabled → test → enable`。Session 能力快照保证新配置只在新 Session 生效，撤权立即生效。
+- 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)；[MCP接入设计草稿.md](6/MCP接入设计草稿.md)；[MCP接入实现总结.md](6/MCP接入实现总结.md)；[MCP对话安装与Session能力快照总结.md](6/MCP对话安装与Session能力快照总结.md)
 
 ### 6C SubAgent Delegation
 

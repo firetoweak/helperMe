@@ -8,12 +8,19 @@ from plugins.mcp.client_manager import McpClientManager
 from plugins.mcp.content import McpContentService
 from plugins.mcp.registry import McpRegistry
 from plugins.mcp.secrets import McpSecretStore
+from plugins.mcp.approval import (
+    McpInstallApprovalHandler,
+    create_mcp_install_proposal_spec,
+)
+from core.tool_registry import ToolSpec
 
 
 @dataclass
 class McpPlugin:
     service: McpApplicationService
     client_manager: McpClientManager
+    install_proposal_spec: ToolSpec
+    install_approval_handler: McpInstallApprovalHandler
 
     @property
     def toolset_provider(self):
@@ -35,4 +42,9 @@ def create_mcp_plugin(
         manager,
         content_service=content,
     )
-    return McpPlugin(service=service, client_manager=manager)
+    return McpPlugin(
+        service=service,
+        client_manager=manager,
+        install_proposal_spec=create_mcp_install_proposal_spec(),
+        install_approval_handler=McpInstallApprovalHandler(service),
+    )
