@@ -176,6 +176,15 @@ class ToolsExecutorEarlyFailTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(success["data"], {"value": 1})
         self.assertEqual(failure["error"], "failed")
 
+    async def test_missing_tool_reports_current_run_without_guessing_source(self):
+        result = await self.executor.execute("echo", "{}")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "TOOL_NOT_FOUND")
+        self.assertIn("current Run", result["error"])
+        self.assertIn("load_toolset", result["hint"])
+        self.assertNotIn("MCP", result["error"])
+
     async def test_empty_arguments_fail_even_for_no_arg_tool(self):
         tool_name = "early_fail_no_arg_tool"
 

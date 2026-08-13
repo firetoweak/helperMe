@@ -28,13 +28,17 @@ class McpConsoleAdapter:
             if action == "list":
                 return await self._list(rest)
             if action == "upsert":
-                return await self._upsert(rest)
+                return self._with_reload_notice(await self._upsert(rest))
             if action == "enable":
-                return await self._set_enabled(rest, True)
+                return self._with_reload_notice(
+                    await self._set_enabled(rest, True)
+                )
             if action == "disable":
-                return await self._set_enabled(rest, False)
+                return self._with_reload_notice(
+                    await self._set_enabled(rest, False)
+                )
             if action == "remove":
-                return await self._remove(rest)
+                return self._with_reload_notice(await self._remove(rest))
             if action == "test":
                 return await self._test(rest)
             if action == "resources":
@@ -168,6 +172,10 @@ class McpConsoleAdapter:
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
     @staticmethod
+    def _with_reload_notice(message: str) -> str:
+        return f"{message}\n执行 /mcp reload 后在新 Session 生效。"
+
+    @staticmethod
     def _server_and_cursor(rest: str) -> tuple[str, str | None]:
         parts = rest.split()
         if not parts:
@@ -186,6 +194,7 @@ class McpConsoleAdapter:
             "  /mcp enable <id>\n"
             "  /mcp disable <id>\n"
             "  /mcp remove <id>\n"
+            "  /mcp reload\n"
             "  /mcp test <id>\n"
             "  /mcp resources <id> [--cursor TOKEN]\n"
             "  /mcp resource-templates <id> [--cursor TOKEN]\n"

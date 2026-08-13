@@ -48,8 +48,11 @@ class ToolsExecutor:
                     "ok": False,
                     "code": "TOOL_NOT_FOUND",
                     "data": {"tool_name": tool_name},
-                    "error": f"Tool {tool_name} not found",
-                    "hint": "确认工具名称是否正确，或换用已注册工具。",
+                    "error": f"Tool {tool_name} is not available in the current Run",
+                    "hint": (
+                        "只能调用当前轮 tools 中暴露的精确名称；"
+                        "能力来自未加载的 Toolset 时，先调用 load_toolset。"
+                    ),
                 }
             )
 

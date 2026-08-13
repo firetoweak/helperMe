@@ -58,6 +58,12 @@ class McpToolsetProvider:
             )
         return tuple(descriptors)
 
+    def toolset_snapshot_token(self) -> object:
+        return tuple(
+            (record.id, record.revision, record.enabled)
+            for record in self._read_records_sync()
+        )
+
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
         server_id = parse_toolset_id(toolset_id)
         record = await self._registry.get(server_id)
@@ -177,6 +183,11 @@ class McpToolsetProvider:
         return handler
 
     def _read_enabled_records_sync(self) -> tuple[McpServerRecord, ...]:
+        return tuple(
+            record for record in self._read_records_sync() if record.enabled
+        )
+
+    def _read_records_sync(self) -> tuple[McpServerRecord, ...]:
         # descriptors() 必须同步且禁止网络。直接读取 Registry 文件。
         if not self._registry.path.exists():
             return ()
@@ -187,6 +198,5 @@ class McpToolsetProvider:
         records = [
             McpServerRecord.from_dict(item)
             for item in servers
-            if item.get("enabled")
         ]
         return tuple(sorted(records, key=lambda item: item.id))

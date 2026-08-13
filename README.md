@@ -128,6 +128,8 @@ python console_chat.py
 
 也可以直接用自然语言要求安装 MCP。Agent 会补问缺失信息并展示冻结后的单进程 stdio 或 HTTP 配置；输入精确的 `yes` 才会由 Application 注册、测试并启用，输入 `no` 取消。成功后控制台自动创建新 Session，使最新能力配置生效。Secret 与复合 Shell 不进入该对话安装入口。
 
+通过 `/mcp upsert|enable|disable|remove` 修改持久配置后，当前 Session 的能力快照会过期；执行 `/mcp reload` 创建新 Session 并捕获最新 MCP 配置。旧 Session 不会静默切换能力版本。
+
 默认情况下，文件工具只能访问 `workspace.root`。如需在整次应用生命周期内开启整机文件工具访问，在 `model_config.yaml` 中显式设置：
 
 ```yaml

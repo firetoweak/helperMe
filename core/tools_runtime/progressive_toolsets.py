@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from dataclasses import dataclass, field, replace
+from typing import Mapping, Protocol, runtime_checkable
 from types import MappingProxyType
 
 from pydantic import BaseModel
@@ -40,6 +40,7 @@ class ToolsetDescriptor:
 @dataclass(frozen=True)
 class SessionCapabilitySnapshot:
     toolsets: Mapping[str, int]
+    provider_token: object | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -53,10 +54,18 @@ class SessionCapabilitySnapshot:
         cls,
         provider: "ToolsetProvider",
     ) -> "SessionCapabilitySnapshot":
-        return cls({
-            descriptor.id: descriptor.revision
-            for descriptor in provider.descriptors()
-        })
+        token = (
+            provider.toolset_snapshot_token()
+            if isinstance(provider, ToolsetSnapshotTokenProvider)
+            else None
+        )
+        return cls(
+            {
+                descriptor.id: descriptor.revision
+                for descriptor in provider.descriptors()
+            },
+            provider_token=token,
+        )
 
 
 class ToolsetProvider(Protocol):
@@ -64,6 +73,18 @@ class ToolsetProvider(Protocol):
         ...
 
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
+        ...
+
+
+@runtime_checkable
+class ToolsetAccessValidator(Protocol):
+    async def validate_toolset_access(self, toolset_id: str) -> None:
+        ...
+
+
+@runtime_checkable
+class ToolsetSnapshotTokenProvider(Protocol):
+    def toolset_snapshot_token(self) -> object:
         ...
 
 
@@ -81,29 +102,57 @@ class SnapshotToolsetProvider:
         )
 
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
+        await self.validate_toolset_access(toolset_id)
+        specs = await self.provider.tool_specs(toolset_id)
+        return tuple(self._guard_spec(spec, toolset_id) for spec in specs)
+
+    async def validate_toolset_access(self, toolset_id: str) -> None:
         current = {
-            descriptor.id: descriptor
+            descriptor.id: descriptor.revision
             for descriptor in self.provider.descriptors()
-        }.get(toolset_id)
-        expected_revision = self.snapshot.toolsets.get(toolset_id)
+        }
+        current_token = (
+            self.provider.toolset_snapshot_token()
+            if isinstance(self.provider, ToolsetSnapshotTokenProvider)
+            else None
+        )
         if (
-            current is None
-            or expected_revision is None
-            or current.revision != expected_revision
+            current != dict(self.snapshot.toolsets)
+            or current_token != self.snapshot.provider_token
         ):
             raise ToolsetLoadError(
-                "TOOLSET_SNAPSHOT_CHANGED",
-                f"Toolset {toolset_id} 不属于当前 Session 能力快照",
-                hint="请新建 Session 后使用最新能力配置。",
+                "SESSION_CAPABILITIES_STALE",
+                "当前 Session 的能力快照已过期",
+                hint="请创建新 Session 后使用最新能力配置。",
                 data={
                     "toolset_id": toolset_id,
-                    "session_revision": expected_revision,
-                    "current_revision": (
-                        current.revision if current is not None else None
-                    ),
+                    "session_toolsets": dict(self.snapshot.toolsets),
+                    "current_toolsets": current,
                 },
             )
-        return await self.provider.tool_specs(toolset_id)
+        if toolset_id not in self.snapshot.toolsets:
+            raise ToolsetLoadError(
+                "TOOLSET_NOT_FOUND",
+                f"Toolset {toolset_id} not found",
+                hint="请从可选 Toolset 目录中选择有效 ID。",
+                data={"toolset_id": toolset_id},
+            )
+
+    def _guard_spec(self, spec: ToolSpec, toolset_id: str) -> ToolSpec:
+        async def guarded_handler(input_data):
+            try:
+                await self.validate_toolset_access(toolset_id)
+            except ToolsetLoadError as exc:
+                return {
+                    "ok": False,
+                    "code": exc.code,
+                    "data": exc.data,
+                    "error": exc.message,
+                    "hint": exc.hint,
+                }
+            return await spec.handler(input_data)
+
+        return replace(spec, handler=guarded_handler)
 
 
 @dataclass(frozen=True)
@@ -128,6 +177,17 @@ class CompositeToolsetProvider:
             descriptor
             for provider in self.providers
             for descriptor in provider.descriptors()
+        )
+
+    def toolset_snapshot_token(self) -> object:
+        return tuple(
+            provider.toolset_snapshot_token()
+            if isinstance(provider, ToolsetSnapshotTokenProvider)
+            else tuple(
+                (item.id, item.revision)
+                for item in provider.descriptors()
+            )
+            for provider in self.providers
         )
 
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
@@ -164,6 +224,20 @@ def create_load_toolset_spec(
     available_ids = {descriptor.id for descriptor in descriptors}
 
     async def load_toolset(input_data: LoadToolsetInput) -> dict:
+        if isinstance(provider, ToolsetAccessValidator):
+            try:
+                await provider.validate_toolset_access(input_data.toolset_id)
+            except ToolsetLoadError as exc:
+                return {
+                    "ok": False,
+                    "code": exc.code,
+                    "data": {
+                        "toolset_id": input_data.toolset_id,
+                        **exc.data,
+                    },
+                    "error": exc.message,
+                    "hint": exc.hint,
+                }
         if input_data.toolset_id not in available_ids:
             return {
                 "ok": False,
@@ -187,15 +261,25 @@ def create_load_toolset_spec(
                     "hint": exc.hint,
                 }
             state.loaded_specs[input_data.toolset_id] = tuple(specs)
+        tools = [
+            {"name": spec.name, "description": spec.description}
+            for spec in state.loaded_specs[input_data.toolset_id]
+        ]
         return {
             "ok": True,
             "code": "TOOLSET_LOADED",
-            "data": {"toolset_id": input_data.toolset_id},
+            "data": {
+                "toolset_id": input_data.toolset_id,
+                "tools": tools,
+            },
         }
 
     return ToolSpec(
         name=LOAD_TOOLSET,
-        description="为当前 Run 加载一个 Toolset；其中的工具从下一轮开始可用。",
+        description=(
+            "为当前 Run 加载一个 Toolset，并返回本次发现的工具名称与描述；"
+            "其中的工具从下一轮开始可用。加载状态不会延续到后续 Run。"
+        ),
         parameters=PydanticParameters(LoadToolsetInput),
         handler=load_toolset,
     )
@@ -206,7 +290,9 @@ def toolset_catalog_instruction(
     state: ToolsetLoadingState,
 ) -> str:
     lines = [
-        "可按需加载以下 Toolset。需要其中能力时，调用 load_toolset；加载后的工具从下一轮开始可用："
+        "可按需加载以下 Toolset。需要其中能力时，调用 load_toolset；加载后的工具从下一轮开始可用。"
+        "“已加载”仅表示当前 Run；历史工具结果只表示过去的发现事实，不代表当前可调用。"
+        "只能调用当前轮 tools 中实际暴露的精确名称："
     ]
     lines.extend(
         f"- {descriptor.id}: {descriptor.description}"

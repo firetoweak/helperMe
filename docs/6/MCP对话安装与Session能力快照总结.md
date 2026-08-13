@@ -33,12 +33,12 @@ Proposal 不接受 Secret 字段，也不允许把 `model_inference` 冒充可�
 
 `ToolsetDescriptor` 提供通用 revision。Session 创建时保存 `SessionCapabilitySnapshot(toolset_id → revision)`，每次 Run 使用 `SnapshotToolsetProvider` 将快照与当前 Provider 目录求交集：
 
-- 新增、启用、更新：旧 Session 不可见，新 Session 可见；
-- 禁用、删除、撤权：当前目录立即移除；
-- Run 内已加载能力发生 revision 变化：现有 MCP handler 返回 `MCP_SERVER_CHANGED`；
+- 新增、启用、更新、禁用、删除或撤权：统一使旧 Session 能力快照过期；
+- 后续 Toolset 加载或已加载工具调用返回 `SESSION_CAPABILITIES_STALE`；
+- 控制面 `/mcp reload` 创建新 Session 并捕获最新配置，不在旧 Session 内静默替换；
 - 快照不保存工具 Schema，具体 Schema 仍在 `load_toolset` 时发现并冻结到当前 Run。
 
-这套语义与 MCP 无关，可直接复用于后续 Skill 等持久能力配置。
+快照同时保存可见 Toolset revision 与 Provider snapshot token，因此未启用配置的修改也能统一失效。这套语义与 MCP 无关，可直接复用于后续 Skill 等持久能力配置。
 
 ## 真实运行发现与修复
 

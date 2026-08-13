@@ -125,4 +125,4 @@ MCP Adapter 必须继续直接使用 `JsonSchemaParameters`。禁止动态生成
 
 用户输入精确的 `yes/no`，Channel 确定性拦截，不让模型解释授权。批准后 Application 根据冻结 payload 调用已注册的 Plugin Action Handler；MCP 安装按 `disabled → test → enable` 执行，失败配置保持 disabled，且不自动重试。
 
-Session 创建时冻结通用的 `toolset_id → revision`。新增、启用和更新只进入新 Session；禁用、删除和撤权立即阻止后续调用。完整实现与 benchmark 见[《MCP 对话安装与 Session 能力快照总结》](MCP对话安装与Session能力快照总结.md)。
+Session 创建时冻结通用能力快照。任意持久能力配置变化都会使旧 Session 快照统一过期；动态能力加载和调用明确失败，控制面 reload 创建新 Session 捕获最新配置。完整实现与 benchmark 见[《MCP 对话安装与 Session 能力快照总结》](MCP对话安装与Session能力快照总结.md)及[《动态能力跨 Run 连续性设计专题》](动态能力跨Run连续性设计专题.md)。

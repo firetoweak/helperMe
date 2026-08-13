@@ -14,6 +14,11 @@ from core.tools_runtime import (
     SnapshotToolsetProvider,
     ToolsetDescriptor,
 )
+from core.tools_runtime.progressive_toolsets import (
+    LoadToolsetInput,
+    ToolsetLoadingState,
+    create_load_toolset_spec,
+)
 from core.tools_runtime.run_runtime import RunRuntime, RunStatus
 from tests.core.llm_test_support import (
     call_result,
@@ -152,6 +157,13 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
             [step.name for step in result.evidence.steps],
             [LOAD_TOOLSET, "get_weather"],
         )
+        self.assertEqual(
+            result.evidence.steps[0].result["data"]["tools"],
+            [{
+                "name": "get_weather",
+                "description": "查询指定地点的当前天气",
+            }],
+        )
 
     async def test_loaded_toolset_does_not_leak_into_the_next_run(self):
         first_client = RecordingLLMClient(
@@ -178,6 +190,46 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("get_weather", tool_names(second_client.requests[0]))
         self.assertIn(LOAD_TOOLSET, tool_names(second_client.requests[0]))
+
+    async def test_adjacent_run_keeps_receipt_and_reloads_before_calling(self):
+        provider = FakeToolsetProvider()
+        conversation = self.conversation()
+        first_client = RecordingLLMClient([
+            LLMResponse(calls=(ToolCall(
+                "load-1",
+                LOAD_TOOLSET,
+                json.dumps({"toolset_id": "weather"}),
+            ),)),
+            LLMResponse(content="天气 Toolset 提供查询能力"),
+        ], provider)
+        runner = self.runner(first_client)
+        invocation = RunInvocation(toolset_provider=provider)
+        await runner.run(conversation, "天气能力是做什么的", invocation=invocation)
+
+        second_client = RecordingLLMClient([
+            LLMResponse(calls=(ToolCall(
+                "load-2",
+                LOAD_TOOLSET,
+                json.dumps({"toolset_id": "weather"}),
+            ),)),
+            LLMResponse(calls=(ToolCall(
+                "weather-2",
+                "get_weather",
+                json.dumps({"location": "北京"}, ensure_ascii=False),
+            ),)),
+            LLMResponse(content="北京当前 26℃"),
+        ], provider)
+        runner.model_calls = model_call_service(second_client)
+        await runner.run(conversation, "那实际查一下北京", invocation=invocation)
+
+        first_request = second_client.requests[0]
+        context_text = json.dumps(first_request["messages"], ensure_ascii=False)
+        self.assertIn("TOOLSET_LOADED", context_text)
+        self.assertIn("get_weather", context_text)
+        self.assertIn("历史工具结果", context_text)
+        self.assertNotIn("get_weather", tool_names(first_request))
+        self.assertIn("get_weather", tool_names(second_client.requests[1]))
+        self.assertEqual(provider.requested_ids, ["weather", "weather"])
 
     async def test_loaded_toolset_specs_are_snapshotted_once_per_run(self):
         provider = FakeToolsetProvider()
@@ -209,6 +261,17 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
             [request["provider_requests"] for request in client.requests],
             [(), ("weather",), ("weather",)],
         )
+
+    async def test_repeated_load_returns_same_receipt_without_rediscovery(self):
+        provider = FakeToolsetProvider()
+        state = ToolsetLoadingState()
+        spec = create_load_toolset_spec(provider.descriptors(), state, provider)
+        load_input = LoadToolsetInput(toolset_id="weather")
+        first = await spec.handler(load_input)
+        second = await spec.handler(load_input)
+
+        self.assertEqual(first, second)
+        self.assertEqual(provider.requested_ids, ["weather"])
 
     async def test_unknown_toolset_is_a_recoverable_tool_input_error(self):
         client = RecordingLLMClient(
@@ -265,10 +328,75 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
 
         provider.items[0] = ToolsetDescriptor("weather", "已更新", 4)
         self.assertEqual(scoped.descriptors(), ())
-        with self.assertRaisesRegex(
-            Exception,
-            "不属于当前 Session 能力快照",
-        ):
+        with self.assertRaisesRegex(Exception, "能力快照已过期"):
+            await scoped.tool_specs("weather")
+
+    async def test_any_catalog_change_blocks_already_loaded_tool_calls(self):
+        class MutableProvider(FakeToolsetProvider):
+            def __init__(self):
+                super().__init__()
+                self.items = [ToolsetDescriptor("weather", "天气", 1)]
+
+            def descriptors(self):
+                return tuple(self.items)
+
+        provider = MutableProvider()
+        scoped = SnapshotToolsetProvider(
+            provider,
+            SessionCapabilitySnapshot.capture(provider),
+        )
+        loaded = await scoped.tool_specs("weather")
+        provider.items.append(ToolsetDescriptor("new", "新能力", 1))
+
+        result = await loaded[0].handler(WeatherInput(location="北京"))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "SESSION_CAPABILITIES_STALE")
+
+    async def test_changed_toolset_reports_stale_before_catalog_not_found(self):
+        class MutableProvider(FakeToolsetProvider):
+            def __init__(self):
+                super().__init__()
+                self.items = [ToolsetDescriptor("weather", "天气", 1)]
+
+            def descriptors(self):
+                return tuple(self.items)
+
+        provider = MutableProvider()
+        scoped = SnapshotToolsetProvider(
+            provider,
+            SessionCapabilitySnapshot.capture(provider),
+        )
+        descriptors = scoped.descriptors()
+        load_spec = create_load_toolset_spec(
+            descriptors,
+            ToolsetLoadingState(),
+            scoped,
+        )
+        provider.items[0] = ToolsetDescriptor("weather", "天气", 2)
+
+        result = await load_spec.handler(LoadToolsetInput(toolset_id="weather"))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "SESSION_CAPABILITIES_STALE")
+
+    async def test_provider_token_detects_configuration_outside_visible_catalog(self):
+        class TokenProvider(FakeToolsetProvider):
+            def __init__(self):
+                super().__init__()
+                self.token = 1
+
+            def toolset_snapshot_token(self):
+                return self.token
+
+        provider = TokenProvider()
+        scoped = SnapshotToolsetProvider(
+            provider,
+            SessionCapabilitySnapshot.capture(provider),
+        )
+        provider.token = 2
+
+        with self.assertRaisesRegex(Exception, "能力快照已过期"):
             await scoped.tool_specs("weather")
 
 

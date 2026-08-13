@@ -173,6 +173,13 @@ async def async_main(argv: list[str] | None = None) -> None:
                     last_status = None
                 continue
 
+            if user_message == "/mcp reload":
+                session_id = _new_session(application)
+                log_path = _resolve_log_path()
+                last_status = None
+                print("新 Session 已创建，并已捕获最新 MCP 能力快照。")
+                continue
+
             try:
                 mcp_reply = await mcp_console.execute_if_handled(user_message)
             except McpCommandError as exc:
