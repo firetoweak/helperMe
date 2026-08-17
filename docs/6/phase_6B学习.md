@@ -112,7 +112,7 @@ Core 同步回补：`tool_specs` 异步化、`ToolsetLoadError`、`CompositeTool
 
 ## 下一步边界
 
-- Skill 渐进加载已拆分到 6C：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 数据模型提前合并；
+- Skill 渐进加载已拆分到 6D：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 数据模型提前合并；
 - 真实 HTTP MCP Server 兼容 benchmark；真实 stdio、现代与 Legacy 已验证；
 - 可选：对话内只读查询已安装列表（仍禁止写 Registry）；
 - OAuth、Approval、Resource 自动注入等后置能力按设计第 15 节按需开启。
