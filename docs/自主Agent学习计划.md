@@ -307,15 +307,15 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 ### 6C Web Search + Web Fetch
 
-- 状态：计划已对齐，具体设计未开始
+- 状态：架构设计草稿已完成，具体契约与实现待开始
 - 目标：先用 `web_search` 发现公开 Web 的候选来源，再用 `web_fetch` 读取目标页面；保留 URL、检索/获取时间与内容出处，形成可核验的信息获取闭环。
 - 学习顺序：① 明确 `web_search` 的输入、结果与证据语义；② 接入一个外部 Search Provider；③ 明确 `web_fetch` 的静态 HTTP 获取与正文提取边界；④ 完成 search → fetch → answer 的真实 Agent benchmark。
 - 能力边界：`web_search` 负责发现候选页面，不运行浏览器；`web_fetch` 负责获取给定 URL 并提取可读内容，不承担点击、登录、表单和复杂动态交互；Browser Automation 负责交互式网页操作，是后续独立可选能力，不属于 6C MVP 的完成条件。
 - 架构边界：Web 能力属于 Harness 的工具面；搜索索引、排序、正文提取和浏览器引擎使用外部实现。项目只拥有稳定、精简的契约、权限边界、Provider 薄适配和结果回写。第一版各能力只接一个实现，不提前建设多供应商框架。
 - 参考策略：Hermes、OpenCode、nanobot 用于比较 Search/Fetch 工具语义；Oh My Pi、Hermes 用于未来 Browser 生命周期；DeepSeek Harness 用于校准“能力契约 → Provider → 模型工具”的接入边界；Codex 用于观察平台级扩展方式。只吸收边界，不照搬“Everything is a Plugin”或完整浏览器子系统。
 - 后续触发：只有真实任务稳定出现登录态、点击、表单、客户端渲染或必须执行页面脚本时，才新增 Browser Automation 小节，并优先接入 Playwright/CDP 或外部浏览器服务，不自建浏览器引擎。
-- 结论：（待写）
-- 详述：总结待写
+- 当前结论：Web 作为可选 Plugin 复用 Core 的 Tool Result、Conversation、RunEvidence 与 Artifact 链路；Search/Fetch 使用隔离 Provider 端口；`FetchAllowedUrls` 是从完整 Conversation 派生的 Run 期状态，不进入 Session。第一版只接单一实现，明确拒绝提前建设 Provider Registry、自动探测、fallback、Browser、Crawl 和 Web 专属持久 Cache。
+- 详述：[Web Search与Web Fetch设计草稿.md](6/Web%20Search与Web%20Fetch设计草稿.md)
 
 ### 6D Skill Progressive Loading
 
