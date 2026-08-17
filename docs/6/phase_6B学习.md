@@ -1,8 +1,8 @@
-# Phase 6B · Skill / Toolset Progressive Loading
+# Phase 6B · Toolset Progressive Loading + MCP Toolset Adapter
 
 ## 目标
 
-按需渐进加载 Skill / Toolset，避免模型在 Run 开始时看到全部工具 schema。第一阶段先建立与具体 Plugin、领域和 MCP 无关的 Toolset 加载机制；Skill 和 MCP Adapter 在该机制稳定后接入。
+按需渐进加载 Toolset，避免模型在 Run 开始时看到全部工具 Schema。先建立与具体 Plugin、领域和 MCP 无关的 Toolset 加载机制，再通过 MCP Adapter 验证外部 Toolset 的发现、选择与调用。
 
 ```text
 精简 Toolset 目录
@@ -112,7 +112,7 @@ Core 同步回补：`tool_specs` 异步化、`ToolsetLoadError`、`CompositeTool
 
 ## 下一步边界
 
-- Skill 渐进加载：复用 Run 生命周期，不与 Toolset 数据模型提前合并；
+- Skill 渐进加载已拆分到 6C：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 数据模型提前合并；
 - 真实 HTTP MCP Server 兼容 benchmark；真实 stdio、现代与 Legacy 已验证；
 - 可选：对话内只读查询已安装列表（仍禁止写 Registry）；
 - OAuth、Approval、Resource 自动注入等后置能力按设计第 15 节按需开启。

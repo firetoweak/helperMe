@@ -47,7 +47,7 @@ Phase 5 Context Management（完成）
 ├─ ✓ 5.6 Workspace Retrieval（工具型）
 └─ ✓ 5.7 Command Execution
         ↓
-Phase 6 Goal、能力加载与委派（进行中：6A 完成；6B Toolset+MCP MVP、对话安装与真实 stdio benchmark 完成，Skill 待续）
+Phase 6 Goal 与能力加载（进行中：6A、6B 完成；6C Skill 待开始）
         ↓
 Phase 7 Scheduler / Watcher / Background Task
         ↓
@@ -182,13 +182,13 @@ Phase 5.5 Workspace Sandbox
         ↓
 Phase 6A Goal Loop
         ↓
-Phase 6B Skill / Toolset Progressive Loading
+Phase 6B Toolset Progressive Loading + MCP Toolset Adapter
         ↓
-Phase 6C SubAgent Delegation
+Phase 6C Skill Progressive Loading
         ↓
 Phase 7 Scheduler / Watcher / Background Task
         ↓
-Phase 8 Multi-Agent
+Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
         ↓
 （很晚，外挂）Memory Model → Memory Extraction → 再考虑 Unified Retrieval
 ```
@@ -274,9 +274,9 @@ Phase 8 Multi-Agent
 
 ---
 
-## Phase 6 · Goal、能力加载与委派
+## Phase 6 · Goal 与能力加载
 
-面向更大目标组织任务、渐进加载能力，并支持 SubAgent 委派。
+面向更大目标组织任务，并按需渐进加载能力。
 
 ### 小节索引
 
@@ -288,10 +288,10 @@ Phase 8 Multi-Agent
 - 交互入口：`/goal <objective>` 自动执行 Contract Compilation → Executor → Judge → continuation，直到 completed、paused 或耗尽 `max_goal_turns`。
 - 详述：[phase_6A学习.md](6/phase_6A学习.md)
 
-### 6B Skill / Toolset Progressive Loading + MCP Toolset Adapter
+### 6B Toolset Progressive Loading + MCP Toolset Adapter
 
-- 状态：进行中；Toolset 渐进加载、MCP Plugin MVP、对话审批安装和真实 stdio 闭环 benchmark 已完成；Skill 待续
-- 目标：按需渐进加载 Skill / Toolset，避免一次性暴露全部能力；接入 MCP，验证外部 Toolset 的发现、选择与调用。
+- 状态：完成；Toolset 渐进加载、MCP Plugin 基础能力、对话审批安装和真实 stdio 闭环 benchmark 已完成
+- 目标：按需渐进加载 Toolset，避免一次性暴露全部工具 Schema；接入 MCP，验证外部 Toolset 的发现、选择与调用。
 - 前置边界：区分 Plugin 装配、交互命令激活与单次 Run Capability 注入；6B 只处理 Run 期 Capability 的选择、加载和释放。
 - Run 约束：RunInvocation 可覆盖当前 RuntimeMode；受限规划能力使用 PlainMode，避免渐进加载的工具集被 Todo 等模式再次扩张。
 - MCP 定位：MCP 是外部 Toolset 的接入协议，不负责能力加载策略；具体适配放在可选 Plugin，Core 不依赖 MCP。
@@ -302,10 +302,11 @@ Phase 8 Multi-Agent
 - 对话安装回补：Agent 通过多轮对话构造单进程 stdio/HTTP Proposal；用户输入 `yes/no`；Application 执行 `disabled → test → enable`。任意持久能力配置变化统一使旧 Session 快照过期，控制面 reload 后由新 Session 捕获最新配置。
 - 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)；[MCP接入设计草稿.md](6/MCP接入设计草稿.md)；[MCP接入实现总结.md](6/MCP接入实现总结.md)；[MCP对话安装与Session能力快照总结.md](6/MCP对话安装与Session能力快照总结.md)
 
-### 6C SubAgent Delegation
+### 6C Skill Progressive Loading
 
 - 状态：未开始
-- 目标：把子任务委派给 SubAgent 并回收结果。
+- 目标：按需发现并加载 Skill 的指令、知识与工作流，避免在 Run 开始时注入全部 Skill 内容。
+- 边界：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 的目录、加载状态和工具 Schema 数据模型提前合并。
 - 结论：（待写）
 - 详述：总结待写
 
@@ -342,9 +343,16 @@ Phase 8 Multi-Agent
 
 ## Phase 8 · Multi-Agent（最后）
 
-多 Agent 协作：协调、分工、委派与共享状态。
+多 Agent 协作：先完成单个 SubAgent 的委派闭环，再逐步扩展协调、并发分工与共享状态。
 
 ### 小节索引
+
+### SubAgent Delegation MVP
+
+- 状态：未开始（由原 6C 后置）
+- 目标：定义任务委派与结果回收契约，完成父 Agent 向单个 SubAgent 委派子任务的最小闭环。
+- 结论：（待写）
+- 详述：总结待写
 
 ### Coordinator
 
@@ -357,13 +365,6 @@ Phase 8 Multi-Agent
 
 - 状态：未开始
 - 目标：执行被委派的具体工作。
-- 结论：（待写）
-- 详述：总结待写
-
-### Delegation
-
-- 状态：未开始
-- 目标：定义任务委派与结果回收契约。
 - 结论：（待写）
 - 详述：总结待写
 
