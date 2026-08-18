@@ -6,23 +6,11 @@
 
 ## Rule 同步区
 
-- 禁止为了跑通当前局部模块而添加静默兜底、隐式默认值或自动生成关键关联数据。兜底不得掩盖上层调用错误，否则会破坏整体设计并显著增加调试成本。
-- 可选能力只能依赖 Core 的公共端口；Core 不得引用具体 Plugin。Plugin 引出的 Core 改动必须具有与插件领域无关的通用语义。移除某个 Plugin 后，Core 应无需修改并能独立运行。
-- Plugin 是构建在 Core 公共端口之上的 Agent 辅助支架，负责可选的领域工作流、外部能力接入及其状态；它可以组合 Core 能力，但不得把自己的领域名词、生命周期或存储模型写回 Core。判断边界时不看能力是否“常用”，只看删除该 Plugin 后 Core 是否仍能独立运行。
-- 源码仓库、Agent Workspace 与用户任务 Workspace 必须分离。源码仓库只保存实现；`~/.helperme` 是 Agent Workspace，保存 Session Artifact、Plugin 安装内容和 Agent 状态；用户任务 Workspace 由配置指定。Agent Workspace 不进入普通文件工具的 Workspace Roots，Plugin 只能通过自身受控端口访问其专属目录。
-- Plugin 的持久安装与 Run 期加载是两个生命周期：安装结果保存在 Agent Workspace；单次 Run 只按需加载已安装能力，并在 Run 结束后释放临时加载状态。协议适配器只负责外部能力发现与调用，不负责 Core 的能力选择策略。
-- Run 期 Progressive Loading 释放的是能力可见性与临时 Registry，不等于关闭 Plugin 的物理资源。Application 级连接、进程和目录缓存由 Plugin/Application 生命周期管理；Toolset 在某个 Run 内一经加载，Schema 快照必须保持稳定。
-- 异步 Application 必须显式进入并退出资源生命周期；Task 取消也必须完成 Session、RunRecord、子进程与异步 Client 的一致清理，再保留原始取消语义。自动化测试全绿不能替代取消与关闭路径的专项验证。
-- 工具参数描述与运行时校验必须由同一个 `ToolParameters` 契约提供。外部 JSON Schema 原样进入通用 Core 契约；MCP Plugin 禁止通过动态生成 Pydantic Model 或静默改写 Schema 绕过该设计。
-- MCP Server 的安装、启停与删除属于用户信任边界，只能走 Plugin 控制面（如 `/mcp`）或 Application API；不得注册为普通 Agent Tool。Run 只消费已启用 Server；Toolset 目录不得做网络 I/O，连接与发现发生在 `load_toolset`。
-- Web 默认作为 MCP 提供的外部能力接入，不是 HelperMe Core 必须拥有的领域能力。搜索、网页读取与浏览器自动化优先复用现有 MCP；只有真实任务证明 MCP 无法满足时，才依据具体缺口设计自有窄边界，不因可能的未来需求预建 Web Plugin、Provider 或浏览器框架。
-- 自然语言可以由 Agent 整理为冻结的 Approval Proposal，但 Proposal 工具必须独占工具批次且不能直接执行控制面操作；只有用户输入精确确认字符后，Application use case 才执行已注册的 Plugin Action Handler。Secret 不进入 Conversation 中的 Approval payload。
-- Session 创建时冻结持久能力配置快照。任何能力配置的新增、启用、更新、禁用、删除或撤权都会使旧 Session 快照统一过期；后续动态能力加载与调用必须明确失败，不能静默切换配置。控制面通过显式 reload 创建捕获最新快照的新 Session。
-- 文件工具访问上限由 `model_config.yaml` 在 Composition 阶段确定，Application 创建后不可变；模型、Run、Skill 与 Plugin 均不得自行升级。`host` 只取消应用路径范围限制，不能绕过操作系统权限，也不等同于命令沙箱。
-- 面向应用的超参数统一由 `model_config.yaml` 提供。默认 Run 轮次上限注入 AgentApplication，普通 Run 与 Plugin Run 均通过 RunHost 解析同一默认值；下层 Runtime 只保留内部调用所需的显式覆盖能力，不维护面向用户的配置入口。
-- Goal 保存 Objective、版本化 Completion Contract、Turn/Judgment 历史与生命周期；Plan 与 TodoList 保持为单次 Turn 内的柔性认知工具。
-- Completion Contract 自动推导并在每个 Executor Turn 开始前冻结。Executor 无权修改；Judge 只能在 Turn 边界修订 inferred 标准和验证方法，不能自动新增、删除或改写 user 标准。
-- Goal 完成必须由隔离 Judge Run 判断。`done` 必须引用证据；结构化命令和 Workspace 要求由 CompletionGate 读取 Judge Run 的真实 RunEvidence 核验，Executor 自述不能替代完成事实。
+- 保持简单、高内聚、低耦合；只为已经出现的真实需求增加抽象。
+- Core 只提供稳定的通用机制；可选能力通过 Plugin 组合，删除 Plugin 不应影响 Core。
+- 不用静默兜底掩盖契约错误；内部相信契约，只在外部输入边界处理预期错误。
+- 明确分离源码、Agent 状态和用户任务数据，并由各自的生命周期管理。
+- 完成结论必须基于可验证证据，不能只依赖 Agent 自述。
 
 ## 全局路线图
 
