@@ -170,16 +170,263 @@ SessionFactory = Callable[
 @dataclass
 class ManagedMcpConnection:
     session: McpSession
-    stack: AsyncExitStack
+    stack: AsyncExitStack | None
     record: McpServerRecord
     negotiated_version: str | None = None
     capabilities: dict[str, Any] = field(default_factory=dict)
     tools_cache: tuple[Tool, ...] | None = None
     tools_cache_expires_at: float | None = None
     cacheable: bool = True
+    close_handler: Callable[[], Awaitable[None]] | None = None
+    alive_handler: Callable[[], bool] | None = None
 
     async def aclose(self) -> None:
+        if self.close_handler is not None:
+            await self.close_handler()
+            return
+        assert self.stack is not None
         await self.stack.aclose()
+
+    def is_alive(self) -> bool:
+        return self.alive_handler is None or self.alive_handler()
+
+
+@dataclass(frozen=True)
+class _SdkOperation:
+    method: str
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+    result: asyncio.Future[Any]
+
+
+class _OwnedSdkSession:
+    """把所有 SDK 调用投递给创建 Client context 的 owner task。"""
+
+    def __init__(
+        self,
+        owner: "_SdkConnectionOwner",
+        *,
+        protocol_version: str,
+        server_capabilities: Any,
+    ) -> None:
+        self._owner = owner
+        self._protocol_version = protocol_version
+        self._server_capabilities = server_capabilities
+
+    @property
+    def protocol_version(self) -> str:
+        return self._protocol_version
+
+    @property
+    def server_capabilities(self) -> Any:
+        return self._server_capabilities
+
+    async def list_tools(self, *, cursor: str | None = None) -> ListToolsResult:
+        return await self._owner.call("list_tools", cursor=cursor)
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        return await self._owner.call("call_tool", name, arguments)
+
+    async def list_resources(
+        self,
+        *,
+        cursor: str | None = None,
+    ) -> ListResourcesResult:
+        return await self._owner.call("list_resources", cursor=cursor)
+
+    async def list_resource_templates(
+        self,
+        *,
+        cursor: str | None = None,
+    ) -> ListResourceTemplatesResult:
+        return await self._owner.call(
+            "list_resource_templates",
+            cursor=cursor,
+        )
+
+    async def read_resource(self, uri: str) -> ReadResourceResult:
+        return await self._owner.call("read_resource", uri)
+
+    async def list_prompts(
+        self,
+        *,
+        cursor: str | None = None,
+    ) -> ListPromptsResult:
+        return await self._owner.call("list_prompts", cursor=cursor)
+
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: dict[str, str] | None = None,
+    ) -> GetPromptResult:
+        return await self._owner.call("get_prompt", name, arguments)
+
+
+class _SdkConnectionOwner:
+    """在单一 Task 内拥有真实 MCP SDK Client 及其传输资源。"""
+
+    def __init__(
+        self,
+        record: McpServerRecord,
+        secrets: Mapping[str, str],
+    ) -> None:
+        self._record = record
+        self._secrets = secrets
+        self._queue: asyncio.Queue[_SdkOperation | None] = asyncio.Queue()
+        self._ready: asyncio.Future[ManagedMcpConnection] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._task = asyncio.create_task(
+            self._run(),
+            name=f"mcp-owner:{record.id}",
+        )
+        self._closing = False
+
+    async def start(self) -> ManagedMcpConnection:
+        try:
+            return await asyncio.shield(self._ready)
+        except BaseException:
+            if not self._ready.done():
+                self._ready.cancel()
+            if not self._task.done():
+                self._task.cancel()
+            try:
+                await self._task
+            except BaseException:
+                pass
+            raise
+
+    async def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        if not self.is_alive():
+            raise ConnectionError(f"MCP connection owner 已停止: {self._record.id}")
+        result = asyncio.get_running_loop().create_future()
+        self._queue.put_nowait(
+            _SdkOperation(
+                method=method,
+                args=args,
+                kwargs=kwargs,
+                result=result,
+            )
+        )
+        try:
+            return await asyncio.shield(result)
+        except asyncio.CancelledError:
+            result.cancel()
+            self._closing = True
+            self._task.cancel()
+            raise
+
+    async def close(self) -> None:
+        if not self._task.done() and not self._closing:
+            self._closing = True
+            self._queue.put_nowait(None)
+        try:
+            await asyncio.shield(self._task)
+        except asyncio.CancelledError:
+            if not self._task.cancelled():
+                raise
+
+    def is_alive(self) -> bool:
+        return not self._closing and not self._task.done()
+
+    async def _run(self) -> None:
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        current: _SdkOperation | None = None
+        try:
+            facade = await self._open_facade(stack)
+            connection = ManagedMcpConnection(
+                session=_OwnedSdkSession(
+                    self,
+                    protocol_version=facade.protocol_version,
+                    server_capabilities=facade.server_capabilities,
+                ),
+                stack=None,
+                record=self._record,
+                negotiated_version=facade.protocol_version,
+                close_handler=self.close,
+                alive_handler=self.is_alive,
+            )
+            self._ready.set_result(connection)
+
+            while True:
+                current = await self._queue.get()
+                if current is None:
+                    break
+                try:
+                    operation = getattr(facade, current.method)
+                    value = await operation(*current.args, **current.kwargs)
+                except BaseException as exc:
+                    if not current.result.done():
+                        current.result.set_exception(exc)
+                    if isinstance(exc, asyncio.CancelledError):
+                        raise
+                else:
+                    if not current.result.done():
+                        current.result.set_result(value)
+                finally:
+                    current = None
+        except BaseException as exc:
+            if not self._ready.done():
+                self._ready.set_exception(exc)
+            if current is not None and not current.result.done():
+                current.result.set_exception(exc)
+            raise
+        finally:
+            self._closing = True
+            self._fail_pending_operations()
+            await stack.aclose()
+
+    async def _open_facade(self, stack: AsyncExitStack) -> _SdkClientFacade:
+        read_timeout: float | None = None
+        if self._record.transport is TransportKind.STDIO:
+            assert isinstance(
+                self._record.transport_config,
+                StdioTransportConfig,
+            )
+            params = StdioServerParameters(
+                command=self._record.transport_config.command,
+                args=list(self._record.transport_config.args),
+                env=dict(self._secrets) or None,
+                cwd=self._record.transport_config.cwd,
+            )
+            transport = stdio_client(params)
+        else:
+            assert isinstance(
+                self._record.transport_config,
+                StreamableHttpTransportConfig,
+            )
+            read_timeout = self._record.transport_config.timeout_seconds
+            http_client = await stack.enter_async_context(
+                httpx2.AsyncClient(
+                    headers=dict(self._secrets),
+                    timeout=read_timeout,
+                    follow_redirects=False,
+                )
+            )
+            transport = streamable_http_client(
+                self._record.transport_config.url,
+                http_client=http_client,
+            )
+        client = await stack.enter_async_context(
+            Client(
+                transport,
+                mode="auto",
+                read_timeout_seconds=read_timeout,
+            )
+        )
+        return _SdkClientFacade(client)
+
+    def _fail_pending_operations(self) -> None:
+        error = ConnectionError(f"MCP connection owner 已停止: {self._record.id}")
+        while not self._queue.empty():
+            operation = self._queue.get_nowait()
+            if operation is not None and not operation.result.done():
+                operation.result.set_exception(error)
 
 
 @dataclass
@@ -373,6 +620,7 @@ class McpClientManager:
                 not force_refresh
                 and entry is not None
                 and entry.revision == record.revision
+                and entry.connection.is_alive()
             ):
                 return entry.connection
             generation = self._generations.get(record.id, 0)
@@ -488,51 +736,4 @@ class McpClientManager:
         record: McpServerRecord,
         secrets: Mapping[str, str],
     ) -> ManagedMcpConnection:
-        stack = AsyncExitStack()
-        await stack.__aenter__()
-        try:
-            read_timeout: float | None = None
-            if record.transport is TransportKind.STDIO:
-                assert isinstance(record.transport_config, StdioTransportConfig)
-                params = StdioServerParameters(
-                    command=record.transport_config.command,
-                    args=list(record.transport_config.args),
-                    env=dict(secrets) or None,
-                    cwd=record.transport_config.cwd,
-                )
-                transport = stdio_client(params)
-            else:
-                assert isinstance(
-                    record.transport_config,
-                    StreamableHttpTransportConfig,
-                )
-                read_timeout = record.transport_config.timeout_seconds
-                http_client = await stack.enter_async_context(
-                    httpx2.AsyncClient(
-                        headers=dict(secrets),
-                        timeout=read_timeout,
-                        follow_redirects=False,
-                    )
-                )
-                transport = streamable_http_client(
-                    record.transport_config.url,
-                    http_client=http_client,
-                )
-            client = await stack.enter_async_context(
-                Client(
-                    transport,
-                    mode="auto",
-                    read_timeout_seconds=read_timeout,
-                )
-            )
-            facade = _SdkClientFacade(client)
-            return ManagedMcpConnection(
-                session=facade,
-                stack=stack,
-                record=record,
-                negotiated_version=facade.protocol_version,
-                cacheable=False,
-            )
-        except BaseException:
-            await stack.aclose()
-            raise
+        return await _SdkConnectionOwner(record, secrets).start()

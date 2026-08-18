@@ -42,9 +42,9 @@ Proposal 不接受 Secret 字段，也不允许把 `model_inference` 冒充可�
 
 ## 真实运行发现与修复
 
-真实端到端 benchmark 发现 MCP SDK 的 stdio/HTTP Client context 带 AnyIO Task 所有权。原实现可能在并发工具 Task 中创建连接，却在 Application 主 Task 关闭，导致跨 Task 退出 cancel scope。
+真实端到端 benchmark 发现 MCP SDK 的 stdio/HTTP Client context 带 AnyIO Task 所有权。原实现可能在并发工具 Task 中创建连接，却在 Application 主 Task 关闭，导致跨 Task 退出 cancel scope。第一轮修复曾把 SDK 物理连接改为单次操作内创建并关闭，虽然闭合了资源所有权，却使有状态 MCP 在每次调用后丢失 Server 状态。
 
-SDK 物理连接现改为单次操作内创建并在同一 Task 关闭；注入的非 Task-affine测试连接仍可缓存。它牺牲了真实 SDK 连接复用，但闭合了并发 Run 的资源所有权。若未来真实性能数据要求复用，应建立专属连接 owner task，而不能重新跨 Task 持有 SDK context。
+真实 Playwright 使用进一步证明：Toolset 可见性可以属于 Run，但 MCP Server 的物理连接与有状态资源必须由 Application 生命周期持有。当前每个 `(server_id, revision)` 使用专属 connection owner task；SDK Client context 的创建、串行调用和关闭始终在该 Task 内完成，其他 Run/工具 Task 只通过队列提交操作。revision 变化、disable、remove、传输取消或 Application 退出时关闭 owner；跨 Run 重新加载 Toolset 不重启同 revision Server。
 
 ## 验证
 

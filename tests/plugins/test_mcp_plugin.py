@@ -644,7 +644,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
 
 
 class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
-    async def test_v2_stdio_auto_negotiation_and_secret_env(self):
+    async def test_v2_stdio_reuses_state_across_toolset_loads(self):
         with TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
@@ -682,6 +682,29 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     result["data"]["mcp"]["structured_content"]["token"],
                     "stdio-secret",
+                )
+                counter_spec = next(
+                    spec
+                    for spec in specs
+                    if spec.name.endswith("increment_counter")
+                )
+                first = await counter_spec.handler({})
+                reloaded_specs = await service.toolset_provider.tool_specs(
+                    "mcp:real_stdio"
+                )
+                reloaded_counter_spec = next(
+                    spec
+                    for spec in reloaded_specs
+                    if spec.name.endswith("increment_counter")
+                )
+                second = await reloaded_counter_spec.handler({})
+                self.assertEqual(
+                    first["data"]["mcp"]["structured_content"]["count"],
+                    1,
+                )
+                self.assertEqual(
+                    second["data"]["mcp"]["structured_content"]["count"],
+                    2,
                 )
                 self.assertEqual(
                     manager.runtime_state("real_stdio").negotiated_version,

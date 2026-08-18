@@ -6,12 +6,21 @@ from mcp.server import MCPServer
 
 
 server = MCPServer("helperme-test-server")
+counter = 0
 
 
 @server.tool()
 def read_test_token() -> dict[str, str]:
     """返回测试进程收到的 MCP_TEST_TOKEN。"""
     return {"token": os.environ.get("MCP_TEST_TOKEN", "")}
+
+
+@server.tool()
+def increment_counter() -> dict[str, int]:
+    """递增并返回当前 MCP Server 进程内计数。"""
+    global counter
+    counter += 1
+    return {"count": counter}
 
 
 if __name__ == "__main__":
