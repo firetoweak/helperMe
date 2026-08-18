@@ -113,6 +113,10 @@ def _tool(
     )
 
 
+def _runtime_root(workspace: AgentWorkspace) -> Path:
+    return workspace.plugins_root / "mcp" / "runtime"
+
+
 class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
     async def test_registry_and_secrets_roundtrip(self):
         with TemporaryDirectory() as directory:
@@ -124,7 +128,10 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             service = McpApplicationService(
                 registry,
                 secrets,
-                McpClientManager(secrets),
+                McpClientManager(
+                    secrets,
+                    runtime_root=_runtime_root(workspace),
+                ),
             )
             record = await service.upsert_server(
                 server_id="demo",
@@ -169,7 +176,10 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             service = McpApplicationService(
                 McpRegistry.from_agent_workspace(workspace),
                 McpSecretStore.from_agent_workspace(workspace),
-                McpClientManager(McpSecretStore.from_agent_workspace(workspace)),
+                McpClientManager(
+                    McpSecretStore.from_agent_workspace(workspace),
+                    runtime_root=_runtime_root(workspace),
+                ),
             )
             for invalid_id in ("a:b", "a/b", "a\\b", "..", "含中文"):
                 with self.subTest(server_id=invalid_id):
@@ -188,7 +198,10 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             workspace.initialize()
             registry = McpRegistry.from_agent_workspace(workspace)
             secrets = McpSecretStore.from_agent_workspace(workspace)
-            manager = McpClientManager(secrets)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
             service = McpApplicationService(registry, secrets, manager)
             await service.upsert_server(
                 server_id="demo",
@@ -279,6 +292,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
         workspace.initialize()
         self.registry = McpRegistry.from_agent_workspace(workspace)
         self.secrets = McpSecretStore.from_agent_workspace(workspace)
+        self.runtime_root = _runtime_root(workspace)
         self.sessions: dict[str, FakeMcpSession] = {}
         self.resolved_secrets: dict[str, dict[str, str]] = {}
 
@@ -298,6 +312,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
 
         self.manager = McpClientManager(
             self.secrets,
+            runtime_root=self.runtime_root,
             session_factory=factory,
         )
         self.service = McpApplicationService(
@@ -533,7 +548,11 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
                 record=record,
             )
 
-        manager = McpClientManager(self.secrets, session_factory=factory)
+        manager = McpClientManager(
+            self.secrets,
+            runtime_root=self.runtime_root,
+            session_factory=factory,
+        )
         service = McpApplicationService(self.registry, self.secrets, manager)
         await service.upsert_server(
             server_id="metadata",
@@ -568,7 +587,11 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
                 record=record,
             )
 
-        manager = McpClientManager(self.secrets, session_factory=factory)
+        manager = McpClientManager(
+            self.secrets,
+            runtime_root=self.runtime_root,
+            session_factory=factory,
+        )
         service = McpApplicationService(self.registry, self.secrets, manager)
         await service.upsert_server(
             server_id="cancelled",
@@ -614,7 +637,11 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
                 record=record,
             )
 
-        manager = McpClientManager(self.secrets, session_factory=factory)
+        manager = McpClientManager(
+            self.secrets,
+            runtime_root=self.runtime_root,
+            session_factory=factory,
+        )
         service = McpApplicationService(self.registry, self.secrets, manager)
         await service.upsert_server(
             server_id="disable_race",
@@ -650,7 +677,10 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
             workspace.initialize()
             registry = McpRegistry.from_agent_workspace(workspace)
             secrets = McpSecretStore.from_agent_workspace(workspace)
-            manager = McpClientManager(secrets)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
             service = McpApplicationService(registry, secrets, manager)
             fixture = (
                 Path(__file__).parents[1]
@@ -706,9 +736,71 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     second["data"]["mcp"]["structured_content"]["count"],
                     2,
                 )
+                cwd_spec = next(
+                    spec
+                    for spec in specs
+                    if spec.name.endswith("read_working_directory")
+                )
+                cwd_result = await cwd_spec.handler({})
+                expected_cwd = _runtime_root(workspace) / "real_stdio"
+                self.assertEqual(
+                    Path(
+                        cwd_result["data"]["mcp"]["structured_content"]["cwd"]
+                    ).resolve(),
+                    expected_cwd.resolve(),
+                )
+                self.assertTrue(expected_cwd.is_dir())
                 self.assertEqual(
                     manager.runtime_state("real_stdio").negotiated_version,
                     "2026-07-28",
+                )
+            finally:
+                await manager.aclose()
+
+    async def test_v2_stdio_preserves_explicit_working_directory(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            explicit_cwd = Path(directory) / "explicit-mcp-cwd"
+            explicit_cwd.mkdir()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
+            service = McpApplicationService(registry, secrets, manager)
+            fixture = (
+                Path(__file__).parents[1]
+                / "fixtures"
+                / "mcp_stdio_server.py"
+            )
+            await service.upsert_server(
+                server_id="explicit_stdio",
+                display_name="Explicit stdio",
+                transport="stdio",
+                transport_config={
+                    "command": sys.executable,
+                    "args": [str(fixture)],
+                    "cwd": str(explicit_cwd),
+                },
+                enabled=True,
+            )
+            try:
+                specs = await service.toolset_provider.tool_specs(
+                    "mcp:explicit_stdio"
+                )
+                cwd_spec = next(
+                    spec
+                    for spec in specs
+                    if spec.name.endswith("read_working_directory")
+                )
+                result = await cwd_spec.handler({})
+                self.assertEqual(
+                    Path(
+                        result["data"]["mcp"]["structured_content"]["cwd"]
+                    ).resolve(),
+                    explicit_cwd.resolve(),
                 )
             finally:
                 await manager.aclose()
@@ -719,7 +811,10 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
             workspace.initialize()
             registry = McpRegistry.from_agent_workspace(workspace)
             secrets = McpSecretStore.from_agent_workspace(workspace)
-            manager = McpClientManager(secrets)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
             service = McpApplicationService(registry, secrets, manager)
             fixture = (
                 Path(__file__).parents[1]

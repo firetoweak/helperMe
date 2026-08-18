@@ -1,6 +1,5 @@
 __pycache__/
 .vscode/
-.playwright-mcp/
 .pytest_cache/
 .cursor/
 logs/

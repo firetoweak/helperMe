@@ -46,6 +46,8 @@ Proposal 不接受 Secret 字段，也不允许把 `model_inference` 冒充可�
 
 真实 Playwright 使用进一步证明：Toolset 可见性可以属于 Run，但 MCP Server 的物理连接与有状态资源必须由 Application 生命周期持有。当前每个 `(server_id, revision)` 使用专属 connection owner task；SDK Client context 的创建、串行调用和关闭始终在该 Task 内完成，其他 Run/工具 Task 只通过队列提交操作。revision 变化、disable、remove、传输取消或 Application 退出时关闭 owner；跨 Run 重新加载 Toolset 不重启同 revision Server。
 
+同一次验证还暴露出 stdio Server 未配置 `cwd` 时会继承 HelperMe 进程启动目录，导致 Playwright 的 `.playwright-mcp`、截图和临时附件写入源码仓库。当前 Composition 为 McpClientManager 注入 Agent Workspace 下的 runtime root；每个未显式配置工作目录的 Server 使用独立的 `plugins/mcp/runtime/{server_id}`。显式 `cwd` 继续原样生效，确实需要以用户任务 Workspace 为工作目录的 Server 必须主动配置，不能依赖启动目录偶然正确。
+
 ## 验证
 
 - Core Approval、独占批次、精确确认与 Session 快照专项测试；

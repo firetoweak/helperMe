@@ -23,5 +23,11 @@ def increment_counter() -> dict[str, int]:
     return {"count": counter}
 
 
+@server.tool()
+def read_working_directory() -> dict[str, str]:
+    """返回 MCP Server 进程的当前工作目录。"""
+    return {"cwd": os.getcwd()}
+
+
 if __name__ == "__main__":
     server.run()

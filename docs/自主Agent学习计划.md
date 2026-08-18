@@ -303,6 +303,7 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 - MCP 前置技术债清理：Run 内 Toolset 在加载时冻结；Application、Session、LLM Client 与 PowerShell 取消/关闭路径闭合；`grep`、`get_changes` 改用异步子进程；JSON Schema 顶层 object 契约前置校验。
 - MCP 接入 MVP：管理走 `/mcp` 控制面；Registry/Secret 与 RuntimeState 分离；目录零网络 I/O；`tool_specs` 异步化；工具名 `mcp__{server}__{tool}`；Resources/Prompts 显式读取。
 - 有状态 MCP 生命周期回补：Toolset 可见性仍属于 Run；同一 `(server_id, revision)` 的真实 SDK Client、stdio Server 和领域状态由 Application 级专属 owner task 持有。SDK context 的创建、串行调用与关闭保持在同一 Task；跨 Run 重新加载不重启 Server，配置变化、取消或 Application 退出时明确关闭。
+- MCP 工作目录回补：stdio Server 显式配置 `cwd` 时严格使用该目录；未配置时使用 `~/.helperme/plugins/mcp/runtime/{server_id}`。外部 Server 的日志、截图和临时附件不得因继承 HelperMe 启动目录而污染源码仓库。
 - 对话安装回补：Agent 通过多轮对话构造单进程 stdio/HTTP Proposal；用户输入 `yes/no`；Application 执行 `disabled → test → enable`。任意持久能力配置变化统一使旧 Session 快照过期，控制面 reload 后由新 Session 捕获最新配置。
 - 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)；[MCP接入设计草稿.md](6/MCP接入设计草稿.md)；[MCP接入实现总结.md](6/MCP接入实现总结.md)；[MCP对话安装与Session能力快照总结.md](6/MCP对话安装与Session能力快照总结.md)
 

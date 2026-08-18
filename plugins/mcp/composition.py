@@ -34,7 +34,10 @@ def create_mcp_plugin(
 ) -> McpPlugin:
     registry = McpRegistry.from_agent_workspace(agent_workspace)
     secret_store = McpSecretStore.from_agent_workspace(agent_workspace)
-    manager = client_manager or McpClientManager(secret_store)
+    manager = client_manager or McpClientManager(
+        secret_store,
+        runtime_root=agent_workspace.plugins_root / "mcp" / "runtime",
+    )
     content = McpContentService(registry, manager)
     service = McpApplicationService(
         registry,

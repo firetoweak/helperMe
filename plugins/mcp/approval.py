@@ -97,7 +97,7 @@ class McpInstallProposalInput(BaseModel):
             lines.extend([
                 f"Executable：{self.command}",
                 "Arguments：" + json.dumps(self.args, ensure_ascii=False),
-                f"Working directory：{self.cwd or '(继承应用默认目录)'}",
+                f"Working directory：{self.cwd or '(Server 私有 runtime 目录)'}",
             ])
         else:
             lines.extend([

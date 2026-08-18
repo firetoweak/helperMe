@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 import httpx2
@@ -442,10 +443,12 @@ class McpClientManager:
         self,
         secret_store: McpSecretStore,
         *,
+        runtime_root: Path,
         session_factory: SessionFactory | None = None,
         list_cache_ttl_seconds: float = 30.0,
     ) -> None:
         self._secret_store = secret_store
+        self._runtime_root = runtime_root.resolve()
         self._session_factory = session_factory or self._open_sdk_connection
         self._list_cache_ttl_seconds = list_cache_ttl_seconds
         self._connections: dict[str, _CacheEntry] = {}
@@ -736,4 +739,20 @@ class McpClientManager:
         record: McpServerRecord,
         secrets: Mapping[str, str],
     ) -> ManagedMcpConnection:
+        if record.transport is TransportKind.STDIO:
+            assert isinstance(record.transport_config, StdioTransportConfig)
+            cwd = record.transport_config.cwd
+            if cwd is None:
+                default_cwd = self._runtime_root / record.id
+                default_cwd.mkdir(parents=True, exist_ok=True)
+                cwd = str(default_cwd)
+            record = replace(
+                record,
+                transport_config=StdioTransportConfig(
+                    command=record.transport_config.command,
+                    args=record.transport_config.args,
+                    cwd=cwd,
+                    env_refs=record.transport_config.env_refs,
+                ),
+            )
         return await _SdkConnectionOwner(record, secrets).start()
