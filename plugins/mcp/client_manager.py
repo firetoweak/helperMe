@@ -471,16 +471,18 @@ class McpClientManager:
         record: McpServerRecord,
         exc: BaseException,
     ) -> str:
+        return sanitize_error_summary(
+            str(exc) or exc.__class__.__name__,
+            secret_values=self.secret_values(record),
+        )
+
+    def secret_values(self, record: McpServerRecord) -> tuple[str, ...]:
         try:
-            secret_values = tuple(
+            return tuple(
                 self._secret_store.resolve_many(record.credential_refs).values()
             )
         except Exception:
-            secret_values = ()
-        return sanitize_error_summary(
-            str(exc) or exc.__class__.__name__,
-            secret_values=secret_values,
-        )
+            return ()
 
     async def invalidate(self, server_id: str) -> None:
         async with self._lock:

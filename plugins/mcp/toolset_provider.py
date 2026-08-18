@@ -178,6 +178,7 @@ class McpToolsetProvider:
             return adapt_call_result(
                 result,
                 output_validator=output_validator,
+                secret_values=self._client_manager.secret_values(record),
             )
 
         return handler

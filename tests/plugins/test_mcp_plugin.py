@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 import sys
 import asyncio
+import json
+import socket
 from contextlib import AsyncExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -23,6 +25,12 @@ from mcp.types import (
 )
 
 from core.agent_workspace import AgentWorkspace
+from core.observability import format_run_log
+from core.runtime_artifacts import (
+    FileArtifactStore,
+    ToolResultExternalizer,
+    ToolResultLimit,
+)
 from core.tool_registry import JsonSchemaParameters
 from core.tools_runtime.progressive_toolsets import ToolsetLoadError
 from plugins.mcp.adapter import (
@@ -283,6 +291,65 @@ class McpAdapterTest(unittest.TestCase):
         )
         adapted = adapt_call_result(result, output_validator=validator)
         self.assertEqual(adapted["code"], "MCP_TOOL_ERROR")
+
+    def test_adapt_call_result_redacts_secrets_recursively(self):
+        secret = "credential-that-must-not-leak"
+        result = CallToolResult(
+            content=[TextContent(type="text", text=f"token={secret}")],
+            structuredContent={
+                "token": secret,
+                "nested": [f"Bearer {secret}"],
+            },
+            _meta={"debug": f"header={secret}"},
+            isError=False,
+        )
+
+        adapted = adapt_call_result(result, secret_values=(secret,))
+
+        serialized = json.dumps(adapted, ensure_ascii=False)
+        self.assertNotIn(secret, serialized)
+        self.assertIn("***", serialized)
+
+    def test_redacted_result_cannot_leak_through_artifact_or_log(self):
+        secret = "artifact-log-secret"
+        result = CallToolResult(
+            content=[TextContent(
+                type="text",
+                text=(f"credential={secret};" + "x" * 500),
+            )],
+            structuredContent={"credential": secret},
+            isError=False,
+        )
+        adapted = adapt_call_result(result, secret_values=(secret,))
+
+        with TemporaryDirectory() as directory:
+            store = FileArtifactStore(Path(directory))
+            outcome = ToolResultExternalizer(
+                store,
+                ToolResultLimit(max_chars=500, preview_chars=80),
+            ).process(adapted)
+            artifact = store.read(
+                outcome.result["data"]["artifact_id"],
+                0,
+                10_000,
+            ).content
+            log = format_run_log({
+                "started_at": "2026-08-18 00:00:00",
+                "ended_at": "2026-08-18 00:00:01",
+                "model": "test",
+                "run_id": "run",
+                "status": "completed",
+                "final_reason": None,
+                "question": "test",
+                "system_prompt": "test",
+                "model_requests": [],
+                "answer": "done",
+                "checkpoints": [outcome.result],
+            })
+
+        self.assertTrue(outcome.externalized)
+        self.assertNotIn(secret, artifact)
+        self.assertNotIn(secret, log)
 
 
 class McpProviderTest(unittest.IsolatedAsyncioTestCase):
@@ -711,7 +778,7 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result["ok"])
                 self.assertEqual(
                     result["data"]["mcp"]["structured_content"]["token"],
-                    "stdio-secret",
+                    "***",
                 )
                 counter_spec = next(
                     spec
@@ -757,6 +824,114 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await manager.aclose()
 
+
+class McpRealStreamableHttpIntegrationTest(
+    unittest.IsolatedAsyncioTestCase
+):
+    async def test_real_streamable_http_lists_and_calls_tool(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
+            service = McpApplicationService(registry, secrets, manager)
+            fixture = (
+                Path(__file__).parents[1]
+                / "fixtures"
+                / "mcp_streamable_http_server.py"
+            )
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(fixture),
+                "--port",
+                str(port),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await service.upsert_server(
+                server_id="real_http",
+                display_name="Real HTTP",
+                transport="streamable_http",
+                transport_config={
+                    "url": f"http://127.0.0.1:{port}/mcp",
+                    "timeout_seconds": 2,
+                },
+                enabled=True,
+            )
+            try:
+                specs = None
+                for _ in range(30):
+                    if process.returncode is not None:
+                        stderr = (await process.stderr.read()).decode(
+                            errors="replace"
+                        )
+                        self.fail(f"HTTP fixture exited early: {stderr}")
+                    try:
+                        specs = await service.toolset_provider.tool_specs(
+                            "mcp:real_http"
+                        )
+                        break
+                    except ToolsetLoadError:
+                        await asyncio.sleep(0.1)
+                self.assertIsNotNone(specs)
+                echo = next(spec for spec in specs if spec.name.endswith("echo"))
+                result = await echo.handler({"value": "hello-http"})
+                self.assertTrue(result["ok"])
+                self.assertEqual(
+                    result["data"]["mcp"]["structured_content"]["value"],
+                    "hello-http",
+                )
+                self.assertEqual(
+                    manager.runtime_state("real_http").negotiated_version,
+                    "2026-07-28",
+                )
+            finally:
+                await manager.aclose()
+                if process.returncode is None:
+                    process.terminate()
+                await process.wait()
+
+    async def test_tool_list_collects_all_paginated_pages(self):
+        pages = {
+            None: ListToolsResult(
+                tools=[_tool(f"tool_{index}") for index in range(50)],
+                nextCursor="page-2",
+                ttlMs=5_000,
+            ),
+            "page-2": ListToolsResult(
+                tools=[_tool(f"tool_{index}") for index in range(50, 120)],
+                ttlMs=3_000,
+            ),
+        }
+
+        class PaginatedSession(FakeMcpSession):
+            async def list_tools(self, *, cursor=None):
+                return pages[cursor]
+
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            manager = McpClientManager(
+                McpSecretStore.from_agent_workspace(workspace),
+                runtime_root=_runtime_root(workspace),
+            )
+            tools, ttl = await manager._paginate_tools(PaginatedSession())
+
+        self.assertEqual(len(tools), 120)
+        self.assertEqual(tools[-1].name, "tool_119")
+        self.assertEqual(ttl, 3.0)
+
+
+class McpRealStdioCompatibilityIntegrationTest(
+    unittest.IsolatedAsyncioTestCase
+):
     async def test_v2_stdio_preserves_explicit_working_directory(self):
         with TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")

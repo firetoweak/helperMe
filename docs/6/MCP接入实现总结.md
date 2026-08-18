@@ -110,20 +110,19 @@ tools/call             handler 闭包持有 (server_id, revision, 原名)
 
 自动化：
 
-- MCP Plugin：`23 passed`（`tests/plugins/test_mcp_plugin.py`）
-- Core + Plugin 全量：`327 passed, 1 skipped`。
+- MCP Plugin：`28 passed`（`tests/plugins/test_mcp_plugin.py`）
+- Core + Plugin 全量：`351 tests, 1 skipped`。
 
 覆盖主路径：Registry/Secret 往返与失败回滚、目录不含 disabled、命名空间路由、加载失败不污染快照、revision 失效、非法输入/输出 Schema、HTTPS 约束、取消清理和配置失效竞态。
 
 真实 stdio 集成已覆盖：
 
-- v2 Server 协商 `2026-07-28`，Secret 正确注入子进程环境并完成工具调用；
+- v2 Server 协商 `2026-07-28`，Secret 正确注入子进程环境；Server 即使回显该凭据，也会在 MCP Adapter 外部输入边界递归替换为 `***`；
 - Legacy Server 在 `server/discover` 不可用时回退 `2025-11-25 initialize`。
+- 真实 Streamable HTTP Server 完成工具发现与调用；分页 fixture 汇总 120 个工具，并采用所有页面中最短 TTL；
+- 已配置凭据在成功内容、`structuredContent`、`meta` 与错误中统一脱敏；专项扫描确认外置 Artifact 和格式化 Run 日志均不含原值。
 
-尚未覆盖设计验收中的：
-
-- 真实 Streamable HTTP 端到端与分页长列表；
-- Secret 不泄露到 Artifact/日志的专项扫描；
+设计验收中的真实 Streamable HTTP、分页长列表和 Secret 不泄露到 Artifact/日志专项扫描均已覆盖。
 
 ## 使用要点
 
@@ -145,7 +144,6 @@ tools/call             handler 闭包持有 (server_id, revision, 原名)
 
 - 只读“查询已安装列表”的对话能力；
 - OAuth Auth Client + Token Store；
-- 真实 HTTP Server 兼容 benchmark；stdio modern/legacy 与对话安装闭环已完成；
 - `subscriptions/listen`、MRTR、Tasks、MCP Apps；
 - Resource 自动注入 ContextPreparation；
 - 更广泛的高风险 Tool Approval。

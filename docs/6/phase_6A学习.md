@@ -116,7 +116,7 @@ Goal 属于工作流型 Plugin：拥有 Goal、Contract、Judge 和跨 Run 状�
 - `continue` 自动注入 feedback；
 - pause / resume / max_goal_turns exhausted 状态迁移。
 
-全量自动化回归通过。下一步补充真实模型 Goal Loop benchmark，验证 Contract 推导、自动 continuation 与独立 Judge 的完整闭环。
+全量自动化回归通过。真实模型 Goal Loop benchmark 也已完成：`qwen27b` 在一个 Goal Turn 内自动编译 5 条 Completion Contract 标准，Executor 完成目标，隔离 Judge 以非空证据判定 `done`，最终状态为 `completed`，且工作区前后状态一致。可复现脚本为 `tests/benchmarks/phase6a_goal_live_benchmark.py`。
 
 ## 下一步边界
 

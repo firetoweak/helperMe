@@ -93,10 +93,14 @@ def adapt_call_result(
     result: CallToolResult,
     *,
     output_validator: Any | None = None,
+    secret_values: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    content = [_serialize_content_block(block) for block in result.content]
-    structured = result.structured_content
-    meta = result.meta
+    content = _redact_secrets(
+        [_serialize_content_block(block) for block in result.content],
+        secret_values,
+    )
+    structured = _redact_secrets(result.structured_content, secret_values)
+    meta = _redact_secrets(result.meta, secret_values)
 
     if result.is_error:
         return {
@@ -129,7 +133,7 @@ def adapt_call_result(
                 "hint": "请检查 MCP Server 返回值。",
             }
         try:
-            output_validator.validate(structured)
+            output_validator.validate(result.structured_content)
         except Exception as exc:
             return {
                 "ok": False,
@@ -141,7 +145,10 @@ def adapt_call_result(
                         "meta": meta,
                     }
                 },
-                "error": f"structuredContent 不符合 outputSchema: {exc}",
+                "error": sanitize_error_summary(
+                    f"structuredContent 不符合 outputSchema: {exc}",
+                    secret_values=secret_values,
+                ),
                 "hint": "请检查 MCP Server 返回值或 outputSchema。",
             }
 
@@ -156,6 +163,36 @@ def adapt_call_result(
             }
         },
     }
+
+
+def _redact_secrets(value: Any, secret_values: tuple[str, ...]) -> Any:
+    secrets = tuple(
+        sorted(
+            (secret for secret in secret_values if secret),
+            key=len,
+            reverse=True,
+        )
+    )
+    if not secrets:
+        return value
+
+    def redact(item: Any) -> Any:
+        if isinstance(item, str):
+            for secret in secrets:
+                item = item.replace(secret, "***")
+            return item
+        if isinstance(item, dict):
+            return {
+                redact(key): redact(child)
+                for key, child in item.items()
+            }
+        if isinstance(item, list):
+            return [redact(child) for child in item]
+        if isinstance(item, tuple):
+            return tuple(redact(child) for child in item)
+        return item
+
+    return redact(value)
 
 
 def adapt_transport_error(

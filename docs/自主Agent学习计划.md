@@ -48,7 +48,7 @@ Phase 5 Context Management（完成）
 ├─ ✓ 5.6 Workspace Retrieval（工具型）
 └─ ✓ 5.7 Command Execution
         ↓
-Phase 6 Goal 与能力加载（进行中：6A、6B 完成；6C Web MCP 验证、6D Skill 待开始）
+Phase 6 Goal 与能力加载（进行中：6A、6B、6C 完成；6D Skill 待开始）
         ↓
 Phase 7 Scheduler / Watcher / Background Task
         ↓
@@ -285,7 +285,7 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 ### 6A Goal Loop
 
-- 状态：架构重做与自动化回归完成；新真实模型 benchmark 待补。
+- 状态：完成；架构回归与真实模型 Goal Loop benchmark 均已通过。
 - 目标：围绕最终目标自动循环完整 Agent Turn，并由独立 Judge 依据冻结 Contract 和真实证据决定完成、继续或暂停。
 - 当前边界：Goal 只保存 Objective、Completion Contract、Turn/Judgment 历史和生命周期；Plan/Todo 不进入 Goal 聚合。Contract 自动推导，Executor 不可修改，Judge 只能在 Turn 边界修订 inferred 标准。
 - 交互入口：`/goal <objective>` 自动执行 Contract Compilation → Executor → Judge → continuation，直到 completed、paused 或耗尽 `max_goal_turns`。
@@ -309,13 +309,14 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 ### 6C Web 能力的 MCP 验证
 
-- 状态：接入策略已确定，Tavily MCP 真实任务验证待进行。
+- 状态：完成；Tavily MCP 搜索/提取、Artifact 回读与 Playwright MCP 浏览器交互均已通过真实任务验证。
 - 目标：验证 HelperMe 能否通过现有 MCP 安装与渐进加载链路完成公开 Web 的搜索、读取和回答；本阶段不实现原生 `web_search`、`web_fetch` 或 Web Plugin。
 - 学习顺序：① 通过 Tavily MCP 完成 search/extract/answer benchmark；② 观察工具发现与加载、结果预算、失败定位和回答质量；③ 只记录真实缺口，不把外部 Provider 的领域语义提前写入 Core。
 - 能力边界：搜索、网页读取和浏览器自动化默认属于外部 MCP 的实现责任。HelperMe 只复用通用 MCP 能力管理、Tool Result、RunEvidence、Conversation 和 Artifact 链路，不要求理解外部能力的内部实现。
 - Browser 策略：登录、点击、填写和发布等交互在真实需要时优先接入 Browser MCP。只要 MCP 能完成任务，即不建设自有 Browser Provider、会话模型或自动化框架。
 - 重新设计触发：只有真实任务证明 MCP 在关键场景中无法完成目标，例如登录态无法维持、必要交互无法表达、结果无法使用或生命周期与 HelperMe 冲突，才根据已观察到的具体缺口重新设计这一能力。
 - 当前结论：Web 是可替换、可移除的外部能力，不是 HelperMe Core 的领域组成。暂停原生 Provider、URL 来源索引、Web 专属安全策略、多供应商切换、fallback、Browser 和 Crawl 等设计。
+- 验证结论：现有 MCP 安装、渐进加载、长结果外置、跨 Run 有状态连接和独立运行目录足以承载当前 Web/Browser 任务，未出现需要自建 Web 能力的缺口。
 - 详述：[Web 能力 MCP 接入决策.md](6/Web能力MCP接入决策.md)
 
 ### 6D Skill Progressive Loading

@@ -64,3 +64,14 @@ python console_chat.py
 - 输入 `/goal <目标>`，启动可持续执行和独立验证的 Goal 工作流。
 - 用自然语言要求安装 MCP，或使用 `/mcp` 管理已有 MCP Server。
 - 按 `Ctrl+C`，请求 Agent 在安全点中断当前任务。
+
+## Web 与浏览器能力
+
+helperMe 不单独实现 Web 搜索、网页解析或浏览器自动化。这些能力默认通过 MCP 按需接入，避免在项目内重复维护搜索索引、浏览器驱动和站点兼容逻辑。
+
+当前推荐：
+
+- [Tavily MCP](https://github.com/tavily-ai/tavily-mcp)：提供 Web 搜索与网页内容提取。
+- [Playwright MCP](https://github.com/microsoft/playwright-mcp)：提供页面导航、登录、点击、填表和其他浏览器自动化能力。
+
+它们是推荐实现，不是 helperMe 的硬依赖。也可以接入其他提供 Web 或浏览器自动化能力的 MCP Server；只要现有 MCP 能完成真实任务，helperMe 就不为该能力建设专属实现。

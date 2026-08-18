@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from core.agent_workspace import AgentWorkspace
 from core.composition import create_agent_application
 from core.model_call.config import load_model_config
 from core.observability import build_run_trace
@@ -280,4 +281,3 @@ async def async_main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(async_main())
-from core.agent_workspace import AgentWorkspace

@@ -112,7 +112,18 @@ HelperMe 当前不为 Web 增加：
 
 如果 Skill 或其他真实能力将来独立证明需要新的 Run 期公共端口，应由那个需求重新推导，而不是沿用 Web 草稿中的预设结论。
 
-## 7. 当前结论
+## 7. 真实验证结果（2026.08.18）
+
+已用现有通用 MCP 链路完成以下真实任务：
+
+- Tavily MCP：按需加载 search/extract，搜索并提取公开网页内容；长结果经 Runtime Artifact 外置后可通过 `read_artifact` 继续读取；
+- Playwright MCP：完成页面导航和浏览器交互；修复连接 owner 生命周期后，跨 Run 重新加载 Toolset 不再重启 Server 或重置其领域状态；
+- stdio MCP 未配置 `cwd` 时，运行目录固定到 `~/.helperme/plugins/mcp/runtime/{server_id}`，日志、截图和临时附件不再落入 HelperMe 源码目录；
+- 真实 Streamable HTTP 集成、120 工具分页列表及配置 Secret 到 Artifact/日志的防泄漏扫描均已自动化覆盖。
+
+本轮没有发现必须由 HelperMe 自建 Search、Fetch 或 Browser Provider 的缺口。6C 验收完成；后续只有出现第 5 节所列的可重复失败时才重新开启设计。
+
+## 8. 当前结论
 
 ```text
 先组合外部 MCP
