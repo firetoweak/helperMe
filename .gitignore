@@ -1,9 +1,10 @@
 __pycache__/
 .vscode/
+.playwright-mcp/
+.pytest_cache/
+.cursor/
 logs/
 tests/.parallel_logs/
 model_config.yaml
-.pytest_cache/
-.cursor/
 tests/benchmarks/*_last_report.json
 tests/benchmarks/*_progress.json

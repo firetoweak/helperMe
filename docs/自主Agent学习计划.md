@@ -15,7 +15,7 @@
 - 异步 Application 必须显式进入并退出资源生命周期；Task 取消也必须完成 Session、RunRecord、子进程与异步 Client 的一致清理，再保留原始取消语义。自动化测试全绿不能替代取消与关闭路径的专项验证。
 - 工具参数描述与运行时校验必须由同一个 `ToolParameters` 契约提供。外部 JSON Schema 原样进入通用 Core 契约；MCP Plugin 禁止通过动态生成 Pydantic Model 或静默改写 Schema 绕过该设计。
 - MCP Server 的安装、启停与删除属于用户信任边界，只能走 Plugin 控制面（如 `/mcp`）或 Application API；不得注册为普通 Agent Tool。Run 只消费已启用 Server；Toolset 目录不得做网络 I/O，连接与发现发生在 `load_toolset`。
-- Web 是 Agent Harness 的核心能力面，但搜索索引、网页解析与浏览器引擎不是 Core 职责。Core 只保留稳定工具契约、权限、执行与证据回写；`web_search`、`web_fetch`、Browser Automation 分别作为发现、读取、交互三种独立能力接入，底层实现允许替换。
+- Web 默认作为 MCP 提供的外部能力接入，不是 HelperMe Core 必须拥有的领域能力。搜索、网页读取与浏览器自动化优先复用现有 MCP；只有真实任务证明 MCP 无法满足时，才依据具体缺口设计自有窄边界，不因可能的未来需求预建 Web Plugin、Provider 或浏览器框架。
 - 自然语言可以由 Agent 整理为冻结的 Approval Proposal，但 Proposal 工具必须独占工具批次且不能直接执行控制面操作；只有用户输入精确确认字符后，Application use case 才执行已注册的 Plugin Action Handler。Secret 不进入 Conversation 中的 Approval payload。
 - Session 创建时冻结持久能力配置快照。任何能力配置的新增、启用、更新、禁用、删除或撤权都会使旧 Session 快照统一过期；后续动态能力加载与调用必须明确失败，不能静默切换配置。控制面通过显式 reload 创建捕获最新快照的新 Session。
 - 文件工具访问上限由 `model_config.yaml` 在 Composition 阶段确定，Application 创建后不可变；模型、Run、Skill 与 Plugin 均不得自行升级。`host` 只取消应用路径范围限制，不能绕过操作系统权限，也不等同于命令沙箱。
@@ -48,7 +48,7 @@ Phase 5 Context Management（完成）
 ├─ ✓ 5.6 Workspace Retrieval（工具型）
 └─ ✓ 5.7 Command Execution
         ↓
-Phase 6 Goal 与能力加载（进行中：6A、6B 完成；6C Web Search、6D Skill 待开始）
+Phase 6 Goal 与能力加载（进行中：6A、6B 完成；6C Web MCP 验证、6D Skill 待开始）
         ↓
 Phase 7 Scheduler / Watcher / Background Task
         ↓
@@ -185,7 +185,7 @@ Phase 6A Goal Loop
         ↓
 Phase 6B Toolset Progressive Loading + MCP Toolset Adapter
         ↓
-Phase 6C Web Search + Web Fetch
+Phase 6C Web 能力的 MCP 验证
         ↓
 Phase 6D Skill Progressive Loading
         ↓
@@ -305,17 +305,16 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 - 对话安装回补：Agent 通过多轮对话构造单进程 stdio/HTTP Proposal；用户输入 `yes/no`；Application 执行 `disabled → test → enable`。任意持久能力配置变化统一使旧 Session 快照过期，控制面 reload 后由新 Session 捕获最新配置。
 - 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)；[MCP接入设计草稿.md](6/MCP接入设计草稿.md)；[MCP接入实现总结.md](6/MCP接入实现总结.md)；[MCP对话安装与Session能力快照总结.md](6/MCP对话安装与Session能力快照总结.md)
 
-### 6C Web Search + Web Fetch
+### 6C Web 能力的 MCP 验证
 
-- 状态：架构设计草稿已完成，具体契约与实现待开始
-- 目标：先用 `web_search` 发现公开 Web 的候选来源，再用 `web_fetch` 读取目标页面；保留 URL、检索/获取时间与内容出处，形成可核验的信息获取闭环。
-- 学习顺序：① 明确 `web_search` 的输入、结果与证据语义；② 接入一个外部 Search Provider；③ 明确 `web_fetch` 的静态 HTTP 获取与正文提取边界；④ 完成 search → fetch → answer 的真实 Agent benchmark。
-- 能力边界：`web_search` 负责发现候选页面，不运行浏览器；`web_fetch` 负责获取给定 URL 并提取可读内容，不承担点击、登录、表单和复杂动态交互；Browser Automation 负责交互式网页操作，是后续独立可选能力，不属于 6C MVP 的完成条件。
-- 架构边界：Web 能力属于 Harness 的工具面；搜索索引、排序、正文提取和浏览器引擎使用外部实现。项目只拥有稳定、精简的契约、权限边界、Provider 薄适配和结果回写。第一版各能力只接一个实现，不提前建设多供应商框架。
-- 参考策略：Hermes、OpenCode、nanobot 用于比较 Search/Fetch 工具语义；Oh My Pi、Hermes 用于未来 Browser 生命周期；DeepSeek Harness 用于校准“能力契约 → Provider → 模型工具”的接入边界；Codex 用于观察平台级扩展方式。只吸收边界，不照搬“Everything is a Plugin”或完整浏览器子系统。
-- 后续触发：只有真实任务稳定出现登录态、点击、表单、客户端渲染或必须执行页面脚本时，才新增 Browser Automation 小节，并优先接入 Playwright/CDP 或外部浏览器服务，不自建浏览器引擎。
-- 当前结论：Web 作为可选 Plugin 复用 Core 的 Tool Result、Conversation、RunEvidence 与 Artifact 链路；Search/Fetch 使用隔离 Provider 端口；`FetchAllowedUrls` 是从完整 Conversation 派生的 Run 期状态，不进入 Session。第一版只接单一实现，明确拒绝提前建设 Provider Registry、自动探测、fallback、Browser、Crawl 和 Web 专属持久 Cache。
-- 详述：[Web Search与Web Fetch设计草稿.md](6/Web%20Search与Web%20Fetch设计草稿.md)
+- 状态：接入策略已确定，Tavily MCP 真实任务验证待进行。
+- 目标：验证 HelperMe 能否通过现有 MCP 安装与渐进加载链路完成公开 Web 的搜索、读取和回答；本阶段不实现原生 `web_search`、`web_fetch` 或 Web Plugin。
+- 学习顺序：① 通过 Tavily MCP 完成 search/extract/answer benchmark；② 观察工具发现与加载、结果预算、失败定位和回答质量；③ 只记录真实缺口，不把外部 Provider 的领域语义提前写入 Core。
+- 能力边界：搜索、网页读取和浏览器自动化默认属于外部 MCP 的实现责任。HelperMe 只复用通用 MCP 能力管理、Tool Result、RunEvidence、Conversation 和 Artifact 链路，不要求理解外部能力的内部实现。
+- Browser 策略：登录、点击、填写和发布等交互在真实需要时优先接入 Browser MCP。只要 MCP 能完成任务，即不建设自有 Browser Provider、会话模型或自动化框架。
+- 重新设计触发：只有真实任务证明 MCP 在关键场景中无法完成目标，例如登录态无法维持、必要交互无法表达、结果无法使用或生命周期与 HelperMe 冲突，才根据已观察到的具体缺口重新设计这一能力。
+- 当前结论：Web 是可替换、可移除的外部能力，不是 HelperMe Core 的领域组成。暂停原生 Provider、URL 来源索引、Web 专属安全策略、多供应商切换、fallback、Browser 和 Crawl 等设计。
+- 详述：[Web 能力 MCP 接入决策.md](6/Web能力MCP接入决策.md)
 
 ### 6D Skill Progressive Loading
 

@@ -45,6 +45,15 @@ def _new_session(application: AgentApplication) -> str:
     return application.create_session(session_id)
 
 
+def _handle_new_session_command(
+    application: AgentApplication,
+    user_message: str,
+) -> str | None:
+    if user_message != "/new":
+        return None
+    return _new_session(application)
+
+
 def _resolve_log_path() -> Path:
     if "HELPER_RUN_LOG_PATH" in os.environ:
         return Path(os.environ["HELPER_RUN_LOG_PATH"])
@@ -127,6 +136,7 @@ async def async_main(argv: list[str] | None = None) -> None:
         print(f"单个 Goal 最大 Turn 数：{runtime_config.max_goal_turns}")
         print("输入任务开始；运行期间按 Ctrl+C 请求安全中断。")
         print("在输入提示处按 Ctrl+C 或 Ctrl+D 退出。")
+        print("新建会话：输入 /new")
         print("MCP 管理：输入 /mcp help")
         print(f"日志路径：{log_path}")
 
@@ -144,6 +154,18 @@ async def async_main(argv: list[str] | None = None) -> None:
                 break
 
             if not user_message:
+                continue
+
+            new_session_id = _handle_new_session_command(
+                application,
+                user_message,
+            )
+            if new_session_id is not None:
+                session_id = new_session_id
+                log_path = _resolve_log_path()
+                last_status = None
+                print("\n新 Session 已创建。")
+                print(f"日志路径：{log_path}")
                 continue
 
             pending_approval = application.pending_approval(session_id)
