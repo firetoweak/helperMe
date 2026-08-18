@@ -309,11 +309,11 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 ### 6D Skill Progressive Loading
 
-- 状态：未开始
+- 状态：设计完成，待实现
 - 目标：按需发现并加载 Skill 的指令、知识与工作流，避免在 Run 开始时注入全部 Skill 内容。
 - 边界：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 的目录、加载状态和工具 Schema 数据模型提前合并。
-- 结论：（待写）
-- 详述：总结待写
+- 当前设计：Agent Workspace 持久安装与 Task Workspace 执行分离；Run 只注入精简目录，`load_skill` 独占一轮并从下一 Round 完整注入主指令，supporting files 按需读取，脚本以 Task Workspace 为 cwd 复用命令执行链。安装默认 disabled；更新仅允许用户显式操作或重新部署触发，候选以 hash 冻结，并同时提供模型概括与机器 diff，禁止静默自动更新。
+- 详述：[phase_6D学习.md](6/phase_6D学习.md)
 
 ---
 
