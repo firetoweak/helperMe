@@ -10,8 +10,11 @@ from plugins.mcp.registry import McpRegistry
 from plugins.mcp.secrets import McpSecretStore
 from plugins.mcp.approval import (
     McpInstallApprovalHandler,
+    McpRecoveryApprovalHandler,
     create_mcp_install_proposal_spec,
+    create_mcp_recovery_proposal_spec,
 )
+from plugins.mcp.management_tools import create_mcp_management_specs
 from core.tool_registry import ToolSpec
 
 
@@ -21,6 +24,9 @@ class McpPlugin:
     client_manager: McpClientManager
     install_proposal_spec: ToolSpec
     install_approval_handler: McpInstallApprovalHandler
+    management_specs: tuple[ToolSpec, ...]
+    recovery_proposal_spec: ToolSpec
+    recovery_approval_handler: McpRecoveryApprovalHandler
 
     @property
     def toolset_provider(self):
@@ -50,4 +56,7 @@ def create_mcp_plugin(
         client_manager=manager,
         install_proposal_spec=create_mcp_install_proposal_spec(),
         install_approval_handler=McpInstallApprovalHandler(service),
+        management_specs=create_mcp_management_specs(service),
+        recovery_proposal_spec=create_mcp_recovery_proposal_spec(service),
+        recovery_approval_handler=McpRecoveryApprovalHandler(service),
     )

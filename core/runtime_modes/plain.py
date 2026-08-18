@@ -34,7 +34,9 @@ class PlainMode:
     ) -> str | None:
         if any(step.ok is False for step in batch_steps):
             return (
-                "刚才有工具调用失败。请根据工具返回的 code/error/hint 调整下一步。"
+                "刚才有工具调用失败。失败只证明本次动作未完成，不代表目标不存在或不可恢复。"
+                "请根据 code/error/hint/recoverable/next_action 获取缺失状态并改用恢复动作；"
+                "不要在条件未变化时原样重试，也不要直接扩大为全局结论。"
             )
         return None
 

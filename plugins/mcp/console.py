@@ -41,6 +41,8 @@ class McpConsoleAdapter:
                 return self._with_reload_notice(await self._remove(rest))
             if action == "test":
                 return await self._test(rest)
+            if action == "retry":
+                return self._with_reload_notice(await self._retry(rest))
             if action == "resources":
                 return await self._resources(rest)
             if action == "resource-templates":
@@ -126,6 +128,25 @@ class McpConsoleAdapter:
         runtime = await self._service.test_server(server_id)
         return json.dumps(runtime.to_dict(), ensure_ascii=False, indent=2)
 
+    async def _retry(self, rest: str) -> str:
+        server_id = rest.strip()
+        if not server_id:
+            raise McpCommandError("/mcp retry 需要 server_id")
+        activation = await self._service.test_and_enable(server_id)
+        if not activation.succeeded:
+            return json.dumps(
+                {
+                    "enabled": False,
+                    "runtime": activation.runtime.to_dict(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        return (
+            f"MCP Server `{server_id}` 测试并启用成功 "
+            f"(revision={activation.record.revision})"
+        )
+
     async def _resources(self, rest: str) -> str:
         server_id, cursor = self._server_and_cursor(rest)
         payload = await self._service.content.list_resources(
@@ -196,6 +217,7 @@ class McpConsoleAdapter:
             "  /mcp remove <id>\n"
             "  /mcp reload\n"
             "  /mcp test <id>\n"
+            "  /mcp retry <id>\n"
             "  /mcp resources <id> [--cursor TOKEN]\n"
             "  /mcp resource-templates <id> [--cursor TOKEN]\n"
             "  /mcp prompts <id> [--cursor TOKEN]\n"

@@ -90,6 +90,7 @@ async def async_main(argv: list[str] | None = None) -> None:
     mcp_plugin = create_mcp_plugin(agent_workspace)
     approval_actions = ApprovalActionRegistry()
     approval_actions.register(mcp_plugin.install_approval_handler)
+    approval_actions.register(mcp_plugin.recovery_approval_handler)
     application = create_agent_application(
         model,
         model_context_limit=runtime_config.model_context_limit,
@@ -107,7 +108,11 @@ async def async_main(argv: list[str] | None = None) -> None:
         ),
         default_max_rounds=runtime_config.max_rounds,
         application_resources=(llm_client, mcp_plugin.client_manager),
-        additional_tool_specs=(mcp_plugin.install_proposal_spec,),
+        additional_tool_specs=(
+            mcp_plugin.install_proposal_spec,
+            *mcp_plugin.management_specs,
+            mcp_plugin.recovery_proposal_spec,
+        ),
         default_toolset_provider=mcp_plugin.toolset_provider,
         approval_actions=approval_actions,
     )
@@ -181,7 +186,7 @@ async def async_main(argv: list[str] | None = None) -> None:
                     user_message,
                 )
                 if resolution.decision == "rejected":
-                    print("\nMCP 安装已取消。")
+                    print("\nMCP 操作已取消。")
                     last_status = None
                     continue
                 execution = resolution.execution

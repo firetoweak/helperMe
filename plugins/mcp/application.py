@@ -9,6 +9,7 @@ from plugins.mcp.content import McpContentService
 from plugins.mcp.models import (
     McpServerRecord,
     McpServerRuntimeState,
+    RuntimeAvailability,
     StdioTransportConfig,
     StreamableHttpTransportConfig,
     TransportKind,
@@ -30,6 +31,16 @@ class ServerSummary:
         if include_runtime and self.runtime is not None:
             payload["runtime"] = self.runtime.to_dict()
         return payload
+
+
+@dataclass(frozen=True)
+class ServerActivationResult:
+    record: McpServerRecord
+    runtime: McpServerRuntimeState
+
+    @property
+    def succeeded(self) -> bool:
+        return self.runtime.status is RuntimeAvailability.AVAILABLE
 
 
 class McpApplicationService:
@@ -221,10 +232,43 @@ class McpApplicationService:
         record = await self.registry.get(server_id)
         if record is None:
             raise KeyError(server_id)
+        return await self._test_record(record)
+
+    async def test_and_enable(
+        self,
+        server_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> ServerActivationResult:
+        """测试冻结配置，并仅在测试成功后原子推进到 enabled。"""
+        async with self._management_lock:
+            record = await self.registry.get(server_id)
+            if record is None:
+                raise KeyError(server_id)
+            if (
+                expected_revision is not None
+                and record.revision != expected_revision
+            ):
+                raise ValueError(
+                    f"MCP Server `{server_id}` 配置已变化："
+                    f"expected revision {expected_revision}, "
+                    f"current revision {record.revision}"
+                )
+            runtime = await self._test_record(record)
+            if runtime.status is not RuntimeAvailability.AVAILABLE:
+                return ServerActivationResult(record, runtime)
+            enabled = await self.registry.set_enabled(server_id, True)
+            await self.client_manager.invalidate(server_id)
+            return ServerActivationResult(enabled, runtime)
+
+    async def _test_record(
+        self,
+        record: McpServerRecord,
+    ) -> McpServerRuntimeState:
         try:
             return await self.client_manager.test_connection(record)
         except Exception as exc:
-            state = self.client_manager.runtime_state(server_id)
+            state = self.client_manager.runtime_state(record.id)
             state.mark_unavailable(
                 self.client_manager.sanitized_error(record, exc)
             )

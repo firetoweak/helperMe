@@ -11,6 +11,8 @@
 - 不用静默兜底掩盖契约错误；内部相信契约，只在外部输入边界处理预期错误。
 - 明确分离源码、Agent 状态和用户任务数据，并由各自的生命周期管理。
 - 完成结论必须基于可验证证据，不能只依赖 Agent 自述。
+- 能力执行目录与管理目录分离：disabled 能力不得进入可执行目录，但必须可被 Agent 观察、诊断和提出恢复方案。
+- 工具失败只证明本次动作失败；可恢复错误应提供结构化状态和下一动作，Agent 完成恢复后必须重新验证原目标。持久信任状态变更继续经过用户审批。
 
 ## 全局路线图
 
@@ -293,6 +295,7 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 - 有状态 MCP 生命周期回补：Toolset 可见性仍属于 Run；同一 `(server_id, revision)` 的真实 SDK Client、stdio Server 和领域状态由 Application 级专属 owner task 持有。SDK context 的创建、串行调用与关闭保持在同一 Task；跨 Run 重新加载不重启 Server，配置变化、取消或 Application 退出时明确关闭。
 - MCP 工作目录回补：stdio Server 显式配置 `cwd` 时严格使用该目录；未配置时使用 `~/.helperme/plugins/mcp/runtime/{server_id}`。外部 Server 的日志、截图和临时附件不得因继承 HelperMe 启动目录而污染源码仓库。
 - 对话安装回补：Agent 通过多轮对话构造单进程 stdio/HTTP Proposal；用户输入 `yes/no`；Application 执行 `disabled → test → enable`。任意持久能力配置变化统一使旧 Session 快照过期，控制面 reload 后由新 Session 捕获最新配置。
+- MCP 管理与自纠回补：Console 和 Agent Tool 复用同一 Application Service；Agent 可列出包含 disabled 项的管理目录、真实测试已登记 Server，并为可用的 disabled Server 提交恢复审批。安装与恢复统一复用原子 `test → enable` 用例；人工入口提供 `/mcp retry <id>`，Toolset 执行目录仍只包含 enabled Server。
 - 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)；[MCP接入设计草稿.md](6/MCP接入设计草稿.md)；[MCP接入实现总结.md](6/MCP接入实现总结.md)；[MCP对话安装与Session能力快照总结.md](6/MCP对话安装与Session能力快照总结.md)
 
 ### 6C Web 能力的 MCP 验证
@@ -309,7 +312,8 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 ### 6D Skill Progressive Loading
 
-- 状态：设计完成，待实现
+- 状态：设计完成，待工作区语义与工具路径契约回补后实现
+- 前置回补：在继续 Skill 前，先明确 Task Workspace、Agent Workspace 与 Host Filesystem 的模型可见边界，并统一文件、命令工具的 root/path/cwd 语义。详见[工作区语义与工具路径契约](专题/工作区语义与工具路径契约.md)。
 - 目标：按需发现并加载 Skill 的指令、知识与工作流，避免在 Run 开始时注入全部 Skill 内容。
 - 边界：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 的目录、加载状态和工具 Schema 数据模型提前合并。
 - 当前设计：Agent Workspace 持久安装与 Task Workspace 执行分离；Run 只注入精简目录，`load_skill` 独占一轮并从下一 Round 完整注入主指令，supporting files 按需读取，脚本以 Task Workspace 为 cwd 复用命令执行链。安装默认 disabled；更新仅允许用户显式操作或重新部署触发，候选以 hash 冻结，并同时提供模型概括与机器 diff，禁止静默自动更新。

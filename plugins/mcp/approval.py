@@ -10,11 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from core.approval import ApprovalExecution, ApprovalRequest
 from core.tool_registry import PydanticParameters, ToolSpec
 from plugins.mcp.application import McpApplicationService
-from plugins.mcp.models import RuntimeAvailability
 
 
 MCP_INSTALL_ACTION = "mcp.install"
+MCP_RECOVER_ACTION = "mcp.recover"
 PROPOSE_MCP_INSTALL = "propose_mcp_install"
+PROPOSE_MCP_RECOVERY = "propose_mcp_recovery"
 
 _SHELL_EXECUTABLES = {
     "bash",
@@ -155,8 +156,12 @@ class McpInstallApprovalHandler:
             transport_config=data["transport_config"],
             enabled=False,
         )
-        runtime = await self._service.test_server(record.id)
-        if runtime.status is not RuntimeAvailability.AVAILABLE:
+        activation = await self._service.test_and_enable(
+            record.id,
+            expected_revision=record.revision,
+        )
+        runtime = activation.runtime
+        if not activation.succeeded:
             return ApprovalExecution(
                 succeeded=False,
                 message=(
@@ -170,7 +175,7 @@ class McpInstallApprovalHandler:
                     "runtime": runtime.to_dict(),
                 },
             )
-        enabled = await self._service.set_server_enabled(record.id, True)
+        enabled = activation.record
         return ApprovalExecution(
             succeeded=True,
             message=(
@@ -181,6 +186,121 @@ class McpInstallApprovalHandler:
                 "server_id": enabled.id,
                 "enabled": True,
                 "revision": enabled.revision,
+                "runtime": runtime.to_dict(),
+            },
+        )
+
+
+class McpRecoveryProposalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    server_id: str
+
+
+def create_mcp_recovery_proposal_spec(
+    service: McpApplicationService,
+) -> ToolSpec:
+    async def propose(
+        input_data: McpRecoveryProposalInput,
+    ) -> ApprovalRequest | dict[str, Any]:
+        record = await service.registry.get(input_data.server_id)
+        if record is None:
+            return {
+                "ok": False,
+                "code": "MCP_SERVER_NOT_FOUND",
+                "data": {"server_id": input_data.server_id},
+                "error": f"未注册 MCP Server `{input_data.server_id}`",
+                "hint": "先调用 list_mcp_servers 核对状态；确需新增时提交安装方案。",
+            }
+        if record.enabled:
+            return {
+                "ok": True,
+                "code": "MCP_SERVER_ALREADY_ENABLED",
+                "data": {
+                    "server_id": record.id,
+                    "revision": record.revision,
+                },
+                "error": None,
+                "hint": "无需恢复；如当前 Session 尚不可见，请创建新 Session。",
+            }
+        return ApprovalRequest(
+            id=f"approval-{uuid4().hex}",
+            action=MCP_RECOVER_ACTION,
+            payload={
+                "server_id": record.id,
+                "expected_revision": record.revision,
+            },
+            summary=(
+                f"准备恢复 MCP Server `{record.id}`（{record.display_name}）\n"
+                f"当前状态：disabled\nRevision：{record.revision}"
+            ),
+            risk=(
+                "批准后 Application 将启动已登记的外部 MCP Server 进行测试；"
+                "测试成功后持久启用，新能力仅在新 Session 生效。"
+            ),
+        )
+
+    return ToolSpec(
+        name=PROPOSE_MCP_RECOVERY,
+        description=(
+            "为已注册但 disabled 的 MCP Server 提交恢复审批。"
+            "仅在 list_mcp_servers 或 test_mcp_server 已确认状态后调用；"
+            "不得把 TOOLSET_NOT_FOUND 直接解释为未安装。"
+            "本工具必须单独调用。"
+        ),
+        parameters=PydanticParameters(McpRecoveryProposalInput),
+        handler=propose,
+        control_boundary=True,
+    )
+
+
+class McpRecoveryApprovalHandler:
+    action = MCP_RECOVER_ACTION
+
+    def __init__(self, service: McpApplicationService) -> None:
+        self._service = service
+
+    async def execute(
+        self,
+        payload: Mapping[str, Any],
+    ) -> ApprovalExecution:
+        server_id = str(payload["server_id"])
+        try:
+            activation = await self._service.test_and_enable(
+                server_id,
+                expected_revision=int(payload["expected_revision"]),
+            )
+        except (KeyError, ValueError) as exc:
+            return ApprovalExecution(
+                succeeded=False,
+                message=f"MCP Server `{server_id}` 恢复条件已变化，未执行：{exc}",
+                data={"server_id": server_id, "enabled": False},
+            )
+        runtime = activation.runtime
+        if not activation.succeeded:
+            return ApprovalExecution(
+                succeeded=False,
+                message=(
+                    f"MCP Server `{server_id}` 连接测试失败，"
+                    "配置保持 disabled。"
+                ),
+                data={
+                    "server_id": server_id,
+                    "enabled": False,
+                    "revision": activation.record.revision,
+                    "runtime": runtime.to_dict(),
+                },
+            )
+        return ApprovalExecution(
+            succeeded=True,
+            message=(
+                f"MCP Server `{server_id}` 测试并启用成功；"
+                "请新建 Session 使用该能力。"
+            ),
+            data={
+                "server_id": server_id,
+                "enabled": True,
+                "revision": activation.record.revision,
                 "runtime": runtime.to_dict(),
             },
         )

@@ -29,6 +29,12 @@ Proposal 不接受 Secret 字段，也不允许把 `model_inference` 冒充可�
 
 批准后的 MCP Handler 先将配置保存为 disabled，连接测试成功后再 enable；测试失败时保留 disabled 配置和真实运行态，不自动重试。
 
+## 失败恢复与 Agent 管理面
+
+Toolset 目录只表达当前可执行能力，因此继续只包含 enabled Server。另由 MCP Plugin 向 Agent 暴露管理面工具：`list_mcp_servers` 返回包括 disabled 项在内的已登记配置与最近运行状态，`test_mcp_server` 使用冻结配置进行真实连接测试，`propose_mcp_recovery` 为测试可用的 disabled Server 提交恢复审批。
+
+安装与恢复审批共用 Application 的原子 `test_and_enable` 用例：测试失败保持 disabled，测试成功才推进 revision 并启用。Console 的 `/mcp retry <id>` 复用同一用例。这样 `TOOLSET_NOT_FOUND` 只表示当前不可加载，Agent 必须先查询管理状态，不能扩大推断为 Server 从未安装或不可恢复。
+
 ## Session 能力快照
 
 `ToolsetDescriptor` 提供通用 revision。Session 创建时保存 `SessionCapabilitySnapshot(toolset_id → revision)`，每次 Run 使用 `SnapshotToolsetProvider` 将快照与当前 Provider 目录求交集：

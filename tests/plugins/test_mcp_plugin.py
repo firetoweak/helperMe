@@ -47,6 +47,7 @@ from plugins.mcp.models import (
 )
 from plugins.mcp.registry import McpRegistry
 from plugins.mcp.secrets import McpSecretStore
+from plugins.mcp.management_tools import create_mcp_management_specs
 
 
 class FakeMcpSession:
@@ -171,6 +172,131 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await registry.list_servers(), ())
             self.assertFalse(
                 (workspace.plugins_root / "mcp" / "secrets" / "demo.json").exists()
+            )
+
+    async def test_agent_management_tools_find_and_test_disabled_server(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+                session_factory=AsyncMock(),
+            )
+            service = McpApplicationService(registry, secrets, manager)
+            await service.upsert_server(
+                server_id="demo",
+                display_name="Demo",
+                transport="stdio",
+                transport_config={"command": "python", "args": []},
+                enabled=False,
+            )
+            runtime = manager.runtime_state("demo")
+            runtime.mark_available(
+                negotiated_version="2026-07-28",
+                capabilities={"tools": {}},
+            )
+            service.test_server = AsyncMock(return_value=runtime)
+            specs = {spec.name: spec for spec in create_mcp_management_specs(service)}
+
+            listed = await specs["list_mcp_servers"].handler(
+                specs["list_mcp_servers"].parameters.validate({})
+            )
+            tested = await specs["test_mcp_server"].handler(
+                specs["test_mcp_server"].parameters.validate({
+                    "server_id": "demo",
+                })
+            )
+
+            self.assertEqual(listed["data"]["servers"][0]["id"], "demo")
+            self.assertFalse(listed["data"]["servers"][0]["enabled"])
+            self.assertEqual(tested["code"], "MCP_SERVER_READY_TO_ENABLE")
+            self.assertEqual(
+                tested["data"]["next_action"],
+                "propose_mcp_recovery",
+            )
+
+    async def test_test_and_enable_only_enables_available_server(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
+            service = McpApplicationService(registry, secrets, manager)
+            record = await service.upsert_server(
+                server_id="demo",
+                display_name="Demo",
+                transport="stdio",
+                transport_config={"command": "python", "args": []},
+                enabled=False,
+            )
+            runtime = manager.runtime_state("demo")
+            runtime.mark_available(
+                negotiated_version="2026-07-28",
+                capabilities={"tools": {}},
+            )
+            service._test_record = AsyncMock(return_value=runtime)
+
+            activation = await service.test_and_enable(
+                "demo",
+                expected_revision=record.revision,
+            )
+
+            self.assertTrue(activation.succeeded)
+            self.assertTrue(activation.record.enabled)
+            self.assertEqual(activation.record.revision, 2)
+
+    async def test_test_and_enable_preserves_disabled_on_failure(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_agent_workspace(workspace)
+            secrets = McpSecretStore.from_agent_workspace(workspace)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
+            service = McpApplicationService(registry, secrets, manager)
+            record = await service.upsert_server(
+                server_id="demo",
+                display_name="Demo",
+                transport="stdio",
+                transport_config={"command": "python", "args": []},
+                enabled=False,
+            )
+            runtime = manager.runtime_state("demo")
+            runtime.mark_unavailable("connection failed")
+            service._test_record = AsyncMock(return_value=runtime)
+
+            activation = await service.test_and_enable(
+                "demo",
+                expected_revision=record.revision,
+            )
+
+            self.assertFalse(activation.succeeded)
+            self.assertFalse(activation.record.enabled)
+            self.assertEqual(activation.record.revision, 1)
+
+    async def test_plugin_exposes_agent_management_and_recovery_specs(self):
+        with TemporaryDirectory() as directory:
+            workspace = AgentWorkspace(Path(directory) / ".helperme")
+            workspace.initialize()
+
+            plugin = create_mcp_plugin(workspace)
+
+            self.assertEqual(
+                {spec.name for spec in plugin.management_specs},
+                {"list_mcp_servers", "test_mcp_server"},
+            )
+            self.assertEqual(
+                plugin.recovery_proposal_spec.name,
+                "propose_mcp_recovery",
             )
 
     async def test_http_non_localhost_requires_https(self):
