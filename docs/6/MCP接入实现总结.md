@@ -85,14 +85,14 @@ Client 缓存键为 `(server_id, revision)`。upsert / enable / remove / 凭证�
 - 模型只能 `load_toolset` 已启用 Server；
 - 普通工具无法改 Registry；对话 Proposal 获批后仍由 Application 控制面修改。
 
-`console_chat` 将 `McpClientManager` 注入 Application resources，并把 `McpToolsetProvider` 放入普通 Run 的 `RunInvocation`。
+`console_chat` 将 `McpClientManager` 注入 Application resources，并把 `McpToolsetProvider` 放入普通 Turn 的 `TurnInvocation`。
 
 ## Toolset 与调用路径
 
 ```text
 descriptors()          同步读 Registry（零网络）
 load_toolset(mcp:id)   await list_tools → ToolSpec 快照
-下一轮                 模型可见 mcp__{server}__{tool}
+下一个 AgentStep                 模型可见 mcp__{server}__{tool}
 tools/call             handler 闭包持有 (server_id, revision, 原名)
 ```
 
@@ -102,7 +102,7 @@ tools/call             handler 闭包持有 (server_id, revision, 原名)
 - `inputSchema` 原样进入 `JsonSchemaParameters`；非法 Schema 导致整个 Toolset 加载失败；
 - `outputSchema` 在加载时编译，结果缺少或违反 `structuredContent` 时明确失败；
 - 跨 Server 同名工具通过命名空间共存；
-- Run 内 revision 变化返回 `MCP_SERVER_CHANGED`，不让旧 Schema 调用新 Server；
+- Turn 内 revision 变化返回 `MCP_SERVER_CHANGED`，不让旧 Schema 调用新 Server；
 - `isError` / transport / protocol / `input_required` 分别映射为明确错误码；
 - Server instructions / Resource / Prompt 不升格为 system instruction。
 
@@ -120,7 +120,7 @@ tools/call             handler 闭包持有 (server_id, revision, 原名)
 - v2 Server 协商 `2026-07-28`，Secret 正确注入子进程环境；Server 即使回显该凭据，也会在 MCP Adapter 外部输入边界递归替换为 `***`；
 - Legacy Server 在 `server/discover` 不可用时回退 `2025-11-25 initialize`。
 - 真实 Streamable HTTP Server 完成工具发现与调用；分页 fixture 汇总 120 个工具，并采用所有页面中最短 TTL；
-- 已配置凭据在成功内容、`structuredContent`、`meta` 与错误中统一脱敏；专项扫描确认外置 Artifact 和格式化 Run 日志均不含原值。
+- 已配置凭据在成功内容、`structuredContent`、`meta` 与错误中统一脱敏；专项扫描确认外置 Artifact 和格式化 Turn 日志均不含原值。
 
 设计验收中的真实 Streamable HTTP、分页长列表和 Secret 不泄露到 Artifact/日志专项扫描均已覆盖。
 
@@ -134,7 +134,7 @@ tools/call             handler 闭包持有 (server_id, revision, 原名)
 /mcp list
 ```
 
-对话中：模型看到 enabled 目录后调用 `load_toolset("mcp:demo")`，下一轮使用 `mcp__demo__...` 工具。
+对话中：模型看到 enabled 目录后调用 `load_toolset("mcp:demo")`，下一个 AgentStep 使用 `mcp__demo__...` 工具。
 
 依赖：`mcp>=2.0.0,<3`、`httpx2>=2.5.0,<3`，以及 Core LLM Client 直接使用的 `httpx>=0.27.0,<1`。HelperMe 使用 SDK v2 高层 `Client(mode="auto")` 完成现代协议发现与 Legacy 回退，不自研 dual-era。
 

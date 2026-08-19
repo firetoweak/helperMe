@@ -26,16 +26,16 @@ def checkpoint_to_record(checkpoint: Checkpoint) -> dict[str, Any]:
     return asdict(checkpoint)
 
 
-def run_started_checkpoint(
-    max_rounds: int,
+def turn_started_checkpoint(
+    max_steps: int,
     system_prompt: str | None,
 ) -> Checkpoint:
     return Checkpoint(
-        kind="run",
-        reason="run_started",
+        kind="turn",
+        reason="turn_started",
         message="运行开始。",
         data={
-            "max_rounds": max_rounds,
+            "max_steps": max_steps,
             "system_prompt": system_prompt,
         },
     )
@@ -44,7 +44,7 @@ def run_started_checkpoint(
 def llm_request_checkpoint(
     *,
     stage: str,
-    round_index: int | None,
+    step_index: int | None,
     attempt: int,
     runtime_prompts: list[str],
     messages: list[dict[str, Any]],
@@ -55,7 +55,7 @@ def llm_request_checkpoint(
         message="已记录发送给模型的完整请求消息。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "attempt": attempt,
             "runtime_prompts": list(runtime_prompts),
             "messages": deepcopy(messages),
@@ -63,15 +63,15 @@ def llm_request_checkpoint(
     )
 
 
-def run_completed_checkpoint(answer: str, extra_data: dict[str, Any] | None = None) -> Checkpoint:
+def turn_completed_checkpoint(answer: str, extra_data: dict[str, Any] | None = None) -> Checkpoint:
     data: dict[str, Any] = {
         "answer_length": len(answer),
     }
     if extra_data:
         data.update(extra_data)
     return Checkpoint(
-        kind="run",
-        reason="run_completed",
+        kind="turn",
+        reason="turn_completed",
         message="运行完成。",
         data=data,
     )
@@ -98,7 +98,7 @@ def approval_required_checkpoint(
 
 
 def tool_batch_completed_checkpoint(
-    round_index: int,
+    step_index: int,
     tools_state: ToolsState,
     batch_size: int,
     extra_data: dict[str, Any] | None = None,
@@ -108,7 +108,7 @@ def tool_batch_completed_checkpoint(
     externalized_count: int = 0,
 ) -> Checkpoint:
     data = {
-        "round_index": round_index,
+        "step_index": step_index,
         "batch_size": batch_size,
         "result_chars_before": result_chars_before,
         "result_chars_after": result_chars_after,
@@ -121,7 +121,7 @@ def tool_batch_completed_checkpoint(
     return Checkpoint(
         kind="tool_batch",
         reason="tool_batch_completed",
-        message=f"第 {round_index} 轮工具调用已完成。",
+        message=f"AgentStep {step_index} 的工具调用已完成。",
         data=data,
     )
 
@@ -140,9 +140,9 @@ def runtime_mode_routed_checkpoint(
     reason: str,
 ) -> Checkpoint:
     return Checkpoint(
-        kind="run",
+        kind="turn",
         reason="runtime_mode_routed",
-        message=f"本次 Run 已选择 {mode} 模式。",
+        message=f"本次 Turn 已选择 {mode} 模式。",
         data={
             "mode": mode,
             "reason": reason,
@@ -156,7 +156,7 @@ def runtime_mode_fallback_checkpoint(
     reason: str,
 ) -> Checkpoint:
     return Checkpoint(
-        kind="run",
+        kind="turn",
         reason="runtime_mode_fallback",
         message=f"RuntimeMode 已降级为 {to_mode}。",
         data={
@@ -192,7 +192,7 @@ def context_prepared_checkpoint(
     stage: str,
     composition: ContextComposition,
     micro_compaction: MicroCompactionTrace,
-    round_index: int | None = None,
+    step_index: int | None = None,
 ) -> Checkpoint:
     return Checkpoint(
         kind="context",
@@ -200,7 +200,7 @@ def context_prepared_checkpoint(
         message="已准备模型调用上下文构成。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "composition": composition.to_dict(),
             "micro_compaction": micro_compaction.to_dict(),
         },
@@ -209,7 +209,7 @@ def context_prepared_checkpoint(
 
 def message_chain_invalid_checkpoint(validation: dict[str, Any]) -> Checkpoint:
     return Checkpoint(
-        kind="run",
+        kind="turn",
         reason="message_chain_invalid",
         message="运行已停止：messages 中的工具调用链路不合法。",
         data={
@@ -222,15 +222,15 @@ def context_length_exceeded_checkpoint(
     *,
     stage: str,
     error: str,
-    round_index: int | None = None,
+    step_index: int | None = None,
 ) -> Checkpoint:
     return Checkpoint(
-        kind="run",
+        kind="turn",
         reason="context_length_exceeded",
         message="运行已停止：上下文超过模型限制，当前阶段暂不做自动裁剪。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "error": error,
             "hint": "上下文压缩会在后续 ContextCompactor 阶段实现。",
         },
@@ -241,15 +241,15 @@ def context_budget_exceeded_checkpoint(
     *,
     stage: str,
     assessment: BudgetAssessment,
-    round_index: int | None = None,
+    step_index: int | None = None,
 ) -> Checkpoint:
     return Checkpoint(
-        kind="run",
+        kind="turn",
         reason="context_budget_exceeded",
         message="运行已停止：当前模型输入超过项目上下文预算。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "estimated_input_tokens": assessment.estimated_input_tokens,
             "input_budget_tokens": assessment.input_budget_tokens,
             "overflow_tokens": assessment.overflow_tokens,
@@ -293,32 +293,32 @@ def context_compressed_checkpoint(
 def invalid_llm_response_checkpoint(
     *,
     stage: str,
-    round_index: int | None,
+    step_index: int | None,
     reason: str,
     error: str,
 ) -> Checkpoint:
     return Checkpoint(
-        kind="run",
+        kind="turn",
         reason=reason,
         message="运行已停止：LLM 返回了非法响应。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "error": error,
         },
     )
 
 
-def budget_stop_checkpoint(max_rounds: int, tools_state: ToolsState) -> Checkpoint:
+def budget_stop_checkpoint(max_steps: int, tools_state: ToolsState) -> Checkpoint:
     tools_status = tools_state.summary()
     verify_status = verification_status(tools_state)
-    message = f"运行已停止：达到最大轮次 max_rounds={max_rounds}。"
+    message = f"Turn 已停止：达到最大 AgentStep 数 max_steps={max_steps}。"
     return Checkpoint(
-        kind="run",
-        reason="max_rounds_exceeded",
+        kind="turn",
+        reason="max_steps_exceeded",
         message=message,
         data={
-            "max_rounds": max_rounds,
+            "max_steps": max_steps,
             "tools": tools_status,
             "verification": verify_status,
         },
@@ -338,8 +338,8 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             checkpoint.message,
             f"阶段：{checkpoint.data['stage']}。",
         ]
-        if checkpoint.data["round_index"] is not None:
-            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        if checkpoint.data["step_index"] is not None:
+            lines.append(f"AgentStep：{checkpoint.data['step_index']}。")
         lines.extend([
             f"重试次数：{checkpoint.data['attempts']}。",
             f"错误：{checkpoint.data['error']}",
@@ -351,8 +351,8 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             checkpoint.message,
             f"阶段：{checkpoint.data['stage']}。",
         ]
-        if checkpoint.data["round_index"] is not None:
-            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        if checkpoint.data["step_index"] is not None:
+            lines.append(f"AgentStep：{checkpoint.data['step_index']}。")
         lines.extend([
             f"错误：{checkpoint.data['error']}",
             f"提示：{checkpoint.data['hint']}",
@@ -364,8 +364,8 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             checkpoint.message,
             f"阶段：{checkpoint.data['stage']}。",
         ]
-        if checkpoint.data["round_index"] is not None:
-            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        if checkpoint.data["step_index"] is not None:
+            lines.append(f"AgentStep：{checkpoint.data['step_index']}。")
         lines.extend([
             (
                 "估算输入："
@@ -389,8 +389,8 @@ def format_checkpoint(checkpoint: Checkpoint) -> str:
             checkpoint.message,
             f"阶段：{checkpoint.data['stage']}。",
         ]
-        if checkpoint.data["round_index"] is not None:
-            lines.append(f"轮次：{checkpoint.data['round_index']}。")
+        if checkpoint.data["step_index"] is not None:
+            lines.append(f"AgentStep：{checkpoint.data['step_index']}。")
         lines.extend([
             f"错误：{checkpoint.data['error']}",
         ])
@@ -468,10 +468,10 @@ def verification_required_checkpoint() -> Checkpoint:
     )
 
 
-def run_interrupted_checkpoint(reason: str | None = None) -> Checkpoint:
+def turn_interrupted_checkpoint(reason: str | None = None) -> Checkpoint:
     return Checkpoint(
-        kind="run",
-        reason="run_interrupted",
+        kind="turn",
+        reason="turn_interrupted",
         message="运行已在安全点中断。",
         data={"request_reason": reason},
     )
@@ -480,7 +480,7 @@ def run_interrupted_checkpoint(reason: str | None = None) -> Checkpoint:
 def llm_retry_checkpoint(
     *,
     stage: str,
-    round_index: int | None,
+    step_index: int | None,
     attempt: int,
     max_attempts: int,
     error: str,
@@ -491,7 +491,7 @@ def llm_retry_checkpoint(
         message=f"LLM 调用失败，准备重试 ({attempt}/{max_attempts})。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "attempt": attempt,
             "max_attempts": max_attempts,
             "error": error,
@@ -503,7 +503,7 @@ def llm_usage_checkpoint(
     *,
     stage: str,
     usage: LLMUsage,
-    round_index: int | None = None,
+    step_index: int | None = None,
 ) -> Checkpoint:
     return Checkpoint(
         kind="llm",
@@ -511,7 +511,7 @@ def llm_usage_checkpoint(
         message="已记录模型真实 token 消耗。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
         },
@@ -521,17 +521,17 @@ def llm_usage_checkpoint(
 def llm_error_checkpoint(
     *,
     stage: str,
-    round_index: int | None,
+    step_index: int | None,
     attempts: int,
     error: str,
 ) -> Checkpoint:
     return Checkpoint(
-        kind="run",
+        kind="turn",
         reason="llm_error",
         message="运行已停止：LLM 调用失败，重试已耗尽。",
         data={
             "stage": stage,
-            "round_index": round_index,
+            "step_index": step_index,
             "attempts": attempts,
             "error": error,
         },

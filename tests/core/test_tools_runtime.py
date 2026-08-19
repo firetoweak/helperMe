@@ -176,12 +176,12 @@ class ToolsExecutorEarlyFailTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(success["data"], {"value": 1})
         self.assertEqual(failure["error"], "failed")
 
-    async def test_missing_tool_reports_current_run_without_guessing_source(self):
+    async def test_missing_tool_reports_current_turn_without_guessing_source(self):
         result = await self.executor.execute("echo", "{}")
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "TOOL_NOT_FOUND")
-        self.assertIn("current Run", result["error"])
+        self.assertIn("current Turn", result["error"])
         self.assertIn("load_toolset", result["hint"])
         self.assertNotIn("MCP", result["error"])
 
@@ -318,7 +318,7 @@ class ToolsProtocolTest(unittest.IsolatedAsyncioTestCase):
 
 
 class StopGuardTest(unittest.IsolatedAsyncioTestCase):
-    async def test_run_without_writes_can_stop(self):
+    async def test_turn_without_writes_can_stop(self):
         safety = evaluate_stop_safety([], ToolsState())
 
         self.assertTrue(safety.can_stop)

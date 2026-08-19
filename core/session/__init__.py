@@ -1,6 +1,6 @@
 from core.session.runtime import (
     MAX_USER_MESSAGE_CHARS,
-    SessionRunOutcome,
+    SessionTurnOutcome,
     SessionRuntime,
 )
 from core.session.state import (
@@ -8,7 +8,7 @@ from core.session.state import (
     Session,
     SessionEvent,
     SessionEventType,
-    SessionRunRecord,
+    SessionTurnRecord,
     SessionStatus,
 )
 
@@ -18,8 +18,8 @@ __all__ = [
     "Session",
     "SessionEvent",
     "SessionEventType",
-    "SessionRunOutcome",
-    "SessionRunRecord",
+    "SessionTurnOutcome",
+    "SessionTurnRecord",
     "SessionRuntime",
     "SessionStatus",
 ]

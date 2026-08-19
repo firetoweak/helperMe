@@ -66,6 +66,6 @@ Tool Result         作为事实写入 Conversation
 
 Goal Judge 的工作区门禁需要按具体文件核验 `allowed_paths`，原先的 Git short status 可能把未跟踪目录折叠为 `?? scripts/`，不足以证明实际新增的是 `scripts/build.py`。本次把状态读取调整为 `git status --short --untracked-files=all`，未跟踪文件按稳定相对路径逐项返回。
 
-Goal 级 CompletionGate 直接核验 Judge Run 读取到的最终工作区状态；`allowed_paths` 表达整个 Goal 允许存在的最终改动，而不是某个 Task 的增量。
+Goal 级 CompletionGate 直接核验 Judge Turn 读取到的最终工作区状态；`allowed_paths` 表达整个 Goal 允许存在的最终改动，而不是某个 Task 的增量。
 
 边界保持不变：`get_changes` 负责提供精确事实；Goal 允许路径的业务解释属于 Phase 6A，不下沉到 Workspace 工具。

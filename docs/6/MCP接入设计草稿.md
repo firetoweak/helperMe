@@ -22,7 +22,7 @@ MVP 不支持：
 - OAuth 登录、刷新和授权升级；
 - 官方 MCP Registry / 市场安装；
 - 旧 HTTP+SSE Transport；
-- 2026 Multi-Round-Trip Request（`input_required`）交互闭环；
+- 2026 多次往返请求（`input_required`）交互闭环；
 - Tasks Extension、MCP Apps；
 - 列表变更订阅；
 - Resources 自动注入上下文；
@@ -34,7 +34,7 @@ MVP 不支持：
 - [MCP `2026-07-28` 规范](https://modelcontextprotocol.io/specification/2026-07-28)；
 - [MCP `2026-07-28` 变更说明](https://blog.modelcontextprotocol.io/posts/2026-07-28/)；
 - [官方 Python SDK](https://github.com/modelcontextprotocol/python-sdk)；
-- HelperMe 已有的 Plugin、Agent Workspace、`ToolsetProvider`、`ToolSpec` 和 Run 生命周期边界。
+- HelperMe 已有的 Plugin、Agent Workspace、`ToolsetProvider`、`ToolSpec` 和 Turn 生命周期边界。
 
 协议事实：
 
@@ -48,17 +48,17 @@ MVP 不支持：
 
 ## 3. 核心原则
 
-> MCP Server 是持久安装与信任单元；Toolset 是 Run 内的能力暴露单元。Registry 长期存在，Run 只消费已启用的 Server。Client/Transport 按需创建、可缓存、可失效、可重建，不进入领域模型。
+> MCP Server 是持久安装与信任单元；Toolset 是 Turn 内的能力暴露单元。Registry 长期存在，Turn 只消费已启用的 Server。Client/Transport 按需创建、可缓存、可失效、可重建，不进入领域模型。
 
 具体约束：
 
 1. **Core 不认识 MCP**：MCP 是可选 Plugin，移除后普通 Agent 和 Toolset 渐进加载仍可工作。
 2. **配置与运行状态分离**：Registry 是安装真相；可用性、发现结果和最近错误都是可丢弃的运行态。
 3. **目录不做网络 I/O**：Toolset 目录只读取 Registry；真正连接和发现发生在 `load_toolset`。
-4. **Run 内 Schema 冻结**：Toolset 一经成功加载，本 Run 后续轮次始终使用同一份 ToolSpec 快照。
+4. **Turn 内 Schema 冻结**：Toolset 一经成功加载，本 Turn 后续 AgentStep 始终使用同一份 ToolSpec 快照。
 5. **不静默改写外部 Schema**：MCP `inputSchema` 原样进入 `JsonSchemaParameters`。
 6. **跨 Server 名称必须消歧**：MCP 工具名只在单个 Server 内唯一，不能直接进入 HelperMe 的扁平 Tool Registry。
-7. **用户控制安装与信任，模型控制已授权工具**：普通 Agent Run 无权新增、修改、启停或删除 MCP Server。
+7. **用户控制安装与信任，模型控制已授权工具**：普通 Agent Turn 无权新增、修改、启停或删除 MCP Server。
 8. **外部内容默认不可信**：Server instructions、Prompt、Resource 和 ToolResult 都不能升级为 HelperMe system instruction。
 
 ## 4. 总体架构
@@ -77,7 +77,7 @@ Application 生命周期
           ├── 缓存与失效发现结果
           └── 关闭、取消、超时清理
 
-Run 生命周期
+Turn 生命周期
   McpToolsetProvider
           ├── descriptors()             只读 Registry，同步
           └── async tool_specs(id)      连接、发现、适配、冻结
@@ -127,14 +127,14 @@ class ToolsetProvider(Protocol):
 load_toolset(toolset_id)
   → 校验 Descriptor ID
   → await provider.tool_specs(toolset_id)
-  → 成功：把 ToolSpec 快照写入本 Run 的 ToolsetLoadingState
+  → 成功：把 ToolSpec 快照写入本 Turn 的 ToolsetLoadingState
   → 失败：返回明确错误，不写 loaded_specs
-  → 下一轮才暴露成功加载的工具
+  → 下一个 AgentStep 才暴露成功加载的工具
 ```
 
 ### 5.2 多 Plugin 组合
 
-`RunInvocation` 仍只接收一个 `ToolsetProvider`。Skill、MCP 等多个 Plugin 的目录合并与 ID 冲突检查由 Composition 形成通用 `CompositeToolsetProvider`，不让 `RunRuntime` 管理 Plugin 列表。
+`TurnInvocation` 仍只接收一个 `ToolsetProvider`。Skill、MCP 等多个 Plugin 的目录合并与 ID 冲突检查由 Composition 形成通用 `CompositeToolsetProvider`，不让 `TurnRuntime` 管理 Plugin 列表。
 
 ## 6. 持久模型
 
@@ -233,7 +233,7 @@ Client 缓存键为 `(server_id, revision)`：
 - upsert、凭证变化、disable、remove 会失效并关闭旧实例；
 - `stdio` 子进程异常退出后允许重建；
 - Application 退出时统一关闭所有 Client、HTTP 连接和子进程；
-- Run 或批次取消必须向正在进行的 MCP 请求传播取消；
+- Turn 或批次取消必须向正在进行的 MCP 请求传播取消；
 - 不因某个 Server 连接失败而阻断 AgentApplication 启动。
 
 `tools/list`、`resources/list` 等缓存优先遵守协议返回的 `ttlMs` 和 `cacheScope`。Legacy 响应没有这些字段时，MVP 可使用短期进程内缓存；显式 test、配置 revision 变化和连接错误会使缓存失效。
@@ -252,7 +252,7 @@ MVP 通过 Console 命令或 Application API 提供：
 | `remove_server` | 删除配置、Secret 并关闭 Client |
 | `test_server` | 显式连接并返回协商版本、能力和错误摘要 |
 
-这些是 MCP Plugin 的 Application use case，不注册为 `ToolSpec`。原因是 `stdio` 配置等价于持久化一个可执行命令入口，不能由普通 Agent Run 自主写入。
+这些是 MCP Plugin 的 Application use case，不注册为 `ToolSpec`。原因是 `stdio` 配置等价于持久化一个可执行命令入口，不能由普通 Agent Turn 自主写入。
 
 后续已建立通用 Approval 边界：自然语言生成一次冻结的待确认管理请求，用户输入精确的 `yes/no`，Application 再执行 Plugin Handler。仍不增加 `McpDraft`、`confirm_*` 等 MCP 专用领域对象。
 
@@ -390,7 +390,7 @@ OAuth 后置。官方 MCP OAuth 涉及 Protected Resource Metadata、Authorizati
 | --- | --- |
 | 未知/未启用 Toolset | 模型可修正的 `TOOLSET_NOT_FOUND` |
 | Server 不可达、超时、认证失败 | `load_toolset` 或 tool call 显式失败；不阻断 Application |
-| MCP tool execution error | 返回模型可见错误，允许下一轮修正 |
+| MCP tool execution error | 返回模型可见错误，允许下一个 AgentStep 修正 |
 | 非法外部 Schema、名称冲突、Adapter 契约错误 | 装配失败；不静默跳过 |
 | Registry/SecretStore 写入失败 | 管理用例失败，不留下半写状态 |
 | 取消 | 清理请求和子进程后保留原始取消语义 |
@@ -415,9 +415,9 @@ sanitized_error_type
 2. 用户控制面的 list/upsert/enable/remove/test 用例；
 3. 官方 SDK Client 包装和 `McpClientManager` 生命周期；
 4. 把通用 `ToolsetProvider.tool_specs()` 改为 async；
-5. `McpToolsetProvider`：enabled Server 目录、load 时发现、Run 内冻结；
+5. `McpToolsetProvider`：enabled Server 目录、load 时发现、Turn 内冻结；
 6. 工具名编码、`inputSchema`、ToolResult/Error Adapter；
-7. 与现有 Evidence、Artifact、取消和同轮并发链路集成；
+7. 与现有 Evidence、Artifact、取消和同一 AgentStep 并发链路集成；
 8. `McpContentService`：Resources、Templates、Prompts；
 9. 真实兼容测试和最小 Agent Benchmark。
 
@@ -433,11 +433,11 @@ sanitized_error_type
 
 - Application 启动不连接任何 MCP Server；
 - enabled Server 出现在目录，disabled Server 不出现；
-- 首次 `load_toolset` 才连接和发现，成功后下一轮出现工具；
+- 首次 `load_toolset` 才连接和发现，成功后下一个 AgentStep 出现工具；
 - 加载失败不污染 `loaded_specs`，后续允许重试；
-- Run 内工具 Schema 稳定，跨 Run 重新加载；
+- Turn 内工具 Schema 稳定，跨 Turn 重新加载；
 - 两个 Server 都暴露 `search` 时可以同时加载和正确路由；
-- Server 配置 revision 变化后旧 Client 被关闭，新 Run 使用新配置；
+- Server 配置 revision 变化后旧 Client 被关闭，新 Turn 使用新配置；
 - MCP 失败不阻断普通 Agent 和其他 Server。
 
 ### 协议与安全
@@ -458,7 +458,7 @@ sanitized_error_type
 - 通用 Tool Approval 与可恢复中断；
 - MCP OAuth；
 - `subscriptions/listen` 与列表缓存失效；
-- Multi-Round-Trip Request；
+- 多次往返请求；
 - Tasks Extension；
 - MCP Apps；
 - 多模态模型输入适配；

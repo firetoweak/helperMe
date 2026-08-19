@@ -277,8 +277,8 @@ def create_load_toolset_spec(
     return ToolSpec(
         name=LOAD_TOOLSET,
         description=(
-            "为当前 Run 加载一个 Toolset，并返回本次发现的工具名称与描述；"
-            "其中的工具从下一轮开始可用。加载状态不会延续到后续 Run。"
+            "为当前 Turn 加载一个 Toolset，并返回本次发现的工具名称与描述；"
+            "其中的工具从下一个 AgentStep 开始可用。加载状态不会延续到后续 Turn。"
         ),
         parameters=PydanticParameters(LoadToolsetInput),
         handler=load_toolset,
@@ -290,8 +290,8 @@ def toolset_catalog_instruction(
     state: ToolsetLoadingState,
 ) -> str:
     lines = [
-        "可按需加载以下 Toolset。需要其中能力时，调用 load_toolset；加载后的工具从下一轮开始可用。"
-        "“已加载”仅表示当前 Run；历史工具结果只表示过去的发现事实，不代表当前可调用。"
+        "可按需加载以下 Toolset。需要其中能力时，调用 load_toolset；加载后的工具从下一个 AgentStep 开始可用。"
+        "“已加载”仅表示当前 Turn；历史工具结果只表示过去的发现事实，不代表当前可调用。"
         "只能调用当前轮 tools 中实际暴露的精确名称："
     ]
     lines.extend(

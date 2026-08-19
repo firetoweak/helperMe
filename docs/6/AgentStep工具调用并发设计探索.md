@@ -1,14 +1,14 @@
-# 同一 Round 工具调用并发设计探索
+# 同一 AgentStep 工具调用并发设计探索
 
 ## 问题
 
 一次模型响应可以同时声明多个 Tool Call。由于这些 Call 在模型看到任何工具结果之前就已经一起生成，它们通常不存在“后一个 Call 读取前一个 Call 返回值”的数据依赖。
 
-由此产生一个问题：既然没有返回值依赖，为什么当前 HelperMe 仍按顺序执行，而不是把同一 Round 的 Calls 全部并行执行？
+由此产生一个问题：既然没有返回值依赖，为什么当前 HelperMe 仍按顺序执行，而不是把同一 AgentStep 的 Calls 全部并行执行？
 
 ## 核心结论
 
-同一 Round 只能说明 Calls 通常没有返回值依赖，不能证明它们没有副作用依赖。
+同一 AgentStep 只能说明 Calls 通常没有返回值依赖，不能证明它们没有副作用依赖。
 
 ```text
 返回值依赖
@@ -25,7 +25,7 @@ read_file("a.py")
 read_file("b.py")
 ```
 
-但以下 Calls 即使由模型在同一 Round 一起声明，仍存在业务顺序或共享状态冲突：
+但以下 Calls 即使由模型在同一 AgentStep 一起声明，仍存在业务顺序或共享状态冲突：
 
 ```text
 write_file("config.json", content_a)
@@ -41,13 +41,13 @@ git add .
 git commit -m "change"
 ```
 
-模型应当把有依赖的操作拆成多个 Round；同一 Round 则视为模型明确给出的并行意图。
+模型应当把有依赖的操作拆成多个 AgentStep；同一 AgentStep 则视为模型明确给出的并行意图。
 
 当前采用的核心原则是：
 
 > 不要让 Runtime 比模型聪明。模型负责语义正确性，Runtime 负责执行正确性。
 
-Runtime 不根据工具名称、命令文本或业务含义猜测调用 DAG，也不把同轮调用静默改成自认为正确的执行顺序。模型若错误地把存在状态依赖的操作放进同一 Round，由后续工具结果和下一轮模型调用负责纠错。
+Runtime 不根据工具名称、命令文本或业务含义猜测调用 DAG，也不把同一 AgentStep 调用静默改成自认为正确的执行顺序。模型若错误地把存在状态依赖的操作放进同一 AgentStep，由后续工具结果和下一个 AgentStep 模型调用负责纠错。
 
 ## nanobot 的处理方式
 
@@ -96,7 +96,7 @@ HelperMe 正在把外部执行主干统一为 async。异步化首先解决的�
 
 这些目标不要求同一批工具立即并发。
 
-当前工具批次还包含多种会修改 Run 内外状态的工具：
+当前工具批次还包含多种会修改 Turn 内外状态的工具：
 
 - 文件写入和 Patch；
 - CLI 与 Git；
@@ -114,7 +114,7 @@ for call in calls:
     result = await tools_executor.execute(...)
 ```
 
-这不是认定 Calls 一定具有前后依赖，而是当时暂时采用保守、确定的执行语义，让异步主干先稳定下来。该阶段完成后，同轮并发作为独立改造落地。
+这不是认定 Calls 一定具有前后依赖，而是当时暂时采用保守、确定的执行语义，让异步主干先稳定下来。该阶段完成后，同一 AgentStep 并发作为独立改造落地。
 
 ## 无条件并行的主要问题
 
@@ -128,7 +128,7 @@ for call in calls:
 
 ### 中断与协议安全
 
-HelperMe 当前在完整工具批次完成、结果进入 Evidence、Artifact、ToolsState 和 Conversation 后检查 `RunControl` 与 StopGuard。并发会要求重新定义未完成 Call、取消中的 Call 以及部分结果的协议表示。
+HelperMe 当前在完整工具批次完成、结果进入 Evidence、Artifact、ToolsState 和 Conversation 后检查 `TurnControl` 与 StopGuard。并发会要求重新定义未完成 Call、取消中的 Call 以及部分结果的协议表示。
 
 ### 资源压力
 
@@ -143,32 +143,32 @@ HelperMe 当前在完整工具批次完成、结果进入 Evidence、Artifact、
 同一模型响应中的全部 Calls 立即并发执行，不建立 `SAFE / SEQUENTIAL / EXCLUSIVE` 静态分类，也不由 Runtime 推断资源冲突：
 
 ```text
-模型同一 Round 声明 Calls
+模型同一 AgentStep 声明 Calls
     → 并发执行全部 Calls
     → 等待全部 Calls 收束
     → 按模型声明顺序提交结果
-    → 下一轮由模型判断成功、失败与纠错
+    → 下一个 AgentStep 由模型判断成功、失败与纠错
 ```
 
 并发只改变工具运行的重叠关系，不改变：
 
 - Tool Result 在 Conversation 中的原始 Call 顺序；
 - Evidence、Artifact 和 ToolsState 的语义；
-- 结构化工具失败不会取消同轮其他调用；
+- 结构化工具失败不会取消同一 AgentStep 其他调用；
 - handler 内部异常保持原始异常传播，但传播前等待兄弟调用全部收束，避免遗留后台副作用；
 - 批次 Task 被取消时，取消传播至全部尚未完成的调用；
-- RunControl 与 StopGuard 的安全停止要求。
+- TurnControl 与 StopGuard 的安全停止要求。
 
-Runtime 未来仍可增加纯机械执行约束，例如并发数量上限或底层连接的硬性互斥要求；这些约束不能演变为业务依赖推断。Prompt 必须明确要求模型把有先后依赖的调用拆到不同 Round。
+Runtime 未来仍可增加纯机械执行约束，例如并发数量上限或底层连接的硬性互斥要求；这些约束不能演变为业务依赖推断。Prompt 必须明确要求模型把有先后依赖的调用拆到不同 AgentStep。
 
-默认 Agent Prompt 已加入对应执行契约：同一响应中的调用并发执行；Round 是执行屏障；独立操作应增加并行宽度；存在结果或副作用依赖时必须拆到后续 Round；发出同轮多调用即由模型确认其语义并发安全。
+默认 Agent Prompt 已加入对应执行契约：同一响应中的调用并发执行；AgentStep 是执行屏障；独立操作应增加并行宽度；存在结果或副作用依赖时必须拆到后续 AgentStep；发出同一 AgentStep 多调用即由模型确认其语义并发安全。
 
 ## 当前阶段决策
 
-同轮 Calls 并发已经落地。批处理采用“并发执行、顺序提交”的两阶段结构；不修改 `ToolSpec`，并发意图直接由模型的 Round 边界表达。
+同一 AgentStep Calls 并发已经落地。批处理采用“并发执行、顺序提交”的两阶段结构；不修改 `ToolSpec`，并发意图直接由模型的 AgentStep 边界表达。
 
 并发回补暴露出的现存技术债已在 MCP 接入前专项清理：`grep`、`get_changes` 已改用异步子进程；PowerShell、Session 和 Application 的取消及资源生命周期已经闭合。MCP 接入后的连接级资源上限应依据真实 Server/Transport 行为设计，不在缺少消费者时预建通用调度层。
 
 最终原则：
 
-> Async 解决等待与资源生命周期；Concurrency 解决吞吐量。模型用 Round 表达语义依赖，Runtime 忠实执行并守住协议、取消、落账和资源生命周期边界。
+> Async 解决等待与资源生命周期；Concurrency 解决吞吐量。模型用 AgentStep 表达语义依赖，Runtime 忠实执行并守住协议、取消、落账和资源生命周期边界。

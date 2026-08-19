@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from core.agent_workspace import AgentWorkspace
 from core.composition import create_agent_application
 from core.runtime_artifacts import ArtifactNotFoundError
-from core.runtime_modes import PlainMode, RunMode, RuntimeModeRouter
+from core.runtime_modes import PlainMode, TurnMode, RuntimeModeRouter
 from core.todos import TodoMode
 from tools.workspace import FilesystemAccessMode
 
@@ -83,7 +83,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             )
             await self.start_application(application)
             application.create_session("session-1")
-            runtime = application._session_runtime._session_run_runtimes[
+            runtime = application._session_runtime._session_turn_runtimes[
                 "session-1"
             ]
 
@@ -125,7 +125,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             )
             await self.start_application(application)
             application.create_session("session-1")
-            runtime = application._session_runtime._session_run_runtimes["session-1"]
+            runtime = application._session_runtime._session_turn_runtimes["session-1"]
 
             missing_root = await runtime.tools_executor.execute(
                 "read_file",
@@ -162,13 +162,13 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             await self.start_application(application)
             application.create_session("session-1")
 
-        runtime = application._session_runtime._session_run_runtimes[
+        runtime = application._session_runtime._session_turn_runtimes[
             "session-1"
         ]
         self.assertIsNone(runtime.runtime_mode)
         self.assertIsInstance(runtime.mode_router, RuntimeModeRouter)
-        self.assertIsInstance(runtime.runtime_modes[RunMode.PLAIN], PlainMode)
-        self.assertIsInstance(runtime.runtime_modes[RunMode.TODO], TodoMode)
+        self.assertIsInstance(runtime.runtime_modes[TurnMode.PLAIN], PlainMode)
+        self.assertIsInstance(runtime.runtime_modes[TurnMode.TODO], TodoMode)
 
     async def test_explicit_runtime_mode_overrides_default(self):
         mode = PlainMode()
@@ -184,13 +184,13 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             application.create_session("session-1")
 
         self.assertIs(
-            application._session_runtime._session_run_runtimes[
+            application._session_runtime._session_turn_runtimes[
                 "session-1"
             ].runtime_mode,
             mode,
         )
 
-    async def test_each_session_gets_a_private_run_runtime(self):
+    async def test_each_session_gets_a_private_turn_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             application = create_agent_application(
                 model="test-model",
@@ -202,7 +202,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             application.create_session("session-a")
             application.create_session("session-b")
 
-        runtimes = application._session_runtime._session_run_runtimes
+        runtimes = application._session_runtime._session_turn_runtimes
         self.assertIsNot(runtimes["session-a"], runtimes["session-b"])
         self.assertIsNot(
             runtimes["session-a"].tool_result_externalizer.store,
@@ -220,7 +220,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             await self.start_application(application)
             application.create_session("session-a")
             application.create_session("session-b")
-            runtimes = application._session_runtime._session_run_runtimes
+            runtimes = application._session_runtime._session_turn_runtimes
             ref = runtimes["session-a"].tool_result_externalizer.store.save(
                 "A content"
             )
@@ -247,7 +247,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             )
             await self.start_application(application)
             application.create_session("session-1")
-            runtime = application._session_runtime._session_run_runtimes[
+            runtime = application._session_runtime._session_turn_runtimes[
                 "session-1"
             ]
             store = runtime.tool_result_externalizer.store

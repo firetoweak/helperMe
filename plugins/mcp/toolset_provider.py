@@ -142,7 +142,7 @@ class McpToolsetProvider:
                         "current_revision": record.revision,
                     },
                     "error": "MCP Server 配置已变化，当前 Toolset 快照已过期",
-                    "hint": "请在新的 Run 中重新加载该 Toolset。",
+                    "hint": "请在新的 Turn 中重新加载该 Toolset。",
                 }
             try:
                 result = await self._client_manager.call_tool(

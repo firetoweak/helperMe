@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.composition import create_agent_application
 from core.model_call.client import LLMClient
 from core.model_call.config import load_app_config
-from core.tools_runtime.run_runtime import RunStatus
+from core.tools_runtime.turn_runtime import TurnStatus
 
 
 PROMPTS = (
@@ -53,23 +53,23 @@ async def async_main() -> None:
 
         for turn, prompt in enumerate(PROMPTS, start=1):
             sink.current_turn = turn
-            print(f"\n\n=== Round {turn} ===\n用户：{prompt}")
+            print(f"\n\n=== Turn {turn} ===\n用户：{prompt}")
             outcome = await application.start(
                 session_id,
-                f"run-{uuid4().hex}",
+                f"turn-{uuid4().hex}",
                 prompt,
             )
             print(f"\n最终回答：{outcome.result.answer}")
-            print(f"Run 状态：{outcome.result.status.value}")
-            if outcome.result.status != RunStatus.COMPLETED:
+            print(f"Turn 状态：{outcome.result.status.value}")
+            if outcome.result.status != TurnStatus.COMPLETED:
                 raise RuntimeError(
-                    f"Round {turn} 未完成：{outcome.result.status.value}"
+                    f"Turn {turn} 未完成：{outcome.result.status.value}"
                 )
 
     print("\n\n=== 阶段性说明统计 ===")
     for turn in range(1, len(PROMPTS) + 1):
         count = sum(record_turn == turn for record_turn, _ in sink.records)
-        print(f"Round {turn}: {count}")
+        print(f"Turn {turn}: {count}")
 
 
 if __name__ == "__main__":

@@ -76,9 +76,9 @@ Pydantic 只允许作为内置工具的声明与校验方式：
 - JSON Schema 远程 `$ref` 的获取与安全策略；当前不主动获取外部引用；
 - 多模态 MCP ToolResult；
 - Validator 编译缓存；当前每个 `JsonSchemaParameters` 只在构造时编译一次，尚无跨实例缓存需要；
-- MCP 工具更新时的并发快照策略；当前 Run 已通过 Registry clone 获得稳定装配边界。
+- MCP 工具更新时的并发快照策略；当前 Turn 已通过 Registry clone 获得稳定装配边界。
 
 ## 架构验收
 
-移除全部 MCP 代码后，`JsonSchemaParameters` 仍然是可独立使用和测试的 Core 能力。Registry、ToolsExecutor 与 RunRuntime 只认识 `ToolSpec`，不知道工具来自 Pydantic、MCP、OpenAPI 或其他 Plugin。
+移除全部 MCP 代码后，`JsonSchemaParameters` 仍然是可独立使用和测试的 Core 能力。Registry、ToolsExecutor 与 TurnRuntime 只认识 `ToolSpec`，不知道工具来自 Pydantic、MCP、OpenAPI 或其他 Plugin。
 

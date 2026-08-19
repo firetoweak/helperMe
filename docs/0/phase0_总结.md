@@ -34,7 +34,7 @@
 有：基础状态，消息拼装
 缺：无trace跟踪
 
-后续状态：Phase 1 已增加 Checkpoint/RunResult，Phase 4 已建立 Run Trace 与日志边界。
+后续状态：Phase 1 已增加 Checkpoint/TurnResult，Phase 4 已建立 Turn Trace 与日志边界。
 
 ✓ Tool Registry
 
@@ -49,7 +49,7 @@
 有：完整一轮对话工具调用循环，system_prompt
 缺：没有runtime
 
-后续状态：Phase 1 已拆出 RunRuntime，Phase 3 在其上建立 SessionRuntime。
+后续状态：Phase 1 已拆出 TurnRuntime，Phase 3 在其上建立 SessionRuntime。
 
 ✓ Workspace
 

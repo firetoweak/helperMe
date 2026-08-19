@@ -24,7 +24,7 @@ class GoalConsoleAdapter:
     async def execute_if_handled(
         self,
         session_id: str,
-        run_id: str,
+        turn_id: str,
         user_message: str,
     ) -> GoalLoopOutcome | None:
         objective = self._goal_objective(user_message)
@@ -36,7 +36,7 @@ class GoalConsoleAdapter:
             return await self._service.start_goal(
                 session_id,
                 self._goal_id_factory(),
-                run_id,
+                turn_id,
                 objective,
             )
 
@@ -45,7 +45,7 @@ class GoalConsoleAdapter:
         return await self._service.continue_goal(
             session_id,
             active.id,
-            run_id,
+            turn_id,
             user_message,
         )
 

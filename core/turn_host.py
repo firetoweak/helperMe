@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from core.session import SessionRunOutcome
-from core.tools_runtime.run_invocation import RunInvocation
+from core.session import SessionTurnOutcome
+from core.tools_runtime.turn_invocation import TurnInvocation
 
 
-class RunHost(Protocol):
+class TurnHost(Protocol):
     def create_session(self, session_id: str) -> str:
         ...
 
@@ -23,10 +23,10 @@ class RunHost(Protocol):
     ) -> None:
         ...
 
-    def validate_run(
+    def validate_turn(
         self,
         session_id: str,
-        run_id: str,
+        turn_id: str,
         user_message: str,
     ) -> None:
         ...
@@ -34,9 +34,9 @@ class RunHost(Protocol):
     async def execute(
         self,
         session_id: str,
-        run_id: str,
+        turn_id: str,
         user_message: str,
-        max_rounds: int | None,
-        invocation: RunInvocation,
-    ) -> SessionRunOutcome:
+        max_steps: int | None,
+        invocation: TurnInvocation,
+    ) -> SessionTurnOutcome:
         ...

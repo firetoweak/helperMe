@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, Mock
 import tools  # noqa: F401
 from core.agent_application import AgentApplication
 from core.model_call import LLMResponse, ToolCall
-from core.observability import format_run_log
+from core.observability import format_turn_log
 from core.runtime_modes import PlainMode
 from core.session import SessionRuntime
 from core.session.state import SessionEventType, SessionStatus
-from core.tools_runtime.run_runtime import RunRuntime, RunStatus
-from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_invocation import TurnInvocation
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from tests.core.llm_test_support import (
     call_result,
@@ -84,15 +84,15 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
 
         result = await self.application.start(
             "session-1",
-            "run-1",
+            "turn-1",
             "开始任务",
-            max_rounds=7,
+            max_steps=7,
         )
 
         self.assertIs(result, outcome)
         self.session_runtime.start.assert_called_once_with(
             "session-1",
-            "run-1",
+            "turn-1",
             "开始任务",
             7,
             invocation=None,
@@ -104,63 +104,63 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
 
         result = await self.application.resume(
             "session-1",
-            "run-2",
+            "turn-2",
             "继续任务",
-            max_rounds=9,
+            max_steps=9,
         )
 
         self.assertIs(result, outcome)
         self.session_runtime.resume.assert_called_once_with(
             "session-1",
-            "run-2",
+            "turn-2",
             "继续任务",
             9,
             invocation=None,
         )
 
-    async def test_application_owns_the_default_run_round_limit(self):
+    async def test_application_owns_the_default_turn_step_limit(self):
         application = AgentApplication(
             self.session_runtime,
             "system prompt",
-            default_max_rounds=73,
+            default_max_steps=73,
         )
         outcome = object()
         self.session_runtime.start.return_value = outcome
 
         async with application:
-            result = await application.start("session-1", "run-1", "开始任务")
+            result = await application.start("session-1", "turn-1", "开始任务")
 
         self.assertIs(result, outcome)
         self.session_runtime.start.assert_called_once_with(
             "session-1",
-            "run-1",
+            "turn-1",
             "开始任务",
             73,
             invocation=None,
         )
 
-    async def test_application_rejects_invalid_default_run_round_limit(self):
+    async def test_application_rejects_invalid_default_turn_step_limit(self):
         with self.assertRaisesRegex(ValueError, "必须大于 0"):
             AgentApplication(
                 self.session_runtime,
                 "system prompt",
-                default_max_rounds=0,
+                default_max_steps=0,
             )
 
-    async def test_run_host_validates_before_plugin_domain_mutation(self):
-        session = Mock(status=SessionStatus.COMPLETED, run_records=[])
+    async def test_turn_host_validates_before_plugin_domain_mutation(self):
+        session = Mock(status=SessionStatus.COMPLETED, turn_records=[])
         self.session_runtime.get_session.return_value = session
 
-        self.application.validate_run("session-1", "run-1", "执行任务")
+        self.application.validate_turn("session-1", "turn-1", "执行任务")
 
-        self.session_runtime.validate_run_input.assert_called_once_with(
-            "run-1",
+        self.session_runtime.validate_turn_input.assert_called_once_with(
+            "turn-1",
             "执行任务",
         )
         self.session_runtime.get_session.assert_called_once_with("session-1")
 
-    async def test_run_host_selects_resume_for_interrupted_session(self):
-        invocation = RunInvocation()
+    async def test_turn_host_selects_resume_for_interrupted_session(self):
+        invocation = TurnInvocation()
         self.session_runtime.get_session.return_value = Mock(
             status=SessionStatus.INTERRUPTED,
         )
@@ -169,7 +169,7 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
 
         result = await self.application.execute(
             "session-1",
-            "run-2",
+            "turn-2",
             "继续任务",
             9,
             invocation,
@@ -178,7 +178,7 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, outcome)
         self.session_runtime.resume.assert_called_once_with(
             "session-1",
-            "run-2",
+            "turn-2",
             "继续任务",
             9,
             invocation=invocation,
@@ -206,7 +206,7 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
         self.session_runtime.start.side_effect = KeyError("Session 不存在")
 
         with self.assertRaises(KeyError):
-            await self.application.start("missing", "run-1", "开始任务")
+            await self.application.start("missing", "turn-1", "开始任务")
 
     async def test_application_module_has_no_infrastructure_dependencies(self):
         source = inspect.getsource(inspect.getmodule(AgentApplication))
@@ -228,7 +228,7 @@ class AgentApplicationContractTest(unittest.IsolatedAsyncioTestCase):
             "os",
             "pathlib",
             "core.model_call",
-            "core.tools_runtime.run_runtime",
+            "core.tools_runtime.turn_runtime",
         }
         self.assertTrue(
             forbidden_modules.isdisjoint(imported_modules),
@@ -295,7 +295,7 @@ class AgentApplicationResourceLifecycleTest(
 
     async def test_close_does_not_hide_body_exception(self):
         events = []
-        error = RuntimeError("run failed")
+        error = RuntimeError("turn failed")
         application = AgentApplication(
             Mock(active_controls={}),
             "system prompt",
@@ -333,7 +333,7 @@ class AgentApplicationResourceLifecycleTest(
         with self.assertRaisesRegex(RuntimeError, "不能进入"):
             await application.__aenter__()
 
-    async def test_close_rejects_active_run_without_closing_resources(self):
+    async def test_close_rejects_active_turn_without_closing_resources(self):
         events = []
         runtime = Mock(active_controls={})
         application = AgentApplication(
@@ -344,7 +344,7 @@ class AgentApplicationResourceLifecycleTest(
         await application.__aenter__()
         runtime.active_controls["session-1"] = Mock()
 
-        with self.assertRaisesRegex(RuntimeError, "活动 Run"):
+        with self.assertRaisesRegex(RuntimeError, "活动 Turn"):
             await application.close()
 
         self.assertEqual(events, ["enter:mcp"])
@@ -355,18 +355,18 @@ class AgentApplicationResourceLifecycleTest(
 
 class AgentApplicationSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
     async def test_one_application_operates_two_sessions_without_conversation_leak(self):
-        async def run(*, conversation, user_message, max_rounds, control, context_state):
+        async def run(*, conversation, user_message, max_steps, control, context_state):
             conversation.add_user(user_message)
             return Mock(
-                status=RunStatus.COMPLETED,
+                status=TurnStatus.COMPLETED,
                 final_reason=None,
                 context_state=context_state,
             )
 
-        run_runtime = Mock()
-        run_runtime.run = AsyncMock()
-        run_runtime.run.side_effect = run
-        session_runtime = SessionRuntime(run_runtime=run_runtime)
+        turn_runtime = Mock()
+        turn_runtime.run = AsyncMock()
+        turn_runtime.run.side_effect = run
+        session_runtime = SessionRuntime(turn_runtime=turn_runtime)
         application = AgentApplication(
             session_runtime=session_runtime,
             system_prompt="system prompt",
@@ -375,8 +375,8 @@ class AgentApplicationSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         async with application:
             application.create_session("session-a")
             application.create_session("session-b")
-            await application.start("session-a", "run-a", "A 的消息")
-            await application.start("session-b", "run-b", "B 的消息")
+            await application.start("session-a", "turn-a", "A 的消息")
+            await application.start("session-b", "turn-b", "B 的消息")
 
         messages_a = (
             session_runtime.sessions["session-a"]
@@ -406,7 +406,7 @@ class AgentApplicationSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
 class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def _build_application(self, llm_client: Mock):
         session_runtime = SessionRuntime(
-            RunRuntime(
+            TurnRuntime(
                 model_calls=model_call_service(llm_client),
                 model="test-model",
                 runtime_mode=PlainMode(),
@@ -448,9 +448,9 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
         application, session_runtime = await self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]
 
-        interrupted = await application.start("session-1", "run-1", "开始任务")
+        interrupted = await application.start("session-1", "turn-1", "开始任务")
 
-        self.assertEqual(interrupted.result.status, RunStatus.INTERRUPTED)
+        self.assertEqual(interrupted.result.status, TurnStatus.INTERRUPTED)
         self.assertEqual(session.status, SessionStatus.INTERRUPTED)
         self.assertTrue(
             validate_tool_message_chain(
@@ -458,12 +458,12 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
             ).ok
         )
 
-        completed = await application.resume("session-1", "run-2", "继续执行")
+        completed = await application.resume("session-1", "turn-2", "继续执行")
 
         self.assertEqual(completed.result.answer, "任务已完成")
-        self.assertEqual(completed.result.status, RunStatus.COMPLETED)
+        self.assertEqual(completed.result.status, TurnStatus.COMPLETED)
         self.assertEqual(session.status, SessionStatus.COMPLETED)
-        self.assertEqual(len(session.run_records), 2)
+        self.assertEqual(len(session.turn_records), 2)
         self.assertEqual(
             [event.kind for event in session.events],
             [
@@ -480,7 +480,7 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
             ).ok
         )
 
-    async def test_application_starts_new_run_in_same_session_after_completed(self):
+    async def test_application_starts_new_turn_in_same_session_after_completed(self):
         llm_client = Mock()
         llm_client.chat = AsyncMock()
         llm_client.chat.side_effect = (
@@ -490,12 +490,12 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
         application, session_runtime = await self._build_application(llm_client)
         session = session_runtime.sessions["session-1"]
 
-        first = await application.start("session-1", "run-1", "第一轮")
-        second = await application.start("session-1", "run-2", "第二轮")
+        first = await application.start("session-1", "turn-1", "第一轮")
+        second = await application.start("session-1", "turn-2", "第二轮")
 
         self.assertEqual(first.result.answer, "第一轮完成")
         self.assertEqual(second.result.answer, "第二轮完成")
-        self.assertEqual(len(session.run_records), 2)
+        self.assertEqual(len(session.turn_records), 2)
         self.assertEqual(
             [event.kind for event in session.events],
             [
@@ -509,7 +509,7 @@ class AgentApplicationSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ObservabilityContractTest(unittest.IsolatedAsyncioTestCase):
-    async def test_todo_revision_checkpoint_is_written_to_run_log(self):
+    async def test_todo_revision_checkpoint_is_written_to_turn_log(self):
         trace = {
             "started_at": "2026-01-01 00:00:00",
             "ended_at": "2026-01-01 00:00:01",
@@ -517,8 +517,8 @@ class ObservabilityContractTest(unittest.IsolatedAsyncioTestCase):
             "system_prompt": "system prompt",
             "model_requests": [
                 {
-                    "stage": "agent_round",
-                    "round_index": 1,
+                    "stage": "agent_step",
+                    "step_index": 1,
                     "attempt": 1,
                     "runtime_prompts": ["runtime prompt"],
                     "messages": [
@@ -527,7 +527,7 @@ class ObservabilityContractTest(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
             ],
-            "run_id": "run-1",
+            "turn_id": "turn-1",
             "status": "completed",
             "question": "hello",
             "answer": "world",
@@ -547,7 +547,7 @@ class ObservabilityContractTest(unittest.IsolatedAsyncioTestCase):
             ],
         }
 
-        log = format_run_log(trace)
+        log = format_turn_log(trace)
 
         self.assertIn('"reason": "tool_batch_completed"', log)
         self.assertIn('"todo_list": {', log)
@@ -562,14 +562,14 @@ class ObservabilityContractTest(unittest.IsolatedAsyncioTestCase):
             "started_at": "2026-01-01 00:00:00",
             "ended_at": "2026-01-01 00:00:01",
             "model": "test-model",
-            "run_id": "run-1",
+            "turn_id": "turn-1",
             "status": "completed",
             "question": "hello",
             "answer": "world",
         }
 
         with self.assertRaises(KeyError):
-            format_run_log(trace)
+            format_turn_log(trace)
 
 
 if __name__ == "__main__":

@@ -20,10 +20,10 @@ from core.context import (
 from core.model_call.service import ModelCallService
 from core.prompt import DEFAULT_AGENT_PROMPT
 from core.runtime_artifacts import ToolResultExternalizer, ToolResultLimit
-from core.runtime_modes import PlainMode, RunMode, RuntimeModeRouter
+from core.runtime_modes import PlainMode, TurnMode, RuntimeModeRouter
 from core.session import SessionRuntime
 from core.todos import TodoMode
-from core.tools_runtime.run_runtime import RunRuntime
+from core.tools_runtime.turn_runtime import TurnRuntime
 from tests.benchmarks.phase5_dehydration_ab import (
     ContentAddressedArtifactStore,
     INPUT_BUDGET_RATIO,
@@ -49,14 +49,14 @@ PREVIOUS_REPORT = Path(
 )
 
 
-class RunGranularityPolicy(MicroCompactionPolicy):
-    """每个 Run 只允许第一次 Context Preparation 发现新的脱水对象。"""
+class TurnGranularityPolicy(MicroCompactionPolicy):
+    """每个 Turn 只允许第一次 Context Preparation 发现新的脱水对象。"""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._allow_new_dehydration = False
 
-    def begin_run(self) -> None:
+    def begin_turn(self) -> None:
         self._allow_new_dehydration = True
 
     def propose(self, *args, **kwargs):
@@ -79,17 +79,17 @@ class RunGranularityPolicy(MicroCompactionPolicy):
         )
 
 
-class RunGranularityContextPreparationService(ContextPreparationService):
-    """用本 Run 的固定 Level 2 边界识别 Run 切换。"""
+class TurnGranularityContextPreparationService(ContextPreparationService):
+    """用本 Turn 的固定 Level 2 边界识别 Turn 切换。"""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._last_run_boundary: object = object()
+        self._last_turn_boundary: object = object()
 
     def prepare(self, *args, level2_boundary_message_id=None, **kwargs):
-        if level2_boundary_message_id != self._last_run_boundary:
-            self.micro_compaction_policy.begin_run()
-            self._last_run_boundary = level2_boundary_message_id
+        if level2_boundary_message_id != self._last_turn_boundary:
+            self.micro_compaction_policy.begin_turn()
+            self._last_turn_boundary = level2_boundary_message_id
         return super().prepare(
             *args,
             level2_boundary_message_id=level2_boundary_message_id,
@@ -97,7 +97,7 @@ class RunGranularityContextPreparationService(ContextPreparationService):
         )
 
 
-def build_run_granularity_application(
+def build_turn_granularity_application(
     llm_client,
     tools_executor,
     artifact_store,
@@ -111,7 +111,7 @@ def build_run_granularity_application(
     )
     model_calls = ModelCallService(llm_client, context_budget)
     context_manager = ContextManager(ToolResultLimit().max_chars)
-    policy = RunGranularityPolicy(
+    policy = TurnGranularityPolicy(
         context_manager=context_manager,
         context_budget=context_budget,
         config=MicroCompactionConfig(
@@ -119,19 +119,19 @@ def build_run_granularity_application(
         ),
         artifact_store=artifact_store,
     )
-    context_preparation = RunGranularityContextPreparationService(
+    context_preparation = TurnGranularityContextPreparationService(
         context_manager=context_manager,
         micro_compaction_policy=policy,
         context_budget=context_budget,
         summary_generator=LLMContextSummaryGenerator(model_calls, MODEL),
     )
-    run_runtime = RunRuntime(
+    turn_runtime = TurnRuntime(
         model_calls=model_calls,
         model=MODEL,
         mode_router=RuntimeModeRouter(),
         runtime_modes={
-            RunMode.PLAIN: PlainMode(),
-            RunMode.TODO: TodoMode(),
+            TurnMode.PLAIN: PlainMode(),
+            TurnMode.TODO: TodoMode(),
         },
         context_preparation=context_preparation,
         tools_executor=tools_executor,
@@ -141,7 +141,7 @@ def build_run_granularity_application(
         ),
     )
     return AgentApplication(
-        session_runtime=SessionRuntime(run_runtime=run_runtime),
+        session_runtime=SessionRuntime(turn_runtime=turn_runtime),
         system_prompt=DEFAULT_AGENT_PROMPT,
     )
 
@@ -151,9 +151,9 @@ def make_group() -> dict[str, Any]:
     registry = build_registry(store)
     llm = RecordingLLMClient(LLMClient())
     tools = RecordingToolsExecutor(ToolsExecutor(registry))
-    application = build_run_granularity_application(llm, tools, store)
+    application = build_turn_granularity_application(llm, tools, store)
     session_id = application.create_session(
-        f"live-run-granularity-{uuid4().hex}"
+        f"live-turn-granularity-{uuid4().hex}"
     )
     return {
         "application": application,
@@ -169,7 +169,7 @@ def summarize(group: dict[str, Any]) -> dict[str, Any]:
     turns = group["turns"]
     completed = sum(turn["status"] == "completed" for turn in turns)
     attempted = sum(
-        turn["status"] != "not_run_after_terminal_failure"
+        turn["status"] != "not_executed_after_terminal_failure"
         for turn in turns
     )
     tool_calls = sum(turn.get("external_tool_calls", 0) for turn in turns)
@@ -185,12 +185,12 @@ def summarize(group: dict[str, Any]) -> dict[str, Any]:
         if "elapsed_seconds" in turn
     ]
     return {
-        "strategy": "run_granularity_10k",
-        "label": "Run 维度 10K 保护窗策略",
+        "strategy": "turn_granularity_10k",
+        "label": "Turn 维度 10K 保护窗策略",
         "turns": turns,
-        "run_completion_rate": completed / len(QUESTIONS),
-        "completed_runs": completed,
-        "attempted_runs": attempted,
+        "turn_completion_rate": completed / len(QUESTIONS),
+        "completed_turns": completed,
+        "attempted_turns": attempted,
         "tool_success_rate": tool_successes / tool_calls if tool_calls else 1.0,
         "successful_external_tools": tool_successes,
         "external_tool_calls": tool_calls,
@@ -238,7 +238,7 @@ def main() -> None:
     summary = summarize(group)
     report = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "experiment": "Level 1 dehydration at Run granularity, independent live runs",
+        "experiment": "Level 1 dehydration at Turn granularity, independent live turns",
         "controls": {
             "model": MODEL,
             "questions": QUESTIONS,
@@ -248,10 +248,10 @@ def main() -> None:
             "recent_protection_tokens": RECENT_PROTECTION_TOKENS,
             "trigger_granularity": (
                 "每个 application.start 仅第一次 Context Preparation "
-                "重新计算脱水集合；同 Run 后续 round 只复用既有 ContextState"
+                "重新计算脱水集合；同 Turn 后续 AgentStep 只复用既有 ContextState"
             ),
             "timing_scope": (
-                "从用户消息提交给 application.start 到 RunRuntime 返回；"
+                "从用户消息提交给 application.start 到 TurnRuntime 返回；"
                 "包含路由、模型网络、重试、工具执行、上下文处理"
             ),
             "important_limitation": (
@@ -260,13 +260,13 @@ def main() -> None:
             ),
             "previous_report": str(PREVIOUS_REPORT),
         },
-        "run_granularity": summary,
+        "turn_granularity": summary,
         "previous_baselines": previous_baselines(),
     }
     report_path = (
         Path(__file__).resolve().parents[2]
         / "logs"
-        / f"dehydration_live_run_granularity_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+        / f"dehydration_live_turn_granularity_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
     )
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
@@ -274,7 +274,7 @@ def main() -> None:
     )
     print(json.dumps({
         "report_path": str(report_path),
-        "run_granularity": {
+        "turn_granularity": {
             key: value
             for key, value in summary.items()
             if key != "turns"

@@ -6,7 +6,7 @@ from core.session.state import (
     Session,
     SessionEvent,
     SessionEventType,
-    SessionRunRecord,
+    SessionTurnRecord,
     SessionStatus,
 )
 
@@ -17,13 +17,13 @@ class SessionStateTest(unittest.TestCase):
         kind: SessionEventType,
         *,
         session_id: str = "session-1",
-        run_id: str = "run-1",
+        turn_id: str = "turn-1",
     ) -> SessionEvent:
         return SessionEvent(
             kind=kind,
             session_id=session_id,
             reason="test transition",
-            run_id=run_id,
+            turn_id=turn_id,
         )
 
     def test_new_session_is_pending(self):
@@ -40,12 +40,12 @@ class SessionStateTest(unittest.TestCase):
     def test_interrupt_and_resume(self):
         session = Session(id="session-1")
 
-        started = self.make_event(SessionEventType.STARTED, run_id="run-1")
+        started = self.make_event(SessionEventType.STARTED, turn_id="turn-1")
         interrupted = self.make_event(
             SessionEventType.INTERRUPTED,
-            run_id="run-1",
+            turn_id="turn-1",
         )
-        resumed = self.make_event(SessionEventType.RESUMED, run_id="run-2")
+        resumed = self.make_event(SessionEventType.RESUMED, turn_id="turn-2")
 
         session.transition_to(SessionStatus.RUNNING, started)
         session.transition_to(SessionStatus.INTERRUPTED, interrupted)
@@ -107,7 +107,7 @@ class SessionStateTest(unittest.TestCase):
             SessionStatus.INTERRUPTED,
             self.make_event(SessionEventType.INTERRUPTED),
         )
-        event = self.make_event(SessionEventType.STARTED, run_id="run-2")
+        event = self.make_event(SessionEventType.STARTED, turn_id="turn-2")
 
         with self.assertRaises(ValueError):
             session.transition_to(SessionStatus.RUNNING, event)
@@ -115,24 +115,24 @@ class SessionStateTest(unittest.TestCase):
         self.assertEqual(session.status, SessionStatus.INTERRUPTED)
         self.assertNotIn(event, session.events)
 
-    def test_completed_can_start_new_run_in_same_session(self):
+    def test_completed_can_start_new_turn_in_same_session(self):
         session = Session(id="session-1")
         session.transition_to(
             SessionStatus.RUNNING,
-            self.make_event(SessionEventType.STARTED, run_id="run-1"),
+            self.make_event(SessionEventType.STARTED, turn_id="turn-1"),
         )
         session.transition_to(
             SessionStatus.COMPLETED,
-            self.make_event(SessionEventType.COMPLETED, run_id="run-1"),
+            self.make_event(SessionEventType.COMPLETED, turn_id="turn-1"),
         )
-        started = self.make_event(SessionEventType.STARTED, run_id="run-2")
+        started = self.make_event(SessionEventType.STARTED, turn_id="turn-2")
 
         session.transition_to(SessionStatus.RUNNING, started)
 
         self.assertEqual(session.status, SessionStatus.RUNNING)
         self.assertIs(session.events[-1], started)
 
-    def test_blocked_and_failed_can_start_a_new_run(self):
+    def test_blocked_and_failed_can_start_a_new_turn(self):
         cases = (
             (SessionStatus.BLOCKED, SessionEventType.BLOCKED),
             (SessionStatus.FAILED, SessionEventType.FAILED),
@@ -152,7 +152,7 @@ class SessionStateTest(unittest.TestCase):
 
                 session.transition_to(
                     SessionStatus.RUNNING,
-                    self.make_event(SessionEventType.STARTED, run_id="run-2"),
+                    self.make_event(SessionEventType.STARTED, turn_id="turn-2"),
                 )
 
                 self.assertEqual(session.status, SessionStatus.RUNNING)
@@ -214,29 +214,29 @@ class SessionStateTest(unittest.TestCase):
         self.assertEqual(session.status, SessionStatus.PENDING)
         self.assertEqual(session.events, [])
 
-    def test_session_can_hold_run_record(self):
+    def test_session_can_hold_turn_record(self):
         session = Session(id="session-1")
-        record = SessionRunRecord(
-            run_id="run-1",
+        record = SessionTurnRecord(
+            turn_id="turn-1",
             status="blocked",
             started_at=datetime.now(timezone.utc),
-            final_reason="max_rounds_exceeded",
+            final_reason="max_steps_exceeded",
         )
 
-        session.run_records.append(record)
+        session.turn_records.append(record)
 
-        self.assertEqual(session.run_records, [record])
+        self.assertEqual(session.turn_records, [record])
 
-    def test_sessions_do_not_share_run_records(self):
+    def test_sessions_do_not_share_turn_records(self):
         first = Session(id="session-1")
         second = Session(id="session-2")
 
-        first.run_records.append(
-            SessionRunRecord(
-                run_id="run-1",
+        first.turn_records.append(
+            SessionTurnRecord(
+                turn_id="turn-1",
                 status="completed",
                 started_at=datetime.now(timezone.utc),
             )
         )
 
-        self.assertEqual(second.run_records, [])
+        self.assertEqual(second.turn_records, [])

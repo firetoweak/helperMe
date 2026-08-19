@@ -2,14 +2,14 @@ from core.runtime_modes.base import RuntimeMode
 from core.runtime_modes.plain import PlainMode
 from core.runtime_modes.router import (
     RouteDecision,
-    RunMode,
+    TurnMode,
     RuntimeModeRouter,
 )
 
 __all__ = [
     "PlainMode",
     "RouteDecision",
-    "RunMode",
+    "TurnMode",
     "RuntimeMode",
     "RuntimeModeRouter",
 ]

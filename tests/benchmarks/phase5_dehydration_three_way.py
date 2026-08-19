@@ -167,7 +167,7 @@ def main() -> None:
             "tool_results": "三组重放完全相同的工具结果",
             "tokenizer": "o200k_base over canonical {messages, tools} JSON",
             "execution_time_scope": (
-                "本地 RunRuntime、上下文投影、脱水、协议编排与内存重放；"
+                "本地 TurnRuntime、上下文投影、脱水、协议编排与内存重放；"
                 "不含真实模型和工具 I/O 延迟"
             ),
             "only_difference": {

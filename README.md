@@ -60,7 +60,7 @@ python console_chat.py
 
 进入对话后：
 
-- 直接输入内容，执行一次普通 Agent Run。
+- 直接输入内容，执行一次普通 Agent Turn。
 - 输入 `/goal <目标>`，启动可持续执行和独立验证的 Goal 工作流。
 - 用自然语言要求安装 MCP，或使用 `/mcp` 管理已有 MCP Server。
 - 按 `Ctrl+C`，请求 Agent 在安全点中断当前任务。

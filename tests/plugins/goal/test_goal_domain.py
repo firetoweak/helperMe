@@ -87,7 +87,7 @@ class GoalLifecycleTest(unittest.TestCase):
         self.goal.record_judgment(
             GoalJudgment(
                 turn.index,
-                turn.judge_run_id,
+                turn.judge_turn_id,
                 decision,
                 reason,
                 ("独立验证证据",),
@@ -111,10 +111,10 @@ class GoalLifecycleTest(unittest.TestCase):
 
     def test_continue_on_last_turn_exhausts_goal(self):
         for index in (1, 2):
-            run_id = f"executor-{index}"
-            self.goal.start_turn(run_id)
+            turn_id = f"executor-{index}"
+            self.goal.start_turn(turn_id)
             self.goal.begin_judgment(
-                run_id,
+                turn_id,
                 f"judge-{index}",
                 f"第 {index} 轮",
             )

@@ -118,7 +118,7 @@ class ContractRevision:
 @dataclass(frozen=True)
 class GoalJudgment:
     turn_index: int
-    judge_run_id: str
+    judge_turn_id: str
     decision: JudgmentDecision
     reason: str
     evidence: tuple[str, ...]
@@ -126,8 +126,8 @@ class GoalJudgment:
     def __post_init__(self) -> None:
         if self.turn_index < 1:
             raise ValueError("judgment turn_index must be positive")
-        if not self.judge_run_id.strip():
-            raise ValueError("judge_run_id cannot be empty")
+        if not self.judge_turn_id.strip():
+            raise ValueError("judge_turn_id cannot be empty")
         if not self.reason.strip():
             raise ValueError("judgment reason cannot be empty")
         if any(not item.strip() for item in self.evidence):
@@ -139,10 +139,10 @@ class GoalJudgment:
 @dataclass(frozen=True)
 class GoalTurn:
     index: int
-    executor_run_id: str
+    executor_turn_id: str
     contract_version: int
     status: GoalTurnStatus = GoalTurnStatus.EXECUTING
-    judge_run_id: str | None = None
+    judge_turn_id: str | None = None
     executor_answer: str | None = None
 
 
@@ -204,19 +204,19 @@ class Goal:
     def latest_feedback(self) -> str | None:
         return self._judgments[-1].reason if self._judgments else None
 
-    def start_turn(self, executor_run_id: str) -> GoalTurn:
+    def start_turn(self, executor_turn_id: str) -> GoalTurn:
         if self._status is not GoalStatus.ACTIVE:
             raise ValueError("only an active goal can start an executor turn")
         if self.turn_count >= self.max_turns:
             raise ValueError("goal has exhausted max_turns")
-        if not executor_run_id.strip():
-            raise ValueError("executor_run_id cannot be empty")
-        if any(turn.executor_run_id == executor_run_id for turn in self._turns):
-            raise ValueError(f"duplicate executor_run_id: {executor_run_id}")
+        if not executor_turn_id.strip():
+            raise ValueError("executor_turn_id cannot be empty")
+        if any(turn.executor_turn_id == executor_turn_id for turn in self._turns):
+            raise ValueError(f"duplicate executor_turn_id: {executor_turn_id}")
 
         turn = GoalTurn(
             index=self.turn_count + 1,
-            executor_run_id=executor_run_id,
+            executor_turn_id=executor_turn_id,
             contract_version=self._contract.version,
         )
         self._turns.append(turn)
@@ -224,31 +224,31 @@ class Goal:
 
     def begin_judgment(
         self,
-        executor_run_id: str,
-        judge_run_id: str,
+        executor_turn_id: str,
+        judge_turn_id: str,
         executor_answer: str,
     ) -> None:
-        turn = self._current_turn(executor_run_id)
+        turn = self._current_turn(executor_turn_id)
         if turn.status is not GoalTurnStatus.EXECUTING:
             raise ValueError("executor turn is not executing")
-        if not judge_run_id.strip():
-            raise ValueError("judge_run_id cannot be empty")
+        if not judge_turn_id.strip():
+            raise ValueError("judge_turn_id cannot be empty")
         if not executor_answer.strip():
             raise ValueError("executor_answer cannot be empty")
         self._turns[-1] = replace(
             turn,
             status=GoalTurnStatus.JUDGING,
-            judge_run_id=judge_run_id,
+            judge_turn_id=judge_turn_id,
             executor_answer=executor_answer,
         )
         self._status = GoalStatus.JUDGING
 
-    def interrupt_turn(self, executor_run_id: str, reason: str) -> None:
-        turn = self._current_turn(executor_run_id)
+    def interrupt_turn(self, executor_turn_id: str, reason: str) -> None:
+        turn = self._current_turn(executor_turn_id)
         if turn.status is not GoalTurnStatus.EXECUTING:
             raise ValueError("only an executing turn can be interrupted")
         # max_turns 只统计完成到 Judge 边界的完整 Executor Turn。
-        # 中断 Run 的事实由 SessionRunRecord 保存，不复制进 Goal 历史。
+        # 中断 Turn 的事实由 SessionTurnRecord 保存，不复制进 Goal 历史。
         self._turns.pop()
         self._status = GoalStatus.PAUSED
         self._resume_status = GoalStatus.ACTIVE
@@ -282,8 +282,8 @@ class Goal:
             raise ValueError("goal turn is not awaiting a judgment")
         if judgment.turn_index != turn.index:
             raise ValueError("judgment targets the wrong turn")
-        if judgment.judge_run_id != turn.judge_run_id:
-            raise ValueError("judgment targets the wrong judge run")
+        if judgment.judge_turn_id != turn.judge_turn_id:
+            raise ValueError("judgment targets the wrong judge turn")
 
         self._judgments.append(judgment)
         self._turns[-1] = replace(turn, status=GoalTurnStatus.FINISHED)
@@ -307,10 +307,10 @@ class Goal:
         self._resume_status = None
         self._pause_reason = None
 
-    def _current_turn(self, executor_run_id: str) -> GoalTurn:
+    def _current_turn(self, executor_turn_id: str) -> GoalTurn:
         if not self._turns:
             raise ValueError("goal has no turn")
         turn = self._turns[-1]
-        if turn.executor_run_id != executor_run_id:
-            raise ValueError("executor_run_id does not match current turn")
+        if turn.executor_turn_id != executor_turn_id:
+            raise ValueError("executor_turn_id does not match current turn")
         return turn

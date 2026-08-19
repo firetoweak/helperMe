@@ -2,7 +2,7 @@
 
 ## 为什么回补
 
-模型单轮可以同时返回 assistant `content` 与 `tool_calls`。旧协议把二者建模成互斥响应，导致工具调用同轮的阶段性说明被 Client 丢弃，Conversation 只能保存 `content=None`。
+模型单个 AgentStep 可以同时返回 assistant `content` 与 `tool_calls`。旧协议把二者建模成互斥响应，导致工具调用同一 AgentStep 的阶段性说明被 Client 丢弃，Conversation 只能保存 `content=None`。
 
 本次不新增“阶段解释层”。阶段性说明仍是模型原始 assistant content，不是 Context、Checkpoint、规划事件或隐藏思维链。
 
@@ -15,14 +15,14 @@ LLMClient 保留混合响应
         ↓
 Conversation 保存完整 assistant message
         ↓
-RunRuntime 在工具执行前向 RunProgressSink 输出 content
+TurnRuntime 在工具执行前向 TurnProgressSink 输出 content
         ↓
-工具结果进入 Conversation，下一轮继续判断
+工具结果进入 Conversation，下一个 AgentStep 继续判断
 ```
 
 - `LLMResponse` 收敛为 `content: str` 与不可变 `calls: tuple[ToolCall, ...]`，不再保留互斥 `type`。
 - 判断顺序固定为：有 `calls` 就执行工具；否则非空 `content` 才是最终回答候选；二者都没有则是非法空响应。
-- `RunProgressSink` 是 Runtime 对外输出端口；无消费者时使用 Null Object，Console 绑定打印实现。
+- `TurnProgressSink` 是 Runtime 对外输出端口；无消费者时使用 Null Object，Console 绑定打印实现。
 - 只输出主 Agent Loop 中携带工具调用的 content。Router、Todo 初始化等内部受限调用不进入 Conversation，也不输出给用户。
 - Sink 异常不捕获、不包装，内部继续相信端口契约。
 
@@ -34,9 +34,9 @@ RunRuntime 在工具执行前向 RunProgressSink 输出 content
 
 ## 当前并发边界
 
-Composition Root 当前把同一个 `progress_sink` 注入所有 Session 创建的 `RunRuntime`。这符合单会话 Console 的使用方式；如果以后支持多个 Session 并发运行，各 Session 的阶段性说明可能写入同一输出流并交错。
+Composition Root 当前把同一个 `progress_sink` 注入所有 Session 创建的 `TurnRuntime`。这符合单会话 Console 的使用方式；如果以后支持多个 Session 并发运行，各 Session 的阶段性说明可能写入同一输出流并交错。
 
-在真正出现并发 Session 消费者时，再把输出目标收敛为 Session 或 Run 级绑定，并携带对应身份进行路由。本次不提前增加并发事件分发机制。
+在真正出现并发 Session 消费者时，再把输出目标收敛为 Session 或 Turn 级绑定，并携带对应身份进行路由。本次不提前增加并发事件分发机制。
 
 ## 验证
 

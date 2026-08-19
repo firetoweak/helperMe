@@ -25,7 +25,7 @@ class RuntimeMode(Protocol):
     def check_final_candidate(self, state: Any) -> str | None:
         ...
 
-    def on_run_completed(self, state: Any) -> None:
+    def on_turn_completed(self, state: Any) -> None:
         ...
 
     def after_tool_batch(

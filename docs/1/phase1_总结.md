@@ -2,7 +2,7 @@
 
 为什么做：当前可靠性主要依赖 system prompt 和模型自觉，所有agent运行状态都在一起了，需要拆解
 
-目标是 Phase 1 的目标不是做完整 Runtime，而是把当前 Agent.run 中混杂的 tool calling loop 抽象成可靠的 RunRuntime，并用 tools_state 管理当前 run 内的工具调用链路，使工具调用过程可检查、可修复、可截断、可停止。
+目标是 Phase 1 的目标不是做完整 Runtime，而是把当前 Agent.run 中混杂的 tool calling loop 抽象成可靠的 TurnRuntime，并用 tools_state 管理当前 Turn 内的工具调用链路，使工具调用过程可检查、可修复、可截断、可停止。
 
 ### 学习内容
 
@@ -16,11 +16,11 @@
 
 ✓ 基础的runtime已经有了。
 
-ToolsState 是账本。RunRuntime 是执行控制者，Checkpoint/RunResult 是对外报告。
+ToolsState 是账本。TurnRuntime 是执行控制者，Checkpoint/TurnResult 是对外报告。
 
-✓ 抽出 RunRuntime，作为整个agent的心脏，最小运行内核
+✓ 抽出 TurnRuntime，作为整个agent的心脏，最小运行内核
 
-短任务 runtime，保持其生命周期在一轮text-tools-text，一次多轮的工具调用。不持久的化状态。
+短任务 Runtime：一个 Turn 可以包含多个 AgentStep，每个 AgentStep 完成一次模型响应及其直接产生的工具批次；状态不跨 Turn 持久化。
 模型异常（完成了）
 
 ✓ 定义 ToolsState
@@ -42,10 +42,10 @@ Phase 1 已完成最小可靠 tool-calling runtime：工具调用循环已从 Ag
 
 ### Phase 6A 压力测试回补（2026.08.10）
 
-跨 Run Goal 验收暴露出初版 `RunResult` 只适合报告运行状态，不能承载机器可验证的完成事实。本次回补：
+跨 Turn Goal 验收暴露出初版 `TurnResult` 只适合报告运行状态，不能承载机器可验证的完成事实。本次回补：
 
-- `RunResult` 增加 `RunEvidence` 快照；工具原始结果在外置或裁剪前写入证据账本，模型自由文本不作为验收事实。
-- `RunInvocation / RunCapability` 成为 Run 级扩展入口，Capability 可以注入临时工具、运行说明、完成门禁，并声明是否允许基础工具。
-- 临时 ToolRegistry 不再只解决“工具何时释放”，还解决“本 Run 有权使用哪些工具”；Contract Compilation Run 因此只能提交 Contract，独立 Judge Run 则可读取真实状态并执行验证。
+- `TurnResult` 增加 `TurnEvidence` 快照；工具原始结果在外置或裁剪前写入证据账本，模型自由文本不作为验收事实。
+- `TurnInvocation / TurnCapability` 成为 Turn 级扩展入口，Capability 可以注入临时工具、运行说明、完成门禁，并声明是否允许基础工具。
+- 临时 ToolRegistry 不再只解决“工具何时释放”，还解决“本 Turn 有权使用哪些工具”；Contract Compilation Turn 因此只能提交 Contract，独立 Judge Turn 则可读取真实状态并执行验证。
 
-这次回补确认：ToolsState 负责协议账本，RunEvidence 负责执行事实，RunResult 负责对外结果，三者不能合并。
+这次回补确认：ToolsState 负责协议账本，TurnEvidence 负责执行事实，TurnResult 负责对外结果，三者不能合并。

@@ -3,16 +3,16 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from typing import Any
 
-from core.session import SessionRunOutcome, SessionRuntime
+from core.session import SessionTurnOutcome, SessionRuntime
 from core.session.state import SessionStatus
-from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.turn_invocation import TurnInvocation
 from core.approval import (
     ApprovalActionRegistry,
     ApprovalRequest,
     ApprovalResolution,
 )
 
-DEFAULT_MAX_ROUNDS = 50
+DEFAULT_MAX_STEPS = 50
 
 
 class AgentApplication:
@@ -20,18 +20,18 @@ class AgentApplication:
         self,
         session_runtime: SessionRuntime,
         system_prompt: str,
-        default_max_rounds: int = DEFAULT_MAX_ROUNDS,
+        default_max_steps: int = DEFAULT_MAX_STEPS,
         resources: tuple[AbstractAsyncContextManager[Any], ...] = (),
         approval_actions: ApprovalActionRegistry | None = None,
     ):
         if not system_prompt.strip():
             raise ValueError("system_prompt 不能为空")
-        if default_max_rounds < 1:
-            raise ValueError("default_max_rounds 必须大于 0")
+        if default_max_steps < 1:
+            raise ValueError("default_max_steps 必须大于 0")
 
         self._session_runtime = session_runtime
         self._system_prompt = system_prompt
-        self._default_max_rounds = default_max_rounds
+        self._default_max_steps = default_max_steps
         self._resources = resources
         self._resource_stack = AsyncExitStack()
         self._lifecycle_state = "new"
@@ -55,7 +55,7 @@ class AgentApplication:
 
     async def __aexit__(self, exc_type, exc, traceback) -> bool:
         self._require_started()
-        self._ensure_no_active_runs()
+        self._ensure_no_active_turns()
         self._lifecycle_state = "closing"
         try:
             return await self._resource_stack.__aexit__(
@@ -72,7 +72,7 @@ class AgentApplication:
         if self._lifecycle_state == "new":
             self._lifecycle_state = "closed"
             return
-        self._ensure_no_active_runs()
+        self._ensure_no_active_turns()
         self._lifecycle_state = "closing"
         try:
             await self._resource_stack.aclose()
@@ -86,9 +86,9 @@ class AgentApplication:
                 f"当前状态: {self._lifecycle_state}"
             )
 
-    def _ensure_no_active_runs(self) -> None:
+    def _ensure_no_active_turns(self) -> None:
         if self._session_runtime.active_controls:
-            raise RuntimeError("AgentApplication 仍有活动 Run，不能关闭资源")
+            raise RuntimeError("AgentApplication 仍有活动 Turn，不能关闭资源")
 
     def create_session(self, session_id: str) -> str:
         self._require_started()
@@ -101,36 +101,36 @@ class AgentApplication:
     async def start(
         self,
         session_id,
-        run_id,
+        turn_id,
         message,
-        max_rounds=None,
+        max_steps=None,
         *,
-        invocation: RunInvocation | None = None,
+        invocation: TurnInvocation | None = None,
     ):
         self._require_started()
         return await self._session_runtime.start(
             session_id,
-            run_id,
+            turn_id,
             message,
-            self._resolve_max_rounds(max_rounds),
+            self._resolve_max_steps(max_steps),
             invocation=invocation,
         )
 
     async def resume(
         self,
         session_id,
-        run_id,
+        turn_id,
         message,
-        max_rounds=None,
+        max_steps=None,
         *,
-        invocation: RunInvocation | None = None,
+        invocation: TurnInvocation | None = None,
     ):
         self._require_started()
         return await self._session_runtime.resume(
             session_id,
-            run_id,
+            turn_id,
             message,
-            self._resolve_max_rounds(max_rounds),
+            self._resolve_max_steps(max_steps),
             invocation=invocation,
         )
 
@@ -187,28 +187,28 @@ class AgentApplication:
         session.pending_approval_id = None
         return resolution
 
-    def validate_run(
+    def validate_turn(
         self,
         session_id: str,
-        run_id: str,
+        turn_id: str,
         user_message: str,
     ) -> None:
         self._require_started()
-        self._session_runtime.validate_run_input(run_id, user_message)
+        self._session_runtime.validate_turn_input(turn_id, user_message)
         session = self._session_runtime.get_session(session_id)
         if session.status is SessionStatus.RUNNING:
             raise ValueError(f"Session 已在执行: {session_id}")
-        if any(record.run_id == run_id for record in session.run_records):
-            raise ValueError(f"重复 run_id: {run_id}")
+        if any(record.turn_id == turn_id for record in session.turn_records):
+            raise ValueError(f"重复 turn_id: {turn_id}")
 
     async def execute(
         self,
         session_id: str,
-        run_id: str,
+        turn_id: str,
         user_message: str,
-        max_rounds: int | None,
-        invocation: RunInvocation,
-    ) -> SessionRunOutcome:
+        max_steps: int | None,
+        invocation: TurnInvocation,
+    ) -> SessionTurnOutcome:
         self._require_started()
         session = self._session_runtime.get_session(session_id)
         use_case = (
@@ -218,20 +218,20 @@ class AgentApplication:
         )
         return await use_case(
             session_id,
-            run_id,
+            turn_id,
             user_message,
-            self._resolve_max_rounds(max_rounds),
+            self._resolve_max_steps(max_steps),
             invocation=invocation,
         )
 
-    def _resolve_max_rounds(self, max_rounds: int | None) -> int:
+    def _resolve_max_steps(self, max_steps: int | None) -> int:
         resolved = (
-            self._default_max_rounds
-            if max_rounds is None
-            else max_rounds
+            self._default_max_steps
+            if max_steps is None
+            else max_steps
         )
         if resolved < 1:
-            raise ValueError("max_rounds 必须大于 0")
+            raise ValueError("max_steps 必须大于 0")
         return resolved
 
     def request_interrupt(self, session_id, reason=None):

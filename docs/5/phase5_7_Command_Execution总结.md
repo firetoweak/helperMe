@@ -12,7 +12,7 @@
 - 非零退出码作为 `COMMAND_COMPLETED` 的真实结果返回；超时返回 `COMMAND_TIMEOUT` 和已捕获的有限输出。
 - 子进程环境由白名单策略构造，禁止直接继承完整 `os.environ`。
 - cwd 继续复用 WorkspaceSandbox；只约束启动目录，不检查命令中的绝对路径，也不宣称进程安全隔离。
-- Composition Root 负责绑定 Workspace 和共享 Runner，RunRuntime 与 ToolsExecutor 不感知 PowerShell 实现。
+- Composition Root 负责绑定 Workspace 和共享 Runner，TurnRuntime 与 ToolsExecutor 不感知 PowerShell 实现。
 - 命令以 `workspace_effect=read_only|may_write` 声明预期副作用，默认保守使用 `may_write`；StopGuard 只要求已执行或超时的 `may_write` 命令在停止前调用 `get_changes`，只读查询不会被验证流程拉偏。
 
 ### 关键结论
@@ -53,7 +53,7 @@ Benchmark 的中间迭代还暴露出一个重要边界：StopGuard 只能保证
 
 ### Phase 6A 命令验收回补（2026.08.10）
 
-Phase 5.7 已能可靠执行命令，但 Agent Runtime 本身仍无法证明某个 Goal 已满足验收标准。Phase 6A 在独立 Judge Run 上补充 `CommandRequirement + CompletionGate`，直接核验当前 RunEvidence 中真实的：
+Phase 5.7 已能可靠执行命令，但 Agent Runtime 本身仍无法证明某个 Goal 已满足验收标准。Phase 6A 在独立 Judge Turn 上补充 `CommandRequirement + CompletionGate`，直接核验当前 TurnEvidence 中真实的：
 
 - command、root 与 cwd；
 - `COMMAND_COMPLETED`、超时状态和整数退出码；

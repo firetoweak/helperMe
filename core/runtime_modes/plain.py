@@ -24,7 +24,7 @@ class PlainMode:
     def check_final_candidate(self, state: None) -> str | None:
         return None
 
-    def on_run_completed(self, state: None) -> None:
+    def on_turn_completed(self, state: None) -> None:
         pass
 
     def after_tool_batch(

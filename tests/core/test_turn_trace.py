@@ -7,7 +7,7 @@ from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.session import SessionRuntime
 from core.session.state import SessionEvent
-from core.tools_runtime.run_runtime import RunRuntime, RunStatus
+from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -15,7 +15,7 @@ from tests.core.llm_test_support import (
 )
 
 
-class RunTraceTest(unittest.IsolatedAsyncioTestCase):
+class TurnTraceTest(unittest.IsolatedAsyncioTestCase):
     async def test_model_request_records_runtime_prompt_and_full_messages(self):
         model_calls = Mock()
         model_calls.call = AsyncMock()
@@ -27,7 +27,7 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -40,8 +40,8 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
             for checkpoint in result.checkpoints
             if checkpoint.reason == "llm_request"
         )
-        self.assertEqual(request.data["stage"], "agent_round")
-        self.assertEqual(request.data["round_index"], 1)
+        self.assertEqual(request.data["stage"], "agent_step")
+        self.assertEqual(request.data["step_index"], 1)
         self.assertEqual(request.data["attempt"], 1)
         self.assertEqual(request.data["runtime_prompts"], [])
         self.assertEqual(
@@ -52,7 +52,7 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_agent_round_emits_context_prepared_with_role_breakdown(self):
+    async def test_agent_step_emits_context_prepared_with_role_breakdown(self):
         model_calls = Mock()
         model_calls.call = AsyncMock()
         model_calls.call.return_value = call_result(
@@ -61,7 +61,7 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system")
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -76,8 +76,8 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(prepared), 1)
         data = prepared[0].data
-        self.assertEqual(data["stage"], "agent_round")
-        self.assertEqual(data["round_index"], 1)
+        self.assertEqual(data["stage"], "agent_step")
+        self.assertEqual(data["step_index"], 1)
         composition = data["composition"]
         self.assertIn("by_role_tokens", composition)
         self.assertIn("tool", composition["by_role_tokens"])
@@ -122,7 +122,7 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system")
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -186,7 +186,7 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
             LLMResponse(content="done")
         )
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -215,7 +215,7 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
             LLMResponse(content="done")
         )
         session_runtime = SessionRuntime(
-            RunRuntime(
+            TurnRuntime(
                 model_calls,
                 "test-model",
                 PlainMode(),
@@ -226,13 +226,13 @@ class RunTraceTest(unittest.IsolatedAsyncioTestCase):
         session_runtime.create_session("s1", "system")
         outcome = await session_runtime.start("s1", "r1", "hello")
 
-        self.assertEqual(outcome.result.status, RunStatus.COMPLETED)
+        self.assertEqual(outcome.result.status, TurnStatus.COMPLETED)
         for event in session_runtime.sessions["s1"].events:
             self.assertIsInstance(event, SessionEvent)
             self.assertFalse(hasattr(event, "composition"))
             self.assertEqual(
                 set(event.__dataclass_fields__),
-                {"kind", "session_id", "reason", "run_id", "occurred_at"},
+                {"kind", "session_id", "reason", "turn_id", "occurred_at"},
             )
         prepared = [
             checkpoint

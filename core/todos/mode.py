@@ -56,7 +56,7 @@ class TodoMode:
         decision = check_todo_exit(state)
         return None if decision.allowed else decision.feedback
 
-    def on_run_completed(self, state: TodoList) -> None:
+    def on_turn_completed(self, state: TodoList) -> None:
         state.complete()
 
     def after_tool_batch(

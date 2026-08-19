@@ -41,11 +41,11 @@ from core.runtime_artifacts import (
     ToolResultExternalizer,
     ToolResultLimit,
 )
-from core.runtime_modes import PlainMode, RunMode, RuntimeModeRouter
+from core.runtime_modes import PlainMode, TurnMode, RuntimeModeRouter
 from core.session import SessionRuntime
 from core.todos import TodoMode
 from core.tool_registry import BUILTIN_TOOL_REGISTRY
-from core.tools_runtime.run_runtime import RunRuntime
+from core.tools_runtime.turn_runtime import TurnRuntime
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tools import create_workspace_tool_specs
 from tools.artifact_read import create_read_artifact_spec
@@ -318,13 +318,13 @@ def build_application(
         context_budget=context_budget,
         summary_generator=LLMContextSummaryGenerator(model_calls, MODEL),
     )
-    run_runtime = RunRuntime(
+    turn_runtime = TurnRuntime(
         model_calls=model_calls,
         model=MODEL,
         mode_router=RuntimeModeRouter(),
         runtime_modes={
-            RunMode.PLAIN: PlainMode(),
-            RunMode.TODO: TodoMode(),
+            TurnMode.PLAIN: PlainMode(),
+            TurnMode.TODO: TodoMode(),
         },
         context_preparation=context_preparation,
         tools_executor=tools_executor,
@@ -334,7 +334,7 @@ def build_application(
         ),
     )
     return AgentApplication(
-        session_runtime=SessionRuntime(run_runtime=run_runtime),
+        session_runtime=SessionRuntime(turn_runtime=turn_runtime),
         system_prompt=DEFAULT_AGENT_PROMPT,
     )
 
@@ -375,9 +375,9 @@ async def run_group(
         before = len(llm_observations)
         outcome = await application.start(
             session_id,
-            f"run-{turn}-{uuid4().hex}",
+            f"turn-{turn}-{uuid4().hex}",
             question,
-            max_rounds=20,
+            max_steps=20,
         )
         after = len(llm_observations)
         request_checkpoints = [
@@ -398,10 +398,10 @@ async def run_group(
                 observations,
                 strict=True,
             )
-            if checkpoint.data["stage"] == "agent_round"
+            if checkpoint.data["stage"] == "agent_step"
         ]
         if not agent_requests:
-            raise AssertionError(f"第 {turn} 轮没有 agent_round 请求")
+            raise AssertionError(f"第 {turn} 轮没有 agent_step 请求")
         reports.append({
             "turn": turn,
             "question": question,

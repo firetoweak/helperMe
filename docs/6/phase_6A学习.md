@@ -11,7 +11,7 @@ Goal 表达最终目标、冻结的完成标准、跨 Turn 生命周期和追加
     ↓ 冻结
 执行一次完整 Executor Agent Turn
     ↓
-独立 Judge Run 主动验证
+独立 Judge Turn 主动验证
     ├─ done     → Goal completed
     ├─ continue → 注入 Judge feedback，自动开启下一 Turn
     └─ pause    → Goal paused，等待用户修订或恢复
@@ -33,7 +33,7 @@ Goal 表达最终目标、冻结的完成标准、跨 Turn 生命周期和追加
 
 ## Completion Contract
 
-Contract 由独立 Contract Compilation Run 根据用户 Goal 自动推导。每条标准都包含语义描述、权限来源和具体证据要求：
+Contract 由独立 Contract Compilation Turn 根据用户 Goal 自动推导。每条标准都包含语义描述、权限来源和具体证据要求：
 
 ```text
 CompletionCriterion
@@ -56,16 +56,16 @@ CompletionCriterion
 
 ## 独立 Judge 与实际验证
 
-Judge 使用独立 Session，不继承 Executor Conversation。Composition 为每个 Session 创建私有 RunRuntime，因此 Judge 与 Executor 的 Conversation、ContextState、RunEvidence 和临时工具注册表相互隔离；二者可以安全复用同一个模型与无状态 ModelCallService。
+Judge 使用独立 Session，不继承 Executor Conversation。Composition 为每个 Session 创建私有 TurnRuntime，因此 Judge 与 Executor 的 Conversation、ContextState、TurnEvidence 和临时工具注册表相互隔离；二者可以安全复用同一个模型与无状态 ModelCallService。
 
 Judge 的基础工具白名单只包含读取、检索、`get_changes` 和 `execute_command`，不暴露 `write_file / apply_patch / replace_all`，因此不能直接修复业务文件。验证命令自身仍可能产生缓存或构建产物，Contract 应通过 workspace 要求核验最终状态；若未来需要强隔离，再引入验证副本，不在本阶段伪造“命令绝对只读”。
 
 Judge Capability 允许读取真实工作区并执行验证，但提示词明确禁止修复。它必须调用 `submit_goal_judgment` 提交结构化结论。`done` 同时受到两层约束：
 
 1. Judge 对 Objective、Contract 和真实状态进行语义判断，并列出证据；
-2. CompletionGate 直接读取 Judge Run 的 `RunEvidence`，机械核验命令、退出码、超时和最终 workspace 状态。
+2. CompletionGate 直接读取 Judge Turn 的 `TurnEvidence`，机械核验命令、退出码、超时和最终 workspace 状态。
 
-Executor 的总结不是完成事实。缺少结构化证据时，RunRuntime 的 completion barrier 会拒绝 `done`，Judge 可以补做验证或改为 `continue`。
+Executor 的总结不是完成事实。缺少结构化证据时，TurnRuntime 的 completion barrier 会拒绝 `done`，Judge 可以补做验证或改为 `continue`。
 
 ## 状态机
 
@@ -79,27 +79,27 @@ active/judging --interrupt--> paused
 paused   --resume--> 中断前可恢复状态
 ```
 
-`max_rounds` 限制单个 Run 内的模型—工具循环；`max_goal_turns` 只统计已经到达 Judge 边界的完整 Executor Turn。中断的 Executor Run 由 SessionRunRecord 保存，不消耗 Goal Turn 配额。两者由 `model_config.yaml` 分别配置。
+`max_steps` 限制单个 Turn 内的模型—工具循环；`max_goal_turns` 只统计已经到达 Judge 边界的完整 Executor Turn。中断的 Executor Turn 由 SessionTurnRecord 保存，不消耗 Goal Turn 配额。两者由 `model_config.yaml` 分别配置。
 
 ## 当前实现
 
 - `plugins/goal/goal.py`：Goal、CompletionContract、ContractRevision、GoalTurn、GoalJudgment 与状态机。
 - `plugins/goal/application.py`：同步驱动 Contract、Executor、Judge 和 continuation，并管理隔离 Session。
 - `plugins/goal/capabilities.py`：ContractCompilation、GoalExecutor、GoalJudge 三种临时 Capability。
-- `plugins/goal/submissions.py`：Contract 与 Judgment 的 Run 内提交缓冲区。
+- `plugins/goal/submissions.py`：Contract 与 Judgment 的 Turn 内提交缓冲区。
 - `plugins/goal/verification.py`：GoalVerification 与只解释机器事实的 CompletionGate。
 - `plugins/goal/store.py`：进程内 GoalStore；一个 Session 同时只允许一个未结束 Goal。
 - `plugins/goal/console.py`：`/goal <objective>` 入口和活动 Goal 的后续路由。
-- `core/run_host.py`：插件只依赖通用 Session/Run 公共端口，Core 不含 Goal 词汇。
-- `core/tools_runtime/run_invocation.py`：Run 级 Capability 与 RuntimeMode 临时覆盖。
+- `core/turn_host.py`：插件只依赖通用 Session/Turn 公共端口，Core 不含 Goal 词汇。
+- `core/tools_runtime/turn_invocation.py`：Turn 级 Capability 与 RuntimeMode 临时覆盖。
 
-普通 Run 不携带 Goal Capability，也看不到 Goal 工具。删除 Goal Plugin 后 Core 无需修改即可独立运行。
+普通 Turn 不携带 Goal Capability，也看不到 Goal 工具。删除 Goal Plugin 后 Core 无需修改即可独立运行。
 
 ## Plugin 边界回看
 
-Goal 是第一个 Plugin，当时主要通过“Core 不导入 Goal、Goal 只消费 RunHost 与 RunInvocation”确认代码依赖方向。到 6B 设计第二个 Plugin——MCP 外部能力支架时，Plugin 的完整语义才进一步清晰：Plugin 不是一种具体工具，也不是 Core 的分层目录，而是建立在 Core 公共端口之上的可选 Agent 辅助支架。
+Goal 是第一个 Plugin，当时主要通过“Core 不导入 Goal、Goal 只消费 TurnHost 与 TurnInvocation”确认代码依赖方向。到 6B 设计第二个 Plugin——MCP 外部能力支架时，Plugin 的完整语义才进一步清晰：Plugin 不是一种具体工具，也不是 Core 的分层目录，而是建立在 Core 公共端口之上的可选 Agent 辅助支架。
 
-Goal 属于工作流型 Plugin：拥有 Goal、Contract、Judge 和跨 Run 状态，通过公共 Run 端口组织 Core 能力。删除 Goal 后，普通 Agent 仍可运行，只失去目标循环能力。Goal 的领域对象、存储和控制台入口均保留在 `plugins/goal`，因此当前实现符合这套更明确的边界。
+Goal 属于工作流型 Plugin：拥有 Goal、Contract、Judge 和跨 Turn 状态，通过公共 Turn 端口组织 Core 能力。删除 Goal 后，普通 Agent 仍可运行，只失去目标循环能力。Goal 的领域对象、存储和控制台入口均保留在 `plugins/goal`，因此当前实现符合这套更明确的边界。
 
 这次回看不要求重构 Goal。它反而验证了一个可复用判断：若未来 Plugin 暴露出 Core 公共端口不足，只补充与该 Plugin 领域无关的通用语义；不得把 Goal、MCP 或其他具体能力的生命周期写进 Core。
 
@@ -111,7 +111,7 @@ Goal 属于工作流型 Plugin：拥有 Goal、Contract、Judge 和跨 Run 状�
 - inferred 标准只能在 Turn 边界版本化修订；
 - Contract v2 只影响下一 Executor Turn；
 - Executor 与 Judge 使用隔离 Session；
-- Judge Session 使用私有 RunRuntime，不继承 Executor 上下文；
+- Judge Session 使用私有 TurnRuntime，不继承 Executor 上下文；
 - `done` 必须引用证据并通过真实命令与 workspace 门禁；
 - `continue` 自动注入 feedback；
 - pause / resume / max_goal_turns exhausted 状态迁移。
@@ -120,6 +120,6 @@ Goal 属于工作流型 Plugin：拥有 Goal、Contract、Judge 和跨 Run 状�
 
 ## 下一步边界
 
-6B 继续研究 Run 期 Skill / Toolset Progressive Loading。Goal 只消费通用 RunInvocation，不负责决定具体能力如何发现和加载。
+6B 继续研究 Turn 期 Skill / Toolset Progressive Loading。Goal 只消费通用 TurnInvocation，不负责决定具体能力如何发现和加载。
 
 持久化、后台调度和多 Agent Judge 都后置；当前不为了未来可能性扩张 Goal 聚合。

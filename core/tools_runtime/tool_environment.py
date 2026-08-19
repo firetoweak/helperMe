@@ -9,7 +9,7 @@ from core.tools_runtime.progressive_toolsets import (
     create_load_toolset_spec,
     toolset_catalog_instruction,
 )
-from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.turn_invocation import TurnInvocation
 from core.tools_runtime.tools_executor import ToolsExecutor
 
 
@@ -20,10 +20,10 @@ class ToolEnvironmentSnapshot:
     runtime_prompts: list[str]
 
 
-class RunToolEnvironment:
-    """管理一次 Run 内的工具选择、渐进加载和逐轮可见快照。"""
+class TurnToolEnvironment:
+    """管理一次 Turn 内的工具选择、渐进加载和逐 AgentStep 可见快照。"""
 
-    def __init__(self, tools_executor: ToolsExecutor, invocation: RunInvocation) -> None:
+    def __init__(self, tools_executor: ToolsExecutor, invocation: TurnInvocation) -> None:
         self.invocation = invocation
         if invocation.capabilities:
             selections = [
@@ -65,11 +65,11 @@ class RunToolEnvironment:
 
     def snapshot(self, runtime_mode: RuntimeMode, mode_state: Any) -> ToolEnvironmentSnapshot:
         if self.toolset_provider is None:
-            run_registry = self.base_registry
-            run_executor = self.base_executor
+            turn_registry = self.base_registry
+            turn_executor = self.base_executor
         else:
-            run_registry = self.base_registry.clone()
-            run_registry.register(
+            turn_registry = self.base_registry.clone()
+            turn_registry.register(
                 create_load_toolset_spec(
                     self.toolset_descriptors,
                     self.toolset_state,
@@ -81,10 +81,10 @@ class RunToolEnvironment:
                 if loaded_specs is None:
                     continue
                 for spec in loaded_specs:
-                    run_registry.register(spec)
-            run_executor = ToolsExecutor(run_registry)
+                    turn_registry.register(spec)
+            turn_executor = ToolsExecutor(turn_registry)
 
-        external_tools = run_registry.get_tools()
+        external_tools = turn_registry.get_tools()
         runtime_tools = runtime_mode.runtime_tools(mode_state)
         external_names = {
             tool["function"]["name"] for tool in external_tools
@@ -111,7 +111,7 @@ class RunToolEnvironment:
             )
 
         return ToolEnvironmentSnapshot(
-            executor=run_executor,
+            executor=turn_executor,
             model_tools=external_tools + runtime_tools,
             runtime_prompts=runtime_prompts,
         )

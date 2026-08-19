@@ -1,11 +1,11 @@
 from typing import Protocol
 
 
-class RunProgressSink(Protocol):
+class TurnProgressSink(Protocol):
     def emit(self, text: str) -> None:
         ...
 
 
-class NullRunProgressSink:
+class NullTurnProgressSink:
     def emit(self, text: str) -> None:
         pass

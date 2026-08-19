@@ -28,7 +28,7 @@ class WorkspaceConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    max_rounds: int
+    max_steps: int
     max_goal_turns: int
     model_context_limit: int
     input_budget_ratio: float
@@ -96,9 +96,9 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     if not isinstance(runtime, dict):
         raise ValueError("配置必须包含 runtime 映射")
 
-    max_rounds = runtime.get("max_rounds")
-    if type(max_rounds) is not int or max_rounds < 1:
-        raise ValueError("配置 runtime.max_rounds 必须是大于 0 的整数")
+    max_steps = runtime.get("max_steps")
+    if type(max_steps) is not int or max_steps < 1:
+        raise ValueError("配置 runtime.max_steps 必须是大于 0 的整数")
 
     max_goal_turns = runtime.get("max_goal_turns")
     if type(max_goal_turns) is not int or max_goal_turns < 1:
@@ -128,7 +128,7 @@ def load_app_config(path: Path | None = None) -> AppConfig:
             full_access=full_access,
         ),
         runtime=RuntimeConfig(
-            max_rounds=max_rounds,
+            max_steps=max_steps,
             max_goal_turns=max_goal_turns,
             model_context_limit=model_context_limit,
             input_budget_ratio=float(input_budget_ratio),

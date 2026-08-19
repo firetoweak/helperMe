@@ -1,5 +1,5 @@
 """Tool-calling runtime package."""
-from core.tools_runtime.run_invocation import RunCapability, RunInvocation
+from core.tools_runtime.turn_invocation import TurnCapability, TurnInvocation
 from core.tools_runtime.progressive_toolsets import (
     LOAD_TOOLSET,
     CompositeToolsetProvider,
@@ -9,8 +9,8 @@ from core.tools_runtime.progressive_toolsets import (
     SessionCapabilitySnapshot,
     SnapshotToolsetProvider,
 )
-from core.tools_runtime.run_evidence import (
-    RunEvidence,
+from core.tools_runtime.turn_evidence import (
+    TurnEvidence,
     ToolEvidence,
     WorkspaceBaseline,
 )
@@ -18,9 +18,9 @@ from core.tools_runtime.run_evidence import (
 __all__ = [
     "LOAD_TOOLSET",
     "CompositeToolsetProvider",
-    "RunCapability",
-    "RunEvidence",
-    "RunInvocation",
+    "TurnCapability",
+    "TurnEvidence",
+    "TurnInvocation",
     "ToolEvidence",
     "ToolsetDescriptor",
     "ToolsetLoadError",

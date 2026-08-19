@@ -9,10 +9,10 @@ from core.model_call import (
     ToolCall,
 )
 from core.runtime_modes import PlainMode
-from core.runtime_modes.router import RunMode, RuntimeModeRouter
+from core.runtime_modes.router import TurnMode, RuntimeModeRouter
 from core.todos import TodoMode
-from core.tools_runtime.run_runtime import RunRuntime
-from core.tools_runtime import RunInvocation
+from core.tools_runtime.turn_runtime import TurnRuntime
+from core.tools_runtime import TurnInvocation
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -38,7 +38,7 @@ class RecordingLLMClient:
         return call_result(response)
 
 
-class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
+class TurnRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _conversation() -> Conversation:
         conversation = Conversation()
@@ -115,14 +115,14 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
         )
 
     @staticmethod
-    def _runner(llm) -> RunRuntime:
-        return RunRuntime(
+    def _runner(llm) -> TurnRuntime:
+        return TurnRuntime(
             model_calls=model_call_service(llm),
             model="test-model",
             mode_router=RuntimeModeRouter(),
             runtime_modes={
-                RunMode.PLAIN: PlainMode(),
-                RunMode.TODO: TodoMode(),
+                TurnMode.PLAIN: PlainMode(),
+                TurnMode.TODO: TodoMode(),
             },
             context_preparation=context_preparation_service(),
             **runtime_tool_dependencies(),
@@ -157,13 +157,13 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(routed.data["mode"], "plain")
         self.assertEqual(routed.data["reason"], "可以直接回答")
 
-    async def test_invocation_runtime_mode_overrides_router_for_current_run(self):
+    async def test_invocation_runtime_mode_overrides_router_for_current_turn(self):
         llm = RecordingLLMClient([LLMResponse(content="能力运行完成")])
 
         result = await self._runner(llm).run(
             self._conversation(),
             "执行一个看起来复杂的能力任务",
-            invocation=RunInvocation(runtime_mode=PlainMode()),
+            invocation=TurnInvocation(runtime_mode=PlainMode()),
         )
 
         self.assertEqual(result.status, "completed")
@@ -177,7 +177,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_todo_route_initializes_todos_before_agent_round(self):
+    async def test_todo_route_initializes_todos_before_agent_step(self):
         llm = RecordingLLMClient(
             [
                 self._route("todo", "需要分析多个依赖步骤"),
@@ -190,7 +190,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
         result = await self._runner(llm).run(
             self._conversation(),
             "分析项目并给出修改建议",
-            max_rounds=2,
+            max_steps=2,
         )
 
         self.assertEqual(result.status, "completed")
@@ -214,8 +214,8 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
             [
                 "routing",
                 "todo_initialization",
-                "agent_round",
-                "agent_round",
+                "agent_step",
+                "agent_step",
             ],
         )
 
@@ -250,7 +250,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_same_session_can_route_different_runs_to_different_modes(self):
+    async def test_same_session_can_route_different_turns_to_different_modes(self):
         conversation = self._conversation()
         llm = RecordingLLMClient(
             [
@@ -265,7 +265,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
         runner = self._runner(llm)
 
         first = await runner.run(conversation, "简单问题")
-        second = await runner.run(conversation, "现在完成一个复杂任务", max_rounds=2)
+        second = await runner.run(conversation, "现在完成一个复杂任务", max_steps=2)
 
         first_route = next(
             cp for cp in first.checkpoints
@@ -278,7 +278,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_route.data["mode"], "plain")
         self.assertEqual(second_route.data["mode"], "todo")
 
-    async def test_discussion_after_todo_run_can_return_to_plain_mode(self):
+    async def test_discussion_after_todo_turn_can_return_to_plain_mode(self):
         conversation = self._conversation()
         llm = RecordingLLMClient(
             [
@@ -292,7 +292,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
         )
         runner = self._runner(llm)
 
-        first = await runner.run(conversation, "实现并验证复杂修改", max_rounds=2)
+        first = await runner.run(conversation, "实现并验证复杂修改", max_steps=2)
         second = await runner.run(
             conversation,
             "我觉得更好的优化方向是引入受限工作区。",
@@ -309,7 +309,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(llm.seen_tools[4], [])
         self.assertNotIn("rewrite_todos", str(llm.seen_tools[5]))
 
-    async def test_invalid_route_falls_back_to_plain_in_same_run(self):
+    async def test_invalid_route_falls_back_to_plain_in_same_turn(self):
         llm = RecordingLLMClient(
             [
                 LLMResponse(content="我觉得这是复杂任务"),
@@ -339,7 +339,7 @@ class RunRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_todo_activation_failure_falls_back_to_plain_in_same_run(self):
+    async def test_todo_activation_failure_falls_back_to_plain_in_same_turn(self):
         initialization_text = "这个问题可以直接讨论，不需要创建 Todo。"
         llm = RecordingLLMClient(
             [

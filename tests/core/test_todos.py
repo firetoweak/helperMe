@@ -172,7 +172,7 @@ class TodoModeTest(unittest.IsolatedAsyncioTestCase):
         )
         return mode, state
 
-    async def test_state_is_created_per_run_instead_of_stored_on_mode(self):
+    async def test_state_is_created_per_turn_instead_of_stored_on_mode(self):
         mode = TodoMode()
 
         first = mode.create_state()
@@ -247,7 +247,7 @@ class TodoModeTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertIsNone(mode.check_final_candidate(state))
-        mode.on_run_completed(state)
+        mode.on_turn_completed(state)
         self.assertEqual(state.phase, TodoPhase.COMPLETED)
 
 

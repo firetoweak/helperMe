@@ -11,7 +11,7 @@ from core.approval import ApprovalActionRegistry
 from core.composition import create_agent_application
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.turn_invocation import TurnInvocation
 from tests.core.llm_test_support import call_result
 from plugins.mcp.composition import create_mcp_plugin
 
@@ -86,9 +86,9 @@ async def run_benchmark() -> dict:
             old_session_id = application.create_session("old-session")
             proposal_outcome = await application.start(
                 old_session_id,
-                "proposal-run",
+                "proposal-turn",
                 "请安装这个真实 stdio MCP Server",
-                invocation=RunInvocation(
+                invocation=TurnInvocation(
                     toolset_provider=plugin.toolset_provider,
                 ),
             )
@@ -99,18 +99,18 @@ async def run_benchmark() -> dict:
             )
             old_outcome = await application.start(
                 old_session_id,
-                "old-session-run",
+                "old-session-turn",
                 "检查当前 Session 的能力",
-                invocation=RunInvocation(
+                invocation=TurnInvocation(
                     toolset_provider=plugin.toolset_provider,
                 ),
             )
             new_session_id = application.create_session("new-session")
             new_outcome = await application.start(
                 new_session_id,
-                "new-session-run",
+                "new-session-turn",
                 "加载并调用刚安装的 MCP",
-                invocation=RunInvocation(
+                invocation=TurnInvocation(
                     toolset_provider=plugin.toolset_provider,
                 ),
             )
@@ -153,7 +153,7 @@ async def run_benchmark() -> dict:
                     item["code"] == "MCP_TOOL_OK"
                     for item in tool_results
                 ),
-                "new_run_completed": (
+                "new_turn_completed": (
                     new_outcome.result.status.value == "completed"
                 ),
             }

@@ -6,8 +6,8 @@ from typing import Any
 from core.context import ContextState, ModelContext
 from core.messages import Conversation
 from core.model_call.types import InvalidLLMResponse
-from core.runtime_modes import RunMode, RuntimeMode, RuntimeModeRouter
-from core.tools_runtime.model_turn import ModelTurnRunner
+from core.runtime_modes import TurnMode, RuntimeMode, RuntimeModeRouter
+from core.tools_runtime.agent_step import AgentStepRunner
 from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     invalid_llm_response_checkpoint,
@@ -29,17 +29,17 @@ class ModeActivationOutcome:
 
 
 class ModeActivator:
-    """选择并初始化一次 Run 使用的 RuntimeMode。"""
+    """选择并初始化一次 Turn 使用的 RuntimeMode。"""
 
     def __init__(
         self,
         *,
-        model_turn_runner: ModelTurnRunner,
+        agent_step_runner: AgentStepRunner,
         default_mode: RuntimeMode | None,
         mode_router: RuntimeModeRouter | None,
-        runtime_modes: dict[RunMode, RuntimeMode] | None,
+        runtime_modes: dict[TurnMode, RuntimeMode] | None,
     ) -> None:
-        self.model_turn_runner = model_turn_runner
+        self.agent_step_runner = agent_step_runner
         self.default_mode = default_mode
         self.mode_router = mode_router
         self.runtime_modes = runtime_modes
@@ -56,7 +56,7 @@ class ModeActivator:
         runtime_mode = requested_mode or self.default_mode
 
         if requested_mode is None and self.mode_router is not None:
-            route_outcome = await self.model_turn_runner.call(
+            route_outcome = await self.agent_step_runner.call(
                 ModelContext(
                     messages=self.mode_router.build_messages(conversation.records)
                 ),
@@ -76,11 +76,11 @@ class ModeActivator:
                     checkpoints.append(
                         runtime_mode_fallback_checkpoint(
                             from_mode=None,
-                            to_mode=RunMode.PLAIN.value,
+                            to_mode=TurnMode.PLAIN.value,
                             reason=route_response.reason,
                         )
                     )
-                    runtime_mode = self.runtime_modes[RunMode.PLAIN]
+                    runtime_mode = self.runtime_modes[TurnMode.PLAIN]
                 else:
                     return ModeActivationOutcome(
                         runtime_mode=None,
@@ -105,11 +105,11 @@ class ModeActivator:
                     checkpoints.append(
                         runtime_mode_fallback_checkpoint(
                             from_mode=None,
-                            to_mode=RunMode.PLAIN.value,
+                            to_mode=TurnMode.PLAIN.value,
                             reason=exc.code,
                         )
                     )
-                    runtime_mode = self.runtime_modes[RunMode.PLAIN]
+                    runtime_mode = self.runtime_modes[TurnMode.PLAIN]
                 else:
                     checkpoints.append(
                         runtime_mode_routed_checkpoint(
@@ -133,14 +133,14 @@ class ModeActivator:
                 tuple(checkpoints),
             )
 
-        start_outcome = await self.model_turn_runner.prepare_and_call(
+        start_outcome = await self.agent_step_runner.prepare_and_call(
             conversation_records=conversation.records,
             context_state=context_state,
             runtime_instructions=[],
             tools=runtime_mode.runtime_tools(mode_state),
             level2_boundary_message_id=level2_boundary_message_id,
             stage="todo_initialization",
-            round_index=None,
+            step_index=None,
             system_prompt_override=start_prompt,
         )
         checkpoints.extend(start_outcome.checkpoints)
@@ -164,7 +164,7 @@ class ModeActivator:
             if self.mode_router is None:
                 checkpoint = invalid_llm_response_checkpoint(
                     stage="todo_initialization",
-                    round_index=None,
+                    step_index=None,
                     reason=exc.code,
                     error=str(exc),
                 )
@@ -178,7 +178,7 @@ class ModeActivator:
                 )
             checkpoints.append(
                 runtime_mode_activation_failed_checkpoint(
-                    mode=RunMode.TODO.value,
+                    mode=TurnMode.TODO.value,
                     stage="todo_initialization",
                     reason=exc.code,
                     error=str(exc),
@@ -186,12 +186,12 @@ class ModeActivator:
             )
             checkpoints.append(
                 runtime_mode_fallback_checkpoint(
-                    from_mode=RunMode.TODO.value,
-                    to_mode=RunMode.PLAIN.value,
+                    from_mode=TurnMode.TODO.value,
+                    to_mode=TurnMode.PLAIN.value,
                     reason=exc.code,
                 )
             )
-            runtime_mode = self.runtime_modes[RunMode.PLAIN]
+            runtime_mode = self.runtime_modes[TurnMode.PLAIN]
             mode_state = runtime_mode.create_state()
         else:
             if start_data is not None:

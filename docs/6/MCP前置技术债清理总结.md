@@ -4,21 +4,21 @@
 
 本次没有按历史清单直接重构，而是逐项检查是否会破坏现有契约、资源生命周期或并发正确性。确认并处理了七项真实问题：
 
-- Toolset Provider 在每轮重新取规格，导致同一 Run 的工具 Schema 和 Handler 可漂移；
+- Toolset Provider 在每个 AgentStep 重新取规格，导致同一 Turn 的工具 Schema 和 Handler 可漂移；
 - `asyncio.CancelledError` 绕过 Session 的异常落账，留下 running 状态；
 - AgentApplication 可在资源启动前、关闭后或重复进入时继续使用；
-- PowerShell Run Task 取消后可能遗留子进程树和输出 reader；
+- PowerShell Turn Task 取消后可能遗留子进程树和输出 reader；
 - 内部创建的异步 LLM Client 没有明确关闭所有权；
 - `grep`、`get_changes` 的 async handler 内部执行同步子进程，阻塞事件循环；
 - JSON Schema Tool 可注册非 object 顶层 Schema，但执行器只接受 object 参数。
 
 ## 回补结果
 
-Toolset 在 `load_toolset` 成功时只调用一次 Provider，并在 Run 状态中保存 `ToolSpec` 元组；`ToolSpec` 本身冻结。后续 Round 只复用该快照，新 Run 才重新发现。
+Toolset 在 `load_toolset` 成功时只调用一次 Provider，并在 Turn 状态中保存 `ToolSpec` 元组；`ToolSpec` 本身冻结。后续 AgentStep 只复用该快照，新 Turn 才重新发现。
 
-Session 显式处理 Task 取消：先将 Session 与 RunRecord 落为 failed、记录 `task_cancelled` 并清理 active control，再原样传播 `CancelledError`。
+Session 显式处理 Task 取消：先将 Session 与 TurnRecord 落为 failed、记录 `task_cancelled` 并清理 active control，再原样传播 `CancelledError`。
 
-AgentApplication 使用 `new → started → closing → closed` 生命周期。业务调用只允许发生在 `async with` 内；重复进入、关闭后调用均直接失败；存在活动 Run 时拒绝关闭，进入 closing 后禁止新 Run 与关闭过程竞争。
+AgentApplication 使用 `new → started → closing → closed` 生命周期。业务调用只允许发生在 `async with` 内；重复进入、关闭后调用均直接失败；存在活动 Turn 时拒绝关闭，进入 closing 后禁止新 Turn 与关闭过程竞争。
 
 PowerShell 在超时、取消和内部异常路径统一终止进程树、等待进程退出并收束 stdout/stderr reader，然后保留原始异常或取消语义。
 

@@ -38,15 +38,15 @@ class ModelCallOutcome:
 
 
 @dataclass(frozen=True)
-class ModelTurnOutcome:
+class AgentStepOutcome:
     result: LLMResponse | Checkpoint
     context_state: ContextState
     compressed: bool
     checkpoints: tuple[Checkpoint, ...]
 
 
-class ModelTurnRunner:
-    """完成一次模型交互，但不提交 Conversation 或 Run Checkpoint。"""
+class AgentStepRunner:
+    """完成一次模型交互，但不提交 Conversation 或 Turn Checkpoint。"""
 
     def __init__(
         self,
@@ -62,14 +62,14 @@ class ModelTurnRunner:
     def _record_summary_compaction(
         summary_compaction: SummaryCompaction | None,
         checkpoints: list[Checkpoint],
-        round_index: int | None,
+        step_index: int | None,
     ) -> bool:
         if summary_compaction is None:
             return False
         checkpoints.append(
             llm_usage_checkpoint(
                 stage="context_summary",
-                round_index=round_index,
+                step_index=step_index,
                 usage=LLMUsage(
                     input_tokens=summary_compaction.generation.input_tokens,
                     output_tokens=summary_compaction.generation.output_tokens,
@@ -92,7 +92,7 @@ class ModelTurnRunner:
         composition: ContextComposition | None,
         micro_compaction_trace: MicroCompactionTrace | None,
         checkpoints: list[Checkpoint],
-        round_index: int | None,
+        step_index: int | None,
     ) -> None:
         if composition is None or micro_compaction_trace is None:
             return
@@ -101,7 +101,7 @@ class ModelTurnRunner:
                 stage=stage,
                 composition=composition,
                 micro_compaction=micro_compaction_trace,
-                round_index=round_index,
+                step_index=step_index,
             )
         )
 
@@ -110,7 +110,7 @@ class ModelTurnRunner:
         model_context: ModelContext,
         tools: list[dict],
         stage: str,
-        round_index: int | None,
+        step_index: int | None,
         runtime_prompts: list[str] | None = None,
         max_llm_retries: int = 3,
     ) -> ModelCallOutcome:
@@ -120,7 +120,7 @@ class ModelTurnRunner:
             checkpoints.append(
                 llm_request_checkpoint(
                     stage=stage,
-                    round_index=round_index,
+                    step_index=step_index,
                     attempt=attempt,
                     runtime_prompts=runtime_prompts or [],
                     messages=model_context.messages,
@@ -134,14 +134,14 @@ class ModelTurnRunner:
                 if isinstance(outcome, ModelCallBlocked):
                     result = context_budget_exceeded_checkpoint(
                         stage=stage,
-                        round_index=round_index,
+                        step_index=step_index,
                         assessment=outcome.assessment,
                     )
                     return ModelCallOutcome(result, tuple(checkpoints))
                 checkpoints.append(
                     llm_usage_checkpoint(
                         stage=stage,
-                        round_index=round_index,
+                        step_index=step_index,
                         usage=outcome.usage,
                     )
                 )
@@ -151,7 +151,7 @@ class ModelTurnRunner:
                     checkpoints.append(
                         llm_retry_checkpoint(
                             stage=stage,
-                            round_index=round_index,
+                            step_index=step_index,
                             attempt=attempt,
                             max_attempts=max_llm_retries,
                             error=str(exc),
@@ -161,7 +161,7 @@ class ModelTurnRunner:
                     continue
                 result = invalid_llm_response_checkpoint(
                     stage=stage,
-                    round_index=round_index,
+                    step_index=step_index,
                     reason=exc.code,
                     error=str(exc),
                 )
@@ -169,7 +169,7 @@ class ModelTurnRunner:
             except LLMContextLengthError as exc:
                 result = context_length_exceeded_checkpoint(
                     stage=stage,
-                    round_index=round_index,
+                    step_index=step_index,
                     error=str(exc),
                 )
                 return ModelCallOutcome(result, tuple(checkpoints))
@@ -179,7 +179,7 @@ class ModelTurnRunner:
                     checkpoints.append(
                         llm_retry_checkpoint(
                             stage=stage,
-                            round_index=round_index,
+                            step_index=step_index,
                             attempt=attempt,
                             max_attempts=max_llm_retries,
                             error=last_error,
@@ -189,7 +189,7 @@ class ModelTurnRunner:
                     continue
                 result = llm_error_checkpoint(
                     stage=stage,
-                    round_index=round_index,
+                    step_index=step_index,
                     attempts=max_llm_retries,
                     error=last_error,
                 )
@@ -206,10 +206,10 @@ class ModelTurnRunner:
         tools: list[dict],
         level2_boundary_message_id: str | None,
         stage: str,
-        round_index: int | None,
+        step_index: int | None,
         system_prompt_override: str | None = None,
         preparation_failure_stage: str | None = None,
-    ) -> ModelTurnOutcome:
+    ) -> AgentStepOutcome:
         checkpoints: list[Checkpoint] = []
         failure_stage = preparation_failure_stage or stage
         records = (
@@ -234,7 +234,7 @@ class ModelTurnRunner:
                 on_summary_request=lambda model_context: checkpoints.append(
                     llm_request_checkpoint(
                         stage="context_summary",
-                        round_index=round_index,
+                        step_index=step_index,
                         attempt=1,
                         runtime_prompts=[SUMMARY_INSTRUCTION],
                         messages=model_context.messages,
@@ -244,46 +244,46 @@ class ModelTurnRunner:
         except LLMContextLengthError as exc:
             result = context_length_exceeded_checkpoint(
                 stage=failure_stage,
-                round_index=round_index,
+                step_index=step_index,
                 error=str(exc),
             )
-            return ModelTurnOutcome(result, context_state, False, tuple(checkpoints))
+            return AgentStepOutcome(result, context_state, False, tuple(checkpoints))
         except LLMTransientError as exc:
             result = llm_error_checkpoint(
                 stage=failure_stage,
-                round_index=round_index,
+                step_index=step_index,
                 attempts=1,
                 error=str(exc),
             )
-            return ModelTurnOutcome(result, context_state, False, tuple(checkpoints))
+            return AgentStepOutcome(result, context_state, False, tuple(checkpoints))
         except InvalidLLMResponse as exc:
             result = invalid_llm_response_checkpoint(
                 stage=failure_stage,
-                round_index=round_index,
+                step_index=step_index,
                 reason=exc.code,
                 error=str(exc),
             )
-            return ModelTurnOutcome(result, context_state, False, tuple(checkpoints))
+            return AgentStepOutcome(result, context_state, False, tuple(checkpoints))
 
         compressed = self._record_summary_compaction(
             prepared.summary_compaction,
             checkpoints,
-            round_index,
+            step_index,
         )
         self._record_context_prepared(
             stage=stage,
             composition=prepared.composition,
             micro_compaction_trace=prepared.micro_compaction_trace,
             checkpoints=checkpoints,
-            round_index=round_index,
+            step_index=step_index,
         )
         if prepared.blocked_assessment is not None:
             result = context_budget_exceeded_checkpoint(
                 stage=failure_stage,
-                round_index=round_index,
+                step_index=step_index,
                 assessment=prepared.blocked_assessment,
             )
-            return ModelTurnOutcome(
+            return AgentStepOutcome(
                 result,
                 prepared.context_state,
                 compressed,
@@ -294,11 +294,11 @@ class ModelTurnRunner:
             prepared.model_context,
             tools,
             stage,
-            round_index,
+            step_index,
             runtime_prompts=request_prompts,
         )
         checkpoints.extend(call_outcome.checkpoints)
-        return ModelTurnOutcome(
+        return AgentStepOutcome(
             call_outcome.result,
             prepared.context_state,
             compressed,

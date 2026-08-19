@@ -10,7 +10,7 @@ TODO_INITIALIZATION_PROMPT = """
 请调用且只调用一次 rewrite_todos。
 
 要求：
-- objective 用一句话描述本 Run 最终要达成的结果；
+- objective 用一句话描述本 Turn 最终要达成的结果；
 - todos 包含 2 到 6 个简短、可验收的执行意图；
 - 所有 Todo 的 id 必须为 null，status 必须为 pending；
 - Todo 描述应达成的局部结果，不描述具体工具调用；
@@ -29,7 +29,7 @@ TODO_INITIALIZATION_PROMPT = """
 
 def format_todo_instructions(todo_list: TodoList) -> str:
     lines = [
-        "TodoList 是本 Run 当前的可变执行认知，不是固定命令序列。",
+        "TodoList 是本 Turn 当前的可变执行认知，不是固定命令序列。",
         f"当前目标：{todo_list.objective}",
         "当前 Todo：",
     ]
@@ -60,7 +60,7 @@ def format_todo_instructions(todo_list: TodoList) -> str:
             "",
             "只有形成明确结论、完成可交付结果或得到验证后，才可将 Todo "
             "标记为 done；done 的 note 应简要记录结果或依据，cancelled 的 "
-            "note 应说明取消原因。准备结束本 Run 前，必须完成最后一次 "
+            "note 应说明取消原因。准备结束本 Turn 前，必须完成最后一次 "
             "TodoList 同步。最终回答必须面向用户说明：达成了什么结果、"
             "关键依据是什么、还有哪些未决事项；"
             "禁止仅用「Todo 已同步/任务已完成」作为最终回答。",

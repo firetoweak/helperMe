@@ -1,6 +1,6 @@
 ## Phase 5.3 回补 A：Dynamic TodoList 总结
 
-这一节重新定义了原有 Planning：当前项目需要的不是面向多 Agent 调度的 Plan，而是单个 Run 内面向执行、可动态变化的 TodoList。
+这一节重新定义了原有 Planning：当前项目需要的不是面向多 Agent 调度的 Plan，而是单个 Turn 内面向执行、可动态变化的 TodoList。
 
 最终删除了独立 Planner / Replanner，将初始化、执行期调整和退出前结算统一到同一个 `rewrite_todos` 契约。Executor 仍是唯一认知决策者；Runtime 只保存状态、校验确定性规则并控制退出边界。
 
@@ -51,7 +51,7 @@ Plan
 └─ WorkUnit C → 依赖 A、B → TodoList C
 ```
 
-Plan 负责大目标拆分、依赖和委派；TodoList 负责单个 Executor Run 内的执行认知。
+Plan 负责大目标拆分、依赖和委派；TodoList 负责单个 Executor Turn 内的执行认知。
 
 ### 核心运行原则
 
@@ -72,7 +72,7 @@ Executor 可以继续调用工具
 Todo Sync Barrier
 ├─ DIRTY            → 拒绝退出，要求同步
 ├─ pending / doing  → 拒绝退出，要求继续或取消
-└─ done / cancelled → 允许完成 Run
+└─ done / cancelled → 允许完成 Turn
 ```
 
 Runtime 不强制模型每执行一个工具就更新 Todo，也不要求严格按照数组顺序执行。TodoList 是阶段性同步的认知快照，不是实时流水账。
@@ -124,7 +124,7 @@ ACTIVE + CLEAN
 COMPLETED + CLEAN
 ```
 
-中断不是 TodoPhase。当前 TodoList 仍限定在单个 Run 内，跨 Run 的持久化和恢复不属于本节。
+中断不是 TodoPhase。当前 TodoList 仍限定在单个 Turn 内，跨 Turn 的持久化和恢复不属于本节。
 
 ### 统一的 rewrite_todos 契约
 
@@ -192,11 +192,11 @@ UNINITIALIZED → ACTIVE + CLEAN
 revision = 1
 ```
 
-如果模型返回文本、调用其他工具、调用多个工具或提交非法快照，`TodoMode` 以 `invalid_todo_initialization` 拒绝该次激活。显式固定 TodoMode 时当前 Run 失败；动态路由场景由 RunRuntime 记录原因并降级到 PlainMode。Runtime 不生成默认 TodoList，也不把失败的初始化响应写回 Conversation；原始响应只进入错误与 trace，避免掩盖模型协议问题。
+如果模型返回文本、调用其他工具、调用多个工具或提交非法快照，`TodoMode` 以 `invalid_todo_initialization` 拒绝该次激活。显式固定 TodoMode 时当前 Turn 失败；动态路由场景由 TurnRuntime 记录原因并降级到 PlainMode。Runtime 不生成默认 TodoList，也不把失败的初始化响应写回 Conversation；原始响应只进入错误与 trace，避免掩盖模型协议问题。
 
 ### 同一个模型兼任 Executor 与 Todo 审查者
 
-初始化后进入普通 Agent Round：
+初始化后进入普通 AgentStep：
 
 ```text
 Conversation
@@ -219,7 +219,7 @@ Conversation
 
 ### Todo Sync Barrier
 
-每个无 tool_calls 的 Assistant text 在当前协议中都表示一次最终回答候选。Runtime 在真正结束 Run 前调用 Todo Sync Barrier：
+每个无 tool_calls 的 Assistant text 在当前协议中都表示一次最终回答候选。Runtime 在真正结束 Turn 前调用 Todo Sync Barrier：
 
 ```text
 final candidate
@@ -231,21 +231,21 @@ final candidate
 │    → 返回未结束 Todo id，不接受当前文本
 └─ CLEAN 且全部终结
      → 再执行原有 StopGuard
-     → 完成 Run
+     → 完成 Turn
 ```
 
-Barrier 只返回结构化判断，不直接修改 Conversation。RunRuntime 负责把反馈追加为 user message 并继续下一轮，从而保持：
+Barrier 只返回结构化判断，不直接修改 Conversation。TurnRuntime 负责把反馈追加为 user message 并继续下一个 AgentStep，从而保持：
 
 ```text
 Todo 策略负责判断
-RunRuntime 负责循环控制和消息写入
+TurnRuntime 负责循环控制和消息写入
 ```
 
 Todo Sync Barrier 保证的是执行事实与 Todo 快照在退出时一致，不保证 Todo 拆分本身正确，也不替代测试、`get_changes` 等任务验证。
 
 ### Prompt 分层
 
-旧实现把以下内容每轮都注入模型：
+旧实现把以下内容每个 AgentStep 都注入模型：
 
 ```text
 phase / sync_state / revision / 退出规则
@@ -269,21 +269,21 @@ phase / sync_state / revision / 退出规则
 
 工具描述负责说明完整快照语义、id 规则和适合调用的时机，避免把所有行为规则重复堆在 system prompt 中。
 
-### Run-local 状态与无状态 TodoMode
+### Turn-local 状态与无状态 TodoMode
 
-旧 `TodoMode` 既是 Runtime 策略，又通过 `self.todo_list` 持有某个 Run 的可变状态。由于 TodoMode 由 Composition Root 创建并挂在可复用的 RunRuntime 上，这种设计会为多 Session 或未来并发留下状态串线风险。
+旧 `TodoMode` 既是 Runtime 策略，又通过 `self.todo_list` 持有某个 Turn 的可变状态。由于 TodoMode 由 Composition Root 创建并挂在可复用的 TurnRuntime 上，这种设计会为多 Session 或未来并发留下状态串线风险。
 
 重构后：
 
 ```text
-RunRuntime.run()
+TurnRuntime.run()
     ├─ mode_state = TodoMode.create_state()
     ├─ 初始化 TodoList
-    ├─ 每轮显式传入 mode_state
-    └─ Run 结束后丢弃该状态
+    ├─ 每个 AgentStep 显式传入 mode_state
+    └─ Turn 结束后丢弃该状态
 
 TodoMode
-    └─ 无 Run 状态，只保存生命周期策略
+    └─ 无 Turn 状态，只保存生命周期策略
 ```
 
 RuntimeMode 接口因此改为显式接收 state：
@@ -296,15 +296,15 @@ runtime_instructions(state)
 execute_tool(state, ...)
 after_tool_batch(state, ...)
 check_final_candidate(state)
-on_run_completed(state)
+on_turn_completed(state)
 checkpoint_data(state)
 ```
 
-TodoList 的所有权与其生命周期一致：它属于一个 Run，而不是属于可复用的 Mode。
+TodoList 的所有权与其生命周期一致：它属于一个 Turn，而不是属于可复用的 Mode。
 
 ### 后续增量：Runtime Mode Router
 
-TodoList 落地后，简单问题仍然会无条件进入 Todo 初始化，额外产生一次模型调用和一套不必要的执行状态。现在在每个 Run 的执行入口增加轻量 Router，只判断本次请求需要哪种 RuntimeMode：
+TodoList 落地后，简单问题仍然会无条件进入 Todo 初始化，额外产生一次模型调用和一套不必要的执行状态。现在在每个 Turn 的执行入口增加轻量 Router，只判断本次请求需要哪种 RuntimeMode：
 
 ```text
 Conversation
@@ -315,18 +315,18 @@ RuntimeModeRouter
     │ tools = []
     ▼
 {"mode":"plain|todo","reason":"..."}
-    ├─ plain → PlainMode → 直接进入 Agent Round
-    └─ todo  → TodoMode  → 受限 Todo 初始化 → Agent Round
+    ├─ plain → PlainMode → 直接进入 AgentStep
+    └─ todo  → TodoMode  → 受限 Todo 初始化 → AgentStep
 ```
 
-路由属于 Run，不属于 Session。同一个 Session 的简单追问可以选择 `plain`，后续复杂任务仍可重新选择 `todo`。Router 不持有状态，也不改变 Conversation。
+路由属于 Turn，不属于 Session。同一个 Session 的简单追问可以选择 `plain`，后续复杂任务仍可重新选择 `todo`。Router 不持有状态，也不改变 Conversation。
 
 Router 只负责两件事：
 
 - 提供区分 `plain/todo` 的 system prompt；
 - 严格解析模型返回的结构化决策。
 
-`RunRuntime` 继续统一负责 Context Preparation、模型调用、retry、usage 和 checkpoint。Runtime 不使用步骤数、关键词等规则自行猜测复杂度，也不让 Router 生成 Todo：
+`TurnRuntime` 继续统一负责 Context Preparation、模型调用、retry、usage 和 checkpoint。Runtime 不使用步骤数、关键词等规则自行猜测复杂度，也不让 Router 生成 Todo：
 
 ```text
 Router：选择执行机制
@@ -346,12 +346,12 @@ Executor：决定具体行动
 - `reason` 必须是非空字符串；
 - 只接受恰好包含这两个字段的 JSON object；
 - 先判断最后一条用户消息是否明确授权执行，再判断执行复杂度；
-- 讨论、评价、解释、询问看法或提出优化方向选择 `plain`，不能因为话题复杂或历史 Run 使用过 Todo 就推断为授权实施；
+- 讨论、评价、解释、询问看法或提出优化方向选择 `plain`，不能因为话题复杂或历史 Turn 使用过 Todo 就推断为授权实施；
 - 是否授权执行不明确时选择 `plain`；已明确要求执行、但不确定执行复杂度时选择 `todo`；
 - 不允许工具调用、Markdown、额外字段或自然语言包裹；
-- 非法路由响应记录 `invalid_runtime_mode_route`，随后在同一 Run 降级到 `plain`。
+- 非法路由响应记录 `invalid_runtime_mode_route`，随后在同一 Turn 降级到 `plain`。
 
-合法结果只写入 `runtime_mode_routed` checkpoint，模型 token 记入 `routing` usage stage，不把路由原因写回 Conversation。这样 Conversation 仍只保存用户与执行 Agent 的协议轨迹，路由决策属于 Run trace。
+合法结果只写入 `runtime_mode_routed` checkpoint，模型 token 记入 `routing` usage stage，不把路由原因写回 Conversation。这样 Conversation 仍只保存用户与执行 Agent 的协议轨迹，路由决策属于 Turn trace。
 
 Composition Root 默认组装：
 
@@ -361,9 +361,9 @@ RuntimeModeRouter
 └─ todo  → TodoMode
 ```
 
-测试和特定调用仍可显式注入固定 `runtime_mode`，此时跳过路由。固定模式与路由模式互斥，避免一个 Run 同时存在两个 mode 来源。
+测试和特定调用仍可显式注入固定 `runtime_mode`，此时跳过路由。固定模式与路由模式互斥，避免一个 Turn 同时存在两个 mode 来源。
 
-Router 的选择是概率性执行建议，不是不可逆状态迁移。动态选择 `todo` 后，如果受限初始化没有产生合法 `rewrite_todos`，`TodoMode` 仍严格拒绝该响应，但 `RunRuntime` 不再把局部协议不匹配升级为 Run 失败：
+Router 的选择是概率性执行建议，不是不可逆状态迁移。动态选择 `todo` 后，如果受限初始化没有产生合法 `rewrite_todos`，`TodoMode` 仍严格拒绝该响应，但 `TurnRuntime` 不再把局部协议不匹配升级为 Turn 失败：
 
 ```text
 todo activation
@@ -375,10 +375,10 @@ todo activation
 runtime_mode_fallback: todo → plain
     │ 使用正常 Agent Prompt 重新调用
     ▼
-继续同一个 Run
+继续同一个 Turn
 ```
 
-严格契约与运行恢复因此分层：`TodoMode` 负责判定初始化是否合法，`RunRuntime` 负责动态 mode 激活失败后的单向、有界降级。显式注入固定 `TodoMode` 时没有备选策略，仍保留原有严格失败语义。
+严格契约与运行恢复因此分层：`TodoMode` 负责判定初始化是否合法，`TurnRuntime` 负责动态 mode 激活失败后的单向、有界降级。显式注入固定 `TodoMode` 时没有备选策略，仍保留原有严格失败语义。
 
 ### 最终模块职责
 
@@ -401,7 +401,7 @@ core/todos/
 
 core/runtime_modes/
 ├─ router.py
-│    RunMode、RouteDecision、严格解析与路由 Prompt
+│    TurnMode、RouteDecision、严格解析与路由 Prompt
 ├─ plain.py
 │    不启用 Todo 生命周期的轻量执行策略
 └─ base.py
@@ -411,9 +411,9 @@ core/runtime_modes/
 外围职责：
 
 ```text
-RunRuntime
-├─ 追加当前用户消息后为本次 Run 选择 RuntimeMode
-├─ 创建 Run-local mode state
+TurnRuntime
+├─ 追加当前用户消息后为本次 Turn 选择 RuntimeMode
+├─ 创建 Turn-local mode state
 ├─ 准备初始化与 Agent ModelContext
 ├─ 合并 Runtime 工具和外部工具
 ├─ 执行工具并记录 ToolsState
@@ -439,12 +439,12 @@ parameters
 
 ### 本节明确不做
 
-- 不增加 Todo `blocked` 状态。当前允许 blocked Todo 退出会与 `RunStatus.COMPLETED` 冲突，需要和 partial/blocked 退出语义一起设计；
+- 不增加 Todo `blocked` 状态。当前允许 blocked Todo 退出会与 `TurnStatus.COMPLETED` 冲突，需要和 partial/blocked 退出语义一起设计；
 - 不引入独立 TodoReviewer；
 - 不实现 Todo patch DSL；
 - 不根据任务复杂度增加新的隐式 Planner；
 - 不把 TodoList 持久化到 Session；
-- 不实现跨 Run 的 Todo 恢复；
+- 不实现跨 Turn 的 Todo 恢复；
 - 不让 Runtime 判断 Todo 内容是否合理或事项是否真的必要；
 - 不用 Todo Sync Barrier 替代工具验证和业务安全检查。
 
@@ -463,16 +463,16 @@ parameters
 - 外部工具后进入 DIRTY，但仍允许继续执行；
 - DIRTY 或 pending/doing 阻止最终回答；
 - TodoMode 不持有 TodoList；
-- 同一个 RunRuntime 连续执行多个 Run 时 Todo 状态互不泄漏；
+- 同一个 TurnRuntime 连续执行多个 Turn 时 Todo 状态互不泄漏；
 - RuntimeMode、PlainMode、Context Preparation、StopGuard、interrupt 和 Session 原有链路保持正常；
 - 嵌套 Pydantic 工具 schema 保留完整 `$defs`。
 - Router 严格解析 `plain/todo` 决策，非法响应不降级；
 - Router 读取包含当前请求的完整 Conversation，但决策不写回 Conversation；
 - plain 跳过 Todo 初始化，todo 保持原有初始化与退出屏障；
-- 同一个 Session 的不同 Run 可以选择不同 mode；
-- Todo Run 完成后的方案讨论能够重新路由到 plain，不继承上一轮模式；
-- 路由结果、原因和模型 usage 进入 Run checkpoint。
-- 非法路由或动态 Todo 激活失败会记录原因并在同一 Run 降级到 plain；
+- 同一个 Session 的不同 Turn 可以选择不同 mode；
+- Todo Turn 完成后的方案讨论能够重新路由到 plain，不继承上一轮模式；
+- 路由结果、原因和模型 usage 进入 Turn checkpoint。
+- 非法路由或动态 Todo 激活失败会记录原因并在同一 Turn 降级到 plain；
 - Todo 初始化阶段产生的非法文本不会进入 Conversation，也不会杀死当前 Session。
 
 这一节最重要的认知是：

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 
 from core.tool_registry import PydanticParameters, ToolSpec
-from core.tools_runtime.run_evidence import RunEvidence
+from core.tools_runtime.turn_evidence import TurnEvidence
 from plugins.goal.submissions import (
     ContractCompilationBuffer,
     JudgmentBuffer,
@@ -159,7 +159,7 @@ def create_submit_completion_contract_spec(
             "code": "COMPLETION_CONTRACT_BUFFERED",
             "data": None,
             "error": None,
-            "hint": "Contract 已冻结，请直接结束本次编译 Run。",
+            "hint": "Contract 已冻结，请直接结束本次编译 Turn。",
         }
 
     return ToolSpec(
@@ -204,7 +204,7 @@ def create_submit_goal_judgment_spec(
             "code": "GOAL_JUDGMENT_BUFFERED",
             "data": {"decision": data.decision.value},
             "error": None,
-            "hint": "请直接结束 Judge Run。",
+            "hint": "请直接结束 Judge Turn。",
         }
 
     return ToolSpec(
@@ -246,7 +246,7 @@ class ContractCompilationCapability:
     def tool_specs(self) -> list[ToolSpec]:
         return [create_submit_completion_contract_spec(self.buffer)]
 
-    def check_final_candidate(self, evidence: RunEvidence) -> str | None:
+    def check_final_candidate(self, evidence: TurnEvidence) -> str | None:
         if self.buffer.contract is None:
             return "结束前必须提交 Completion Contract。"
         return None
@@ -277,7 +277,7 @@ class GoalExecutorCapability:
                     f"你正在执行 Goal {self.goal_id} 的第 {self.turn_index} 个完整 Agent Turn。",
                     f"Goal：{self.objective}",
                     _format_contract(self.contract),
-                    f"上一轮 Judge 反馈：{feedback}",
+                    f"上一次 Judge Turn 的反馈：{feedback}",
                     "Contract 在本 Turn 内冻结。你不能降低、删除或改写完成标准。",
                     "自主决定本 Turn 的行动；TodoList 只作为 Turn 内柔性参考。",
                     "完成本 Turn 能推进的工作后直接给出真实总结，不要自行宣布 Goal 已验收完成。",
@@ -288,7 +288,7 @@ class GoalExecutorCapability:
     def tool_specs(self) -> list[ToolSpec]:
         return []
 
-    def check_final_candidate(self, evidence: RunEvidence) -> str | None:
+    def check_final_candidate(self, evidence: TurnEvidence) -> str | None:
         return None
 
     def checkpoint_data(self) -> dict | None:
@@ -350,10 +350,10 @@ class GoalJudgeCapability:
             create_submit_goal_judgment_spec(self.contract, self.buffer)
         ]
 
-    def check_final_candidate(self, evidence: RunEvidence) -> str | None:
+    def check_final_candidate(self, evidence: TurnEvidence) -> str | None:
         submission = self.buffer.submission
         if submission is None:
-            return "结束 Judge Run 前必须提交 GoalJudgment。"
+            return "结束 Judge Turn 前必须提交 GoalJudgment。"
         if submission.decision is JudgmentDecision.DONE:
             review = self.completion_gate.review(
                 self.contract.verification,

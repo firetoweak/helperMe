@@ -9,7 +9,7 @@
 Core 新增来源无关的 `ApprovalRequest`、`ApprovalResolution`、`ApprovalActionRegistry`：
 
 ```text
-Agent control tool → frozen ApprovalRequest → RunStatus.BLOCKED
+Agent control tool → frozen ApprovalRequest → TurnStatus.BLOCKED
 Channel yes/no → AgentApplication.resolve_approval
 → registered ApprovalActionHandler → resolution fact
 ```
@@ -20,7 +20,7 @@ Channel 只接受去除首尾空白后精确的小写 `yes` 或 `no`。等待审
 
 ## MCP Proposal
 
-MCP Plugin 提供 `propose_mcp_install` 控制工具。Agent 通过多轮对话补齐字段后，构造以下两类配置：
+MCP Plugin 提供 `propose_mcp_install` 控制工具。Agent 通过多个 Turn 的对话补齐字段后，构造以下两类配置：
 
 - 单进程 stdio：结构化 `command + args + cwd`；拒绝 Shell 解释器和复合 Shell；
 - 无 Secret 的 streamable HTTP：URL 与 timeout。
@@ -37,12 +37,12 @@ Toolset 目录只表达当前可执行能力，因此继续只包含 enabled Ser
 
 ## Session 能力快照
 
-`ToolsetDescriptor` 提供通用 revision。Session 创建时保存 `SessionCapabilitySnapshot(toolset_id → revision)`，每次 Run 使用 `SnapshotToolsetProvider` 将快照与当前 Provider 目录求交集：
+`ToolsetDescriptor` 提供通用 revision。Session 创建时保存 `SessionCapabilitySnapshot(toolset_id → revision)`，每次 Turn 使用 `SnapshotToolsetProvider` 将快照与当前 Provider 目录求交集：
 
 - 新增、启用、更新、禁用、删除或撤权：统一使旧 Session 能力快照过期；
 - 后续 Toolset 加载或已加载工具调用返回 `SESSION_CAPABILITIES_STALE`；
 - 控制面 `/mcp reload` 创建新 Session 并捕获最新配置，不在旧 Session 内静默替换；
-- 快照不保存工具 Schema，具体 Schema 仍在 `load_toolset` 时发现并冻结到当前 Run。
+- 快照不保存工具 Schema，具体 Schema 仍在 `load_toolset` 时发现并冻结到当前 Turn。
 
 快照同时保存可见 Toolset revision 与 Provider snapshot token，因此未启用配置的修改也能统一失效。这套语义与 MCP 无关，可直接复用于后续 Skill 等持久能力配置。
 
@@ -50,7 +50,7 @@ Toolset 目录只表达当前可执行能力，因此继续只包含 enabled Ser
 
 真实端到端 benchmark 发现 MCP SDK 的 stdio/HTTP Client context 带 AnyIO Task 所有权。原实现可能在并发工具 Task 中创建连接，却在 Application 主 Task 关闭，导致跨 Task 退出 cancel scope。第一轮修复曾把 SDK 物理连接改为单次操作内创建并关闭，虽然闭合了资源所有权，却使有状态 MCP 在每次调用后丢失 Server 状态。
 
-真实 Playwright 使用进一步证明：Toolset 可见性可以属于 Run，但 MCP Server 的物理连接与有状态资源必须由 Application 生命周期持有。当前每个 `(server_id, revision)` 使用专属 connection owner task；SDK Client context 的创建、串行调用和关闭始终在该 Task 内完成，其他 Run/工具 Task 只通过队列提交操作。revision 变化、disable、remove、传输取消或 Application 退出时关闭 owner；跨 Run 重新加载 Toolset 不重启同 revision Server。
+真实 Playwright 使用进一步证明：Toolset 可见性可以属于 Turn，但 MCP Server 的物理连接与有状态资源必须由 Application 生命周期持有。当前每个 `(server_id, revision)` 使用专属 connection owner task；SDK Client context 的创建、串行调用和关闭始终在该 Task 内完成，其他 Turn/工具 Task 只通过队列提交操作。revision 变化、disable、remove、传输取消或 Application 退出时关闭 owner；跨 Turn 重新加载 Toolset 不重启同 revision Server。
 
 同一次验证还暴露出 stdio Server 未配置 `cwd` 时会继承 HelperMe 进程启动目录，导致 Playwright 的 `.playwright-mcp`、截图和临时附件写入源码仓库。当前 Composition 为 McpClientManager 注入 Agent Workspace 下的 runtime root；每个未显式配置工作目录的 Server 使用独立的 `plugins/mcp/runtime/{server_id}`。显式 `cwd` 继续原样生效，确实需要以用户任务 Workspace 为工作目录的 Server 必须主动配置，不能依赖启动目录偶然正确。
 

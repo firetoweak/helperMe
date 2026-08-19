@@ -42,11 +42,11 @@ ContextState
 - `tool_artifacts` 表示 Level 1 已为哪些 tool 消息建立可回读 artifact 映射；
 - ContextState 不保存 ModelContext 副本，不复制 Conversation 消息。
 
-每次模型调用仍生成新的不可变 ModelContext 快照。同一 Round 的 retry 复用同一个快照，不在 retry 之间重新压缩。
+每次模型调用仍生成新的不可变 ModelContext 快照。同一 AgentStep 的 retry 复用同一个快照，不在 retry 之间重新压缩。
 
 ### 统一上下文准备入口
 
-Planner 和 Agent Round 不再各自直接调用 ContextManager，而是统一经过 `ContextPreparationService`：
+Planner 和 AgentStep 不再各自直接调用 ContextManager，而是统一经过 `ContextPreparationService`：
 
 ```text
 Conversation + ContextState + runtime instructions + tools
@@ -63,7 +63,7 @@ PreparedContext
 └─ 压缩决策与预算结果
 ```
 
-ContextPreparationService 只生成候选状态，不直接修改 Session。RunRuntime 在一次 Run 内维护当前候选状态，通过 RunResult 返回；SessionRuntime 在 Run 结束时统一回写。这样 Session 后续 Run 会继续复用已经提交的摘要和压缩边界。
+ContextPreparationService 只生成候选状态，不直接修改 Session。TurnRuntime 在一次 Turn 内维护当前候选状态，通过 TurnResult 返回；SessionRuntime 在 Turn 结束时统一回写。这样 Session 后续 Turn 会继续复用已经提交的摘要和压缩边界。
 
 ### Level 1：持续性工具脱水投影
 
@@ -88,9 +88,9 @@ Level 2 是最后兜底，只在 Level 1 脱水投影后仍超过项目输入预
 
 Level 2 的安全边界固定为：
 
-> 只摘要当前 Run 开始前的历史。
+> 只摘要当前 Turn 开始前的历史。
 
-RunRuntime 在添加当前 user message 前记录上一条消息的 message_id，作为本 Run 的临时 Level 2 上界。当前 Run 的用户目标、工具步骤和模型响应保持原文，不进入摘要。
+TurnRuntime 在添加当前 user message 前记录上一条消息的 message_id，作为本 Turn 的临时 Level 2 上界。当前 Turn 的用户目标、工具步骤和模型响应保持原文，不进入摘要。
 
 摘要输入不是重新读取完整原始工具结果，而是使用 Level 1 处理后的旧历史投影：
 
@@ -116,7 +116,7 @@ Level 2 先生成候选摘要和候选 ContextState，然后重新完成投影�
 ```text
 Level 1 后仍超预算
         ↓
-检查当前 Run 前是否存在可摘要历史
+检查当前 Turn 前是否存在可摘要历史
         ↓
 生成候选摘要
         ↓
@@ -129,7 +129,7 @@ Level 1 后仍超预算
 
 以下情况不会提交候选摘要：
 
-- 当前 Run 前没有新增可摘要历史；
+- 当前 Turn 前没有新增可摘要历史；
 - 摘要调用本身超过预算；
 - 摘要模型调用失败或返回非法响应；
 - 候选边界或工具协议不合法；
@@ -149,10 +149,10 @@ Level 2 会产生上下文压缩 checkpoint，记录：
 
 摘要正文不会复制到 checkpoint。摘要模型的真实 input/output usage 使用独立的 `context_summary` usage checkpoint 记录。
 
-Level 2 成功并继续完成本轮任务后，最终回答前会增加一次简短提示：
+Level 2 成功并继续完成当前 Turn 的任务后，最终回答前会增加一次简短提示：
 
 ```text
-本轮已执行上下文压缩。
+本次 Turn 已执行上下文压缩。
 ```
 
 结构化 checkpoint 面向上层消费者，简短提示面向真实用户。
@@ -162,10 +162,10 @@ Level 2 成功并继续完成本轮任务后，最终回答前会增加一次简
 ```text
 SessionRuntime
     ↓ 传入 Session.context_state
-RunRuntime
-    ├─ 记录当前 Run 前边界
+TurnRuntime
+    ├─ 记录当前 Turn 前边界
     ├─ Planner ContextPreparation
-    └─ 每轮 Agent ContextPreparation
+    └─ 每个 AgentStep 执行 ContextPreparation
             ├─ Level 1 持续性工具脱水（落盘/映射 + 投影）
             ├─ ContextBudget 评估
             ├─ 必要时 Level 2
@@ -173,7 +173,7 @@ RunRuntime
     ↓
 ModelCallService
     ↓
-RunResult.context_state
+TurnResult.context_state
     ↓
 SessionRuntime 原子回写 Session.context_state
 ```
@@ -183,7 +183,7 @@ Conversation 始终保持完整，ContextState 在同一 Session 中持续复用
 ### 当前明确不做
 
 - 结构化摘要字段与语义等价校验；
-- 当前 Run 内已闭合步骤的 Level 2 摘要；
+- 当前 Turn 内已闭合步骤的 Level 2 摘要；
 - `protected_message_ids` 和稀疏原文保留；
 - 普通 Assistant 文本的 Level 1 压缩；
 - 自动识别长期约束和事实重要性；
@@ -198,9 +198,9 @@ Conversation 始终保持完整，ContextState 在同一 Session 中持续复用
 - ContextState 摘要投影和边界校验；
 - 成功、失败、未消费和不完整工具批次的 Level 1 脱水行为；
 - recent 保护窗、懒落盘 artifact 与幂等二次 propose；
-- Planner 与 Agent Round 使用统一准备入口；
-- ContextState 在 Run 内推进并由 Session 跨 Run 复用；
-- Level 2 不读取当前 Run 的用户目标；
+- Planner 与 AgentStep 使用统一准备入口；
+- ContextState 在 Turn 内推进并由 Session 跨 Turn 复用；
+- Level 2 不读取当前 Turn 的用户目标；
 - Level 2 成功后裁剪已被摘要覆盖的 tool_artifacts；
 - 摘要后仍超预算时拒绝候选状态并 blocked；
 - compression checkpoint、summary usage 和最终用户提示；

@@ -17,7 +17,7 @@ from core.model_call import LLMResponse
 from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.model_call.service import ModelCallBlocked
 from core.runtime_modes import PlainMode
-from core.tools_runtime.run_runtime import RunRuntime, RunStatus
+from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -68,7 +68,7 @@ class ChangingInstructionsMode:
             return "继续"
         return None
 
-    def on_run_completed(self, state):
+    def on_turn_completed(self, state):
         return None
 
     def after_tool_batch(self, state, batch_steps):
@@ -92,7 +92,7 @@ class StaticInstructionsMode(ChangingInstructionsMode):
         return None
 
 
-class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
+class TurnRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_level2_records_checkpoint_and_notifies_user(self):
         before = make_budget_assessment(900, 750)
         after = make_budget_assessment(500, 750)
@@ -129,7 +129,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
             LLMResponse(content="done")
         )
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -137,9 +137,9 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
             **runtime_tool_dependencies(),
         ).run(Conversation(), "hello")
 
-        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.status, TurnStatus.COMPLETED)
         self.assertEqual(result.context_state, state)
-        self.assertTrue(result.answer.startswith("本轮已执行上下文压缩。"))
+        self.assertTrue(result.answer.startswith("本次 Turn 已执行上下文压缩。"))
         self.assertIn(
             "level2_context_compressed",
             [checkpoint.reason for checkpoint in result.checkpoints],
@@ -156,7 +156,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
         )
         conversation = Conversation()
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             PlainMode(),
@@ -164,7 +164,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
             **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
-        self.assertEqual(result.status, RunStatus.BLOCKED)
+        self.assertEqual(result.status, TurnStatus.BLOCKED)
         self.assertEqual(result.final_reason, "context_budget_exceeded")
         self.assertEqual(
             conversation.protocol_messages(),
@@ -173,7 +173,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.checkpoints[-1].data["overflow_tokens"], 51)
 
     async def test_context_limit_error_blocks_without_retry(self):
-        runner = RunRuntime(
+        runner = TurnRuntime(
             model_call_service(ContextLimitLLMClient()),
             "test-model",
             PlainMode(),
@@ -182,15 +182,15 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
         )
         conversation = Conversation()
 
-        result = await runner.run(conversation, "hello", max_rounds=3)
+        result = await runner.run(conversation, "hello", max_steps=3)
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.final_reason, "context_length_exceeded")
-        self.assertEqual(result.checkpoints[-1].kind, "run")
+        self.assertEqual(result.checkpoints[-1].kind, "turn")
         self.assertEqual(result.checkpoints[-1].reason, "context_length_exceeded")
         self.assertIn("上下文超过模型限制", result.answer)
 
-    @patch("core.tools_runtime.run_runtime.asyncio.sleep", new_callable=AsyncMock)
+    @patch("core.tools_runtime.turn_runtime.asyncio.sleep", new_callable=AsyncMock)
     async def test_retry_reuses_one_model_context_snapshot(self, _sleep):
         llm_client = RecordingLLMClient(
             [
@@ -206,7 +206,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,
@@ -214,7 +214,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
             **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
-        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.status, TurnStatus.COMPLETED)
         self.assertEqual(context_preparation.prepare.call_count, 1)
         self.assertEqual(mode.instruction_calls, 1)
         self.assertIs(llm_client.messages[0], llm_client.messages[1])
@@ -224,7 +224,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
             "system prompt",
         )
 
-    async def test_each_round_builds_a_snapshot_with_current_instructions(self):
+    async def test_each_step_builds_a_snapshot_with_current_instructions(self):
         llm_client = RecordingLLMClient(
             [
                 LLMResponse(content="draft"),
@@ -239,7 +239,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
         conversation = Conversation()
         conversation.set_system_prompt("system prompt")
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls=model_call_service(llm_client),
             model="test-model",
             runtime_mode=mode,
@@ -247,7 +247,7 @@ class RunRuntimeContextTest(unittest.IsolatedAsyncioTestCase):
             **runtime_tool_dependencies(),
         ).run(conversation, "hello")
 
-        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.status, TurnStatus.COMPLETED)
         self.assertEqual(context_preparation.prepare.call_count, 2)
         self.assertEqual(mode.instruction_calls, 2)
         self.assertIn("第一轮指令", llm_client.messages[0][0]["content"])

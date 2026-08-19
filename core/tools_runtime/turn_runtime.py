@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import asyncio  # 兼容既有重试测试的 patch 边界；重试实现位于 model_turn。
+import asyncio  # 兼容既有重试测试的 patch 边界；重试实现位于 agent_step。
 import json
 from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
     format_checkpoint,
     message_chain_invalid_checkpoint,
-    run_completed_checkpoint,
-    run_interrupted_checkpoint,
-    run_started_checkpoint,
+    turn_completed_checkpoint,
+    turn_interrupted_checkpoint,
+    turn_started_checkpoint,
     tool_batch_completed_checkpoint,
     verification_required_checkpoint,
     approval_required_checkpoint,
@@ -20,21 +20,21 @@ from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import ToolsExecutor
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.tools_state import ToolsState
-from core.runtime_modes import RunMode, RuntimeMode, RuntimeModeRouter
+from core.runtime_modes import TurnMode, RuntimeMode, RuntimeModeRouter
 from core.context import ContextPreparationService, ContextState
 from core.runtime_artifacts import ToolResultExternalizer
-from core.tools_runtime.run_progress import NullRunProgressSink, RunProgressSink
-from core.tools_runtime.run_evidence import RunEvidence, RunEvidenceRecorder
-from core.tools_runtime.run_invocation import RunInvocation
-from core.tools_runtime.model_turn import ModelTurnRunner
+from core.tools_runtime.turn_progress import NullTurnProgressSink, TurnProgressSink
+from core.tools_runtime.turn_evidence import TurnEvidence, TurnEvidenceRecorder
+from core.tools_runtime.turn_invocation import TurnInvocation
+from core.tools_runtime.agent_step import AgentStepRunner
 from core.tools_runtime.mode_activation import ModeActivator
-from core.tools_runtime.run_types import RunControl, RunResult, RunStatus
+from core.tools_runtime.turn_types import TurnControl, TurnResult, TurnStatus
 from core.tools_runtime.tool_batch import ConcurrentToolBatchExecutor
-from core.tools_runtime.tool_environment import RunToolEnvironment
+from core.tools_runtime.tool_environment import TurnToolEnvironment
 from core.approval import ApprovalRequest
 
 
-class RunRuntime:
+class TurnRuntime:
     """最小 tool-calling 运行内核。"""
 
     def __init__(
@@ -45,10 +45,10 @@ class RunRuntime:
         context_preparation: ContextPreparationService | None = None,
         tools_executor: ToolsExecutor | None = None,
         tool_result_externalizer: ToolResultExternalizer | None = None,
-        progress_sink: RunProgressSink | None = None,
+        progress_sink: TurnProgressSink | None = None,
         *,
         mode_router: RuntimeModeRouter | None = None,
-        runtime_modes: dict[RunMode, RuntimeMode] | None = None,
+        runtime_modes: dict[TurnMode, RuntimeMode] | None = None,
     ):
         if runtime_mode is None:
             if mode_router is None or runtime_modes is None:
@@ -67,21 +67,21 @@ class RunRuntime:
         self.context_preparation = context_preparation
         self.tools_executor = tools_executor
         self.tool_result_externalizer = tool_result_externalizer
-        self.progress_sink = progress_sink or NullRunProgressSink()
+        self.progress_sink = progress_sink or NullTurnProgressSink()
 
     @staticmethod
     def _finish(
         *,
-        status: RunStatus,
+        status: TurnStatus,
         answer: str,
         checkpoint: Checkpoint,
         checkpoints: list[Checkpoint],
         context_state: ContextState,
-        evidence: RunEvidence,
+        evidence: TurnEvidence,
         approval_request: ApprovalRequest | None = None,
-    ) -> RunResult:
+    ) -> TurnResult:
         checkpoints.append(checkpoint)
-        return RunResult(
+        return TurnResult(
             status=status,
             answer=answer,
             checkpoints=checkpoints,
@@ -94,23 +94,23 @@ class RunRuntime:
         self,
         conversation: Conversation,
         user_message: str,
-        max_rounds: int = 50,
-        control: RunControl | None = None,
+        max_steps: int = 50,
+        control: TurnControl | None = None,
         context_state: ContextState | None = None,
-        invocation: RunInvocation | None = None,
-    ) -> RunResult:
+        invocation: TurnInvocation | None = None,
+    ) -> TurnResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
-        evidence_recorder = RunEvidenceRecorder()
-        run_control = control or RunControl()
+        evidence_recorder = TurnEvidenceRecorder()
+        turn_control = control or TurnControl()
         current_context_state = context_state or ContextState()
-        current_invocation = invocation or RunInvocation()
-        model_turn_runner = ModelTurnRunner(
+        current_invocation = invocation or TurnInvocation()
+        agent_step_runner = AgentStepRunner(
             self.model_calls,
             self.model,
             self.context_preparation,
         )
-        tool_environment = RunToolEnvironment(
+        tool_environment = TurnToolEnvironment(
             self.tools_executor,
             current_invocation,
         )
@@ -137,11 +137,11 @@ class RunRuntime:
             and conversation.records[0].payload.get("role") == "system"
             else None
         )
-        checkpoints.append(run_started_checkpoint(max_rounds, system_prompt))
+        checkpoints.append(turn_started_checkpoint(max_steps, system_prompt))
         conversation.add_user(user_message)
 
         activation = await ModeActivator(
-            model_turn_runner=model_turn_runner,
+            agent_step_runner=agent_step_runner,
             default_mode=self.runtime_mode,
             mode_router=self.mode_router,
             runtime_modes=self.runtime_modes,
@@ -157,12 +157,12 @@ class RunRuntime:
         if activation.terminal_checkpoint is not None:
             checkpoint = activation.terminal_checkpoint
             status = (
-                RunStatus.BLOCKED
+                TurnStatus.BLOCKED
                 if checkpoint.reason in {
                     "context_budget_exceeded",
                     "context_length_exceeded",
                 }
-                else RunStatus.FAILED
+                else TurnStatus.FAILED
             )
             return self._finish(
                 status=status,
@@ -176,7 +176,7 @@ class RunRuntime:
         mode_state = activation.mode_state
         if runtime_mode is None:
             raise AssertionError("mode activation completed without a runtime mode")
-        for round_index in range(1, max_rounds + 1):
+        for step_index in range(1, max_steps + 1):
             tool_snapshot = tool_environment.snapshot(runtime_mode, mode_state)
             tools = tool_snapshot.model_tools
             validation = validate_tool_message_chain(
@@ -185,21 +185,21 @@ class RunRuntime:
             if not validation.ok:
                 checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
                 return self._finish(
-                    status=RunStatus.FAILED,
+                    status=TurnStatus.FAILED,
                     answer=format_checkpoint(checkpoint),
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
                     context_state=current_context_state,
                     evidence=evidence_recorder.snapshot(),
                 )
-            turn_outcome = await model_turn_runner.prepare_and_call(
+            turn_outcome = await agent_step_runner.prepare_and_call(
                 conversation_records=conversation.records,
                 context_state=current_context_state,
                 runtime_instructions=tool_snapshot.runtime_prompts,
                 tools=tools,
                 level2_boundary_message_id=level2_boundary_message_id,
-                stage="agent_round",
-                round_index=round_index,
+                stage="agent_step",
+                step_index=step_index,
                 preparation_failure_stage="context_summary",
             )
             checkpoints.extend(turn_outcome.checkpoints)
@@ -208,12 +208,12 @@ class RunRuntime:
             llm_outcome = turn_outcome.result
             if isinstance(llm_outcome, Checkpoint):
                 status = (
-                    RunStatus.BLOCKED
+                    TurnStatus.BLOCKED
                     if llm_outcome.reason in {
                         "context_budget_exceeded",
                         "context_length_exceeded",
                     }
-                    else RunStatus.FAILED
+                    else TurnStatus.FAILED
                 )
                 return self._finish(
                     status=status,
@@ -256,7 +256,7 @@ class RunRuntime:
                     )
                     checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
                     return self._finish(
-                        status=RunStatus.FAILED,
+                        status=TurnStatus.FAILED,
                         answer=format_checkpoint(checkpoint),
                         checkpoint=checkpoint,
                         checkpoints=checkpoints,
@@ -272,8 +272,8 @@ class RunRuntime:
 
                 answer = response.content
                 if level2_performed:
-                    answer = "本轮已执行上下文压缩。\n\n" + answer
-                runtime_mode.on_run_completed(mode_state)
+                    answer = "本次 Turn 已执行上下文压缩。\n\n" + answer
+                runtime_mode.on_turn_completed(mode_state)
                 completion_data = runtime_mode.checkpoint_data(mode_state) or {}
                 for capability in current_invocation.capabilities:
                     capability_data = capability.checkpoint_data() or {}
@@ -284,12 +284,12 @@ class RunRuntime:
                             f"data: {sorted(duplicated_keys)}"
                         )
                     completion_data.update(capability_data)
-                checkpoint = run_completed_checkpoint(
+                checkpoint = turn_completed_checkpoint(
                     answer=answer,
                     extra_data=completion_data or None,
                 )
                 return self._finish(
-                    status=RunStatus.COMPLETED,
+                    status=TurnStatus.COMPLETED,
                     answer=answer,
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
@@ -315,7 +315,7 @@ class RunRuntime:
                 conversation.add_user(batch_feedback)
             checkpoints.append(
                 tool_batch_completed_checkpoint(
-                    round_index,
+                    step_index,
                     tools_state,
                     len(calls),
                     runtime_mode.checkpoint_data(mode_state),
@@ -334,7 +334,7 @@ class RunRuntime:
                     request.risk,
                 )
                 return self._finish(
-                    status=RunStatus.BLOCKED,
+                    status=TurnStatus.BLOCKED,
                     answer=checkpoint.message,
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
@@ -343,7 +343,7 @@ class RunRuntime:
                     approval_request=request,
                 )
 
-            if run_control.interrupt_requested:
+            if turn_control.interrupt_requested:
                 stop_safety = evaluate_stop_safety(
                     conversation.protocol_messages(),
                     tools_state,
@@ -354,7 +354,7 @@ class RunRuntime:
                     )
                     checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
                     return self._finish(
-                        status=RunStatus.FAILED,
+                        status=TurnStatus.FAILED,
                         answer=format_checkpoint(checkpoint),
                         checkpoint=checkpoint,
                         checkpoints=checkpoints,
@@ -368,11 +368,11 @@ class RunRuntime:
                     conversation.add_user(checkpoint.message)
                     continue
 
-                checkpoint = run_interrupted_checkpoint(
-                    run_control.interrupt_reason
+                checkpoint = turn_interrupted_checkpoint(
+                    turn_control.interrupt_reason
                 )
                 return self._finish(
-                    status=RunStatus.INTERRUPTED,
+                    status=TurnStatus.INTERRUPTED,
                     answer=checkpoint.message,
                     checkpoint=checkpoint,
                     checkpoints=checkpoints,
@@ -380,9 +380,9 @@ class RunRuntime:
                     evidence=evidence_recorder.snapshot(),
                 )
 
-        checkpoint = budget_stop_checkpoint(max_rounds, tools_state)
+        checkpoint = budget_stop_checkpoint(max_steps, tools_state)
         return self._finish(
-            status=RunStatus.BLOCKED,
+            status=TurnStatus.BLOCKED,
             answer=format_checkpoint(checkpoint),
             checkpoint=checkpoint,
             checkpoints=checkpoints,

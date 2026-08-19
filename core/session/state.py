@@ -48,15 +48,15 @@ class SessionEvent:
     session_id: str
     reason: str
 
-    run_id: str | None = None
+    turn_id: str | None = None
     occurred_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
 
 
 @dataclass
-class SessionRunRecord:
-    run_id: str
+class SessionTurnRecord:
+    turn_id: str
     status: str
     started_at: datetime
     ended_at: datetime | None = None
@@ -99,7 +99,7 @@ class Session:
     context_state: ContextState = field(default_factory=ContextState)
     status: SessionStatus = SessionStatus.PENDING
     events: list[SessionEvent] = field(default_factory=list)
-    run_records: list[SessionRunRecord] = field(default_factory=list)
+    turn_records: list[SessionTurnRecord] = field(default_factory=list)
     capability_snapshot: SessionCapabilitySnapshot | None = None
     pending_approval_id: str | None = None
 

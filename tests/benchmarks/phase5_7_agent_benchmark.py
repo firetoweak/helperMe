@@ -13,7 +13,7 @@ from uuid import uuid4
 from core.agent_workspace import AgentWorkspace
 from core.composition import create_agent_application
 from core.model_call.config import load_model_config
-from core.observability import build_run_trace
+from core.observability import build_turn_trace
 
 
 MODEL = load_model_config().name
@@ -174,9 +174,9 @@ async def async_main() -> None:
         started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         outcome = await application.start(
             session_id,
-            f"run-{uuid4().hex}",
+            f"turn-{uuid4().hex}",
             USER_GOAL,
-            max_rounds=50,
+            max_steps=50,
         )
 
     session = application._session_runtime.sessions[session_id]
@@ -240,7 +240,7 @@ async def async_main() -> None:
         "model": MODEL,
         "goal": USER_GOAL,
         "initial_test_exit_code": initial_test.returncode,
-        "run_status": outcome.result.status.value,
+        "turn_status": outcome.result.status.value,
         "final_reason": outcome.result.final_reason,
         "answer": outcome.result.answer,
         "tool_timeline": timeline,
@@ -258,7 +258,7 @@ async def async_main() -> None:
         "git_status": status.stdout,
         "checks": checks,
         "passed": all(checks.values()),
-        "trace": build_run_trace(
+        "trace": build_turn_trace(
             started_at=started_at,
             model=MODEL,
             question=USER_GOAL,
@@ -272,7 +272,7 @@ async def async_main() -> None:
     print(json.dumps({
         "report_path": str(report_path),
         "benchmark_root": str(benchmark_root),
-        "run_status": report["run_status"],
+        "turn_status": report["turn_status"],
         "checks": checks,
         "passed": report["passed"],
         "answer": report["answer"],

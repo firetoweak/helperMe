@@ -3,7 +3,7 @@ import unittest
 
 from core.model_call.types import ToolCall
 from core.runtime_modes.plain import PlainMode
-from core.tools_runtime.run_evidence import RunEvidenceRecorder
+from core.tools_runtime.turn_evidence import TurnEvidenceRecorder
 from core.tools_runtime.tool_batch import ConcurrentToolBatchExecutor
 from core.tools_runtime.tools_state import ToolsState
 from tests.core.llm_test_support import runtime_tool_dependencies
@@ -36,7 +36,7 @@ class ConcurrentToolBatchExecutorTest(unittest.IsolatedAsyncioTestCase):
 
         tools_executor.execute = execute
         tools_state = ToolsState()
-        evidence = RunEvidenceRecorder()
+        evidence = TurnEvidenceRecorder()
         calls = (
             ToolCall("call-1", "first", '{"value": 1}'),
             ToolCall("call-2", "second", '{"value": 2}'),
@@ -99,7 +99,7 @@ class ConcurrentToolBatchExecutorTest(unittest.IsolatedAsyncioTestCase):
 
         tools_executor.execute = execute
         tools_state = ToolsState()
-        evidence = RunEvidenceRecorder()
+        evidence = TurnEvidenceRecorder()
         calls = (
             ToolCall("call-1", "failed", "{}"),
             ToolCall("call-2", "sibling", "{}"),
@@ -154,7 +154,7 @@ class ConcurrentToolBatchExecutorTest(unittest.IsolatedAsyncioTestCase):
                 runtime_mode=PlainMode(),
                 mode_state=None,
                 tools_state=ToolsState(),
-                evidence_recorder=RunEvidenceRecorder(),
+                evidence_recorder=TurnEvidenceRecorder(),
             )
         )
         await asyncio.wait_for(both_started.wait(), timeout=1)
@@ -198,7 +198,7 @@ class ConcurrentToolBatchExecutorTest(unittest.IsolatedAsyncioTestCase):
                 runtime_mode=PlainMode(),
                 mode_state=None,
                 tools_state=ToolsState(),
-                evidence_recorder=RunEvidenceRecorder(),
+                evidence_recorder=TurnEvidenceRecorder(),
             )
 
         self.assertTrue(sibling_finished)

@@ -83,7 +83,7 @@ async def run_benchmark() -> dict:
                         f"goal-{uuid4().hex}",
                         f"executor-{uuid4().hex}",
                         OBJECTIVE,
-                        max_rounds=6,
+                        max_steps=6,
                     ),
                     timeout=360,
                 )

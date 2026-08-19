@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from core.tools_runtime.run_evidence import RunEvidence, ToolEvidence
+from core.tools_runtime.turn_evidence import TurnEvidence, ToolEvidence
 from plugins.goal.capabilities import GoalJudgeCapability
 from plugins.goal.submissions import JudgmentBuffer, JudgmentSubmission
 from plugins.goal.goal import (
@@ -42,7 +42,7 @@ def contract():
 
 
 def evidence():
-    return RunEvidence(
+    return TurnEvidence(
         steps=(
             ToolEvidence(
                 "call-1",
@@ -95,7 +95,7 @@ class GoalJudgeCapabilityTest(unittest.TestCase):
             )
         )
 
-        rejected = self.capability.check_final_candidate(RunEvidence())
+        rejected = self.capability.check_final_candidate(TurnEvidence())
         accepted = self.capability.check_final_candidate(evidence())
 
         self.assertIn("缺少命令验收证据", rejected)
@@ -110,7 +110,7 @@ class GoalJudgeCapabilityTest(unittest.TestCase):
             )
         )
         self.assertIsNotNone(
-            self.capability.check_final_candidate(RunEvidence())
+            self.capability.check_final_candidate(TurnEvidence())
         )
 
         self.buffer.submit(
@@ -121,7 +121,7 @@ class GoalJudgeCapabilityTest(unittest.TestCase):
             )
         )
         self.assertIsNone(
-            self.capability.check_final_candidate(RunEvidence())
+            self.capability.check_final_candidate(TurnEvidence())
         )
 
 

@@ -5,19 +5,19 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.agent_workspace import AgentWorkspace
-from core.agent_application import AgentApplication, DEFAULT_MAX_ROUNDS
+from core.agent_application import AgentApplication, DEFAULT_MAX_STEPS
 from core.model_call.client import LLMClient
 from core.prompt import DEFAULT_AGENT_PROMPT
 from core.runtime_modes import (
     PlainMode,
-    RunMode,
+    TurnMode,
     RuntimeMode,
     RuntimeModeRouter,
 )
 from core.todos import TodoMode
 from core.session import SessionRuntime
-from core.tools_runtime.run_runtime import RunRuntime
-from core.tools_runtime.run_progress import RunProgressSink
+from core.tools_runtime.turn_runtime import TurnRuntime
+from core.tools_runtime.turn_progress import TurnProgressSink
 from core.context import (
     ContextBudget,
     ContextManager,
@@ -62,11 +62,11 @@ def create_agent_application(
     runtime_mode: RuntimeMode | None = None,
     recent_protection_tokens: int = 10_000,
     llm_client: LLMClient | None = None,
-    progress_sink: RunProgressSink | None = None,
+    progress_sink: TurnProgressSink | None = None,
     filesystem_access_mode: FilesystemAccessMode = (
         FilesystemAccessMode.SCOPED
     ),
-    default_max_rounds: int = DEFAULT_MAX_ROUNDS,
+    default_max_steps: int = DEFAULT_MAX_STEPS,
     application_resources: tuple[
         AbstractAsyncContextManager[Any], ...
     ] = (),
@@ -134,13 +134,13 @@ def create_agent_application(
         else {
             "mode_router": RuntimeModeRouter(),
             "runtime_modes": {
-                RunMode.PLAIN: PlainMode(),
-                RunMode.TODO: TodoMode(),
+                TurnMode.PLAIN: PlainMode(),
+                TurnMode.TODO: TodoMode(),
             },
         }
     )
 
-    def create_session_run_runtime(session_id: str) -> RunRuntime:
+    def create_session_turn_runtime(session_id: str) -> TurnRuntime:
         artifact_store = artifact_drawers.for_session(session_id)
         tool_registry = application_tool_registry.clone()
         tool_registry.register(create_read_artifact_spec(artifact_store))
@@ -157,7 +157,7 @@ def create_agent_application(
             context_budget=context_budget,
             summary_generator=summary_generator,
         )
-        return RunRuntime(
+        return TurnRuntime(
             model_calls=model_calls,
             model=model,
             context_preparation=context_preparation,
@@ -171,14 +171,14 @@ def create_agent_application(
         )
 
     session_runtime = SessionRuntime(
-        run_runtime_factory=create_session_run_runtime,
+        turn_runtime_factory=create_session_turn_runtime,
         delete_session_resources=artifact_drawers.delete,
         default_toolset_provider=default_toolset_provider,
     )
     return AgentApplication(
         session_runtime=session_runtime,
         system_prompt=DEFAULT_AGENT_PROMPT,
-        default_max_rounds=default_max_rounds,
+        default_max_steps=default_max_steps,
         resources=(llm_client, *application_resources)
         if owns_llm_client
         else application_resources,

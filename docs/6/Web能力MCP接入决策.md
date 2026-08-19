@@ -22,7 +22,7 @@ Web MCP 与其他 MCP 使用相同的通用链路：
 持久 MCP 配置
 → Application 资源进入
 → Session 能力快照
-→ Run 期按需加载
+→ Turn 期按需加载
 → Tool Registry
 → 工具调用、结果记录与上下文预算
 ```
@@ -31,7 +31,7 @@ HelperMe 只负责已经存在的通用语义：
 
 - MCP Server 的安装、启停、连接、发现与按需加载；
 - ToolSpec、工具执行和失败传播；
-- Tool Result、RunEvidence、Conversation 与 Artifact；
+- Tool Result、TurnEvidence、Conversation 与 Artifact；
 - Session 能力快照和配置变更后的明确过期；
 - 已有通用审批机制能够表达的外部操作确认。
 
@@ -104,24 +104,24 @@ HelperMe 当前不为 Web 增加：
 
 以下内容没有获得真实需求证明，停止推进：
 
-- 为 Web 回补通用 `RunScope`、`CapabilitySource` 和 `CapabilityContribution`；
-- 建立 `WebApplicationService`、`WebRunState` 和 `UrlProvenanceIndex`；
+- 为 Web 回补通用 `TurnScope`、`CapabilitySource` 和 `CapabilityContribution`；
+- 建立 `WebApplicationService`、`WebTurnState` 和 `UrlProvenanceIndex`；
 - 分离并实现 SearchProvider / FetchProvider；
 - 自行承担本地 Fetch 的 DNS 固定、逐跳重定向和 SSRF 防护；
 - 为未来 Browser、Crawl、多 Provider 或 fallback 预留框架。
 
-如果 Skill 或其他真实能力将来独立证明需要新的 Run 期公共端口，应由那个需求重新推导，而不是沿用 Web 草稿中的预设结论。
+如果 Skill 或其他真实能力将来独立证明需要新的 Turn 期公共端口，应由那个需求重新推导，而不是沿用 Web 草稿中的预设结论。
 
 ## 7. 真实验证结果（2026.08.18）
 
 已用现有通用 MCP 链路完成以下真实任务：
 
 - Tavily MCP：按需加载 search/extract，搜索并提取公开网页内容；长结果经 Runtime Artifact 外置后可通过 `read_artifact` 继续读取；
-- Playwright MCP：完成页面导航和浏览器交互；修复连接 owner 生命周期后，跨 Run 重新加载 Toolset 不再重启 Server 或重置其领域状态；
+- Playwright MCP：完成页面导航和浏览器交互；修复连接 owner 生命周期后，跨 Turn 重新加载 Toolset 不再重启 Server 或重置其领域状态；
 - stdio MCP 未配置 `cwd` 时，运行目录固定到 `~/.helperme/plugins/mcp/runtime/{server_id}`，日志、截图和临时附件不再落入 HelperMe 源码目录；
 - 真实 Streamable HTTP 集成、120 工具分页列表及配置 Secret 到 Artifact/日志的防泄漏扫描均已自动化覆盖。
 
-本轮没有发现必须由 HelperMe 自建 Search、Fetch 或 Browser Provider 的缺口。6C 验收完成；后续只有出现第 5 节所列的可重复失败时才重新开启设计。
+本次验收没有发现必须由 HelperMe 自建 Search、Fetch 或 Browser Provider 的缺口。6C 验收完成；后续只有出现第 5 节所列的可重复失败时才重新开启设计。
 
 ## 8. 当前结论
 

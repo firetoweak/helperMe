@@ -71,7 +71,7 @@ class ContextPreparationServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         policy.propose.assert_called_once()
 
-    async def test_level2_summarizes_only_history_before_current_run(self):
+    async def test_level2_summarizes_only_history_before_current_turn(self):
         conversation = Conversation()
         conversation.set_system_prompt("system")
         conversation.add_user("old " * 30)

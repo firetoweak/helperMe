@@ -4,13 +4,13 @@ import asyncio
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from core.tools_runtime.run_runtime import (
-    RunControl,
-    RunResult,
-    RunRuntime,
-    RunStatus,
+from core.tools_runtime.turn_runtime import (
+    TurnControl,
+    TurnResult,
+    TurnRuntime,
+    TurnStatus,
 )
-from core.tools_runtime.run_invocation import RunInvocation
+from core.tools_runtime.turn_invocation import TurnInvocation
 from core.tools_runtime.progressive_toolsets import (
     SessionCapabilitySnapshot,
     SnapshotToolsetProvider,
@@ -21,27 +21,27 @@ from core.session.state import (
     Session,
     SessionEvent,
     SessionEventType,
-    SessionRunRecord,
+    SessionTurnRecord,
     SessionStatus,
 )
 from datetime import datetime, timezone
 
 MAX_USER_MESSAGE_CHARS = 32_000
 
-RUN_STATUS_MAPPING = {
-    RunStatus.COMPLETED: (
+TURN_STATUS_MAPPING = {
+    TurnStatus.COMPLETED: (
         SessionStatus.COMPLETED,
         SessionEventType.COMPLETED,
     ),
-    RunStatus.INTERRUPTED: (
+    TurnStatus.INTERRUPTED: (
         SessionStatus.INTERRUPTED,
         SessionEventType.INTERRUPTED,
     ),
-    RunStatus.BLOCKED: (
+    TurnStatus.BLOCKED: (
         SessionStatus.BLOCKED,
         SessionEventType.BLOCKED,
     ),
-    RunStatus.FAILED: (
+    TurnStatus.FAILED: (
         SessionStatus.FAILED,
         SessionEventType.FAILED,
     ),
@@ -49,35 +49,35 @@ RUN_STATUS_MAPPING = {
 
 
 @dataclass(frozen=True)
-class SessionRunOutcome:
-    record: SessionRunRecord
-    result: RunResult
+class SessionTurnOutcome:
+    record: SessionTurnRecord
+    result: TurnResult
 
 
 
 class SessionRuntime:
     def __init__(
         self,
-        run_runtime: RunRuntime | None = None,
+        turn_runtime: TurnRuntime | None = None,
         *,
-        run_runtime_factory: Callable[[str], RunRuntime] | None = None,
+        turn_runtime_factory: Callable[[str], TurnRuntime] | None = None,
         delete_session_resources: Callable[[str], None] | None = None,
         default_toolset_provider: ToolsetProvider | None = None,
     ):
-        if (run_runtime is None) == (run_runtime_factory is None):
+        if (turn_runtime is None) == (turn_runtime_factory is None):
             raise ValueError(
-                "run_runtime 与 run_runtime_factory 必须且只能提供一个"
+                "turn_runtime 与 turn_runtime_factory 必须且只能提供一个"
             )
-        if run_runtime_factory is not None and delete_session_resources is None:
+        if turn_runtime_factory is not None and delete_session_resources is None:
             raise ValueError(
-                "使用 run_runtime_factory 时必须提供 delete_session_resources"
+                "使用 turn_runtime_factory 时必须提供 delete_session_resources"
             )
-        self.run_runtime = run_runtime
-        self._run_runtime_factory = run_runtime_factory
+        self.turn_runtime = turn_runtime
+        self._turn_runtime_factory = turn_runtime_factory
         self._delete_session_resources = delete_session_resources
-        self._session_run_runtimes: dict[str, RunRuntime] = {}
+        self._session_turn_runtimes: dict[str, TurnRuntime] = {}
         self.sessions: dict[str, Session] = {}
-        self.active_controls: dict[str, RunControl] = {}
+        self.active_controls: dict[str, TurnControl] = {}
         self.default_toolset_provider = default_toolset_provider
 
     def create_session(
@@ -110,8 +110,8 @@ class SessionRuntime:
         )
 
         session.record_event(event)
-        if self._run_runtime_factory is not None:
-            self._session_run_runtimes[session.id] = self._run_runtime_factory(
+        if self._turn_runtime_factory is not None:
+            self._session_turn_runtimes[session.id] = self._turn_runtime_factory(
                 session.id
             )
         self.sessions[session.id] = session
@@ -127,7 +127,7 @@ class SessionRuntime:
 
         if self._delete_session_resources is not None:
             self._delete_session_resources(session_id)
-        self._session_run_runtimes.pop(session_id, None)
+        self._session_turn_runtimes.pop(session_id, None)
         del self.sessions[session_id]
 
     def get_session(self, session_id: str) -> Session:
@@ -136,15 +136,15 @@ class SessionRuntime:
     async def start(
         self,
         session_id: str,
-        run_id: str,
+        turn_id: str,
         user_message: str,
-        max_rounds: int = 20,
+        max_steps: int = 20,
         *,
-        invocation: RunInvocation | None = None,
-    ) -> SessionRunOutcome:
+        invocation: TurnInvocation | None = None,
+    ) -> SessionTurnOutcome:
         if not session_id or not session_id.strip():
             raise ValueError("session_id 不能为空")
-        self.validate_run_input(run_id, user_message)
+        self.validate_turn_input(turn_id, user_message)
 
         if session_id not in self.sessions:
             raise KeyError(f"Session 不存在: {session_id}")
@@ -161,15 +161,15 @@ class SessionRuntime:
             SessionStatus.FAILED,
         }:
             raise ValueError(
-                "Session 状态必须允许启动新 Run，"
+                "Session 状态必须允许启动新 Turn，"
                 f"当前为: {session.status.value}"
             )
 
-        return await self._begin_and_execute_run(
+        return await self._begin_and_execute_turn(
             session=session,
-            run_id=run_id,
+            turn_id=turn_id,
             user_message=user_message,
-            max_rounds=max_rounds,
+            max_steps=max_steps,
             event_kind=SessionEventType.STARTED,
             event_reason="Session started",
             invocation=invocation,
@@ -202,15 +202,15 @@ class SessionRuntime:
     async def resume(
         self,
         session_id: str,
-        run_id: str,
+        turn_id: str,
         user_message: str,
-        max_rounds: int = 20,
+        max_steps: int = 20,
         *,
-        invocation: RunInvocation | None = None,
-    ) -> SessionRunOutcome:
+        invocation: TurnInvocation | None = None,
+    ) -> SessionTurnOutcome:
         if not session_id or not session_id.strip():
             raise ValueError("session_id 不能为空")
-        self.validate_run_input(run_id, user_message)
+        self.validate_turn_input(turn_id, user_message)
         if session_id not in self.sessions:
             raise KeyError(f"Session 不存在: {session_id}")
 
@@ -220,20 +220,20 @@ class SessionRuntime:
                 f"Session 状态必须为 interrupted，当前为: {session.status.value}"
             )
 
-        return await self._begin_and_execute_run(
+        return await self._begin_and_execute_turn(
             session=session,
-            run_id=run_id,
+            turn_id=turn_id,
             user_message=user_message,
-            max_rounds=max_rounds,
+            max_steps=max_steps,
             event_kind=SessionEventType.RESUMED,
             event_reason="Session resumed",
             invocation=invocation,
         )
 
     @staticmethod
-    def validate_run_input(run_id: str, user_message: str) -> None:
-        if not run_id or not run_id.strip():
-            raise ValueError("run_id 不能为空")
+    def validate_turn_input(turn_id: str, user_message: str) -> None:
+        if not turn_id or not turn_id.strip():
+            raise ValueError("turn_id 不能为空")
         SessionRuntime._validate_user_message(user_message)
 
     @staticmethod
@@ -246,24 +246,24 @@ class SessionRuntime:
                 f"{len(user_message)} > {MAX_USER_MESSAGE_CHARS}"
             )
 
-    async def _begin_and_execute_run(
+    async def _begin_and_execute_turn(
         self,
         session: Session,
-        run_id: str,
+        turn_id: str,
         user_message: str,
-        max_rounds: int,
+        max_steps: int,
         event_kind: SessionEventType,
         event_reason: str,
-        invocation: RunInvocation | None,
-    ) -> SessionRunOutcome:
+        invocation: TurnInvocation | None,
+    ) -> SessionTurnOutcome:
         if session.id in self.active_controls:
-            raise ValueError(f"Session 已有正在执行的 run: {session.id}")
-        if any(record.run_id == run_id for record in session.run_records):
-            raise ValueError(f"重复 run_id: {run_id}")
+            raise ValueError(f"Session 已有正在执行的 Turn: {session.id}")
+        if any(record.turn_id == turn_id for record in session.turn_records):
+            raise ValueError(f"重复 turn_id: {turn_id}")
 
-        run_control = RunControl()
-        run_record = SessionRunRecord(
-            run_id=run_id,
+        turn_control = TurnControl()
+        turn_record = SessionTurnRecord(
+            turn_id=turn_id,
             status="running",
             started_at=datetime.now(timezone.utc),
             ended_at=None,
@@ -273,19 +273,19 @@ class SessionRuntime:
             kind=event_kind,
             session_id=session.id,
             reason=event_reason,
-            run_id=run_id,
+            turn_id=turn_id,
         )
         session.transition_to(SessionStatus.RUNNING, event)
-        session.run_records.append(run_record)
-        self.active_controls[session.id] = run_control
+        session.turn_records.append(turn_record)
+        self.active_controls[session.id] = turn_control
 
         try:
-            return await self._execute_run(
+            return await self._execute_turn(
                 session=session,
-                run_record=run_record,
+                turn_record=turn_record,
                 user_message=user_message,
-                max_rounds=max_rounds,
-                control=run_control,
+                max_steps=max_steps,
+                control=turn_control,
                 invocation=invocation,
             )
         except asyncio.CancelledError:
@@ -294,13 +294,13 @@ class SessionRuntime:
                 event = SessionEvent(
                     kind=SessionEventType.FAILED,
                     session_id=session.id,
-                    reason="Run task was cancelled",
-                    run_id=run_id,
+                    reason="Turn task was cancelled",
+                    turn_id=turn_id,
                 )
                 session.transition_to(SessionStatus.FAILED, event)
-                run_record.status = RunStatus.FAILED.value
-                run_record.ended_at = ended_at
-                run_record.final_reason = "task_cancelled"
+                turn_record.status = TurnStatus.FAILED.value
+                turn_record.ended_at = ended_at
+                turn_record.final_reason = "task_cancelled"
             raise
         except Exception:
             if session.status is SessionStatus.RUNNING:
@@ -308,39 +308,39 @@ class SessionRuntime:
                 event = SessionEvent(
                     kind=SessionEventType.FAILED,
                     session_id=session.id,
-                    reason="RunRuntime raised an exception",
-                    run_id=run_id,
+                    reason="TurnRuntime raised an exception",
+                    turn_id=turn_id,
                 )
                 session.transition_to(SessionStatus.FAILED, event)
-                run_record.status = RunStatus.FAILED.value
-                run_record.ended_at = ended_at
-                run_record.final_reason = "runtime_exception"
+                turn_record.status = TurnStatus.FAILED.value
+                turn_record.ended_at = ended_at
+                turn_record.final_reason = "runtime_exception"
             raise
         finally:
             del self.active_controls[session.id]
 
 
-    async def _execute_run(
+    async def _execute_turn(
         self,
         session: Session,
-        run_record: SessionRunRecord,
+        turn_record: SessionTurnRecord,
         user_message: str,
-        max_rounds: int,
-        control: RunControl,
-        invocation: RunInvocation | None,
-    ) -> SessionRunOutcome:
-        run_runtime = self._session_run_runtimes.get(
+        max_steps: int,
+        control: TurnControl,
+        invocation: TurnInvocation | None,
+    ) -> SessionTurnOutcome:
+        turn_runtime = self._session_turn_runtimes.get(
             session.id,
-            self.run_runtime,
+            self.turn_runtime,
         )
-        run_arguments = dict(
+        turn_arguments = dict(
             conversation=session.conversation,
             user_message=user_message,
-            max_rounds=max_rounds,
+            max_steps=max_steps,
             control=control,
             context_state=session.context_state,
         )
-        effective_invocation = invocation or RunInvocation()
+        effective_invocation = invocation or TurnInvocation()
         provider = effective_invocation.toolset_provider
         if provider is not None and session.capability_snapshot is not None:
             effective_invocation = replace(
@@ -351,25 +351,25 @@ class SessionRuntime:
                 ),
             )
         if invocation is not None:
-            run_arguments["invocation"] = effective_invocation
-        result = await run_runtime.run(**run_arguments)
+            turn_arguments["invocation"] = effective_invocation
+        result = await turn_runtime.run(**turn_arguments)
         if isinstance(result.approval_request, ApprovalRequest):
-            if result.status is not RunStatus.BLOCKED:
-                raise ValueError("ApprovalRequest 必须阻塞当前 Run")
+            if result.status is not TurnStatus.BLOCKED:
+                raise ValueError("ApprovalRequest 必须阻塞当前 Turn")
             session.pending_approval_id = result.approval_request.id
         session.context_state = result.context_state
-        target_status, event_kind = RUN_STATUS_MAPPING[result.status]
+        target_status, event_kind = TURN_STATUS_MAPPING[result.status]
         ended_at = datetime.now(timezone.utc)
 
         event = SessionEvent(
             kind=event_kind,
             session_id=session.id,
-            reason=result.final_reason or "Run completed",
-            run_id=run_record.run_id,
+            reason=result.final_reason or "Turn completed",
+            turn_id=turn_record.turn_id,
         )
         session.transition_to(target_status, event)
-        run_record.status = result.status.value
-        run_record.ended_at = ended_at
-        run_record.final_reason = result.final_reason
+        turn_record.status = result.status.value
+        turn_record.ended_at = ended_at
+        turn_record.final_reason = result.final_reason
 
-        return SessionRunOutcome(record=run_record, result=result)
+        return SessionTurnOutcome(record=turn_record, result=result)

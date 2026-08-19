@@ -9,7 +9,7 @@ from core.runtime_modes import PlainMode
 from core.tool_registry import PydanticParameters, ToolSpec
 from core.tools_runtime import (
     LOAD_TOOLSET,
-    RunInvocation,
+    TurnInvocation,
     SessionCapabilitySnapshot,
     SnapshotToolsetProvider,
     ToolsetDescriptor,
@@ -19,7 +19,7 @@ from core.tools_runtime.progressive_toolsets import (
     ToolsetLoadingState,
     create_load_toolset_spec,
 )
-from core.tools_runtime.run_runtime import RunRuntime, RunStatus
+from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -95,8 +95,8 @@ def tool_names(request: dict) -> set[str]:
 
 class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def runner(client: RecordingLLMClient) -> RunRuntime:
-        return RunRuntime(
+    def runner(client: RecordingLLMClient) -> TurnRuntime:
+        return TurnRuntime(
             model_call_service(client),
             "test-model",
             PlainMode(),
@@ -110,7 +110,7 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         conversation.set_system_prompt("system prompt")
         return conversation
 
-    async def test_toolset_is_loaded_for_the_next_round_only(self):
+    async def test_toolset_is_loaded_for_the_next_step_only(self):
         provider = FakeToolsetProvider()
         client = RecordingLLMClient(
             [
@@ -140,10 +140,10 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         result = await self.runner(client).run(
             self.conversation(),
             "查询北京天气",
-            invocation=RunInvocation(toolset_provider=provider),
+            invocation=TurnInvocation(toolset_provider=provider),
         )
 
-        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.status, TurnStatus.COMPLETED)
         self.assertIn(LOAD_TOOLSET, tool_names(client.requests[0]))
         self.assertNotIn("get_weather", tool_names(client.requests[0]))
         self.assertIn("get_weather", tool_names(client.requests[1]))
@@ -165,7 +165,7 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
             }],
         )
 
-    async def test_loaded_toolset_does_not_leak_into_the_next_run(self):
+    async def test_loaded_toolset_does_not_leak_into_the_next_turn(self):
         first_client = RecordingLLMClient(
             [
                 LLMResponse(
@@ -181,7 +181,7 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
         runner = self.runner(first_client)
-        invocation = RunInvocation(toolset_provider=FakeToolsetProvider())
+        invocation = TurnInvocation(toolset_provider=FakeToolsetProvider())
         await runner.run(self.conversation(), "加载天气能力", invocation=invocation)
 
         second_client = RecordingLLMClient([LLMResponse(content="再次运行")])
@@ -191,7 +191,7 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("get_weather", tool_names(second_client.requests[0]))
         self.assertIn(LOAD_TOOLSET, tool_names(second_client.requests[0]))
 
-    async def test_adjacent_run_keeps_receipt_and_reloads_before_calling(self):
+    async def test_adjacent_turn_keeps_receipt_and_reloads_before_calling(self):
         provider = FakeToolsetProvider()
         conversation = self.conversation()
         first_client = RecordingLLMClient([
@@ -203,7 +203,7 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
             LLMResponse(content="天气 Toolset 提供查询能力"),
         ], provider)
         runner = self.runner(first_client)
-        invocation = RunInvocation(toolset_provider=provider)
+        invocation = TurnInvocation(toolset_provider=provider)
         await runner.run(conversation, "天气能力是做什么的", invocation=invocation)
 
         second_client = RecordingLLMClient([
@@ -231,7 +231,7 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("get_weather", tool_names(second_client.requests[1]))
         self.assertEqual(provider.requested_ids, ["weather", "weather"])
 
-    async def test_loaded_toolset_specs_are_snapshotted_once_per_run(self):
+    async def test_loaded_toolset_specs_are_snapshotted_once_per_turn(self):
         provider = FakeToolsetProvider()
         client = RecordingLLMClient(
             [
@@ -253,7 +253,7 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         await self.runner(client).run(
             self.conversation(),
             "查询天气",
-            invocation=RunInvocation(toolset_provider=provider),
+            invocation=TurnInvocation(toolset_provider=provider),
         )
 
         self.assertEqual(provider.requested_ids, ["weather"])
@@ -292,10 +292,10 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         result = await self.runner(client).run(
             self.conversation(),
             "加载不存在的能力",
-            invocation=RunInvocation(toolset_provider=FakeToolsetProvider()),
+            invocation=TurnInvocation(toolset_provider=FakeToolsetProvider()),
         )
 
-        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.status, TurnStatus.COMPLETED)
         self.assertEqual(result.evidence.steps[0].result["code"], "TOOLSET_NOT_FOUND")
         self.assertNotIn("get_weather", tool_names(client.requests[1]))
 

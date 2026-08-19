@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, Mock
 from core.composition import create_agent_application
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.tools_runtime.run_evidence import RunEvidence
-from core.tools_runtime.run_runtime import RunStatus
+from core.tools_runtime.turn_evidence import TurnEvidence
+from core.tools_runtime.turn_runtime import TurnStatus
 from plugins.goal.application import GoalApplicationService
 from plugins.goal.capabilities import (
     ContractCompilationCapability,
@@ -37,21 +37,21 @@ def user_criterion():
     )
 
 
-def outcome(status=RunStatus.COMPLETED, answer="完成", reason=None):
+def outcome(status=TurnStatus.COMPLETED, answer="完成", reason=None):
     return SimpleNamespace(
         result=SimpleNamespace(
             status=status,
             answer=answer,
             final_reason=reason,
-            evidence=RunEvidence(),
+            evidence=TurnEvidence(),
         )
     )
 
 
-class FakeRunHost:
+class FakeTurnHost:
     def __init__(self, judgments):
         self.sessions = {"session-1"}
-        self.used_runs = set()
+        self.used_turns = set()
         self.judgments = iter(judgments)
         self.executions = []
         self.deleted_sessions = []
@@ -68,12 +68,12 @@ class FakeRunHost:
         if session_id not in self.sessions:
             raise KeyError(session_id)
 
-    def validate_run(self, session_id, run_id, user_message):
+    def validate_turn(self, session_id, turn_id, user_message):
         self.require_session(session_id)
-        if not run_id.strip() or not user_message.strip():
-            raise ValueError("invalid run")
-        if (session_id, run_id) in self.used_runs:
-            raise ValueError("duplicate run")
+        if not turn_id.strip() or not user_message.strip():
+            raise ValueError("invalid turn")
+        if (session_id, turn_id) in self.used_turns:
+            raise ValueError("duplicate turn")
 
     def request_interrupt(self, session_id, reason=None):
         raise AssertionError("test did not expect an interrupt")
@@ -81,13 +81,13 @@ class FakeRunHost:
     async def execute(
         self,
         session_id,
-        run_id,
+        turn_id,
         user_message,
-        max_rounds,
+        max_steps,
         invocation,
     ):
-        self.validate_run(session_id, run_id, user_message)
-        self.used_runs.add((session_id, run_id))
+        self.validate_turn(session_id, turn_id, user_message)
+        self.used_turns.add((session_id, turn_id))
         capability = invocation.capabilities[0]
         self.executions.append((session_id, user_message, capability))
 
@@ -123,8 +123,8 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
             id_factory=self.ids(),
         )
 
-    async def test_runs_executor_then_independent_judge_until_done(self):
-        host = FakeRunHost(
+    async def test_turns_executor_then_independent_judge_until_done(self):
+        host = FakeTurnHost(
             [
                 JudgmentSubmission(
                     JudgmentDecision.CONTINUE,
@@ -165,7 +165,7 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(session not in host.sessions for session in host.deleted_sessions))
 
     async def test_continue_at_max_turns_becomes_exhausted(self):
-        host = FakeRunHost(
+        host = FakeTurnHost(
             [
                 JudgmentSubmission(
                     JudgmentDecision.CONTINUE,
@@ -197,7 +197,7 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
                 ),
             )
         )
-        host = FakeRunHost(
+        host = FakeTurnHost(
             [
                 JudgmentSubmission(
                     JudgmentDecision.CONTINUE,
@@ -233,7 +233,7 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         class ExecutorBug(RuntimeError):
             pass
 
-        host = FakeRunHost([])
+        host = FakeTurnHost([])
         execute = host.execute
 
         async def fail_executor(*args, **kwargs):
@@ -269,7 +269,7 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
 
 
 class GoalLoopRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):
-    async def test_contract_executor_and_independent_judge_run_through_runtime(self):
+    async def test_contract_executor_and_independent_judge_turn_through_runtime(self):
         llm = Mock()
         llm.chat = AsyncMock()
         llm.chat.side_effect = [
@@ -350,7 +350,7 @@ class GoalLoopRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):
             result = await service.start_goal(
                 "session-1",
                 "goal-1",
-                "executor-run-1",
+                "executor-turn-1",
                 "完成目标",
             )
 

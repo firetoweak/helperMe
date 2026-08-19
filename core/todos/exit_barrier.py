@@ -17,7 +17,7 @@ def check_todo_exit(todo_list: TodoList) -> TodoExitDecision:
             allowed=False,
             feedback=(
                 "Todo Sync Barrier 未通过：最近的外部工具结果尚未同步。"
-                "你可以继续调用外部工具；准备结束本 Run 时，请先调用 "
+                "你可以继续调用外部工具；准备结束本 Turn 时，请先调用 "
                 "rewrite_todos 提交完整最新快照。"
             ),
         )
@@ -33,7 +33,7 @@ def check_todo_exit(todo_list: TodoList) -> TodoExitDecision:
             feedback=(
                 "Todo Sync Barrier 未通过：TodoList 中仍有未结束事项，"
                 f"id={unfinished_ids}。请继续执行；确认不再需要的事项可标记为 "
-                "cancelled，并在 note 中说明原因。同步完整快照后再结束本 Run。"
+                "cancelled，并在 note 中说明原因。同步完整快照后再结束本 Turn。"
             ),
         )
 

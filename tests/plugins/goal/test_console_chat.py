@@ -11,9 +11,9 @@ from console_chat import (
 )
 
 
-class ConsoleRunMetadataTest(unittest.TestCase):
-    def test_run_hyperparameters_are_not_cli_options(self):
-        for arguments in (["--max-rounds", "80"], ["--full-access"]):
+class ConsoleTurnMetadataTest(unittest.TestCase):
+    def test_turn_hyperparameters_are_not_cli_options(self):
+        for arguments in (["--max-steps", "80"], ["--full-access"]):
             with self.subTest(arguments=arguments):
                 with redirect_stderr(StringIO()), self.assertRaises(
                     SystemExit

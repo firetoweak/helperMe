@@ -8,7 +8,7 @@ from core.approval import ApprovalRequest
 from core.model_call.types import ToolCall
 from core.runtime_artifacts import ToolResultExternalizer
 from core.runtime_modes import RuntimeMode
-from core.tools_runtime.run_evidence import RunEvidenceRecorder
+from core.tools_runtime.turn_evidence import TurnEvidenceRecorder
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from core.tools_runtime.tools_protocol import build_tool_messages
 from core.tools_runtime.tools_state import ToolStep, ToolsState
@@ -25,7 +25,7 @@ class ToolBatchOutcome:
 
 
 class ConcurrentToolBatchExecutor:
-    """并发执行模型同一轮声明的工具调用，并按声明顺序提交结果。"""
+    """并发执行模型在同一 AgentStep 声明的工具调用，并按声明顺序提交结果。"""
 
     def __init__(self, result_externalizer: ToolResultExternalizer) -> None:
         self.result_externalizer = result_externalizer
@@ -38,7 +38,7 @@ class ConcurrentToolBatchExecutor:
         runtime_mode: RuntimeMode,
         mode_state: Any,
         tools_state: ToolsState,
-        evidence_recorder: RunEvidenceRecorder,
+        evidence_recorder: TurnEvidenceRecorder,
     ) -> ToolBatchOutcome:
         calls = tuple(calls)
         steps = tools_state.add_calls(calls)
@@ -64,7 +64,7 @@ class ConcurrentToolBatchExecutor:
                         "batch_size": len(calls),
                     },
                     "error": "控制工具必须单独调用；本批工具均未执行",
-                    "hint": "下一轮只提交需要审批的控制工具。",
+                    "hint": "下一个 AgentStep 只提交需要审批的控制工具。",
                 }
             if runtime_mode.handles_tool(call.name):
                 return await runtime_mode.execute_tool(
@@ -77,7 +77,7 @@ class ConcurrentToolBatchExecutor:
                 call.arguments,
             )
 
-        # 同一 Round 即模型的并行意图。gather 保持返回值与输入顺序一致；
+        # 同一 AgentStep 即模型的并行意图。gather 保持返回值与输入顺序一致；
         # 取消本批次时，取消会继续传播到所有尚未完成的工具调用。
         tool_results = await asyncio.gather(
             *(execute_call(call) for call in calls),
@@ -85,7 +85,7 @@ class ConcurrentToolBatchExecutor:
         )
 
         # handler 缺陷仍是内部异常，不伪装成可恢复的 Tool Result；但必须先等
-        # 同轮兄弟调用全部收束，避免 Run 已失败后仍有后台调用继续产生副作用。
+        # 同一 AgentStep 的兄弟调用全部收束，避免 Turn 已失败后仍有后台调用继续产生副作用。
         for result in tool_results:
             if isinstance(result, BaseException):
                 raise result

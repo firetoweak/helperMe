@@ -104,7 +104,7 @@ async def run_turn(group: dict[str, Any], turn: int, question: str) -> dict[str,
         return {
             "turn": turn,
             "question": question,
-            "status": "not_run_after_terminal_failure",
+            "status": "not_executed_after_terminal_failure",
             "success": False,
         }
 
@@ -113,9 +113,9 @@ async def run_turn(group: dict[str, Any], turn: int, question: str) -> dict[str,
     started = perf_counter()
     outcome = await group["application"].start(
         group["session_id"],
-        f"run-{turn}-{uuid4().hex}",
+        f"turn-{turn}-{uuid4().hex}",
         question,
-        max_rounds=20,
+        max_steps=20,
     )
     elapsed_seconds = perf_counter() - started
     llm_observations = group["llm"].observations[llm_before:]
@@ -137,7 +137,7 @@ async def run_turn(group: dict[str, Any], turn: int, question: str) -> dict[str,
             llm_observations,
             strict=True,
         )
-        if checkpoint.data["stage"] == "agent_round"
+        if checkpoint.data["stage"] == "agent_step"
     ]
     successful_model_requests = [
         observation
@@ -191,7 +191,7 @@ def summarize_group(strategy: str, group: dict[str, Any]) -> dict[str, Any]:
     turns = group["turns"]
     completed = sum(turn["status"] == "completed" for turn in turns)
     attempted = sum(
-        turn["status"] != "not_run_after_terminal_failure"
+        turn["status"] != "not_executed_after_terminal_failure"
         for turn in turns
     )
     tool_calls = sum(turn.get("external_tool_calls", 0) for turn in turns)
@@ -210,9 +210,9 @@ def summarize_group(strategy: str, group: dict[str, Any]) -> dict[str, Any]:
         "strategy": strategy,
         "label": STRATEGIES[strategy],
         "turns": turns,
-        "run_completion_rate": completed / len(QUESTIONS),
-        "completed_runs": completed,
-        "attempted_runs": attempted,
+        "turn_completion_rate": completed / len(QUESTIONS),
+        "completed_turns": completed,
+        "attempted_turns": attempted,
         "tool_success_rate": (
             tool_successes / tool_calls if tool_calls else 1.0
         ),
@@ -289,7 +289,7 @@ async def async_main() -> None:
     }
     report = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "experiment": "Level 1 dehydration three-way independent live runs",
+        "experiment": "Level 1 dehydration three-way independent live turns",
         "controls": {
             "model": MODEL,
             "questions": QUESTIONS,
@@ -303,11 +303,11 @@ async def async_main() -> None:
             ),
             "execution_order": execution_order,
             "timing_scope": (
-                "从用户消息提交给 application.start 到 RunRuntime 返回；"
+                "从用户消息提交给 application.start 到 TurnRuntime 返回；"
                 "包含路由、模型网络、重试、工具执行、上下文处理"
             ),
             "success_definition": (
-                "RunStatus=completed 且回答非空；另行报告外部工具成功率"
+                "TurnStatus=completed 且回答非空；另行报告外部工具成功率"
             ),
             "important_limitation": (
                 "三组模型与工具轨迹不固定，因此结果反映真实用户体验，"

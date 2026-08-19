@@ -121,7 +121,7 @@ class ModelConfigTest(unittest.IsolatedAsyncioTestCase):
                 "  root: C:\\\\work\\\\agent\n"
                 "  full_access: true\n"
                 "runtime:\n"
-                "  max_rounds: 80\n"
+                "  max_steps: 80\n"
                 "  max_goal_turns: 6\n"
                 "  model_context_limit: 200000\n"
                 "  input_budget_ratio: 0.85\n",
@@ -135,7 +135,7 @@ class ModelConfigTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.model.api_key, "test-key")
         self.assertEqual(config.workspace.root, Path(r"C:\work\agent"))
         self.assertTrue(config.workspace.full_access)
-        self.assertEqual(config.runtime.max_rounds, 80)
+        self.assertEqual(config.runtime.max_steps, 80)
         self.assertEqual(config.runtime.max_goal_turns, 6)
         self.assertEqual(config.runtime.model_context_limit, 200_000)
         self.assertEqual(config.runtime.input_budget_ratio, 0.85)
@@ -152,14 +152,14 @@ class ModelConfigTest(unittest.IsolatedAsyncioTestCase):
                 "  root: C:\\\\work\\\\agent\n"
                 "  full_access: false\n"
                 "runtime:\n"
-                "  max_rounds: 0\n"
+                "  max_steps: 0\n"
                 "  max_goal_turns: 6\n"
                 "  model_context_limit: 200000\n"
                 "  input_budget_ratio: 0.9\n",
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "runtime.max_rounds"):
+            with self.assertRaisesRegex(ValueError, "runtime.max_steps"):
                 load_app_config(path)
 
     async def test_rejects_missing_required_value(self):

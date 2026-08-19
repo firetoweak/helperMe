@@ -17,7 +17,7 @@ from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.tool_registry import EmptyInput, PydanticParameters, ToolRegistry, ToolSpec
-from core.tools_runtime.run_runtime import RunRuntime
+from core.tools_runtime.turn_runtime import TurnRuntime
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from tools.artifact_read import create_read_artifact_spec
 from tests.core.llm_test_support import (
@@ -200,7 +200,7 @@ class RuntimeArtifactsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["next_offset"], 3000)
         self.assertEqual(invalid["code"], "VALIDATION_ERROR")
 
-    async def test_run_runtime_only_puts_artifact_reference_in_conversation(self):
+    async def test_turn_runtime_only_puts_artifact_reference_in_conversation(self):
         class LLMClient:
             def __init__(self):
                 self.responses = [
@@ -233,7 +233,7 @@ class RuntimeArtifactsTest(unittest.IsolatedAsyncioTestCase):
         limit = ToolResultLimit(max_chars=500, preview_chars=80)
         conversation = Conversation()
 
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls=model_call_service(LLMClient()),
             model="test-model",
             runtime_mode=PlainMode(),

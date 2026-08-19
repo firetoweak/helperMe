@@ -17,9 +17,9 @@ from core.runtime_modes import PlainMode
 from core.session import SessionRuntime
 from core.session.state import SessionStatus
 from core.tool_registry import PydanticParameters, ToolSpec
-from core.tools_runtime.run_evidence import RunEvidence
-from core.tools_runtime.run_runtime import RunRuntime, RunStatus
-from core.tools_runtime.run_types import RunResult
+from core.tools_runtime.turn_evidence import TurnEvidence
+from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_types import TurnResult
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -52,7 +52,7 @@ class ApprovalRuntimeTest(unittest.IsolatedAsyncioTestCase):
         dependencies = runtime_tool_dependencies()
         for spec in specs:
             dependencies["tools_executor"].registry.register(spec)
-        return RunRuntime(
+        return TurnRuntime(
             model_call_service(client),
             "test-model",
             PlainMode(),
@@ -60,7 +60,7 @@ class ApprovalRuntimeTest(unittest.IsolatedAsyncioTestCase):
             **dependencies,
         )
 
-    async def test_control_tool_blocks_run_and_records_frozen_request(self):
+    async def test_control_tool_blocks_turn_and_records_frozen_request(self):
         request = ApprovalRequest(
             id="approval-1",
             action="demo.install",
@@ -93,7 +93,7 @@ class ApprovalRuntimeTest(unittest.IsolatedAsyncioTestCase):
             "安装 demo",
         )
 
-        self.assertEqual(result.status, RunStatus.BLOCKED)
+        self.assertEqual(result.status, TurnStatus.BLOCKED)
         self.assertIs(result.approval_request, request)
         self.assertIs(history.get_approval_request("approval-1"), request)
         self.assertEqual(result.final_reason, "approval_required")
@@ -146,7 +146,7 @@ class ApprovalRuntimeTest(unittest.IsolatedAsyncioTestCase):
             "安装 demo",
         )
 
-        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.status, TurnStatus.COMPLETED)
         self.assertEqual(executions, [])
         self.assertEqual(
             [item.result["code"] for item in result.evidence.steps],
@@ -170,7 +170,7 @@ class DemoApprovalHandler:
 
 class ApprovalApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.runtime = SessionRuntime(run_runtime=Mock())
+        self.runtime = SessionRuntime(turn_runtime=Mock())
         self.handler = DemoApprovalHandler()
         actions = ApprovalActionRegistry()
         actions.register(self.handler)

@@ -10,7 +10,7 @@ Phase 5 建立了同一 Session 内的上下文管理与真实 Workspace 工作�
 - 5.2 Context Budget：发送前评估完整模型请求，并用真实 usage 校准。
 - 5.2.1 Tool Result Budget / Runtime Artifact：单次工具结果有界，超大正文按 Session 外置回读。
 - 5.3 Safe Compression：Level 1 持续性工具脱水，Level 2 增量摘要；只更新 ContextState，不修改 Conversation。
-- 回补 A / A.1：Run-local Dynamic TodoList 与按 Run 生效的 Runtime Mode Router。
+- 回补 A / A.1：Turn-local Dynamic TodoList 与按 Turn 生效的 Runtime Mode Router。
 - 回补 B / C：用户输入、工具结果边界与 Artifact 生命周期。
 - 5.5 Workspace Sandbox：多根、相对路径、轻量路径权限边界。
 - 5.6 Workspace Retrieval：`glob / grep / read_file` 的有界显式回取。
@@ -24,7 +24,7 @@ ContextState = Session 持有的最小派生状态
 ModelContext = 单次模型调用快照
 Runtime Artifact = Session 私有外部正文抽屉
 Workspace = 外部事实源
-RunRuntime = 执行与安全控制者，不持有长期 Session 状态
+TurnRuntime = 执行与安全控制者，不持有长期 Session 状态
 ```
 
 压缩不能补救单条无界输入；WorkspaceSandbox 不是操作系统沙箱；调用 `get_changes` 只保证完成了验证动作，不自动保证模型正确解释结果。
@@ -45,10 +45,10 @@ Phase 5 不实现长期 Memory、不可信命令隔离、后台进程、调度�
 
 Phase 6 可以直接依赖以下稳定事实：
 
-- Session 能跨 Run 保留 Conversation 与 ContextState；
-- TodoList 只属于单个 Run；
+- Session 能跨 Turn 保留 Conversation 与 ContextState；
+- TodoList 只属于单个 Turn；
 - Application 层通过显式用例操作 Session；
 - 工具能力可由 Composition Root 绑定；
 - Workspace 读、写、命令和验证已经形成真实行动闭环。
 
-因此下一步不是继续扩展 Context，而是先回答：比 Run 活得更久、需要组织多个行动单元的 Goal 应由谁持有。
+因此下一步不是继续扩展 Context，而是先回答：比 Turn 活得更久、需要组织多个行动单元的 Goal 应由谁持有。

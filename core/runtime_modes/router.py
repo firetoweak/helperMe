@@ -8,14 +8,14 @@ from core.messages import ConversationMessage
 from core.model_call.types import InvalidLLMResponse, LLMResponse
 
 
-class RunMode(str, Enum):
+class TurnMode(str, Enum):
     PLAIN = "plain"
     TODO = "todo"
 
 
 @dataclass(frozen=True)
 class RouteDecision:
-    mode: RunMode
+    mode: TurnMode
     reason: str
 
 
@@ -41,18 +41,18 @@ def parse_route_response(content: str) -> RouteDecision:
     if not isinstance(mode, str):
         raise InvalidRouteResponse("route mode must be a string")
     try:
-        run_mode = RunMode(mode)
+        turn_mode = TurnMode(mode)
     except ValueError as exc:
         raise InvalidRouteResponse(f"unknown route mode: {mode}") from exc
     if not isinstance(reason, str) or not reason.strip():
         raise InvalidRouteResponse("route reason must be a non-empty string")
 
-    return RouteDecision(run_mode, reason.strip())
+    return RouteDecision(turn_mode, reason.strip())
 
 
 class RuntimeModeRouter:
     system_prompt = """
-你是本次 Run 的执行模式路由器。请根据提供的近期可见对话，判断最后一条用户消息明确要求的行动适合哪种执行模式。历史消息只用于理解指代和背景，不能让之前的执行模式延续到本次 Run。
+你是本次 Turn 的执行模式路由器。请根据提供的近期可见对话，判断最后一条用户消息明确要求的行动适合哪种执行模式。历史消息只用于理解指代和背景，不能让之前的执行模式延续到本次 Turn。
 
 - plain：用户在讨论、评价、解释或提出方案；询问看法、可能性、优化方向；可以直接回答；或只需少量短链路行动。即使主题技术上很复杂、之前刚完成 Todo 任务，也应选择 plain。
 - todo：用户明确要求执行一个需要多个步骤、持续使用工具、修改与验证，或会根据观察调整路径的任务。
@@ -64,7 +64,7 @@ class RuntimeModeRouter:
 - “我觉得可以引入受限工作区保存大输出。” → plain
 - “帮我实现受限工作区，并补测试验证。” → todo
 
-模式选择仅对本次 Run 生效，后续 Run 重新判断。
+模式选择仅对本次 Turn 生效，后续 Turn 重新判断。
 mode 只能是 "plain" 或 "todo"。只返回严格 JSON，不要输出 Markdown 或其他文字，例如：
 {"mode":"todo","reason":"需要多个步骤并验证结果"}
 """.strip()
@@ -98,8 +98,8 @@ mode 只能是 "plain" 或 "todo"。只返回严格 JSON，不要输出 Markdown
         system_content = self.system_prompt
         if previous_answer is not None:
             system_content += (
-                "\n\n上一轮最终回答，仅用于理解当前用户消息中的指代和背景，"
-                "不要延续上一轮的执行模式：\n"
+                "\n\n上一个 Turn 的最终回答，仅用于理解当前用户消息中的指代和背景，"
+                "不要延续上一个 Turn 的执行模式：\n"
                 f"{previous_answer}"
             )
         return [

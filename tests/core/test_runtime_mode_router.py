@@ -4,7 +4,7 @@ from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
 from core.runtime_modes.router import (
     InvalidRouteResponse,
     RouteDecision,
-    RunMode,
+    TurnMode,
     RuntimeModeRouter,
     parse_route_response,
 )
@@ -14,7 +14,7 @@ class RuntimeModeRouterTest(unittest.TestCase):
     def test_prompt_routes_execution_complexity_not_session_identity(self):
         prompt = RuntimeModeRouter().system_prompt
 
-        self.assertIn("本次 Run", prompt)
+        self.assertIn("本次 Turn", prompt)
         self.assertIn("近期可见对话", prompt)
         self.assertIn("plain", prompt)
         self.assertIn("todo", prompt)
@@ -34,11 +34,11 @@ class RuntimeModeRouterTest(unittest.TestCase):
         cases = (
             (
                 '{"mode":"plain","reason":"可以直接回答"}',
-                RouteDecision(RunMode.PLAIN, "可以直接回答"),
+                RouteDecision(TurnMode.PLAIN, "可以直接回答"),
             ),
             (
                 '{"mode":"todo","reason":"需要分析、修改和验证"}',
-                RouteDecision(RunMode.TODO, "需要分析、修改和验证"),
+                RouteDecision(TurnMode.TODO, "需要分析、修改和验证"),
             ),
         )
 

@@ -25,7 +25,7 @@ from mcp.types import (
 )
 
 from core.agent_workspace import AgentWorkspace
-from core.observability import format_run_log
+from core.observability import format_turn_log
 from core.runtime_artifacts import (
     FileArtifactStore,
     ToolResultExternalizer,
@@ -459,11 +459,11 @@ class McpAdapterTest(unittest.TestCase):
                 0,
                 10_000,
             ).content
-            log = format_run_log({
+            log = format_turn_log({
                 "started_at": "2026-08-18 00:00:00",
                 "ended_at": "2026-08-18 00:00:01",
                 "model": "test",
-                "run_id": "run",
+                "turn_id": "turn",
                 "status": "completed",
                 "final_reason": None,
                 "question": "test",

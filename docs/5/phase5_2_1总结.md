@@ -1,6 +1,6 @@
 ## Phase 5.2.1 Tool Result Budget / Runtime Artifact 总结
 
-> **Artifact 生命周期后继修订（Phase 5 回补 C）**：Runtime Artifact 已明确为 Conversation 的外部正文，并改为 Session 私有工作抽屉。应用退出、Run/Session 完成和 Level 2 裁剪均不自动删除；只有显式 `delete_session` 才整体清理对应抽屉。本文后面“暂不按 Session 划分、暂不自动清理”的描述只代表 5.2.1 初版状态，以本修订为准。
+> **Artifact 生命周期后继修订（Phase 5 回补 C）**：Runtime Artifact 已明确为 Conversation 的外部正文，并改为 Session 私有工作抽屉。应用退出、Turn/Session 完成和 Level 2 裁剪均不自动删除；只有显式 `delete_session` 才整体清理对应抽屉。本文后面“暂不按 Session 划分、暂不自动清理”的描述只代表 5.2.1 初版状态，以本修订为准。
 
 这一步是 Phase 5.3 Safe Compression 的前置。我们解决的问题不是简单截断字符串，而是保证单次工具结果不会独自撑爆上下文，同时保留完整结果供模型按需继续读取。
 
@@ -60,7 +60,7 @@ ContextManager 再次检查硬上限
 ModelContext
 ```
 
-`ToolsExecutor` 没有承担截断、存储或上下文管理职责。它只负责调用工具和标准化结果。统一结果策略由独立的 `ToolResultExternalizer` 负责，`RunRuntime` 只编排两者的先后顺序。
+`ToolsExecutor` 没有承担截断、存储或上下文管理职责。它只负责调用工具和标准化结果。统一结果策略由独立的 `ToolResultExternalizer` 负责，`TurnRuntime` 只编排两者的先后顺序。
 
 ### 三种数据形态
 
@@ -178,12 +178,12 @@ ContextManager.build() 不会在投影过程中偷偷写 artifact。发现超限
 - Runtime storage 与用户 Workspace 隔离；
 - 应用实例级 ToolRegistry；
 - ContextManager 历史结果硬检查；
-- RunRuntime 端到端外置链路。
+- TurnRuntime 端到端外置链路。
 
 当前明确不做：
 
 - artifact 自动清理；
-- 按 Session/Run 划分存储目录；
+- 按 Session/Turn 划分存储目录；
 - artifact 持久化索引；
 - 旧会话自动迁移；
 - 第三方对象存储；
@@ -204,7 +204,7 @@ ContextManager.build() 不会在投影过程中偷偷写 artifact。发现超限
 - Runtime root 不能位于用户 Workspace；
 - ContextManager 拒绝超大历史 tool message；
 - 外置后 tool_call/result 协议链保持完整；
-- 既有 Run、Session、Planning 和 StopGuard 行为不变。
+- 既有 Turn、Session、Planning 和 StopGuard 行为不变。
 
 这一步最重要的认知是：
 
@@ -214,12 +214,12 @@ ContextManager.build() 不会在投影过程中偷偷写 artifact。发现超限
 
 CompletionGate 证明了“Artifact 保存完整正文”仍不等于“系统拥有稳定验收事实”：Conversation 中的 tool result 可以被外置、脱水或压缩，不能反向作为 Goal 完成依据。
 
-RunRuntime 现会在 `ToolResultExternalizer` 处理之前，把原始规范化结果复制到 `RunEvidence`。因此形成两个互不替代的消费者：
+TurnRuntime 现会在 `ToolResultExternalizer` 处理之前，把原始规范化结果复制到 `TurnEvidence`。因此形成两个互不替代的消费者：
 
 ```text
 原始工具结果
 ├─ ToolResultExternalizer → Conversation / Artifact：供模型理解，可有界投影
-└─ RunEvidenceRecorder    → CompletionGate：供系统验收，保留完整事实
+└─ TurnEvidenceRecorder    → CompletionGate：供系统验收，保留完整事实
 ```
 
-Artifact 仍负责大正文的会话内回读，RunEvidence 只负责当前 Run 的验收证据；没有把二者合成新的长期事实库。
+Artifact 仍负责大正文的会话内回读，TurnEvidence 只负责当前 Turn 的验收证据；没有把二者合成新的长期事实库。

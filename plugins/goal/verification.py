@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from core.tools_runtime.run_evidence import RunEvidence, ToolEvidence
+from core.tools_runtime.turn_evidence import TurnEvidence, ToolEvidence
 
 
 @dataclass(frozen=True)
@@ -46,12 +46,12 @@ class CompletionReview:
 
 
 class CompletionGate:
-    """只验证 Judge Run 中真实发生的机械事实，不解释 Goal 语义。"""
+    """只验证 Judge Turn 中真实发生的机械事实，不解释 Goal 语义。"""
 
     def review(
         self,
         verification: GoalVerification,
-        evidence: RunEvidence,
+        evidence: TurnEvidence,
     ) -> CompletionReview:
         failures = [
             failure
@@ -75,7 +75,7 @@ class CompletionGate:
     @staticmethod
     def _command_failure(
         requirement: CommandRequirement,
-        evidence: RunEvidence,
+        evidence: TurnEvidence,
     ) -> str | None:
         matching: list[ToolEvidence] = []
         for step in evidence.by_name("execute_command"):
@@ -126,7 +126,7 @@ class CompletionGate:
     @staticmethod
     def _workspace_failure(
         requirement: WorkspaceRequirement,
-        evidence: RunEvidence,
+        evidence: TurnEvidence,
     ) -> str | None:
         matching = [
             step

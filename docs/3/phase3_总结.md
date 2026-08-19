@@ -13,7 +13,7 @@ resume 后 agent 能基于原 conversation 继续完成任务；
 
 ### Session
 
-定义好会话状态，一个多步任务/多轮交互的状态。
+定义好会话状态，一个多步任务/多个 Turn 交互的状态。
 持久化到文件中，先搁置。
 
 Session 必须持有：
@@ -21,15 +21,15 @@ Session 必须持有：
 1. conversation：恢复上下文
 2. status：运行状态
 3. event：可观察历史
-4. run_records：历次 run 的最小摘要
+4. turn_records：历次 Turn 的最小摘要
 
 ### 重点
 
 - conversation 是协议层消息历史；ToolsState 是 runtime 层工具账本。它们互相映射，但不是包含关系。
 - facts 推迟到 Phase 5 Context Management：Phase 3 复用完整 conversation，没有独立 facts 的实际消费者，不提前复制工具结果或对话摘要。
 - constraints 推迟到 Phase 5：Phase 3 将 resume 输入视为新的 user_message，不判断它是继续指令、反馈还是长期约束。没有约束消费者时，提前分类只会复制数据并制造同步责任。
-- 不保存 progress.last_safe_point：RunRuntime 已保证 completed/interrupted 只发生在安全点，SessionRuntime 基于完整 conversation 继续即可。没有持久化恢复消费者时，再保存一份恢复位置属于重复状态。
-- session events 应该分层，不直接包含 tools runtime 的全部 events，只保存 session 层事件和 run 摘要。工具 runtime 的完整 event 留在 run result / run trace。
+- 不保存 progress.last_safe_point：TurnRuntime 已保证 completed/interrupted 只发生在安全点，SessionRuntime 基于完整 conversation 继续即可。没有持久化恢复消费者时，再保存一份恢复位置属于重复状态。
+- session events 应该分层，不直接包含 tools runtime 的全部 events，只保存 session 层事件和 Turn 摘要。工具 runtime 的完整 event 留在 Turn result / Turn trace。
 - Session Event 在本阶段只记录生命周期，事件均由 SessionRuntime 产生，因此不设计 event source。等出现真实的多来源事件消费者后再引入来源模型。
 - Session Event 不提供任意 data 字典；当前生命周期字段已明确，提前开放无约束扩展口会弱化事件契约。
 
@@ -37,16 +37,16 @@ Session 必须持有：
 SessionRuntime 设计暴露出 ToolsState、协议校验、停止安全和结果状态边界不清；
 已按 Phase 3 的 interrupt/resume 需求完成职责拆分，不扩展无关能力。
 
-### Run 摘要边界
+### Turn 摘要边界
 
-- `SessionRunRecord` 只记录 run_id、状态、起止时间、结束原因等最小索引信息；
-- verification 是 RunRuntime 内部的安全检查与 checkpoint/trace 观测数据，不复制到 `RunResult` 或 `SessionRunRecord`；
-- RunRuntime 保证只有处于业务安全点的 run 才能 completed/interrupted；SessionRuntime 只根据最终 status/final_reason 驱动 Session 状态迁移；
-- 需要验证细节时，通过 run_id 查询 run trace，避免跨层重复保存快照。
+- `SessionTurnRecord` 只记录 turn_id、状态、起止时间、结束原因等最小索引信息；
+- verification 是 TurnRuntime 内部的安全检查与 checkpoint/trace 观测数据，不复制到 `TurnResult` 或 `SessionTurnRecord`；
+- TurnRuntime 保证只有处于业务安全点的 Turn 才能 completed/interrupted；SessionRuntime 只根据最终 status/final_reason 驱动 Session 状态迁移；
+- 需要验证细节时，通过 turn_id 查询 Turn trace，避免跨层重复保存快照。
 
 ### Context 边界
 
-本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/run trace。Phase 5 最终选择 `Conversation + ContextState + ModelContext` 的安全投影方案，没有复制一套 facts/constraints；长期 Memory 继续后置，避免没有消费者时提前建模。
+本阶段不提炼或保存 facts、constraints、feedback 分类：工具结果和新增 user_message 留在 conversation/Turn trace。Phase 5 最终选择 `Conversation + ContextState + ModelContext` 的安全投影方案，没有复制一套 facts/constraints；长期 Memory 继续后置，避免没有消费者时提前建模。
 
 ### Interrupt
 
@@ -59,27 +59,27 @@ SessionRuntime 设计暴露出 ToolsState、协议校验、停止安全和结果
 
 resume 不是崩溃恢复，也不是持久化恢复；
 只是同一进程内，基于 session 状态继续执行。
-resume 接收新的 user_message，但不判断或复制其语义；消息由 RunRuntime 写入原 conversation。
-本阶段不设计 Task Queue；active_controls 只管理当前同步 run 的控制信号，不是调度队列。
+resume 接收新的 user_message，但不判断或复制其语义；消息由 TurnRuntime 写入原 conversation。
+本阶段不设计 Task Queue；active_controls 只管理当前同步 Turn 的控制信号，不是调度队列。
 
 ✓ Agent 接入 SessionRuntime：
 
-- Agent 不再直接调用或持有 RunRuntime；RunRuntime 由 SessionRuntime 编排。
+- Agent 不再直接调用或持有 TurnRuntime；TurnRuntime 由 SessionRuntime 编排。
 - Agent 的 conversation 指向当前 Session 持有的 conversation，pending/completed 时 start，interrupted 时 resume。
-- completed 表示当前 run 已完成并等待下一条 user_message；下一轮在同一 Session、同一 conversation 中重新进入 running。interrupted 使用 resume；Phase 6A 回补后，blocked、failed 也可通过新的 start Run 继续同一 Session。
-- SessionRuntime 使用临时 SessionRunOutcome 向调用方返回 RunResult 与 SessionRunRecord；Outcome 不写入 Session，避免长期状态重复。
-- 跨层测试已验证 Agent -> SessionRuntime -> RunRuntime 的 interrupt/resume、conversation 协议完整性及完整 Session Event 流。
+- completed 表示当前 Turn 已完成并等待下一条 user_message；下一个 Turn 在同一 Session、同一 conversation 中重新进入 running。interrupted 使用 resume；Phase 6A 回补后，blocked、failed 也可通过新的 start Turn 继续同一 Session。
+- SessionRuntime 使用临时 SessionTurnOutcome 向调用方返回 TurnResult 与 SessionTurnRecord；Outcome 不写入 Session，避免长期状态重复。
+- 跨层测试已验证 Agent -> SessionRuntime -> TurnRuntime 的 interrupt/resume、conversation 协议完整性及完整 Session Event 流。
 
 ### Phase 6A 异常恢复回补（2026.08.10）
 
-Goal 跨 Run 执行要求异常路径同样保持 Session 状态完整：RunRuntime 直接抛出内部异常时，Session 不能残留在 running，也不能继续占用 active control。
+Goal 跨 Turn 执行要求异常路径同样保持 Session 状态完整：TurnRuntime 直接抛出内部异常时，Session 不能残留在 running，也不能继续占用 active control。
 
 现在异常路径明确为：
 
 ```text
-RunRuntime 原始异常
-  → SessionRuntime 记录 failed RunRecord / Event 并释放 active control
-  → GoalApplicationService 释放当前隔离 Run 关联
+TurnRuntime 原始异常
+  → SessionRuntime 记录 failed TurnRecord / Event 并释放 active control
+  → GoalApplicationService 释放当前隔离 Turn 关联
   → 原始异常继续向调用方抛出
 ```
 

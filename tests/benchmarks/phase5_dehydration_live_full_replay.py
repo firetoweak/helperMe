@@ -48,9 +48,9 @@ def main() -> None:
             "context_limit": MODEL_CONTEXT_LIMIT,
             "input_budget_ratio": INPUT_BUDGET_RATIO,
             "recent_protection_tokens": RECENT_PROTECTION_TOKENS,
-            "max_rounds": 20,
+            "max_steps": 20,
             "timing_scope": (
-                "从 application.start 到 RunRuntime 返回；包含路由、模型网络、"
+                "从 application.start 到 TurnRuntime 返回；包含路由、模型网络、"
                 "重试、工具执行与上下文处理"
             ),
             "important_limitation": (
@@ -63,7 +63,7 @@ def main() -> None:
     report_path = (
         Path(__file__).resolve().parents[2]
         / "logs"
-        / f"dehydration_live_full_rerun_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+        / f"dehydration_live_full_replay_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
     )
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2),

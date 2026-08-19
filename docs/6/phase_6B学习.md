@@ -2,16 +2,16 @@
 
 ## 目标
 
-按需渐进加载 Toolset，避免模型在 Run 开始时看到全部工具 Schema。先建立与具体 Plugin、领域和 MCP 无关的 Toolset 加载机制，再通过 MCP Adapter 验证外部 Toolset 的发现、选择与调用。
+按需渐进加载 Toolset，避免模型在 Turn 开始时看到全部工具 Schema。先建立与具体 Plugin、领域和 MCP 无关的 Toolset 加载机制，再通过 MCP Adapter 验证外部 Toolset 的发现、选择与调用。
 
 ```text
 精简 Toolset 目录
     ↓
 load_toolset("weather")
     ↓
-下一轮出现 weather 工具
+下一个 AgentStep 出现 weather 工具
     ↓
-Run 结束，加载状态自然释放
+Turn 结束，加载状态自然释放
 ```
 
 ## 职责边界
@@ -24,7 +24,7 @@ Core 管“如何加载”，Plugin 管“加载什么”。
 
 | Plugin 类型 | 领域职责 | 复用的 Core 端口 | 删除后的结果 |
 | --- | --- | --- | --- |
-| Goal 工作流型 Plugin | Contract、Executor/Judge 循环与跨 Run Goal 状态 | RunHost、RunInvocation、RunEvidence | Agent 失去 Goal Loop，普通 Run 不受影响 |
+| Goal 工作流型 Plugin | Contract、Executor/Judge 循环与跨 Turn Goal 状态 | TurnHost、TurnInvocation、TurnEvidence | Agent 失去 Goal Loop，普通 Turn 不受影响 |
 | MCP 外部能力型 Plugin | 安装、发现、启动和适配外部 MCP Toolset | AgentWorkspace、ToolsetProvider、ToolSpec | Agent 失去 MCP 能力，Core 渐进加载机制仍可服务其他 Plugin |
 
 因此后续 Plugin 统一遵循这些边界：
@@ -32,7 +32,7 @@ Core 管“如何加载”，Plugin 管“加载什么”。
 - Plugin 可以拥有领域模型、应用服务、交互入口和持久状态；
 - Plugin 只能组合 Core 公共端口，Core 不认识具体 Plugin 名称；
 - Plugin 推动的 Core 改动必须能脱离该 Plugin 单独成立；
-- 多个 Plugin 的装配、目录合并和冲突检查发生在 Composition，不进入 RunRuntime 的领域判断；
+- 多个 Plugin 的装配、目录合并和冲突检查发生在 Composition，不进入 TurnRuntime 的领域判断；
 - Plugin 安装内容属于 Agent Workspace，不属于 HelperMe 源码仓库或用户任务 Workspace。
 
 ### 渐进加载对象
@@ -41,53 +41,53 @@ Core 管“如何加载”，Plugin 管“加载什么”。
 | --- | --- |
 | `ToolsetDescriptor` | 用稳定 ID 和简短描述帮助模型选择，不能提前暴露工具 schema |
 | `ToolsetProvider` | 由 Plugin 实现，提供精简目录和选定 Toolset 的具体工具 |
-| `RunInvocation` | 向单次 Run 注入一个可选 Provider |
-| `ToolsetLoadingState` | 保存本 Run 已加载的 Toolset ID，Run 结束后自然销毁 |
-| `RunRuntime` | 每轮依据加载状态重新组装工具列表 |
-| `load_toolset` | 校验模型选择并更新本 Run 状态，不直接操纵 Runtime |
+| `TurnInvocation` | 向单次 Turn 注入一个可选 Provider |
+| `ToolsetLoadingState` | 保存本 Turn 已加载的 Toolset ID，Turn 结束后自然销毁 |
+| `TurnRuntime` | 每个 AgentStep 依据加载状态重新组装工具列表 |
+| `load_toolset` | 校验模型选择并更新本 Turn 状态，不直接操纵 Runtime |
 
 分类只是未来目录过大时可增加的只读索引，不是加载和生命周期对象。第一版目录规模尚未证明需要 `list_categories` 或 `list_toolsets`，因此直接把精简 Descriptor 目录注入运行指令，只提供 `load_toolset`。
 
-## RunCapability 与 ToolsetProvider
+## TurnCapability 与 ToolsetProvider
 
-两者语义不同，因此 Provider 直接进入 `RunInvocation`，不包装成 `RunCapability`：
+两者语义不同，因此 Provider 直接进入 `TurnInvocation`，不包装成 `TurnCapability`：
 
-- `RunCapability` 表示调用方已经决定本 Run 立即拥有的能力；
-- `ToolsetProvider` 表示候选能力目录，由模型在 Run 中决定加载什么。
+- `TurnCapability` 表示调用方已经决定本 Turn 立即拥有的能力；
+- `ToolsetProvider` 表示候选能力目录，由模型在 Turn 中决定加载什么。
 
-第一版一次 Invocation 只接受一个 Provider。多个 Plugin 的目录合并和 ID 冲突应在 Composition 层形成组合 Provider，不让 `RunRuntime` 管理 Plugin 列表。
+第一版一次 Invocation 只接受一个 Provider。多个 Plugin 的目录合并和 ID 冲突应在 Composition 层形成组合 Provider，不让 `TurnRuntime` 管理 Plugin 列表。
 
-## 每轮装配
+## 每个 AgentStep 装配
 
-`RunRuntime.run()` 创建空的 `ToolsetLoadingState`。每轮模型调用前：
+`TurnRuntime.run()` 创建空的 `ToolsetLoadingState`。每个 AgentStep 模型调用前：
 
-1. 从本 Run 的基础 Registry 开始；
+1. 从本 Turn 的基础 Registry 开始；
 2. 注册 `load_toolset`；
 3. 只向 Provider 获取已加载 Descriptor 对应的 `ToolSpec`；
-4. 与当前 RuntimeMode 工具检查名称冲突；
-5. 把本轮工具 schema 交给 ContextPreparation 和模型。
+4. 与当前 TurntimeMode 工具检查名称冲突；
+5. 把当前 AgentStep 工具 schema 交给 ContextPreparation 和模型。
 
-因此，模型在调用 `load_toolset("weather")` 的同一批次中不能调用尚未暴露的 weather 工具；这些工具从下一轮开始可见。未注入 Provider 的普通 Run 保留原有 Registry 和 ToolsExecutor 执行路径。
+因此，模型在调用 `load_toolset("weather")` 的同一批次中不能调用尚未暴露的 weather 工具；这些工具从下一个 AgentStep 开始可见。未注入 Provider 的普通 Turn 保留原有 Registry 和 ToolsExecutor 执行路径。
 
 ## 错误边界
 
-模型传入未知 Toolset ID 属于外部输入边界，`load_toolset` 返回 `TOOLSET_NOT_FOUND`，允许模型在当前 Run 内根据目录修正。Provider 返回重复工具名、与基础工具或 RuntimeMode 工具冲突属于内部装配契约错误，保留原始异常直接失败。
+模型传入未知 Toolset ID 属于外部输入边界，`load_toolset` 返回 `TOOLSET_NOT_FOUND`，允许模型在当前 Turn 内根据目录修正。Provider 返回重复工具名、与基础工具或 RuntimeMode 工具冲突属于内部装配契约错误，保留原始异常直接失败。
 
 ## 当前实现
 
 - `core/tool_registry.py`：已完成 MCP 接入前置回补；`ToolSpec` 通过 `ToolParameters` 同时获得模型 Schema 与运行时校验，支持 `PydanticParameters` 和原生 `JsonSchemaParameters`。
-- `core/tools_runtime/progressive_toolsets.py`：Descriptor、Provider 公共端口、Run 内加载状态和 `load_toolset` 工具。
-- `core/tools_runtime/run_invocation.py`：增加单次 Run 的可选 `toolset_provider`。
-- `core/tools_runtime/run_runtime.py`：按轮重新装配已加载 Toolset 的工具和目录指令。
-- `tests/core/test_progressive_toolsets.py`：覆盖下一轮可见、跨 Run 释放和未知 ID 修正边界。
+- `core/tools_runtime/progressive_toolsets.py`：Descriptor、Provider 公共端口、Turn 内加载状态和 `load_toolset` 工具。
+- `core/tools_runtime/turn_invocation.py`：增加单次 Turn 的可选 `toolset_provider`。
+- `core/tools_runtime/turn_runtime.py`：按轮重新装配已加载 Toolset 的工具和目录指令。
+- `tests/core/test_progressive_toolsets.py`：覆盖下一个 AgentStep 可见、跨 Turn 释放和未知 ID 修正边界。
 
 ## 当前验证
 
 最小行为测试已经验证：
 
-- 第一轮能看到 `load_toolset`，看不到未加载的 weather 工具；
-- 加载成功后，weather 工具从下一轮出现并可执行；
-- 即使复用同一个 `RunInvocation`，下一个 Run 也不会继承加载状态；
+- AgentStep 1 能看到 `load_toolset`，看不到未加载的 weather 工具；
+- 加载成功后，weather 工具从下一个 AgentStep 出现并可执行；
+- 即使复用同一个 `TurnInvocation`，下一个 Turn 也不会继承加载状态；
 - 未知 Toolset 不会触发内部异常，也不会错误加载工具。
 
 引入统一 AgentWorkspace 后，Core 全量自动化回归通过：262 tests passed，1 skipped（当前 Windows 环境无创建符号链接权限）；Plugin 回归 16 tests passed。
@@ -112,7 +112,7 @@ Core 同步回补：`tool_specs` 异步化、`ToolsetLoadError`、`CompositeTool
 
 ## 下一步边界
 
-- Skill 渐进加载已拆分到 6D：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 数据模型提前合并；
+- Skill 渐进加载已拆分到 6D：复用通用 Turn 生命周期与能力快照规则，但不与 Toolset 数据模型提前合并；
 - 真实 Streamable HTTP、stdio modern/legacy 与分页长列表均已验证；
 - 可选：对话内只读查询已安装列表（仍禁止写 Registry）；
 - OAuth、Approval、Resource 自动注入等后置能力按设计第 15 节按需开启。
@@ -125,4 +125,4 @@ MCP Adapter 必须继续直接使用 `JsonSchemaParameters`。禁止动态生成
 
 用户输入精确的 `yes/no`，Channel 确定性拦截，不让模型解释授权。批准后 Application 根据冻结 payload 调用已注册的 Plugin Action Handler；MCP 安装按 `disabled → test → enable` 执行，失败配置保持 disabled，且不自动重试。
 
-Session 创建时冻结通用能力快照。任意持久能力配置变化都会使旧 Session 快照统一过期；动态能力加载和调用明确失败，控制面 reload 创建新 Session 捕获最新配置。完整实现与 benchmark 见[《MCP 对话安装与 Session 能力快照总结》](MCP对话安装与Session能力快照总结.md)及[《动态能力跨 Run 连续性设计专题》](动态能力跨Run连续性设计专题.md)。
+Session 创建时冻结通用能力快照。任意持久能力配置变化都会使旧 Session 快照统一过期；动态能力加载和调用明确失败，控制面 reload 创建新 Session 捕获最新配置。完整实现与 benchmark 见[《MCP 对话安装与 Session 能力快照总结》](MCP对话安装与Session能力快照总结.md)及[《动态能力跨 Turn 连续性设计专题》](动态能力跨Turn连续性设计专题.md)。

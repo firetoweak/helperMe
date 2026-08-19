@@ -68,36 +68,36 @@ Memory（后置，外挂）
 
 ## Phase 1 · Reliable Tool-Calling Runtime
 
-把 Agent.run 中混杂的 tool calling loop 抽成可检查、可截断、可停止的 RunRuntime。
+把 Agent.run 中混杂的 tool calling loop 抽成可检查、可截断、可停止的 TurnRuntime。
 
 ### 小节索引
 
-### ✓ 初版 RunRuntime
+### ✓ 初版 TurnRuntime
 
 - 状态：完成
-- 目标：用 ToolsState 管理一次 run 内的工具调用链路，并统一 RunResult 出口。
-- 结论：ToolsState 是账本，RunRuntime 是执行控制者；上下文压缩与长期会话不属于本阶段。
+- 目标：用 ToolsState 管理一次 Turn 内的工具调用链路，并统一 TurnResult 出口。
+- 结论：ToolsState 是账本，TurnRuntime 是执行控制者；上下文压缩与长期会话不属于本阶段。
 - 详述：[phase1_总结.md](1/phase1_总结.md)
 
 ### ✓ Phase 3 回顾补强（2026.07.14）
 
 - 状态：完成
 - 目标：为 interrupt/resume 回补 Tools Runtime 职责边界。
-- 结论：拆出 ToolsProtocol / StopGuard / RunControl；RunStatus 收敛为 completed/interrupted/blocked/failed。
+- 结论：拆出 ToolsProtocol / StopGuard / TurnControl；TurnStatus 收敛为 completed/interrupted/blocked/failed。
 - 详述：[phase1_Phase3回补总结.md](1/phase1_Phase3回补总结.md)
 
 ### ✓ Phase 1 / Phase 4 回补：阶段性说明（2026.08.10）
 
 - 状态：完成
-- 目标：保留模型同轮返回的 assistant content 与 tool_calls，并在工具执行前即时输出阶段性说明。
-- 结论：不新增阶段解释层；Conversation 保存完整协议事实，RunProgressSink 只负责对外输出。
+- 目标：保留模型同一 AgentStep 返回的 assistant content 与 tool_calls，并在工具执行前即时输出阶段性说明。
+- 结论：不新增阶段解释层；Conversation 保存完整协议事实，TurnProgressSink 只负责对外输出。
 - 详述：[phase1_阶段性说明回补总结.md](1/phase1_阶段性说明回补总结.md)
 
 ### ✓ Phase 6B 前置回补：异步工具执行链（2026.08.12）
 
 - 状态：完成
-- 目标：在 MCP 接入前统一 Application → Session → Run → Model/Tool 异步主干，同时保持工具批次、Evidence、Artifact 和 StopGuard 语义。
-- 结论：Tool handler 收敛为严格 async；异步回补阶段先保持串行，后续已升级为同轮并发执行、原序提交；Application 提供通用异步资源生命周期，`asyncio.run()` 只留在最外层入口。
+- 目标：在 MCP 接入前统一 Application → Session → Turn → Model/Tool 异步主干，同时保持工具批次、Evidence、Artifact 和 StopGuard 语义。
+- 结论：Tool handler 收敛为严格 async；异步回补阶段先保持串行，后续已升级为同一 AgentStep 并发执行、原序提交；Application 提供通用异步资源生命周期，`asyncio.run()` 只留在最外层入口。
 - 详述：[异步工具执行链回补总结.md](6/异步工具执行链回补总结.md)
 
 ---
@@ -111,7 +111,7 @@ Memory（后置，外挂）
 ### ✓ TodoList
 
 - 状态：完成（后续边界与长任务验证已回补）
-- 目标：按 Run 路由 `plain/todo`，把 TodoList 作为柔性行动参考。
+- 目标：按 Turn 路由 `plain/todo`，把 TodoList 作为柔性行动参考。
 - 结论：删除独立 Planner/Replanner；最终回答前必须通过 Todo Sync Barrier。
 - 详述：[phase2_总结.md](2/phase2_总结.md)
 
@@ -192,7 +192,7 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 - 状态：完成
 - 目标：建立 Conversation → ModelContext 的最小投影闭环。
-- 结论：Conversation 是事实，RuntimeMode 提供控制状态，ModelContext 是二者在某个 Round 上的临时投影。
+- 结论：Conversation 是事实，RuntimeMode 提供控制状态，ModelContext 是二者在某个 AgentStep 上的临时投影。
 - 详述：[phase5_1总结.md](5/phase5_1总结.md)
 
 ### ✓ 5.2 Context Budget
@@ -219,14 +219,14 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 ### ✓ 回补 A：Dynamic TodoList
 
 - 状态：完成
-- 目标：把固定 Plan 改为 Run 内可变 TodoList，由 `rewrite_todos` 统一维护。
+- 目标：把固定 Plan 改为 Turn 内可变 TodoList，由 `rewrite_todos` 统一维护。
 - 结论：TodoList 是柔性行动参考；最终回答前必须通过 Todo Sync Barrier。
 - 详述：[phase5_3_A_Dynamic_TodoList总结.md](5/phase5_3_A_Dynamic_TodoList总结.md)
 
 ### ✓ 回补 A.1：Runtime Mode Router
 
 - 状态：完成
-- 目标：每个 Run 按 Conversation 选择 `plain/todo`，不固定整个 Session。
+- 目标：每个 Turn 按 Conversation 选择 `plain/todo`，不固定整个 Session。
 - 结论：Router 只选执行机制；非法路由可降级到 PlainMode，不升级成 Session 失败。
 - 详述：[phase5_3_A1_Runtime_Mode_Router总结.md](5/phase5_3_A1_Runtime_Mode_Router总结.md)
 
@@ -241,7 +241,7 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 - 状态：完成
 - 目标：明确 Runtime Artifact 为 Session 私有工作抽屉中的外部正文。
-- 结论：只有显式 `delete_session` 才整体清理；Run/Session 结束与 Level 2 裁剪不自动删除 Artifact。
+- 结论：只有显式 `delete_session` 才整体清理；Turn/Session 结束与 Level 2 裁剪不自动删除 Artifact。
 - 详述：[phase5_3_C_Artifact生命周期总结.md](5/phase5_3_C_Artifact生命周期总结.md)
 
 ### ✓ 5.5 Workspace Sandbox（完成于 2026.08.05）
@@ -285,16 +285,16 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 - 状态：完成；Toolset 渐进加载、MCP Plugin 基础能力、对话审批安装和真实 stdio 闭环 benchmark 已完成
 - 目标：按需渐进加载 Toolset，避免一次性暴露全部工具 Schema；接入 MCP，验证外部 Toolset 的发现、选择与调用。
-- 前置边界：区分 Plugin 装配、交互命令激活与单次 Run Capability 注入；6B 只处理 Run 期 Capability 的选择、加载和释放。
-- Run 约束：RunInvocation 可覆盖当前 RuntimeMode；受限规划能力使用 PlainMode，避免渐进加载的工具集被 Todo 等模式再次扩张。
+- 前置边界：区分 Plugin 装配、交互命令激活与单次 Turn Capability 注入；6B 只处理 Turn 期 Capability 的选择、加载和释放。
+- Turn 约束：TurnInvocation 可覆盖当前 TurntimeMode；受限规划能力使用 PlainMode，避免渐进加载的工具集被 Todo 等模式再次扩张。
 - MCP 定位：MCP 是外部 Toolset 的接入协议，不负责能力加载策略；具体适配放在可选 Plugin，Core 不依赖 MCP。
-- 当前结论：Core 管理单次 Run 的加载状态与逐轮工具装配，Plugin 通过 `ToolsetProvider` 提供精简目录和具体工具；模型调用 `load_toolset` 后，工具从下一轮可见，Run 结束后自然释放。
+- 当前结论：Core 管理单次 Turn 的加载状态与逐 AgentStep 工具装配，Plugin 通过 `ToolsetProvider` 提供精简目录和具体工具；模型调用 `load_toolset` 后，工具从下一个 AgentStep 可见，Turn 结束后自然释放。
 - ToolSpec 前置回补：以 `ToolParameters` 绑定模型 Schema 与运行时校验；支持 Pydantic 与原生 JSON Schema，非法 Schema 和重复工具名直接失败。
-- MCP 前置技术债清理：Run 内 Toolset 在加载时冻结；Application、Session、LLM Client 与 PowerShell 取消/关闭路径闭合；`grep`、`get_changes` 改用异步子进程；JSON Schema 顶层 object 契约前置校验。
+- MCP 前置技术债清理：Turn 内 Toolset 在加载时冻结；Application、Session、LLM Client 与 PowerShell 取消/关闭路径闭合；`grep`、`get_changes` 改用异步子进程；JSON Schema 顶层 object 契约前置校验。
 - MCP 接入 MVP：管理走 `/mcp` 控制面；Registry/Secret 与 RuntimeState 分离；目录零网络 I/O；`tool_specs` 异步化；工具名 `mcp__{server}__{tool}`；Resources/Prompts 显式读取。
-- 有状态 MCP 生命周期回补：Toolset 可见性仍属于 Run；同一 `(server_id, revision)` 的真实 SDK Client、stdio Server 和领域状态由 Application 级专属 owner task 持有。SDK context 的创建、串行调用与关闭保持在同一 Task；跨 Run 重新加载不重启 Server，配置变化、取消或 Application 退出时明确关闭。
+- 有状态 MCP 生命周期回补：Toolset 可见性仍属于 Turn；同一 `(server_id, revision)` 的真实 SDK Client、stdio Server 和领域状态由 Application 级专属 owner task 持有。SDK context 的创建、串行调用与关闭保持在同一 Task；跨 Turn 重新加载不重启 Server，配置变化、取消或 Application 退出时明确关闭。
 - MCP 工作目录回补：stdio Server 显式配置 `cwd` 时严格使用该目录；未配置时使用 `~/.helperme/plugins/mcp/runtime/{server_id}`。外部 Server 的日志、截图和临时附件不得因继承 HelperMe 启动目录而污染源码仓库。
-- 对话安装回补：Agent 通过多轮对话构造单进程 stdio/HTTP Proposal；用户输入 `yes/no`；Application 执行 `disabled → test → enable`。任意持久能力配置变化统一使旧 Session 快照过期，控制面 reload 后由新 Session 捕获最新配置。
+- 对话安装回补：Agent 通过多个 Turn 的对话构造单进程 stdio/HTTP Proposal；用户输入 `yes/no`；Application 执行 `disabled → test → enable`。任意持久能力配置变化统一使旧 Session 快照过期，控制面 reload 后由新 Session 捕获最新配置。
 - MCP 管理与自纠回补：Console 和 Agent Tool 复用同一 Application Service；Agent 可列出包含 disabled 项的管理目录、真实测试已登记 Server，并为可用的 disabled Server 提交恢复审批。安装与恢复统一复用原子 `test → enable` 用例；人工入口提供 `/mcp retry <id>`，Toolset 执行目录仍只包含 enabled Server。
 - 详述：[phase_6B学习.md](6/phase_6B学习.md)；[ToolSpec格式回补总结.md](6/ToolSpec格式回补总结.md)；[MCP前置技术债清理总结.md](6/MCP前置技术债清理总结.md)；[MCP接入设计草稿.md](6/MCP接入设计草稿.md)；[MCP接入实现总结.md](6/MCP接入实现总结.md)；[MCP对话安装与Session能力快照总结.md](6/MCP对话安装与Session能力快照总结.md)
 
@@ -303,20 +303,20 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 - 状态：完成；Tavily MCP 搜索/提取、Artifact 回读与 Playwright MCP 浏览器交互均已通过真实任务验证。
 - 目标：验证 HelperMe 能否通过现有 MCP 安装与渐进加载链路完成公开 Web 的搜索、读取和回答；本阶段不实现原生 `web_search`、`web_fetch` 或 Web Plugin。
 - 学习顺序：① 通过 Tavily MCP 完成 search/extract/answer benchmark；② 观察工具发现与加载、结果预算、失败定位和回答质量；③ 只记录真实缺口，不把外部 Provider 的领域语义提前写入 Core。
-- 能力边界：搜索、网页读取和浏览器自动化默认属于外部 MCP 的实现责任。HelperMe 只复用通用 MCP 能力管理、Tool Result、RunEvidence、Conversation 和 Artifact 链路，不要求理解外部能力的内部实现。
+- 能力边界：搜索、网页读取和浏览器自动化默认属于外部 MCP 的实现责任。HelperMe 只复用通用 MCP 能力管理、Tool Result、TurnEvidence、Conversation 和 Artifact 链路，不要求理解外部能力的内部实现。
 - Browser 策略：登录、点击、填写和发布等交互在真实需要时优先接入 Browser MCP。只要 MCP 能完成任务，即不建设自有 Browser Provider、会话模型或自动化框架。
 - 重新设计触发：只有真实任务证明 MCP 在关键场景中无法完成目标，例如登录态无法维持、必要交互无法表达、结果无法使用或生命周期与 HelperMe 冲突，才根据已观察到的具体缺口重新设计这一能力。
 - 当前结论：Web 是可替换、可移除的外部能力，不是 HelperMe Core 的领域组成。暂停原生 Provider、URL 来源索引、Web 专属安全策略、多供应商切换、fallback、Browser 和 Crawl 等设计。
-- 验证结论：现有 MCP 安装、渐进加载、长结果外置、跨 Run 有状态连接和独立运行目录足以承载当前 Web/Browser 任务，未出现需要自建 Web 能力的缺口。
+- 验证结论：现有 MCP 安装、渐进加载、长结果外置、跨 Turn 有状态连接和独立运行目录足以承载当前 Web/Browser 任务，未出现需要自建 Web 能力的缺口。
 - 详述：[Web 能力 MCP 接入决策.md](6/Web能力MCP接入决策.md)
 
 ### 6D Skill Progressive Loading
 
 - 状态：设计完成，待工作区语义与工具路径契约回补后实现
 - 前置回补：在继续 Skill 前，先明确 Task Workspace、Agent Workspace 与 Host Filesystem 的模型可见边界，并统一文件、命令工具的 root/path/cwd 语义。详见[工作区语义与工具路径契约](专题/工作区语义与工具路径契约.md)。
-- 目标：按需发现并加载 Skill 的指令、知识与工作流，避免在 Run 开始时注入全部 Skill 内容。
-- 边界：复用通用 Run 生命周期与能力快照规则，但不与 Toolset 的目录、加载状态和工具 Schema 数据模型提前合并。
-- 当前设计：Agent Workspace 持久安装与 Task Workspace 执行分离；Run 只注入精简目录，`load_skill` 独占一轮并从下一 Round 完整注入主指令，supporting files 按需读取，脚本以 Task Workspace 为 cwd 复用命令执行链。安装默认 disabled；更新仅允许用户显式操作或重新部署触发，候选以 hash 冻结，并同时提供模型概括与机器 diff，禁止静默自动更新。
+- 目标：按需发现并加载 Skill 的指令、知识与工作流，避免在 Turn 开始时注入全部 Skill 内容。
+- 边界：复用通用 Turn 生命周期与能力快照规则，但不与 Toolset 的目录、加载状态和工具 Schema 数据模型提前合并。
+- 当前设计：Agent Workspace 持久安装与 Task Workspace 执行分离；Turn 只注入精简目录，`load_skill` 独占一个 AgentStep 并从下一 AgentStep 完整注入主指令，supporting files 按需读取，脚本以 Task Workspace 为 cwd 复用命令执行链。安装默认 disabled；更新仅允许用户显式操作或重新部署触发，候选以 hash 冻结，并同时提供模型概括与机器 diff，禁止静默自动更新。
 - 详述：[phase_6D学习.md](6/phase_6D学习.md)
 
 ---

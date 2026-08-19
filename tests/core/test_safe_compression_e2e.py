@@ -17,7 +17,7 @@ from core.runtime_artifacts import ToolResultExternalizer, ToolResultLimit
 from core.runtime_modes import PlainMode
 from core.session import SessionRuntime
 from core.tool_registry import EmptyInput, PydanticParameters, ToolRegistry, ToolSpec
-from core.tools_runtime.run_runtime import RunRuntime, RunStatus
+from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tests.core.llm_test_support import (
     CharacterEstimator,
@@ -61,7 +61,7 @@ def make_runtime(
     summary_generator: RecordingSummaryGenerator,
     context_limit: int,
     registry: ToolRegistry | None = None,
-) -> RunRuntime:
+) -> TurnRuntime:
     manager = ContextManager()
     preparation_budget = ContextBudget(
         CharacterEstimator(),
@@ -86,7 +86,7 @@ def make_runtime(
             ModelBudgetConfig(context_limit=100_000, input_ratio=0.9),
         ),
     )
-    return RunRuntime(
+    return TurnRuntime(
         model_calls=model_calls,
         model="test-model",
         runtime_mode=PlainMode(),
@@ -104,10 +104,10 @@ class SafeCompressionEndToEndTest(unittest.IsolatedAsyncioTestCase):
         summary_generator = RecordingSummaryGenerator(["S1", "S2"])
         llm_client = ScriptedLLMClient([
             LLMResponse(content="DELTA_ONE " * 60),
-            LLMResponse(content="second run done"),
+            LLMResponse(content="second turn done"),
         ])
         session_runtime = SessionRuntime(
-            run_runtime=make_runtime(
+            turn_runtime=make_runtime(
                 llm_client=llm_client,
                 summary_generator=summary_generator,
                 context_limit=300,
@@ -119,13 +119,13 @@ class SafeCompressionEndToEndTest(unittest.IsolatedAsyncioTestCase):
             LLMResponse(content="OLD_ANSWER " * 40)
         )
 
-        first = await session_runtime.start("session-1", "run-1", "first goal")
+        first = await session_runtime.start("session-1", "turn-1", "first goal")
         first_boundary = session.context_state.summarized_through_message_id
-        second = await session_runtime.start("session-1", "run-2", "second goal")
+        second = await session_runtime.start("session-1", "turn-2", "second goal")
 
-        self.assertEqual(first.result.status, RunStatus.COMPLETED)
+        self.assertEqual(first.result.status, TurnStatus.COMPLETED)
         self.assertEqual(first.result.context_state.summary, "S1")
-        self.assertEqual(second.result.status, RunStatus.COMPLETED)
+        self.assertEqual(second.result.status, TurnStatus.COMPLETED)
         self.assertEqual(session.context_state.summary, "S2")
         self.assertNotEqual(
             session.context_state.summarized_through_message_id,
@@ -181,7 +181,7 @@ class SafeCompressionEndToEndTest(unittest.IsolatedAsyncioTestCase):
             LLMResponse(content="resumed done"),
         ])
         session_runtime = SessionRuntime(
-            run_runtime=make_runtime(
+            turn_runtime=make_runtime(
                 llm_client=llm_client,
                 summary_generator=summary_generator,
                 context_limit=1_000,
@@ -200,19 +200,19 @@ class SafeCompressionEndToEndTest(unittest.IsolatedAsyncioTestCase):
 
         interrupted = await session_runtime.start(
             "session-1",
-            "run-1",
+            "turn-1",
             "start work",
         )
         interrupted_state = session.context_state
         resumed = await session_runtime.resume(
             "session-1",
-            "run-2",
+            "turn-2",
             "continue work",
         )
 
-        self.assertEqual(interrupted.result.status, RunStatus.INTERRUPTED)
+        self.assertEqual(interrupted.result.status, TurnStatus.INTERRUPTED)
         self.assertEqual(interrupted_state.summary, "S1")
-        self.assertEqual(resumed.result.status, RunStatus.COMPLETED)
+        self.assertEqual(resumed.result.status, TurnStatus.COMPLETED)
         self.assertEqual(session.context_state.summary, "S1")
         self.assertEqual(
             session.context_state.summarized_through_message_id,

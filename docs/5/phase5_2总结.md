@@ -25,7 +25,7 @@
 - system prompt；
 - Conversation 协议轨迹；
 - 当前 user message；
-- 当前 runtime instructions。
+- 当前 Turntime instructions。
 
 Conversation 即使超过模型窗口也仍然可以是合法、完整的事实轨迹。预算不足不能删除或修改 Conversation。
 
@@ -63,7 +63,7 @@ allowed               派生属性
 overflow_tokens       派生属性
 ```
 
-它不修改 ModelContext，也不决定 RunStatus。`overflow_tokens` 为 Phase 5.3 Safe Compression 保留了稳定接缝，但本阶段没有实现压缩或截断。
+它不修改 ModelContext，也不决定 TurnStatus。`overflow_tokens` 为 Phase 5.3 Safe Compression 保留了稳定接缝，但本阶段没有实现压缩或截断。
 
 ### 估算与校准
 
@@ -80,12 +80,12 @@ overflow_tokens       派生属性
 - 只在内存中保留当前模型的校准系数；
 - 校准使用最近 8 次样本的最大比例；异常高值滑出窗口后不再永久影响估算；
 - 系数不低于 1.0，避免低于 tokenizer 基础计数；
-- tools schema 在一次 Run 内生成一次，并被各 Round 复用；
+- tools schema 在一次 Turn 内生成一次，并被各 AgentStep 复用；
 - 真实 token 消费只记录模型返回的 input/output usage，不记录估算值。
 
 ### 统一模型调用入口
 
-Planner 和主 Agent Round 都通过同一个 `ModelCallService`：
+Planner 和主 AgentStep 都通过同一个 `ModelCallService`：
 
 ```text
 ModelContext + tools
@@ -119,7 +119,7 @@ reason = context_length_exceeded
 
 ### Planner 与 Conversation
 
-RunRuntime 接受用户输入后，先把 user message 写入 Conversation，再启动 PlanningMode。
+TurnRuntime 接受用户输入后，先把 user message 写入 Conversation，再启动 PlanningMode。
 
 Planner 不再只接收孤立的 `user_message`，也不再通过 `build_plan_messages()` 自建第二套消息路径，而是：
 
@@ -137,33 +137,33 @@ Planner 能读取完整历史，但 Planner prompt、原始 JSON 和 Plan 不写
 
 ### 真实 usage 记录
 
-每次成功返回 `LLMCallResult` 的调用都会生成 `llm_usage` Checkpoint，并自动进入 Run Trace：
+每次成功返回 `LLMCallResult` 的调用都会生成 `llm_usage` Checkpoint，并自动进入 Turn Trace：
 
 ```text
 kind: llm
 reason: llm_usage
 data:
-  stage: planning | agent_round
-  round_index: int | null
+  stage: planning | agent_step
+  step_index: int | null
   input_tokens: 模型真实值
   output_tokens: 模型真实值
 ```
 
-usage 不进入 Conversation，也不复制到 SessionRunRecord。Run 的总消费可以从 Run Trace 中的 usage checkpoints 派生。
+usage 不进入 Conversation，也不复制到 SessionTurnRecord。Turn 的总消费可以从 Turn Trace 中的 usage checkpoints 派生。
 
 ### 最终流程
 
 ```text
 SessionRuntime
     ↓
-RunRuntime
+TurnRuntime
     ├─ 将当前 user message 写入 Conversation
     ├─ Planner：完整 Conversation 投影 → 预算 → 模型调用
-    └─ Agent Round：重新投影 → 预算 → 模型调用 → 工具循环
+    └─ AgentStep：重新投影 → 预算 → 模型调用 → 工具循环
 
 模型成功响应
     ├─ 使用真实 input_tokens 校准估算系数
-    └─ 将真实 input/output tokens 写入 Run Trace
+    └─ 将真实 input/output tokens 写入 Turn Trace
 ```
 
 ### 本阶段明确不做
@@ -187,9 +187,9 @@ RunRuntime
 - Planner 使用完整 Conversation 且 tools 为空；
 - Plan 不污染 Conversation；
 - Planner 与主 Agent 共用 ModelCallService；
-- Planning 和 Agent Round 分别记录模型真实 usage；
+- Planning 和 AgentStep 分别记录模型真实 usage；
 - 项目预算超限与模型硬限制原因分离；
-- 同一 Round 的 retry 继续复用同一个 ModelContext 快照。
+- 同一 AgentStep 的 retry 继续复用同一个 ModelContext 快照。
 
 这一步最重要的认知是：
 

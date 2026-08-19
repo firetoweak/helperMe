@@ -9,8 +9,8 @@ from core.todos.todo_list import TodoDraft, TodoList, TodoStatus
 
 REWRITE_TODOS_NAME = "rewrite_todos"
 REWRITE_TODOS_DESCRIPTION = """
-用途：用完整快照创建或同步当前 Run 的 TodoList，可修改状态和内容，也可新增、删除、拆分、合并或重排 Todo。
-何时使用：执行路径、任务范围或完成状态发生实质变化时使用，准备结束 Run 前必须最后同步；它维护执行状态，不代替实际任务工具。
+用途：用完整快照创建或同步当前 Turn 的 TodoList，可修改状态和内容，也可新增、删除、拆分、合并或重排 Todo。
+何时使用：执行路径、任务范围或完成状态发生实质变化时使用，准备结束 Turn 前必须最后同步；它维护执行状态，不代替实际任务工具。
 关键限制：首次创建提交 objective、2 到 6 个 id=null 且 status=pending 的 Todo；后续已有项保留 id，新增项 id=null，省略旧项表示删除，数组顺序表示建议执行顺序。
 失败/截断后：结果不截断；INVALID_TODO_REWRITE 后按 hint 修正并重新提交完整快照，不能只提交增量；内容未变化时也可提交相同快照确认同步。
 """.strip()

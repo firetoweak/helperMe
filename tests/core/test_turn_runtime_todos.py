@@ -8,7 +8,7 @@ from core.model_call import LLMCallResult, LLMResponse, ToolCall
 from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.model_call.service import ModelCallBlocked
 from core.todos import TodoMode
-from core.tools_runtime.run_runtime import RunRuntime
+from core.tools_runtime.turn_runtime import TurnRuntime
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -34,7 +34,7 @@ class RecordingLLMClient:
         return call_result(response)
 
 
-class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
+class TurnRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _conversation() -> Conversation:
         conversation = Conversation()
@@ -42,8 +42,8 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
         return conversation
 
     @staticmethod
-    def _runner(llm) -> RunRuntime:
-        return RunRuntime(
+    def _runner(llm) -> TurnRuntime:
+        return TurnRuntime(
             model_call_service(llm),
             "test-model",
             TodoMode(),
@@ -160,7 +160,7 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
         )
         conversation = self._conversation()
 
-        result = await self._runner(llm).run(conversation, "完成任务", max_rounds=5)
+        result = await self._runner(llm).run(conversation, "完成任务", max_steps=5)
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.answer, "最终回答")
@@ -180,7 +180,7 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
         )
         conversation = self._conversation()
 
-        result = await self._runner(llm).run(conversation, "完成任务", max_rounds=3)
+        result = await self._runner(llm).run(conversation, "完成任务", max_steps=3)
 
         self.assertEqual(result.status, "completed")
         self.assertTrue(
@@ -200,7 +200,7 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.final_reason, "invalid_todo_initialization")
         self.assertIn("raw_response=LLMResponse", result.answer)
 
-    async def test_reused_runtime_creates_an_independent_todo_state_per_run(self):
+    async def test_reused_runtime_creates_an_independent_todo_state_per_turn(self):
         llm = RecordingLLMClient(
             [
                 self._initial_response(),
@@ -235,7 +235,7 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
         model_calls.call.return_value = ModelCallBlocked(
             make_budget_assessment(820, 750)
         )
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             TodoMode(),
@@ -255,7 +255,7 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
         model_calls.call.side_effect = LLMContextLengthError(
             "maximum context length exceeded"
         )
-        result = await RunRuntime(
+        result = await TurnRuntime(
             model_calls,
             "test-model",
             TodoMode(),
@@ -270,7 +270,7 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
             "todo_initialization",
         )
 
-    @patch("core.tools_runtime.run_runtime.asyncio.sleep", new_callable=AsyncMock)
+    @patch("core.tools_runtime.turn_runtime.asyncio.sleep", new_callable=AsyncMock)
     async def test_initialization_transient_failure_reuses_retry_chain(self, sleep):
         llm = RecordingLLMClient(
             [
@@ -288,7 +288,7 @@ class RunRuntimeTodosTest(unittest.IsolatedAsyncioTestCase):
             cp for cp in result.checkpoints if cp.reason == "llm_retry"
         )
         self.assertEqual(retry.data["stage"], "todo_initialization")
-        self.assertIsNone(retry.data["round_index"])
+        self.assertIsNone(retry.data["step_index"])
         sleep.assert_called_once_with(1)
 
 

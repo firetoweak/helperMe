@@ -4,14 +4,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from core.tool_registry import ToolSpec
-from core.tools_runtime.run_evidence import RunEvidence
+from core.tools_runtime.turn_evidence import TurnEvidence
 
 if TYPE_CHECKING:
     from core.runtime_modes import RuntimeMode
     from core.tools_runtime.progressive_toolsets import ToolsetProvider
 
 
-class RunCapability(Protocol):
+class TurnCapability(Protocol):
     def base_tool_names(self) -> tuple[str, ...] | None:
         ...
 
@@ -24,7 +24,7 @@ class RunCapability(Protocol):
     def tool_specs(self) -> list[ToolSpec]:
         ...
 
-    def check_final_candidate(self, evidence: RunEvidence) -> str | None:
+    def check_final_candidate(self, evidence: TurnEvidence) -> str | None:
         ...
 
     def checkpoint_data(self) -> dict | None:
@@ -32,7 +32,7 @@ class RunCapability(Protocol):
 
 
 @dataclass(frozen=True)
-class RunInvocation:
-    capabilities: tuple[RunCapability, ...] = ()
+class TurnInvocation:
+    capabilities: tuple[TurnCapability, ...] = ()
     toolset_provider: ToolsetProvider | None = None
     runtime_mode: RuntimeMode | None = None

@@ -20,7 +20,7 @@ class WorkspaceBaseline:
 
 
 @dataclass(frozen=True)
-class RunEvidence:
+class TurnEvidence:
     steps: tuple[ToolEvidence, ...] = ()
     workspace_baselines: tuple[WorkspaceBaseline, ...] = ()
 
@@ -38,7 +38,7 @@ class RunEvidence:
         )
 
 
-class RunEvidenceRecorder:
+class TurnEvidenceRecorder:
     def __init__(self) -> None:
         self._steps: list[ToolEvidence] = []
         self._workspace_baselines: list[WorkspaceBaseline] = []
@@ -68,8 +68,8 @@ class RunEvidenceRecorder:
             )
         )
 
-    def snapshot(self) -> RunEvidence:
-        return RunEvidence(
+    def snapshot(self) -> TurnEvidence:
+        return TurnEvidence(
             tuple(self._steps),
             tuple(self._workspace_baselines),
         )

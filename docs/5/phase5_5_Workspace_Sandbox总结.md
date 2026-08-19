@@ -47,7 +47,7 @@ Workspace Tools
 - `scoped`：默认模式，只注册显式配置的项目 roots。
 - `host`：保留项目 roots，并额外发现应用启动时已挂载的本机文件系统 roots；Windows 使用 `drive_c`、`drive_d` 等稳定逻辑名称。
 
-工具仍统一使用 `root + relative path`，不增加绝对路径分支。Host 只表示文件工具不再施加项目范围上限，实际访问继续服从当前进程的操作系统权限。模型、Plugin、Skill 和单次 Run 无权切换或升级该模式；GUI 若切换按钮，必须重新创建 Application 与 Session。
+工具仍统一使用 `root + relative path`，不增加绝对路径分支。Host 只表示文件工具不再施加项目范围上限，实际访问继续服从当前进程的操作系统权限。模型、Plugin、Skill 和单次 Turn 无权切换或升级该模式；GUI 若切换按钮，必须重新创建 Application 与 Session。
 
 `execute_command` 当前仍可使用绝对路径访问 Workspace 外部资源，因此 scoped 是“文件工具访问范围”，不是操作系统安全隔离；在命令执行器具备真实权限隔离前，界面不得把 scoped 宣称为安全沙箱。
 
