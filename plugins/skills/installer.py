@@ -7,14 +7,12 @@ import shutil
 import tempfile
 from typing import Protocol
 
-from core.agent_workspace import AgentWorkspace
 from plugins.skills.models import SkillBundle, SkillRecord
 from plugins.skills.package import (
     LocalSkillPackageReader,
     SkillPackageError,
     write_skill_bundle,
 )
-from plugins.skills.registry import SkillRegistry
 
 
 class SkillRegistryWriter(Protocol):
@@ -40,17 +38,6 @@ class LocalSkillInstaller:
         self.registry = registry
         self.package_reader = package_reader or LocalSkillPackageReader()
         self._lock = asyncio.Lock()
-
-    @classmethod
-    def from_agent_workspace(
-        cls,
-        workspace: AgentWorkspace,
-        registry: SkillRegistry | None = None,
-    ) -> "LocalSkillInstaller":
-        return cls(
-            workspace.skills_root,
-            registry or SkillRegistry.from_agent_workspace(workspace),
-        )
 
     async def install(self, source_directory: Path) -> SkillRecord:
         bundle = self.package_reader.read(source_directory)

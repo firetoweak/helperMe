@@ -58,11 +58,11 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(removed.name, "demo")
         self.assertIsNone(await self.service.registry.get("demo"))
         self.assertFalse(
-            (self.workspace.skills_root / "packages" / "demo").exists()
+            (self.service.skills_root / "packages" / "demo").exists()
         )
 
     async def test_enable_rejects_modified_installed_package(self):
-        installed = self.workspace.skills_root / "packages" / "demo" / "SKILL.md"
+        installed = self.service.skills_root / "packages" / "demo" / "SKILL.md"
         installed.write_text(
             "---\nname: demo\ndescription: Demo skill\n---\ntampered\n",
             encoding="utf-8",
@@ -118,7 +118,7 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         updated = await self.service.update("demo", candidate.candidate_hash)
 
-        installed = self.workspace.skills_root / "packages" / "demo" / "SKILL.md"
+        installed = self.service.skills_root / "packages" / "demo" / "SKILL.md"
         text = installed.read_text(encoding="utf-8")
         self.assertIn("candidate v2", text)
         self.assertNotIn("source changed after check", text)
@@ -232,7 +232,7 @@ class SkillConsoleAdapterTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("disabled", install)
             self.assertIn("demo [disabled]", listing)
             self.assertIn("校验通过", test)
-            self.assertIn("新 Session", enable)
+            self.assertIn("下一个 Turn", enable)
 
 
 if __name__ == "__main__":

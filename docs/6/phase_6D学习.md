@@ -1,6 +1,6 @@
 # Phase 6D · Skill Progressive Loading
 
-> 状态：第一版实现与真实模型 Benchmark 完成（2026-08-20）。
+> 状态：第一版实现与真实模型 Benchmark 完成；运行时边界已在架构复盘中修订（2026-08-20）。
 > 实现结论与验收证据见[Phase 6D 实现总结](phase_6D实现总结.md)。
 
 ## 目标
@@ -8,33 +8,40 @@
 让 HelperMe 能安装和管理持久 Skill，并在单次 Turn 中按需加载其主指令与 supporting files，避免在 Turn 开始时注入全部 Skill 正文。
 
 ```text
-Agent Workspace 中已安装并启用的 Skill
+Skill Plugin 中已安装并启用的 Skill
     ↓
-Turn 开始只注入 name + description 精简目录
+每个 Turn 生成普通 load_skill ToolSpec，工具描述携带精简目录
     ↓
 模型单独调用 load_skill(name)
     ↓
-当前 Turn 冻结完整主指令
+完整主指令作为普通 tool result 进入 Conversation
     ↓
-下一 AgentStep 将主指令注入 runtime instructions
-    ↓
-按主指令继续读取 reference 或执行 script
-    ↓
-Turn 结束，SkillLoadingState 自然释放
+模型自行决定沿用、重新加载、读取 reference 或调用普通工具执行 script
 ```
 
 第一版同时完成安装、检查更新、更新、启停与卸载闭环。更新只能由用户显式操作或用户重新部署 HelperMe 触发，严禁后台或启动时静默更新。
 
 ## 核心定义
 
-Skill 是模型完成某类任务的方法，包含指令、知识、工作流和 supporting files；Tool 是模型可以执行的外部动作。两者变化方向不同：
+> Skill 是可发现、可复用、按需读取的详细指令包，不是一种新的执行能力。
 
-| 能力 | 加载后改变什么 | Turn 内状态 |
-| --- | --- | --- |
-| Toolset | 下一 AgentStep 可见的工具 Schema 与 handler | `ToolsetLoadingState` |
-| Skill | 下一 AgentStep 的 runtime instructions 与可访问资源 | `SkillLoadingState` |
+Skill 可以包含指令、知识、工作流和 supporting files，但真正执行动作的仍是模型、普通 Tool、MCP 或代码执行器。与用户直接输入一段详细操作规程相比，Skill 新增的是可发现、可复用、可版本化和可治理的工程属性，而不是新的 Agent 执行语义。
 
-6D 复用 Turn 生命周期、Session 能力快照、工具结果预算和现有命令执行链，不把 Skill 合并进 `ToolsetProvider`、`ToolsetLoadingState` 或工具 Schema 数据模型。
+```text
+MCP / Tool
+→ 系统能够执行什么外部动作
+
+Skill
+→ 面对某类任务时，模型应当如何组织已有动作
+```
+
+`load_skill` 也不负责选择或执行 Skill。模型根据 Catalog 选择稳定 ID；`load_skill(id)` 只确定性读取对应详细指令，并以普通 tool result 返回。
+
+运行时边界遵循：
+
+> 安全与因果约束由 Runtime 保证；工作流选择权交还模型。
+
+因此 Runtime 只强制通用工具协议、`exclusive_batch`、参数校验和资源路径沙箱，不强制模型何时加载、是否重新加载、是否先读主指令或使用哪个 revision。Core 不保存 Skill 领域状态，不理解 Skill 的安装、版本和加载生命周期。
 
 ## Workspace 边界
 
@@ -43,14 +50,14 @@ Task Workspace
 → execution root
 → cwd、用户输入、任务产物、Git 变化与 Evidence
 
-Agent Workspace / skills
+Skill Plugin storage
 → resource root
 → 已安装 Skill 的 SKILL.md、references、scripts、templates、assets
 ```
 
 相对路径默认属于 Task Workspace，不因加载或执行 Skill 而改变。HelperMe 不做 `chdir(skill_dir)`；Skill 脚本必须通过显式 `<skill-dir>` 路径执行。
 
-第一版目录：
+第一版目录仍可位于 Agent Workspace 根目录之下，但路径由 Skill Plugin 自己派生和管理，不在 `AgentWorkspace` 上增加 `skills_root` 领域接口：
 
 ```text
 ~/.helperme/skills/
@@ -65,7 +72,7 @@ Agent Workspace / skills
 └─ .staging/
 ```
 
-Task Workspace 的 `read_file` 不得读取 Skill 包。Skill 内容通过专属 `read_skill_resource` 访问；脚本执行复用 `execute_command`，其 cwd 仍是 Task Workspace，输出继续进入既有有界捕获、Artifact 与 Evidence 链路。
+Task Workspace 的 `read_file` 不得读取 Skill 包。Skill 内容通过专属 `read_skill_resource` 访问；该工具的特殊性仅是 Skill 目录路径沙箱，不代表一套新的执行流程。脚本执行复用 `execute_command`，其 cwd 仍是 Task Workspace，输出继续进入既有有界捕获、Artifact 与 Evidence 链路。
 
 ## Skill 包契约
 
@@ -110,9 +117,10 @@ SkillSource
 → 原子安装
 → Registry 提交
 
-SkillProvider
-→ 只读取已登记且 enabled 的 Descriptor
-→ 按稳定 ID 加载主指令和 supporting files
+Skill Runtime Tools（Plugin 内部）
+→ 从 Registry 投影 enabled Descriptor 目录
+→ 生成普通 load_skill / read_skill_resource ToolSpec
+→ 按稳定 ID 读取主指令和 supporting files
 ```
 
 第一版真实来源包括本地目录、GitHub 与直接 URL；它们统一转换为：
@@ -138,7 +146,7 @@ SkillBundle
 - 模型不能直接写 Registry 或 Skill 安装目录；
 - 安装完成默认 disabled，`enable` 是“发布到模型可见目录”的独立动作，不代表连接测试。
 
-安装、更新和启停属于 Application 控制面，不进入普通 `SkillProvider` 或 TurnRuntime。
+安装、更新和启停属于 Application 控制面，不进入两个 Runtime ToolSpec 或 TurnRuntime。
 
 ## 更新策略
 
@@ -178,91 +186,84 @@ Skill 只允许在以下两种情况下更新：
 
 ### 运行期稳定性
 
-第一版不实现 Skill 热更新、多版本并存和旧版本 GC。手动 update 是显式维护操作：不得在活动 Turn 中替换包；提交后重载 Skill Runtime，并创建使用新能力集合的 Session。重新部署天然形成相同边界。
+第一版不实现活动 Turn 内热更新、多版本存储和旧版本 GC。手动 update 是显式维护操作：不得在活动 Turn 中替换包；提交后由下一个 Turn 重新生成 Catalog 和工具闭包，无需强制创建新 Session。
 
-这条限制保证普通任务执行期间 Skill 包不可变，同时避免为尚未出现的需求建设跨 Session 版本保留、引用计数和回收系统。
+刷新的是发现目录，不会覆盖已经作为 tool result 进入 Conversation 的 Skill 指令。`load_skill` 返回 `skill_id + revision + content`，使加载时版本成为对话证据。后续 Turn 是否沿用旧内容、重新加载或请求最新版，由模型结合用户语义决定，Runtime 不维护这项工作流策略。
 
 ## 运行时对象
 
-| 对象 | 生命周期 | 职责 |
+| 对象 | 所属边界 | 职责 |
 | --- | --- | --- |
-| `SkillDescriptor` | Provider 目录快照 | 仅含稳定 name、description 与 revision，帮助模型选择 |
-| `SkillBundle` | 获取与安装过程 | 规范化一个完整候选包 |
-| `SkillRecord` | Agent Workspace 持久 | source、resolved ref、enabled、revision、hash 与时间戳 |
-| `LoadedSkill` | 当前 Turn | 完整主指令、skill_dir、稳定身份与 revision |
-| `SkillLoadingState` | 当前 Turn | 按加载顺序保存 `LoadedSkill`，Turn 结束自然释放 |
-| `SkillProvider` | Application/Session 注入 | 提供目录、完整主指令与包内资源访问 |
-| `TurnSkillEnvironment` | 当前 Turn | 组装 Skill 工具、目录与已加载主指令 |
+| `SkillBundle` | Plugin 管理面 | 规范化一个完整候选包 |
+| `SkillRecord` | Plugin 持久层 | source、resolved ref、enabled、revision、hash 与时间戳 |
+| `SkillDescriptor` | Plugin Registry 投影 | 仅含稳定 name、description 与 revision，帮助模型选择 |
+| `load_skill` ToolSpec | Plugin 执行面 | 携带当前 Catalog，按 ID 返回完整主指令和 revision |
+| `read_skill_resource` ToolSpec | Plugin 执行面 | 在指定 Skill 目录沙箱内读取 supporting file |
 
-`SkillLoadingState` 不保存完整 `SkillRecord`。source、更新时间和更新候选属于安装控制面；Turn 只消费执行所需的冻结内容。
+Runtime 不再需要 `LoadedSkill`、`SkillLoadingState`、`SkillProvider`、`SessionSkillSnapshot`、`SnapshotSkillProvider` 或 `TurnSkillEnvironment`。Skill Plugin 实现现有通用 `TurnCapability`，在 `tool_specs()` 被每个 Turn 调用时根据当前 Registry 生成两个普通 `ToolSpec`；Core 不增加 Skill 专属接口。Application 级 `additional_tool_specs` 在创建时冻结，只继续承载静态管理工具，不用于动态 Catalog。
 
-`TurnInvocation` 增加独立的可选 `skill_provider`。`TurnSkillEnvironment` 不接管 `ToolsExecutor`；它只向现有工具环境贡献当前 AgentStep 所需的 `ToolSpec` 和 runtime instructions，工具注册、名称冲突和执行结果仍由现有通用链路负责。
+## Turn 可见性与对话版本证据
 
-## Session 能力快照
+每个 Turn 使用创建工具闭包时的 enabled Descriptor 集合。活动 Turn 中禁止安装控制面替换包；下一个 Turn 自动获得最新 Catalog。
 
-Session 创建时捕获 enabled Skill 的稳定 Descriptor 集合。Skill 使用独立的 `SessionSkillSnapshot` / `SnapshotSkillProvider`，不塞入 Toolset 的 Descriptor、加载状态或 ToolSpec 模型。
+已经调用过的 `load_skill` 结果属于 Conversation 历史，而不是 Runtime 私有状态：
 
-第一版的正常运行期不允许更新包；Snapshot 的职责是：
+```text
+Turn A：load_skill(pdf) → revision=abc + 完整正文 → 提出方案
+Turn B：用户确认 → 模型可以直接依据 revision=abc 继续执行
+```
 
-- 新安装或新启用的 Skill 不进入既有 Session；
-- 新增其他 Skill 不应使旧 Session 已捕获的 Skill 失效；
-- 新 Session 捕获最新 enabled 目录；
-- 加载某个 Skill 时只核对该 ID 的已捕获 revision；
-- 若控制面违反维护边界，导致旧 Session 已捕获的 Skill 被更新、禁用、删除或破坏，明确拒绝该 Skill 的加载与资源访问，不静默切换内容。
-
-这复用了“Session 冻结能力可见性”的规则，但没有把 Skill 与 MCP 的数据模型或外部连接语义合并。
+如果 Turn A 只口头选择 Skill 而没有加载，Turn B 再加载；如果内容因上下文处理不可用、用户要求最新版或模型判断任务已变化，模型可以重新加载。Runtime 不为这些情形编写强制状态机。
 
 ## 渐进发现与加载
 
 ### 第一层：精简目录
 
-第一版在每个 Turn 开始时注入全部 enabled Skill 的 `name + description`：
+第一版在每个 Turn 生成 `load_skill` ToolSpec 时，将全部 enabled Skill 的 `name + description` 放入工具描述或参数 Schema：
 
 ```text
 - python-testing: 指导 Python 项目的测试设计与执行
 - pdf: 创建、读取和验证 PDF
 ```
 
-revision、source、hash 和安装信息不进入 Prompt。目录顺序固定，保证相同能力快照产生稳定请求。
+revision、source、hash 和安装信息不进入 Catalog。目录顺序固定，保证相同 Registry 投影产生稳定 ToolSpec。
 
 暂不实现分类、搜索或 `list_skills`。优化边界必须保留：
 
-- `SkillProvider` 独立提供 Descriptor；
-- `skill_catalog_instruction()` 集中负责目录投影；
+- `SkillRegistry` 独立提供 Descriptor 投影；
+- ToolSpec 工厂集中负责目录投影；
 - `load_skill(name)` 只依赖稳定 ID，不依赖发现方式；
-- Skill Catalog 拥有独立预算，不能静默截断；
+- Catalog 在 Plugin 内有明确大小上限，不能静默截断；
 - `/skill enable` 检查发布后的完整目录仍在预算内。
 
 真实目录规模触发预算问题后，再从分类、分页、关键词搜索或语义检索中选择，不提前实现。
 
 ### 第二层：完整主指令
 
-`load_skill(name)` 成功后只返回加载回执，完整正文不进入 tool result 或 Conversation。正文原子写入当前 `SkillLoadingState`，从下一 AgentStep 开始通过 runtime instructions 注入。
+`load_skill(name)` 成功后直接返回 `skill_id + revision + skill_dir + content`。完整正文作为普通 tool result 进入 Conversation，不写入 Runtime 私有状态，也不提升为 system/developer/runtime instructions。
 
 ```text
-已加载 Skill：python-testing
-Skill Directory：<absolute skill-dir>
-
-<SKILL.md 去除 Frontmatter 后的完整正文>
+skill_id: python-testing
+revision: <content revision>
+skill_dir: <absolute skill-dir>
+content: <SKILL.md 去除 Frontmatter 后的完整正文>
 ```
 
-Conversation 中的历史回执只说明过去发生过加载，不代表新 Turn 已加载。Goal 可以跨多个 Turn，但每个 Executor/Judge Turn 都必须根据当前任务重新选择 Skill。
-
-同一 Turn 可以先后加载多个 Skill；每个 AgentStep 只允许加载一个。重复加载同一 Skill 幂等返回已加载回执。
+Conversation 中的工具结果就是加载证据。Goal 跨多个 Turn 时，模型可以沿用已存在的正文，也可以自行决定重新加载。重复加载不需要 Runtime 幂等状态；它只是再次读取当前 Registry 指向的内容。
 
 ### 第三层：supporting files
 
-加载主指令后，模型根据正文路由按需调用：
+模型根据任务或正文按需调用：
 
 ```text
 read_skill_resource(skill_id, relative_path, range)
 ```
 
-只允许读取当前 Turn 已加载 Skill 的包内资源，路径必须相对对应 skill_dir，不能跨 Skill。大型 reference 使用分页或范围读取；主指令必须完整加载，但 supporting files 不永久注入所有后续 AgentStep。
+只允许读取当前 enabled Skill 的包内资源，路径必须相对对应 skill_dir，不能跨 Skill。是否先加载主指令由模型决定，不由 Runtime 强制。大型 reference 使用分页或范围读取；supporting files 作为普通 tool result 进入 Conversation。
 
 读取错误边界：
 
-- 未加载 Skill、未知 Skill ID、非法相对路径或不存在资源：模型可修正的工具错误；
+- 未知或未启用 Skill ID、非法相对路径或不存在资源：模型可修正的工具错误；
 - Registry 指向损坏包、已登记内容与 hash/Frontmatter 不一致：内部安装契约破坏，保留原始异常失败。
 
 ## Skill 脚本执行
@@ -286,24 +287,13 @@ Skill 主指令通过显式 `<skill-dir>` 告诉模型资源根。第一版不�
 
 Skill 只能补充完成任务的领域方法，不能覆盖 Core 规则、Goal Contract、RuntimeMode、Todo Sync Barrier 或工具协议。
 
-Skill 正文使用带 Skill ID 的独立边界块注入。第一版不建设复杂的指令冲突检测器；上下文组装保持明确顺序，使 Runtime/Goal 控制指令拥有最终解释权。极端恶意或冲突指令归入外源信息注入专题。
+Skill 正文以普通 tool result 进入 Conversation，其权限不高于用户消息，更不能被提升为 system/developer/runtime instructions。第一版不建设复杂的指令冲突检测器；极端恶意或冲突内容归入外源信息注入专题。
 
 ## 预算契约
 
-Skill 主指令是执行契约，不允许截断、摘要或由 Safe Compression 删除：
+Skill Plugin 在安装、启用和 ToolSpec 生成阶段维护包大小、单个主指令和 Catalog 的确定性上限。`load_skill` 返回完整正文，不在 Skill 层建立“当前 Turn 累计已加载正文”状态。
 
-```text
-完整正文可装入 → 原子提交 LoadedSkill
-无法完整装入   → SKILL_CONTEXT_LIMIT，状态不变
-```
-
-预算分层：
-
-- `enable/test` 验证单个 `SKILL.md` 能完整加载；
-- `load_skill` 验证当前 Turn 已加载正文加上新正文不超过 Skill 累计预算；
-- 既有 `ContextBudget` 检查 Conversation、工具 Schema、运行时指令组成的完整模型请求。
-
-Skill 层不依赖 `ContextPreparation` 精算整个请求；完整请求仍由现有预算组件负责。若新 Skill 加载失败，已经加载的 Skill 保持不变。
+正文进入 Conversation 后，统一服从现有工具结果与上下文预算规则。超过单条工具结果上限时，完整结果由通用 `ToolResultExternalizer` 保存为 Runtime Artifact，模型按提示使用 `read_artifact` 分页读取；不为 Skill 在 Core 建立专属预算和 Safe Compression 旁路。
 
 ## 同一 AgentStep 独占加载
 
@@ -338,13 +328,13 @@ Skill 层不依赖 `ContextPreparation` 精算整个请求；完整请求仍由�
 
 1. `ToolSpec.exclusive_batch` 与批次预检测试；
 2. Skill 包模型、Frontmatter/路径/大小校验和 `SkillBundle`；
-3. `SkillRegistry`、AgentWorkspace `skills_root` 与本地原子安装；
+3. `SkillRegistry`、Plugin 私有 storage root 与本地原子安装；
 4. Local/GitHub/URL `SkillSource`、staging 和冻结 candidate；
 5. `/skill` list/install/inspect/test/enable/disable/remove/check-update/update；
 6. 更新 manifest diff、独立模型概括与 candidate hash 应用；
-7. `SkillDescriptor`、`SkillProvider` 与 Session Skill 快照；
-8. `TurnSkillEnvironment`、`load_skill`、完整正文注入与预算；
-9. `read_skill_resource` 分页读取与 `<skill-dir>` 脚本执行闭环；
+7. 从 Registry 投影 `SkillDescriptor`，生成携带 Catalog 的普通 `load_skill` ToolSpec；
+8. `load_skill` 以普通 tool result 返回完整正文、revision 与 skill_dir；
+9. `read_skill_resource` 路径沙箱与 `<skill-dir>` 脚本执行闭环；
 10. 普通对话 Proposal/Approval 接入；
 11. 自动化回归与真实模型 benchmark。
 
@@ -354,29 +344,29 @@ Skill 层不依赖 `ContextPreparation` 精算整个请求；完整请求仍由�
 
 ### Core 行为测试
 
-- AgentStep 1 只有精简目录和 `load_skill`，没有未加载正文；
-- `load_skill` 只返回回执，正文从下一 AgentStep 完整进入 runtime instructions；
-- 新 Turn 不继承上一 Turn 的 `SkillLoadingState`；
-- Goal 的不同 Turn 必须重新加载所需 Skill；
-- 未知 ID、未加载资源、非法路径和预算超限返回可修正错误；
-- 主指令不截断，失败时不留下半加载状态；
+- AgentStep 1 的 `load_skill` ToolSpec 携带精简目录，没有未选择 Skill 的正文；
+- `load_skill` 通过普通 tool result 返回完整正文、revision 与 skill_dir；
+- Core 不存在 Skill 专属 Provider、Snapshot、LoadingState、Environment 或预算；
+- Goal 的后续 Turn 可以依据 Conversation 中已有加载结果继续执行；
+- 未知 ID、未启用资源、非法路径和大小超限返回可修正错误；
+- `read_skill_resource` 不要求 Runtime 先记录“已加载”，但必须阻止路径越界；
 - 同一 AgentStep 多个 `load_skill` 或混合批次整批不执行；
-- 多个 Skill 可跨 AgentStep 按加载顺序共存；
-- Skill 正文不写入 Conversation，不被 Safe Compression 摘要；
+- 是否加载多个 Skill、重新加载或沿用旧 revision 由模型决定；
+- Skill 正文只作为普通 tool result 进入 Conversation，不提升指令权限；
 - Task Workspace 相对路径语义不因 Skill 改变。
 
 ### 安装与更新测试
 
 - 非法 Frontmatter、身份不一致、路径穿越、symlink/junction 和越界目标被拒绝；
 - staging 失败不产生 Registry 记录或半安装目录；
-- 安装默认 disabled，enable 后只进入新 Session 目录；
+- 安装默认 disabled，enable 后从下一个 Turn 进入 Catalog；
 - 未登记孤立目录不进入 Runtime；
 - check-update 冻结 candidate hash 并产生确定性 manifest diff；
 - update 只能应用已检查的确切 hash，不能重新获取漂移内容；
 - 同源 update 与换源 replace 在记录和说明中明确区分；
 - 更新报告优先提供语义概括，同时保留文件级证据；
 - 没有用户显式 update 或重新部署时，Skill 内容绝不变化；
-- 活动 Turn 中拒绝替换包，更新后重载能力并使用新 Session。
+- 活动 Turn 中拒绝替换包，更新后由下一个 Turn 使用新 Catalog。
 
 ### 真实模型 Benchmark
 
@@ -384,12 +374,12 @@ Skill 层不依赖 `ContextPreparation` 精算整个请求；完整请求仍由�
 
 1. 从远端来源安装为 disabled；
 2. inspect/test 后显式 enable；
-3. 新 Session 只根据精简目录选择该 Skill；
+3. 新 Turn 只根据 `load_skill` ToolSpec 中的精简目录选择该 Skill；
 4. 模型单独调用 `load_skill`；
-5. 下一 AgentStep 遵循完整正文，按需读取 reference；
+5. 下一 AgentStep 从 tool result 获得完整正文，按需读取 reference；
 6. 以 Task Workspace 为 cwd 执行 Skill script 并生成任务产物；
 7. 通过真实 Evidence 验证结果；
-8. 新 Turn 不继承加载状态；
+8. 用户在后续 Turn 确认时，模型能依据 Conversation 中已加载的 revision 继续执行；
 9. 手动检查新版，展示模型概括和机器 diff；
 10. 只应用冻结 candidate，并验证不存在自动更新。
 

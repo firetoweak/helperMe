@@ -216,7 +216,7 @@ class GoalApplicationService:
                     max_steps=max_steps,
                     invocation=replace(
                         invocation,
-                        capabilities=(
+                        capabilities=(*invocation.capabilities,
                             GoalExecutorCapability(
                                 goal_id=goal.id,
                                 objective=goal.objective,
@@ -288,7 +288,7 @@ class GoalApplicationService:
             max_steps=max_steps,
             invocation=replace(
                 invocation,
-                capabilities=(
+                capabilities=(*invocation.capabilities,
                     GoalJudgeCapability(
                         goal_id=goal.id,
                         objective=goal.objective,

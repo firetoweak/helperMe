@@ -12,6 +12,7 @@ from plugins.skills.approval import (
     create_skill_install_proposal_spec,
 )
 from plugins.skills.management_tools import create_skill_management_specs
+from plugins.skills.runtime import SkillRuntimeCapability
 from core.tool_registry import ToolSpec
 
 
@@ -25,8 +26,8 @@ class SkillPlugin:
     enable_approval_handler: SkillEnableApprovalHandler
 
     @property
-    def skill_provider(self):
-        return self.service.skill_provider
+    def runtime_capability(self) -> SkillRuntimeCapability:
+        return self.service.runtime_capability
 
 
 def create_skill_plugin(

@@ -315,8 +315,8 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 - 状态：第一版实现、自动化回归、真实模型 Runtime/Update Benchmark 与真实 GitHub 远程安装验证均已完成（2026.08.20）。
 - 前置回补：已建立 Environment Selection/Binding、Workspace View、Permission、cwd-relative / Environment-absolute 路径解析、Environment Context 与 EnvironmentLocation；进程级 Sandbox 仍是明确记录的后续能力边界。详见[工作区语义与工具路径契约](专题/工作区语义与工具路径契约.md)。
 - 目标：按需发现并加载 Skill 的指令、知识与工作流，避免在 Turn 开始时注入全部 Skill 内容。
-- 边界：复用通用 Turn 生命周期与能力快照规则，但不与 Toolset 的目录、加载状态和工具 Schema 数据模型提前合并。
-- 当前结论：Agent Workspace 持久安装与 Task Workspace 执行分离；Turn 只注入精简目录，`load_skill` 独占一个 AgentStep 并从下一 AgentStep 完整注入主指令，supporting files 按需读取；脚本以 Task Workspace 为 cwd 复用命令执行链。Local/GitHub/URL 来源统一冻结为确定包；安装默认 disabled；更新必须显式应用已检查 hash，不存在静默自动更新。
+- 边界：Skill 是可发现、可复用、按需读取的详细指令包，不是新的执行能力。Core 只复用普通 ToolSpec、Conversation tool result 与 `exclusive_batch`，不保存 Skill Provider、Session Snapshot、Turn LoadingState 或专属预算。
+- 当前结论：Skill Plugin 通过现有 `TurnCapability.tool_specs()` 在每个 Turn 投影 Catalog，并生成普通 `load_skill` / `read_skill_resource`；主指令作为 tool result 进入 Conversation，是否沿用或重新加载由模型决定。Plugin 自己管理 Agent Workspace 根目录下的私有 storage；脚本以 Task Workspace 为 cwd 复用命令执行链。Local/GitHub/URL 来源统一冻结为确定包；安装默认 disabled；更新必须显式应用已检查 hash，不存在静默自动更新。
 - 详述：[设计与学习文档](6/phase_6D学习.md)；[实现总结](6/phase_6D实现总结.md)
 
 ---

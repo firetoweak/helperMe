@@ -13,7 +13,7 @@ class AgentWorkspaceTest(unittest.TestCase):
 
         self.assertEqual(workspace.root, Path("C:/Users/test/.helperme").resolve())
 
-    def test_layout_separates_sessions_plugins_skills_and_state(self):
+    def test_layout_contains_only_core_owned_roots(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
 
@@ -21,11 +21,9 @@ class AgentWorkspaceTest(unittest.TestCase):
 
             self.assertTrue(workspace.sessions_root.is_dir())
             self.assertTrue(workspace.plugins_root.is_dir())
-            self.assertTrue(workspace.skills_root.is_dir())
             self.assertTrue(workspace.state_root.is_dir())
             self.assertEqual(workspace.sessions_root.parent, workspace.root)
             self.assertEqual(workspace.plugins_root.parent, workspace.root)
-            self.assertEqual(workspace.skills_root.parent, workspace.root)
             self.assertEqual(workspace.state_root.parent, workspace.root)
 
 

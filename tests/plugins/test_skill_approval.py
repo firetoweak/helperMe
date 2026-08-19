@@ -50,7 +50,7 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             )
 
             record = await service.registry.get("demo")
-            installed = workspace.skills_root / "packages" / "demo" / "SKILL.md"
+            installed = service.skills_root / "packages" / "demo" / "SKILL.md"
             text = installed.read_text(encoding="utf-8")
             self.assertTrue(execution.succeeded)
             self.assertFalse(record.enabled)

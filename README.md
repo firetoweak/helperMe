@@ -66,7 +66,7 @@ python console_chat.py
 - 用自然语言提交 Skill 安装/启用审批，或使用 `/skill` 管理本地、GitHub 与 URL Skill。
 - 按 `Ctrl+C`，请求 Agent 在安全点中断当前任务。
 
-Skill 安装后默认为 disabled。使用 `/skill inspect|test|enable` 检查并启用，然后输入 `/skill reload` 创建捕获最新能力快照的 Session。`check-update` 只冻结候选和展示概括/diff，`update` 必须显式提交该 candidate hash，不会后台自动更新。
+Skill 安装后默认为 disabled。使用 `/skill inspect|test|enable` 检查并启用，能力目录从下一个 Turn 自动生效。`check-update` 只冻结候选和展示概括/diff，`update` 必须显式提交该 candidate hash，不会后台自动更新。
 
 ## Web 与浏览器能力
 

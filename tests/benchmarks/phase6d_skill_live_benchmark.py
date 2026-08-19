@@ -17,9 +17,9 @@ from core.environment import (
 )
 from core.model_call.client import LLMClient
 from core.model_call.config import load_app_config
-from core.tools_runtime.progressive_skills import LOAD_SKILL, READ_SKILL_RESOURCE
 from core.tools_runtime.turn_invocation import TurnInvocation
 from plugins.skills.application import SkillApplicationService
+from plugins.skills.runtime import LOAD_SKILL, READ_SKILL_RESOURCE
 from plugins.skills.summarizer import LlmSkillDiffSummarizer
 
 
@@ -95,7 +95,6 @@ async def run() -> dict:
             llm_client=llm_client,
             application_resources=(llm_client,),
             default_max_steps=config.runtime.max_steps,
-            default_skill_provider=skills.skill_provider,
         )
         skills.bind_active_turn_guard(application.has_active_turns)
         view = WorkspaceViewSnapshot((RootBinding(
@@ -119,7 +118,7 @@ async def run() -> dict:
                     "必须遵循 Skill 中的完整工作流并基于真实工具证据回答。"
                 ),
                 invocation=TurnInvocation(
-                    skill_provider=skills.skill_provider,
+                    capabilities=(skills.runtime_capability,),
                     environment_selection=selection,
                 ),
             )

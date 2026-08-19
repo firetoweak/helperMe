@@ -10,13 +10,6 @@ from core.tools_runtime.progressive_toolsets import (
     create_load_toolset_spec,
     toolset_catalog_instruction,
 )
-from core.tools_runtime.progressive_skills import (
-    SkillBudget,
-    SkillLoadingState,
-    create_load_skill_spec,
-    create_read_skill_resource_spec,
-    skill_runtime_instructions,
-)
 from core.tools_runtime.turn_invocation import TurnInvocation
 from core.tools_runtime.tools_executor import ToolsExecutor
 
@@ -73,14 +66,6 @@ class TurnToolEnvironment:
             else ()
         )
         self.toolset_state = ToolsetLoadingState()
-        self.skill_provider = invocation.skill_provider
-        self.skill_descriptors = (
-            self.skill_provider.descriptors()
-            if self.skill_provider is not None
-            else ()
-        )
-        self.skill_state = SkillLoadingState()
-        self.skill_budget = SkillBudget()
 
     def evidence_roots(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(
@@ -90,7 +75,7 @@ class TurnToolEnvironment:
         ))
 
     def snapshot(self, runtime_mode: RuntimeMode, mode_state: Any) -> ToolEnvironmentSnapshot:
-        if self.toolset_provider is None and self.skill_provider is None:
+        if self.toolset_provider is None:
             turn_registry = self.base_registry
             turn_executor = self.base_executor
         else:
@@ -109,17 +94,6 @@ class TurnToolEnvironment:
                         continue
                     for spec in loaded_specs:
                         turn_registry.register(spec)
-            if self.skill_provider is not None:
-                turn_registry.register(create_load_skill_spec(
-                    self.skill_descriptors,
-                    self.skill_state,
-                    self.skill_provider,
-                    self.skill_budget,
-                ))
-                turn_registry.register(create_read_skill_resource_spec(
-                    self.skill_state,
-                    self.skill_provider,
-                ))
             turn_executor = ToolsExecutor(turn_registry)
 
         external_tools = turn_registry.get_tools()
@@ -147,12 +121,6 @@ class TurnToolEnvironment:
                     self.toolset_state,
                 )
             )
-        if self.skill_provider is not None:
-            runtime_prompts.extend(skill_runtime_instructions(
-                self.skill_descriptors,
-                self.skill_state,
-                self.skill_budget,
-            ))
 
         return ToolEnvironmentSnapshot(
             executor=turn_executor,

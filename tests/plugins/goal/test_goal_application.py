@@ -90,7 +90,18 @@ class FakeTurnHost:
     ):
         self.validate_turn(session_id, turn_id, user_message)
         self.used_turns.add((session_id, turn_id))
-        capability = invocation.capabilities[0]
+        capability = next(
+            item
+            for item in invocation.capabilities
+            if isinstance(
+                item,
+                (
+                    ContractCompilationCapability,
+                    GoalExecutorCapability,
+                    GoalJudgeCapability,
+                ),
+            )
+        )
         self.invocations.append(invocation)
         self.executions.append((session_id, user_message, capability))
 
@@ -167,7 +178,7 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("仍缺完整验证", executor_calls[1][1])
         self.assertTrue(all(session not in host.sessions for session in host.deleted_sessions))
 
-    async def test_executor_and_judge_receive_turn_skill_provider_and_reload_per_turn(self):
+    async def test_executor_and_judge_preserve_existing_turn_capabilities(self):
         host = FakeTurnHost([
             JudgmentSubmission(
                 JudgmentDecision.DONE,
@@ -175,25 +186,25 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
                 ("verified",),
             ),
         ])
-        skill_provider = object()
+        existing_capability = object()
 
         await self.service(host).start_goal(
             "session-1",
             "goal-1",
             "executor-1",
             "use skill",
-            invocation=TurnInvocation(skill_provider=skill_provider),
+            invocation=TurnInvocation(capabilities=(existing_capability,)),
         )
 
-        self.assertIsNone(host.invocations[0].skill_provider)
-        self.assertIs(host.invocations[1].skill_provider, skill_provider)
-        self.assertIs(host.invocations[2].skill_provider, skill_provider)
+        self.assertNotIn(existing_capability, host.invocations[0].capabilities)
+        self.assertIn(existing_capability, host.invocations[1].capabilities)
+        self.assertIn(existing_capability, host.invocations[2].capabilities)
         self.assertIsInstance(
-            host.invocations[1].capabilities[0],
+            host.invocations[1].capabilities[-1],
             GoalExecutorCapability,
         )
         self.assertIsInstance(
-            host.invocations[2].capabilities[0],
+            host.invocations[2].capabilities[-1],
             GoalJudgeCapability,
         )
 

@@ -17,10 +17,10 @@ from core.environment import (
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.tools_runtime.progressive_skills import LOAD_SKILL, READ_SKILL_RESOURCE
 from core.tools_runtime.turn_invocation import TurnInvocation
 from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
 from plugins.skills.application import SkillApplicationService
+from plugins.skills.runtime import LOAD_SKILL, READ_SKILL_RESOURCE
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -79,8 +79,8 @@ class SkillScriptEndToEndTest(unittest.IsolatedAsyncioTestCase):
             service = SkillApplicationService(workspace)
             await service.install_local(source)
             await service.set_enabled("artifact-maker", True)
-            provider = service.skill_provider
-            skill_dir = workspace.skills_root / "packages" / "artifact-maker"
+            runtime_capability = service.runtime_capability
+            skill_dir = service.skills_root / "packages" / "artifact-maker"
             command = (
                 f"& '{skill_dir / 'scripts' / 'create.ps1'}' "
                 "-OutputPath 'result.txt'"
@@ -148,7 +148,7 @@ class SkillScriptEndToEndTest(unittest.IsolatedAsyncioTestCase):
                 "create artifact",
                 context_state=ContextState(),
                 invocation=TurnInvocation(
-                    skill_provider=provider,
+                    capabilities=(runtime_capability,),
                     environment_binding=binding,
                 ),
             )

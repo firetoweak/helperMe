@@ -126,7 +126,6 @@ async def async_main(argv: list[str] | None = None) -> None:
             skill_plugin.enable_proposal_spec,
         ),
         default_toolset_provider=mcp_plugin.toolset_provider,
-        default_skill_provider=skill_plugin.skill_provider,
         approval_actions=approval_actions,
     )
     skill_plugin.service.bind_active_turn_guard(application.has_active_turns)
@@ -228,13 +227,6 @@ async def async_main(argv: list[str] | None = None) -> None:
                 print("新 Session 已创建，并已捕获最新 MCP 能力快照。")
                 continue
 
-            if user_message == "/skill reload":
-                session_id = _new_session(application)
-                log_path = _resolve_log_path()
-                last_status = None
-                print("新 Session 已创建，并已捕获最新 Skill 能力快照。")
-                continue
-
             try:
                 mcp_reply = await mcp_console.execute_if_handled(user_message)
             except McpCommandError as exc:
@@ -260,8 +252,8 @@ async def async_main(argv: list[str] | None = None) -> None:
 
             goal_loop_outcome = None
             turn_invocation = TurnInvocation(
+                capabilities=(skill_plugin.runtime_capability,),
                 toolset_provider=mcp_plugin.toolset_provider,
-                skill_provider=skill_plugin.skill_provider,
             )
 
             async def execute() -> SessionTurnOutcome:

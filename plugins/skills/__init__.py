@@ -12,7 +12,12 @@ from plugins.skills.application import SkillApplicationService, SkillInspection
 from plugins.skills.console import SkillCommandError, SkillConsoleAdapter
 from plugins.skills.package import LocalSkillPackageReader, SkillPackageError
 from plugins.skills.registry import SkillRegistry
-from plugins.skills.provider import InstalledSkillProvider
+from plugins.skills.runtime import (
+    LOAD_SKILL,
+    READ_SKILL_RESOURCE,
+    SkillRuntimeCapability,
+    SkillRuntimeError,
+)
 from plugins.skills.sources import SkillSourceError, SkillSourceRouter
 from plugins.skills.summarizer import LlmSkillDiffSummarizer, SkillDiffSummarizer
 from plugins.skills.approval import (
@@ -25,7 +30,10 @@ from plugins.skills.approval import (
 
 __all__ = [
     "LocalSkillPackageReader",
-    "InstalledSkillProvider",
+    "LOAD_SKILL",
+    "READ_SKILL_RESOURCE",
+    "SkillRuntimeCapability",
+    "SkillRuntimeError",
     "LocalSkillInstaller",
     "SkillApplicationService",
     "SkillBundle",

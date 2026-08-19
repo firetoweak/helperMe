@@ -85,7 +85,7 @@ class SkillInstallApprovalHandler:
             succeeded=True,
             message=(
                 f"Skill `{record.name}` 已安装为 disabled。"
-                "请 inspect/test 后显式 enable，再创建新 Session。"
+                "请 inspect/test 后显式 enable。"
             ),
             data={
                 "skill_id": record.name,
@@ -123,7 +123,7 @@ def create_skill_enable_proposal_spec(
                 f"主指令长度：{inspection.main_instruction_chars} chars"
             ),
             risk=(
-                "启用后，该 Skill 的外部指令会进入新 Session 能力目录；"
+                "启用后，该 Skill 的外部指令会从下一个 Turn 进入目录；"
                 "其脚本仍只在 Agent 显式调用命令时执行。"
             ),
         )
@@ -157,7 +157,7 @@ class SkillEnableApprovalHandler:
             succeeded=True,
             message=(
                 f"Skill `{record.name}` 已启用。"
-                "请创建新 Session 捕获最新 Skill 快照。"
+                "最新目录将从下一个 Turn 生效。"
             ),
             data={
                 "skill_id": record.name,

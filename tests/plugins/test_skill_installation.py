@@ -50,20 +50,18 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
+            skills_root = workspace.root / "skills"
             source = Path(directory) / "source-directory-name-differs"
             write_skill(source, name="python-testing")
             script = source / "scripts" / "run.py"
             script.parent.mkdir()
             script.write_text("print('ok')\n", encoding="utf-8")
-            registry = SkillRegistry.from_agent_workspace(workspace)
-            installer = LocalSkillInstaller.from_agent_workspace(
-                workspace,
-                registry,
-            )
+            registry = SkillRegistry(skills_root)
+            installer = LocalSkillInstaller(skills_root, registry)
 
             record = await installer.install(source)
 
-            target = workspace.skills_root / "packages" / "python-testing"
+            target = skills_root / "packages" / "python-testing"
             self.assertEqual(record.name, "python-testing")
             self.assertFalse(record.enabled)
             self.assertTrue((target / "SKILL.md").is_file())
@@ -75,10 +73,11 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
+            skills_root = workspace.root / "skills"
             source = Path(directory) / "source"
             write_skill(source, name="demo")
             installer = LocalSkillInstaller(
-                workspace.skills_root,
+                skills_root,
                 FailingRegistry(),
             )
 
@@ -86,7 +85,7 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
                 await installer.install(source)
 
             self.assertFalse(
-                (workspace.skills_root / "packages" / "demo").exists()
+                (skills_root / "packages" / "demo").exists()
             )
             self.assertEqual(list(installer.staging_root.iterdir()), [])
 
@@ -94,11 +93,15 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
+            skills_root = workspace.root / "skills"
             source = Path(directory) / "source"
             write_skill(source, name="demo")
-            orphan = workspace.skills_root / "packages" / "demo"
+            orphan = skills_root / "packages" / "demo"
             orphan.mkdir(parents=True)
-            installer = LocalSkillInstaller.from_agent_workspace(workspace)
+            installer = LocalSkillInstaller(
+                skills_root,
+                SkillRegistry(skills_root),
+            )
 
             with self.assertRaisesRegex(RuntimeError, "未登记"):
                 await installer.install(source)
@@ -107,15 +110,13 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
+            skills_root = workspace.root / "skills"
             source = Path(directory) / "source"
             write_skill(source, name="demo")
-            registry = SkillRegistry.from_agent_workspace(workspace)
-            installer = LocalSkillInstaller.from_agent_workspace(
-                workspace,
-                registry,
-            )
+            registry = SkillRegistry(skills_root)
+            installer = LocalSkillInstaller(skills_root, registry)
             await installer.install(source)
-            installed = workspace.skills_root / "packages" / "demo" / "SKILL.md"
+            installed = skills_root / "packages" / "demo" / "SKILL.md"
             original = installed.read_bytes()
             (source / "SKILL.md").write_text(
                 "---\nname: demo\ndescription: changed\n---\nchanged\n",

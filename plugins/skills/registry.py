@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 
-from core.agent_workspace import AgentWorkspace
 from plugins.skills.models import SkillRecord, utc_now
 
 
@@ -17,10 +16,6 @@ class SkillRegistry:
         self._path = self._root / "registry.json"
         self._lock = asyncio.Lock()
 
-    @classmethod
-    def from_agent_workspace(cls, workspace: AgentWorkspace) -> "SkillRegistry":
-        return cls(workspace.skills_root)
-
     @property
     def root(self) -> Path:
         return self._root
@@ -28,6 +23,10 @@ class SkillRegistry:
     @property
     def path(self) -> Path:
         return self._path
+
+    def snapshot(self) -> tuple[SkillRecord, ...]:
+        """读取一次原子文件快照，供 Turn 装配同步投影 Catalog。"""
+        return self._read_unlocked()
 
     async def list_skills(self) -> tuple[SkillRecord, ...]:
         async with self._lock:

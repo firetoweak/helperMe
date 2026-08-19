@@ -13,7 +13,7 @@ from plugins.skills.models import SkillBundle, SkillRecord, validate_skill_id
 from plugins.skills.package import LocalSkillPackageReader
 from plugins.skills.package import write_skill_bundle
 from plugins.skills.registry import SkillRegistry
-from plugins.skills.provider import InstalledSkillProvider
+from plugins.skills.runtime import SkillRuntimeCapability
 from plugins.skills.updates import SkillCandidateStore
 from plugins.skills.models import SkillUpdateCandidate, SkillUpdateReport
 from plugins.skills.models import SkillSourceRef
@@ -46,24 +46,27 @@ class SkillApplicationService:
     ) -> None:
         if max_catalog_chars <= 0:
             raise ValueError("max_catalog_chars 必须大于 0")
-        resolved_skills_root = workspace.skills_root.resolve()
+        resolved_skills_root = (workspace.root / "skills").resolve()
         if not resolved_skills_root.is_relative_to(workspace.root):
             raise ValueError("Agent Workspace skills root 不能通过链接越界")
-        self.workspace = workspace
-        self.registry = registry or SkillRegistry.from_agent_workspace(workspace)
+        if registry is not None and registry.root != resolved_skills_root:
+            raise ValueError("Skill Registry 必须属于当前 Plugin storage root")
+        self.skills_root = resolved_skills_root
+        self.registry = registry or SkillRegistry(self.skills_root)
         self.package_reader = package_reader or LocalSkillPackageReader()
         self.installer = LocalSkillInstaller(
-            workspace.skills_root,
+            self.skills_root,
             self.registry,
             self.package_reader,
         )
-        self.skill_provider = InstalledSkillProvider(
+        self.runtime_capability = SkillRuntimeCapability(
             self.registry,
             self.package_reader,
+            max_catalog_chars=max_catalog_chars,
         )
         self.max_catalog_chars = max_catalog_chars
         self.candidate_store = SkillCandidateStore(
-            workspace.skills_root,
+            self.skills_root,
             self.package_reader,
         )
         self._has_active_turns = has_active_turns or (lambda: False)
@@ -72,7 +75,7 @@ class SkillApplicationService:
         )
         self.diff_summarizer = diff_summarizer
         self.install_candidates = SkillInstallCandidateStore(
-            workspace.skills_root,
+            self.skills_root,
             self.package_reader,
         )
         self._management_lock = asyncio.Lock()
@@ -355,7 +358,7 @@ class SkillApplicationService:
         directory = (self.installer.packages_root / skill_id).resolve()
         if (
             not directory.is_relative_to(self.installer.packages_root.resolve())
-            or not directory.is_relative_to(self.workspace.skills_root.resolve())
+            or not directory.is_relative_to(self.skills_root)
         ):
             raise RuntimeError("Skill package directory 越界")
         return directory

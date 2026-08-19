@@ -33,15 +33,15 @@ class SkillConsoleAdapter:
             if action == "test":
                 return await self._test(rest)
             if action == "enable":
-                return self._with_new_session(await self._set_enabled(rest, True))
+                return self._with_next_turn(await self._set_enabled(rest, True))
             if action == "disable":
-                return self._with_new_session(await self._set_enabled(rest, False))
+                return self._with_next_turn(await self._set_enabled(rest, False))
             if action == "remove":
-                return self._with_new_session(await self._remove(rest))
+                return self._with_next_turn(await self._remove(rest))
             if action == "check-update":
                 return await self._check_update(rest)
             if action == "update":
-                return self._with_new_session(await self._update(rest))
+                return self._with_next_turn(await self._update(rest))
         except KeyError as exc:
             raise SkillCommandError(f"未找到 Skill: {exc}") from exc
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -79,7 +79,7 @@ class SkillConsoleAdapter:
         record = await self._service.install_source(source_ref)
         return (
             f"已安装 Skill `{record.name}` 为 disabled。"
-            "\n检查后执行 /skill enable 发布给新 Session。"
+            "\n检查后执行 /skill enable，从下一个 Turn 发布给模型。"
         )
 
     async def _inspect(self, rest: str) -> str:
@@ -151,8 +151,8 @@ class SkillConsoleAdapter:
         return skill_id
 
     @staticmethod
-    def _with_new_session(message: str) -> str:
-        return f"{message}\n能力集合变化仅在新 Session 生效。"
+    def _with_next_turn(message: str) -> str:
+        return f"{message}\n能力集合变化从下一个 Turn 生效。"
 
     @staticmethod
     def _help() -> str:
@@ -167,5 +167,4 @@ class SkillConsoleAdapter:
             "  /skill remove <id>"
             "\n  /skill check-update <id> [[local|url|github] <locator> [ref]]"
             "\n  /skill update <id> <candidate_hash>"
-            "\n  /skill reload"
         )

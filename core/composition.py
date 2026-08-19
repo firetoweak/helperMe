@@ -47,7 +47,6 @@ from core.tool_registry import BUILTIN_TOOL_REGISTRY
 from core.tool_registry import ToolSpec
 from core.approval import ApprovalActionRegistry
 from core.tools_runtime.progressive_toolsets import ToolsetProvider
-from core.tools_runtime.progressive_skills import SkillProvider
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tools.artifact_read import create_read_artifact_spec
 from tools import create_environment_tool_specs
@@ -76,7 +75,6 @@ def create_agent_application(
     ] = (),
     additional_tool_specs: tuple[ToolSpec, ...] = (),
     default_toolset_provider: ToolsetProvider | None = None,
-    default_skill_provider: SkillProvider | None = None,
     approval_actions: ApprovalActionRegistry | None = None,
 ) -> AgentApplication:
     if not model or not model.strip():
@@ -201,7 +199,6 @@ def create_agent_application(
         turn_runtime_factory=create_session_turn_runtime,
         delete_session_resources=artifact_drawers.delete,
         default_toolset_provider=default_toolset_provider,
-        default_skill_provider=default_skill_provider,
         environment_provider=environment_provider,
         default_environment_selection=default_environment_selection,
     )
