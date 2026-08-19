@@ -5,7 +5,13 @@ from core.messages import Conversation
 from core.model_call import InvalidLLMResponse, LLMResponse, ToolCall
 from core.model_call.client import LLMTransientError
 from core.runtime_modes import PlainMode
-from core.tools_runtime.turn_runtime import TurnControl, TurnRuntime, TurnStatus
+from core.tools_runtime.turn_invocation import TurnInvocation
+from core.tools_runtime.turn_runtime import (
+    TurnControl,
+    TurnRuntime as CoreTurnRuntime,
+    TurnStatus,
+)
+from tests.core.environment_test_support import BoundTurnRuntime as TurnRuntime
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from tests.core.llm_test_support import (
     call_result,
@@ -22,6 +28,24 @@ SUCCESS = {
     "error": None,
     "hint": None,
 }
+
+
+class TurnEnvironmentContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_turn_rejects_invocation_without_environment_binding(self):
+        runner = CoreTurnRuntime(
+            model_call_service(RecordingLLMClient([])),
+            "test-model",
+            PlainMode(),
+            context_preparation_service(),
+            **runtime_tool_dependencies(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "Environment Binding"):
+            await runner.run(
+                Conversation(),
+                "hello",
+                invocation=TurnInvocation(),
+            )
 
 
 class RecordingLLMClient:

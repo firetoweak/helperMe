@@ -3,12 +3,12 @@ from datetime import datetime, timezone
 
 from core.session.state import (
     InvalidSessionTransition,
-    Session,
     SessionEvent,
     SessionEventType,
     SessionTurnRecord,
     SessionStatus,
 )
+from tests.core.environment_test_support import BoundSession as Session
 
 
 class SessionStateTest(unittest.TestCase):

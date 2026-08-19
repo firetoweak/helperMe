@@ -8,9 +8,12 @@ from core.agent_application import AgentApplication
 from core.model_call import LLMResponse, ToolCall
 from core.observability import format_turn_log
 from core.runtime_modes import PlainMode
-from core.session import SessionRuntime
 from core.session.state import SessionEventType, SessionStatus
-from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_runtime import TurnStatus
+from tests.core.environment_test_support import (
+    BoundSessionRuntime as SessionRuntime,
+    BoundTurnRuntime as TurnRuntime,
+)
 from core.tools_runtime.turn_invocation import TurnInvocation
 from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from tests.core.llm_test_support import (
@@ -355,7 +358,15 @@ class AgentApplicationResourceLifecycleTest(
 
 class AgentApplicationSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
     async def test_one_application_operates_two_sessions_without_conversation_leak(self):
-        async def run(*, conversation, user_message, max_steps, control, context_state):
+        async def run(
+            *,
+            conversation,
+            user_message,
+            max_steps,
+            control,
+            context_state,
+            invocation,
+        ):
             conversation.add_user(user_message)
             return Mock(
                 status=TurnStatus.COMPLETED,

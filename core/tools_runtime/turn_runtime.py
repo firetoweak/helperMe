@@ -104,32 +104,30 @@ class TurnRuntime:
         max_steps: int = 50,
         control: TurnControl | None = None,
         context_state: ContextState | None = None,
-        invocation: TurnInvocation | None = None,
+        *,
+        invocation: TurnInvocation,
     ) -> TurnResult:
         checkpoints: list[Checkpoint] = []
         tools_state = ToolsState()
         evidence_recorder = TurnEvidenceRecorder()
         turn_control = control or TurnControl()
         current_context_state = context_state or ContextState()
-        current_invocation = invocation or TurnInvocation()
+        current_invocation = invocation
         environment_binding = current_invocation.environment_binding
-        if self.environment_tool_factory is not None and environment_binding is None:
+        if environment_binding is None:
             raise ValueError("Turn 缺少 Environment Binding")
         environment_tool_specs = (
             tuple(self.environment_tool_factory(environment_binding))
             if self.environment_tool_factory is not None
-            and environment_binding is not None
             else ()
         )
         agent_step_runner = AgentStepRunner(
             self.model_calls,
             self.model,
             self.context_preparation,
-            contextual_user_fragments=(
-                [render_environment_context(environment_binding)]
-                if environment_binding is not None
-                else []
-            ),
+            contextual_user_fragments=[
+                render_environment_context(environment_binding)
+            ],
         )
         tool_environment = TurnToolEnvironment(
             self.tools_executor,
@@ -140,8 +138,6 @@ class TurnRuntime:
             self.tool_result_externalizer,
         )
         for root in tool_environment.evidence_roots():
-            if environment_binding is None:
-                raise ValueError("Workspace Evidence 需要 Environment Binding")
             root_binding = environment_binding.workspace_view.get(root)
             evidence_recorder.record_environment_baseline(
                 root,

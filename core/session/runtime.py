@@ -62,11 +62,11 @@ class SessionRuntime:
         self,
         turn_runtime: TurnRuntime | None = None,
         *,
+        environment_provider: EnvironmentProvider,
+        default_environment_selection: EnvironmentSelection,
         turn_runtime_factory: Callable[[str], TurnRuntime] | None = None,
         delete_session_resources: Callable[[str], None] | None = None,
         default_toolset_provider: ToolsetProvider | None = None,
-        environment_provider: EnvironmentProvider | None = None,
-        default_environment_selection: EnvironmentSelection | None = None,
     ):
         if (turn_runtime is None) == (turn_runtime_factory is None):
             raise ValueError(
@@ -84,13 +84,6 @@ class SessionRuntime:
         self.active_controls: dict[str, TurnControl] = {}
         self._turn_locks: dict[str, asyncio.Lock] = {}
         self.default_toolset_provider = default_toolset_provider
-        if (environment_provider is None) != (
-            default_environment_selection is None
-        ):
-            raise ValueError(
-                "environment_provider 与 default_environment_selection "
-                "必须同时提供"
-            )
         self.environment_provider = environment_provider
         self.default_environment_selection = default_environment_selection
 
@@ -316,13 +309,9 @@ class SessionRuntime:
         if any(record.turn_id == turn_id for record in session.turn_records):
             raise ValueError(f"重复 turn_id: {turn_id}")
 
-        effective_invocation = (
-            await self._resolve_environment_invocation(
-                session,
-                invocation or TurnInvocation(),
-            )
-            if self.environment_provider is not None
-            else invocation
+        effective_invocation = await self._resolve_environment_invocation(
+            session,
+            invocation or TurnInvocation(),
         )
 
         turn_control = TurnControl()
@@ -388,14 +377,10 @@ class SessionRuntime:
         session: Session,
         invocation: TurnInvocation,
     ) -> TurnInvocation:
-        if self.environment_provider is None:
-            return invocation
         selection = (
             invocation.environment_selection
             or session.default_environment_selection
         )
-        if selection is None:
-            raise RuntimeError("Session 缺少默认 Environment Selection")
         binding = await self.environment_provider.attach(selection)
         if invocation.environment_selection is not None:
             session.default_environment_selection = selection
@@ -409,7 +394,7 @@ class SessionRuntime:
         user_message: str,
         max_steps: int,
         control: TurnControl,
-        invocation: TurnInvocation | None,
+        invocation: TurnInvocation,
     ) -> SessionTurnOutcome:
         turn_runtime = self._session_turn_runtimes.get(
             session.id,
@@ -422,7 +407,7 @@ class SessionRuntime:
             control=control,
             context_state=session.context_state,
         )
-        effective_invocation = invocation or TurnInvocation()
+        effective_invocation = invocation
         provider = effective_invocation.toolset_provider
         if provider is not None and session.capability_snapshot is not None:
             effective_invocation = replace(
@@ -432,8 +417,7 @@ class SessionRuntime:
                     session.capability_snapshot,
                 ),
             )
-        if invocation is not None:
-            turn_arguments["invocation"] = effective_invocation
+        turn_arguments["invocation"] = effective_invocation
         result = await turn_runtime.run(**turn_arguments)
         if isinstance(result.approval_request, ApprovalRequest):
             if result.status is not TurnStatus.BLOCKED:

@@ -17,6 +17,13 @@ from core.context import (
     ModelBudgetConfig,
     TiktokenTokenEstimator,
 )
+from core.environment import (
+    EnvironmentSelection,
+    LocalEnvironmentProvider,
+    RootBinding,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+)
 from core.model_call.service import ModelCallService
 from core.prompt import DEFAULT_AGENT_PROMPT
 from core.runtime_artifacts import ToolResultExternalizer, ToolResultLimit
@@ -24,6 +31,8 @@ from core.runtime_modes import PlainMode, TurnMode, RuntimeModeRouter
 from core.session import SessionRuntime
 from core.todos import TodoMode
 from core.tools_runtime.turn_runtime import TurnRuntime
+from tools import create_environment_tool_specs
+from tools.powershell_runner import PowerShellCommandRunner
 from tests.benchmarks.phase5_dehydration_ab import (
     ContentAddressedArtifactStore,
     INPUT_BUDGET_RATIO,
@@ -139,9 +148,24 @@ def build_turn_granularity_application(
             artifact_store,
             ToolResultLimit(),
         ),
+        environment_tool_factory=create_environment_tool_specs,
+    )
+    runner = PowerShellCommandRunner()
+    provider = LocalEnvironmentProvider(runner)
+    workspace_view = WorkspaceViewSnapshot((
+        RootBinding("project", WorkspaceScope.TASK, WORKSPACE_ROOT),
+    ))
+    selection = EnvironmentSelection(
+        provider.environment_id,
+        workspace_view,
+        str(WORKSPACE_ROOT),
     )
     return AgentApplication(
-        session_runtime=SessionRuntime(turn_runtime=turn_runtime),
+        session_runtime=SessionRuntime(
+            turn_runtime=turn_runtime,
+            environment_provider=provider,
+            default_environment_selection=selection,
+        ),
         system_prompt=DEFAULT_AGENT_PROMPT,
     )
 

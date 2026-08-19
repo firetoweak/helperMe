@@ -19,7 +19,8 @@ from core.tools_runtime.progressive_toolsets import (
     ToolsetLoadingState,
     create_load_toolset_spec,
 )
-from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_runtime import TurnStatus
+from tests.core.environment_test_support import BoundTurnRuntime as TurnRuntime
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,

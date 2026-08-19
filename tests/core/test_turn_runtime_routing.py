@@ -11,7 +11,7 @@ from core.model_call import (
 from core.runtime_modes import PlainMode
 from core.runtime_modes.router import TurnMode, RuntimeModeRouter
 from core.todos import TodoMode
-from core.tools_runtime.turn_runtime import TurnRuntime
+from tests.core.environment_test_support import BoundTurnRuntime as TurnRuntime
 from core.tools_runtime import TurnInvocation
 from tests.core.llm_test_support import (
     call_result,

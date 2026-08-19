@@ -53,8 +53,7 @@
 
 ✓ Workspace
 
-有：基础工作空间；Phase 5.5 已补充由 Composition Root 配置并注入的多根轻量路径沙箱。每个 root 使用独立 WorkspaceSandbox，文件工具只接受 root 名称与 root 内相对路径。
-边界：只约束经过 Workspace 工具的路径访问，不做进程/容器隔离。
+后续状态：旧 `WorkspaceSandbox + root + relative path` 模型已删除。当前唯一主链为 `EnvironmentSelection → EnvironmentBinding → EnvironmentPathResolver`；文件工具与命令工具共享路径契约，Workspace roots 只承担归属、可见性和权限边界。进程/容器隔离仍属后续 Sandbox 工作。
 
 ✓ Verification
 

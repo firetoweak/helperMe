@@ -1,5 +1,7 @@
 ## Phase 5 · Context Management 总结
 
+> 历史快照：本文保留 Phase 5 完成时的能力与验收记录。其 WorkspaceSandbox、逻辑 root 和 `root + relative path` 描述已被后续 Environment 架构替代，不形成兼容主链。当前唯一契约见 [工作区语义与工具路径契约](../专题/工作区语义与工具路径契约.md)。
+
 状态：完成（2026.08.07）。
 
 Phase 5 建立了同一 Session 内的上下文管理与真实 Workspace 工作闭环。Conversation 保存完整协议事实；ContextState 保存可持续更新的最小压缩状态；ModelContext 是某一轮发送给模型的临时投影。Workspace 内容和命令副作用仍是外部事实，只有经过工具读取与验证后才进入模型判断。
