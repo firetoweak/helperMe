@@ -1,5 +1,7 @@
 ## Phase 5.7 Command Execution 总结
 
+> 历史快照：命令执行能力仍然有效，但本文的逻辑 root 入口与 `WorkspaceSandbox` cwd 解析已废止并删除。当前命令 cwd 与文件 path 共用 `EnvironmentPathResolver`，唯一契约见 [工作区语义与工具路径契约](../专题/工作区语义与工具路径契约.md)。
+
 状态：完成（第一版实现、行为测试与真实 Agent Benchmark 均已通过，2026.08.07）。
 
 ### 完成内容

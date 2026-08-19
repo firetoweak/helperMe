@@ -1,5 +1,7 @@
 ## Phase 5.6 Workspace Retrieval 总结（完成于 2026.08.05）
 
+> 历史快照：文件回取能力仍然有效，但本文的 `get_workspace_info` 和 `root + 相对 path` 入口已废止并删除，不是兼容路径。当前文件工具统一接受 Environment path，唯一契约见 [工作区语义与工具路径契约](../专题/工作区语义与工具路径契约.md)。
+
 目标：在 Workspace Sandbox 边界内提供有界、真实且可继续的只读回取工具；Workspace 仍是外部事实源，不自动注入 ModelContext。
 
 核心结论：Workspace Retrieval 是模型显式调用的工具链，不是统一检索层。`glob` 按名称找路径，`grep` 按内容找匹配行，`read_file` 按行读取正文；三者通过窄结果逐步收敛信息需求。

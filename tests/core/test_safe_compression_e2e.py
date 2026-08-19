@@ -15,9 +15,12 @@ from core.model_call import LLMResponse, ToolCall
 from core.model_call.service import ModelCallService
 from core.runtime_artifacts import ToolResultExternalizer, ToolResultLimit
 from core.runtime_modes import PlainMode
-from core.session import SessionRuntime
 from core.tool_registry import EmptyInput, PydanticParameters, ToolRegistry, ToolSpec
-from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_runtime import TurnStatus
+from tests.core.environment_test_support import (
+    BoundSessionRuntime as SessionRuntime,
+    BoundTurnRuntime as TurnRuntime,
+)
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tests.core.llm_test_support import (
     CharacterEstimator,
@@ -110,7 +113,7 @@ class SafeCompressionEndToEndTest(unittest.IsolatedAsyncioTestCase):
             turn_runtime=make_runtime(
                 llm_client=llm_client,
                 summary_generator=summary_generator,
-                context_limit=300,
+                context_limit=1_000,
             )
         )
         session = session_runtime.create_session("session-1", "system")

@@ -8,7 +8,7 @@ from core.model_call import LLMCallResult, LLMResponse, ToolCall
 from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.model_call.service import ModelCallBlocked
 from core.todos import TodoMode
-from core.tools_runtime.turn_runtime import TurnRuntime
+from tests.core.environment_test_support import BoundTurnRuntime as TurnRuntime
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,

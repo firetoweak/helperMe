@@ -17,7 +17,7 @@ from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.tool_registry import EmptyInput, PydanticParameters, ToolRegistry, ToolSpec
-from core.tools_runtime.turn_runtime import TurnRuntime
+from tests.core.environment_test_support import BoundTurnRuntime as TurnRuntime
 from core.tools_runtime.tools_executor import ToolsExecutor, encode_tool_result
 from tools.artifact_read import create_read_artifact_spec
 from tests.core.llm_test_support import (

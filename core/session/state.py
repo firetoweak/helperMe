@@ -96,7 +96,7 @@ NON_TRANSITION_EVENT_KINDS = {
 @dataclass
 class Session:
     id: str
-    default_environment_selection: EnvironmentSelection | None = None
+    default_environment_selection: EnvironmentSelection
     conversation: Conversation = field(default_factory=Conversation)
     context_state: ContextState = field(default_factory=ContextState)
     status: SessionStatus = SessionStatus.PENDING

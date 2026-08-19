@@ -14,11 +14,14 @@ from core.context import ContextState
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.session import SessionRuntime
 from core.session.state import SessionStatus
 from core.tool_registry import PydanticParameters, ToolSpec
 from core.tools_runtime.turn_evidence import TurnEvidence
-from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_runtime import TurnStatus
+from tests.core.environment_test_support import (
+    BoundSessionRuntime as SessionRuntime,
+    BoundTurnRuntime as TurnRuntime,
+)
 from core.tools_runtime.turn_types import TurnResult
 from tests.core.llm_test_support import (
     call_result,

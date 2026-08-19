@@ -13,7 +13,7 @@ from core.environment import (
     WorkspaceScope,
     WorkspaceViewSnapshot,
 )
-from core.session import MAX_USER_MESSAGE_CHARS, SessionRuntime
+from core.session import MAX_USER_MESSAGE_CHARS
 from core.session.state import (
     Session,
     SessionEvent,
@@ -22,6 +22,9 @@ from core.session.state import (
 )
 from core.tools_runtime.turn_runtime import TurnStatus
 from core.tools_runtime.turn_invocation import TurnInvocation
+from tests.core.environment_test_support import (
+    BoundSessionRuntime as SessionRuntime,
+)
 
 
 class SessionRuntimeCreateSessionTest(unittest.IsolatedAsyncioTestCase):
@@ -159,7 +162,15 @@ class SessionRuntimeStartTest(unittest.IsolatedAsyncioTestCase):
     async def test_start_exposes_control_during_turn_and_cleans_it_afterwards(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")
 
-        def run(*, conversation, user_message, max_steps, control, context_state):
+        def run(
+            *,
+            conversation,
+            user_message,
+            max_steps,
+            control,
+            context_state,
+            invocation,
+        ):
             self.assertIs(conversation, session.conversation)
             self.assertEqual(user_message, "完成任务")
             self.assertEqual(max_steps, 20)
@@ -305,7 +316,15 @@ class SessionRuntimeRequestInterruptTest(unittest.IsolatedAsyncioTestCase):
     async def test_request_interrupt_marks_active_control_without_early_transition(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")
 
-        def run(*, conversation, user_message, max_steps, control, context_state):
+        def run(
+            *,
+            conversation,
+            user_message,
+            max_steps,
+            control,
+            context_state,
+            invocation,
+        ):
             self.runtime.request_interrupt(session.id, "用户请求暂停")
 
             self.assertTrue(control.interrupt_requested)
@@ -378,7 +397,15 @@ class SessionRuntimeResumeTest(unittest.IsolatedAsyncioTestCase):
         self.turn_runtime.reset_mock()
 
     async def test_resume_starts_new_turn_from_interrupted_session(self):
-        def run(*, conversation, user_message, max_steps, control, context_state):
+        def run(
+            *,
+            conversation,
+            user_message,
+            max_steps,
+            control,
+            context_state,
+            invocation,
+        ):
             self.assertIs(conversation, self.session.conversation)
             self.assertEqual(user_message, "继续完成剩余任务")
             self.assertEqual(max_steps, 20)

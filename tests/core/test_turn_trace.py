@@ -5,9 +5,12 @@ from core.context import ContextState, make_budget_assessment
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
-from core.session import SessionRuntime
 from core.session.state import SessionEvent
-from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_runtime import TurnStatus
+from tests.core.environment_test_support import (
+    BoundSessionRuntime as SessionRuntime,
+    BoundTurnRuntime as TurnRuntime,
+)
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
@@ -45,11 +48,17 @@ class TurnTraceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.data["attempt"], 1)
         self.assertEqual(request.data["runtime_prompts"], [])
         self.assertEqual(
-            request.data["messages"],
-            [
-                {"role": "system", "content": "system prompt"},
-                {"role": "user", "content": "hello"},
-            ],
+            request.data["messages"][0],
+            {"role": "system", "content": "system prompt"},
+        )
+        self.assertTrue(
+            request.data["messages"][1]["content"].startswith(
+                "<environment_context>"
+            )
+        )
+        self.assertEqual(
+            request.data["messages"][2],
+            {"role": "user", "content": "hello"},
         )
 
     async def test_agent_step_emits_context_prepared_with_role_breakdown(self):

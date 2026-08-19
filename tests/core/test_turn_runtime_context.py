@@ -17,7 +17,8 @@ from core.model_call import LLMResponse
 from core.model_call.client import LLMContextLengthError, LLMTransientError
 from core.model_call.service import ModelCallBlocked
 from core.runtime_modes import PlainMode
-from core.tools_runtime.turn_runtime import TurnRuntime, TurnStatus
+from core.tools_runtime.turn_runtime import TurnStatus
+from tests.core.environment_test_support import BoundTurnRuntime as TurnRuntime
 from tests.core.llm_test_support import (
     call_result,
     context_preparation_service,
