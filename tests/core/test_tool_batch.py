@@ -1,15 +1,154 @@
 import asyncio
 import unittest
 
+from pydantic import BaseModel
+
 from core.model_call.types import ToolCall
 from core.runtime_modes.plain import PlainMode
+from core.tool_registry import PydanticParameters, ToolSpec
 from core.tools_runtime.turn_evidence import TurnEvidenceRecorder
 from core.tools_runtime.tool_batch import ConcurrentToolBatchExecutor
 from core.tools_runtime.tools_state import ToolsState
 from tests.core.llm_test_support import runtime_tool_dependencies
 
 
+class BatchInput(BaseModel):
+    value: str = ""
+
+
 class ConcurrentToolBatchExecutorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_exclusive_tool_rejects_entire_mixed_batch_before_handlers(self):
+        dependencies = runtime_tool_dependencies()
+        executions: list[str] = []
+
+        async def exclusive(_input):
+            executions.append("exclusive")
+            return {"ok": True, "code": "LOADED"}
+
+        async def ordinary(_input):
+            executions.append("ordinary")
+            return {"ok": True, "code": "READ"}
+
+        dependencies["tools_executor"].registry.register(ToolSpec(
+            name="load_skill",
+            description="load",
+            parameters=PydanticParameters(BatchInput),
+            handler=exclusive,
+            exclusive_batch=True,
+        ))
+        dependencies["tools_executor"].registry.register(ToolSpec(
+            name="read_file_for_batch_test",
+            description="read",
+            parameters=PydanticParameters(BatchInput),
+            handler=ordinary,
+        ))
+        tools_state = ToolsState()
+        evidence = TurnEvidenceRecorder()
+
+        outcome = await ConcurrentToolBatchExecutor(
+            dependencies["tool_result_externalizer"]
+        ).execute(
+            calls=(
+                ToolCall("call-1", "load_skill", '{}'),
+                ToolCall("call-2", "read_file_for_batch_test", '{}'),
+            ),
+            tools_executor=dependencies["tools_executor"],
+            runtime_mode=PlainMode(),
+            mode_state=None,
+            tools_state=tools_state,
+            evidence_recorder=evidence,
+        )
+
+        self.assertEqual(executions, [])
+        self.assertEqual(
+            [step.result["code"] for step in evidence.snapshot().steps],
+            [
+                "EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+                "EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+            ],
+        )
+        self.assertEqual([step.ok for step in outcome.steps], [False, False])
+        self.assertEqual(tools_state.summary(), {
+            "total": 2,
+            "pending": 0,
+            "failed": 2,
+        })
+
+    async def test_two_exclusive_calls_reject_entire_batch(self):
+        dependencies = runtime_tool_dependencies()
+        executions: list[str] = []
+
+        async def exclusive(_input):
+            executions.append("exclusive")
+            return {"ok": True, "code": "LOADED"}
+
+        dependencies["tools_executor"].registry.register(ToolSpec(
+            name="load_skill",
+            description="load",
+            parameters=PydanticParameters(BatchInput),
+            handler=exclusive,
+            exclusive_batch=True,
+        ))
+        evidence = TurnEvidenceRecorder()
+
+        await ConcurrentToolBatchExecutor(
+            dependencies["tool_result_externalizer"]
+        ).execute(
+            calls=(
+                ToolCall("call-1", "load_skill", '{"value":"one"}'),
+                ToolCall("call-2", "load_skill", '{"value":"two"}'),
+            ),
+            tools_executor=dependencies["tools_executor"],
+            runtime_mode=PlainMode(),
+            mode_state=None,
+            tools_state=ToolsState(),
+            evidence_recorder=evidence,
+        )
+
+        self.assertEqual(executions, [])
+        self.assertEqual(
+            [step.result["code"] for step in evidence.snapshot().steps],
+            [
+                "EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+                "EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+            ],
+        )
+
+    async def test_single_exclusive_tool_executes_normally(self):
+        dependencies = runtime_tool_dependencies()
+        executions: list[str] = []
+
+        async def exclusive(input_data):
+            executions.append(input_data.value)
+            return {"ok": True, "code": "LOADED"}
+
+        dependencies["tools_executor"].registry.register(ToolSpec(
+            name="load_skill",
+            description="load",
+            parameters=PydanticParameters(BatchInput),
+            handler=exclusive,
+            exclusive_batch=True,
+        ))
+        evidence = TurnEvidenceRecorder()
+
+        await ConcurrentToolBatchExecutor(
+            dependencies["tool_result_externalizer"]
+        ).execute(
+            calls=(ToolCall(
+                "call-1",
+                "load_skill",
+                '{"value":"pdf"}',
+            ),),
+            tools_executor=dependencies["tools_executor"],
+            runtime_mode=PlainMode(),
+            mode_state=None,
+            tools_state=ToolsState(),
+            evidence_recorder=evidence,
+        )
+
+        self.assertEqual(executions, ["pdf"])
+        self.assertEqual(evidence.snapshot().steps[0].result["code"], "LOADED")
+
     async def test_executes_concurrently_and_commits_results_in_source_order(self):
         dependencies = runtime_tool_dependencies()
         tools_executor = dependencies["tools_executor"]

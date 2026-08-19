@@ -46,25 +46,30 @@ class ConcurrentToolBatchExecutor:
         result_chars_after = 0
         externalized_count = 0
 
-        boundary_calls = tuple(
+        exclusive_calls = tuple(
             call
             for call in calls
-            if tools_executor.is_control_boundary(call.name)
+            if tools_executor.requires_exclusive_batch(call.name)
         )
 
         async def execute_call(
             call: ToolCall,
         ) -> dict[str, Any] | ApprovalRequest:
-            if boundary_calls and len(calls) != 1:
+            if exclusive_calls and len(calls) != 1:
                 return {
                     "ok": False,
-                    "code": "CONTROL_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+                    "code": "EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH",
                     "data": {
                         "tool_name": call.name,
+                        "exclusive_tools": [
+                            item.name for item in exclusive_calls
+                        ],
                         "batch_size": len(calls),
                     },
-                    "error": "控制工具必须单独调用；本批工具均未执行",
-                    "hint": "下一个 AgentStep 只提交需要审批的控制工具。",
+                    "error": "独占工具必须单独调用；本批工具均未执行",
+                    "hint": (
+                        "下一个 AgentStep 只提交一个需要独占批次的工具调用。"
+                    ),
                 }
             if runtime_mode.handles_tool(call.name):
                 return await runtime_mode.execute_tool(

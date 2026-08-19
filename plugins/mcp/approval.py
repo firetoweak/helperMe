@@ -134,6 +134,7 @@ def create_mcp_install_proposal_spec() -> ToolSpec:
         parameters=PydanticParameters(McpInstallProposalInput),
         handler=propose,
         control_boundary=True,
+        exclusive_batch=True,
     )
 
 
@@ -251,6 +252,7 @@ def create_mcp_recovery_proposal_spec(
         parameters=PydanticParameters(McpRecoveryProposalInput),
         handler=propose,
         control_boundary=True,
+        exclusive_batch=True,
     )
 
 

@@ -4,6 +4,7 @@ from typing import Callable
 from uuid import uuid4
 
 from plugins.goal.application import GoalApplicationService, GoalLoopOutcome
+from core.tools_runtime.turn_invocation import TurnInvocation
 
 
 class GoalCommandError(ValueError):
@@ -26,6 +27,7 @@ class GoalConsoleAdapter:
         session_id: str,
         turn_id: str,
         user_message: str,
+        invocation: TurnInvocation | None = None,
     ) -> GoalLoopOutcome | None:
         objective = self._goal_objective(user_message)
         active = self._service.active_goal(session_id)
@@ -38,6 +40,7 @@ class GoalConsoleAdapter:
                 self._goal_id_factory(),
                 turn_id,
                 objective,
+                invocation=invocation,
             )
 
         if active is None:
@@ -47,6 +50,7 @@ class GoalConsoleAdapter:
             active.id,
             turn_id,
             user_message,
+            invocation=invocation,
         )
 
     def request_pause(self, session_id: str) -> bool:

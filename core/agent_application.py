@@ -90,6 +90,9 @@ class AgentApplication:
         if self._session_runtime.active_controls:
             raise RuntimeError("AgentApplication 仍有活动 Turn，不能关闭资源")
 
+    def has_active_turns(self) -> bool:
+        return bool(self._session_runtime.active_controls)
+
     def create_session(self, session_id: str) -> str:
         self._require_started()
         self._session_runtime.create_session(

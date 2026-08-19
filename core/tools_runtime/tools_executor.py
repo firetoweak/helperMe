@@ -102,3 +102,7 @@ class ToolsExecutor:
     def is_control_boundary(self, tool_name: str) -> bool:
         spec = self.registry.get(tool_name)
         return spec is not None and spec.control_boundary
+
+    def requires_exclusive_batch(self, tool_name: str) -> bool:
+        spec = self.registry.get(tool_name)
+        return spec is not None and spec.exclusive_batch

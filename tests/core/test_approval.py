@@ -81,6 +81,7 @@ class ApprovalRuntimeTest(unittest.IsolatedAsyncioTestCase):
             parameters=PydanticParameters(ProposalInput),
             handler=propose,
             control_boundary=True,
+            exclusive_batch=True,
         )
         client = RecordingClient([
             LLMResponse(calls=(ToolCall(
@@ -129,6 +130,7 @@ class ApprovalRuntimeTest(unittest.IsolatedAsyncioTestCase):
             PydanticParameters(ProposalInput),
             propose,
             control_boundary=True,
+            exclusive_batch=True,
         )
         mutation = ToolSpec(
             "mutate",
@@ -154,8 +156,8 @@ class ApprovalRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item.result["code"] for item in result.evidence.steps],
             [
-                "CONTROL_TOOL_REQUIRES_EXCLUSIVE_BATCH",
-                "CONTROL_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+                "EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH",
+                "EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH",
             ],
         )
 

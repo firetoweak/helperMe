@@ -1,5 +1,8 @@
 # Phase 6D · Skill Progressive Loading
 
+> 状态：第一版实现与真实模型 Benchmark 完成（2026-08-20）。
+> 实现结论与验收证据见[Phase 6D 实现总结](phase_6D实现总结.md)。
+
 ## 目标
 
 让 HelperMe 能安装和管理持久 Skill，并在单次 Turn 中按需加载其主指令与 supporting files，避免在 Turn 开始时注入全部 Skill 正文。

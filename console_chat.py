@@ -25,6 +25,9 @@ from plugins.goal.composition import create_goal_plugin
 from plugins.goal.console import GoalCommandError, GoalConsoleAdapter
 from plugins.mcp.composition import create_mcp_plugin
 from plugins.mcp.console import McpCommandError, McpConsoleAdapter
+from plugins.skills.composition import create_skill_plugin
+from plugins.skills.console import SkillCommandError, SkillConsoleAdapter
+from plugins.skills.summarizer import LlmSkillDiffSummarizer
 from core.tools_runtime.turn_invocation import TurnInvocation
 from core.environment import FilesystemAccessMode
 from core.approval import ApprovalActionRegistry
@@ -88,9 +91,15 @@ async def async_main(argv: list[str] | None = None) -> None:
     llm_client = LLMClient(model_config)
     agent_workspace = AgentWorkspace.default()
     mcp_plugin = create_mcp_plugin(agent_workspace)
+    skill_plugin = create_skill_plugin(
+        agent_workspace,
+        diff_summarizer=LlmSkillDiffSummarizer(llm_client, model),
+    )
     approval_actions = ApprovalActionRegistry()
     approval_actions.register(mcp_plugin.install_approval_handler)
     approval_actions.register(mcp_plugin.recovery_approval_handler)
+    approval_actions.register(skill_plugin.install_approval_handler)
+    approval_actions.register(skill_plugin.enable_approval_handler)
     application = create_agent_application(
         model,
         model_context_limit=runtime_config.model_context_limit,
@@ -112,10 +121,15 @@ async def async_main(argv: list[str] | None = None) -> None:
             mcp_plugin.install_proposal_spec,
             *mcp_plugin.management_specs,
             mcp_plugin.recovery_proposal_spec,
+            skill_plugin.install_proposal_spec,
+            *skill_plugin.management_specs,
+            skill_plugin.enable_proposal_spec,
         ),
         default_toolset_provider=mcp_plugin.toolset_provider,
+        default_skill_provider=skill_plugin.skill_provider,
         approval_actions=approval_actions,
     )
+    skill_plugin.service.bind_active_turn_guard(application.has_active_turns)
     async with application:
         session_id = _new_session(application)
         goal_console = GoalConsoleAdapter(
@@ -125,6 +139,7 @@ async def async_main(argv: list[str] | None = None) -> None:
             )
         )
         mcp_console = McpConsoleAdapter(mcp_plugin.service)
+        skill_console = SkillConsoleAdapter(skill_plugin.service)
         log_path = _resolve_log_path()
         last_status: TurnStatus | None = None
 
@@ -143,6 +158,7 @@ async def async_main(argv: list[str] | None = None) -> None:
         print("在输入提示处按 Ctrl+C 或 Ctrl+D 退出。")
         print("新建会话：输入 /new")
         print("MCP 管理：输入 /mcp help")
+        print("Skill 管理：输入 /skill help")
         print(f"日志路径：{log_path}")
 
         while True:
@@ -175,6 +191,11 @@ async def async_main(argv: list[str] | None = None) -> None:
 
             pending_approval = application.pending_approval(session_id)
             if pending_approval is not None:
+                approval_domain = (
+                    "Skill"
+                    if pending_approval.action.startswith("skill.")
+                    else "MCP"
+                )
                 if user_message not in {"yes", "no"}:
                     print(
                         "\n当前操作正在等待审批。"
@@ -186,12 +207,12 @@ async def async_main(argv: list[str] | None = None) -> None:
                     user_message,
                 )
                 if resolution.decision == "rejected":
-                    print("\nMCP 操作已取消。")
+                    print(f"\n{approval_domain} 操作已取消。")
                     last_status = None
                     continue
                 execution = resolution.execution
-                print(f"\nMCP：\n{execution.message}")
-                if execution.succeeded:
+                print(f"\n{approval_domain}：\n{execution.message}")
+                if execution.succeeded and approval_domain == "MCP":
                     session_id = _new_session(application)
                     log_path = _resolve_log_path()
                     last_status = None
@@ -207,6 +228,13 @@ async def async_main(argv: list[str] | None = None) -> None:
                 print("新 Session 已创建，并已捕获最新 MCP 能力快照。")
                 continue
 
+            if user_message == "/skill reload":
+                session_id = _new_session(application)
+                log_path = _resolve_log_path()
+                last_status = None
+                print("新 Session 已创建，并已捕获最新 Skill 能力快照。")
+                continue
+
             try:
                 mcp_reply = await mcp_console.execute_if_handled(user_message)
             except McpCommandError as exc:
@@ -216,12 +244,24 @@ async def async_main(argv: list[str] | None = None) -> None:
                 print(f"\nMCP：\n{mcp_reply}")
                 continue
 
+            try:
+                skill_reply = await skill_console.execute_if_handled(
+                    user_message
+                )
+            except SkillCommandError as exc:
+                print(f"\nSkill 命令错误：{exc}")
+                continue
+            if skill_reply is not None:
+                print(f"\nSkill：\n{skill_reply}")
+                continue
+
             started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             turn_id = f"turn-{uuid4().hex}"
 
             goal_loop_outcome = None
             turn_invocation = TurnInvocation(
                 toolset_provider=mcp_plugin.toolset_provider,
+                skill_provider=skill_plugin.skill_provider,
             )
 
             async def execute() -> SessionTurnOutcome:
@@ -230,6 +270,7 @@ async def async_main(argv: list[str] | None = None) -> None:
                     session_id,
                     turn_id,
                     user_message,
+                    invocation=turn_invocation,
                 )
                 if goal_loop_outcome is not None:
                     return goal_loop_outcome.final_session_outcome

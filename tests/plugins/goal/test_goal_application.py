@@ -10,6 +10,7 @@ from core.model_call import LLMResponse, ToolCall
 from core.runtime_modes import PlainMode
 from core.tools_runtime.turn_evidence import TurnEvidence
 from core.tools_runtime.turn_runtime import TurnStatus
+from core.tools_runtime.turn_invocation import TurnInvocation
 from plugins.goal.application import GoalApplicationService
 from plugins.goal.capabilities import (
     ContractCompilationCapability,
@@ -54,6 +55,7 @@ class FakeTurnHost:
         self.used_turns = set()
         self.judgments = iter(judgments)
         self.executions = []
+        self.invocations = []
         self.deleted_sessions = []
 
     def create_session(self, session_id):
@@ -89,6 +91,7 @@ class FakeTurnHost:
         self.validate_turn(session_id, turn_id, user_message)
         self.used_turns.add((session_id, turn_id))
         capability = invocation.capabilities[0]
+        self.invocations.append(invocation)
         self.executions.append((session_id, user_message, capability))
 
         if isinstance(capability, ContractCompilationCapability):
@@ -163,6 +166,36 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item[0] != "session-1" for item in judge_calls))
         self.assertIn("仍缺完整验证", executor_calls[1][1])
         self.assertTrue(all(session not in host.sessions for session in host.deleted_sessions))
+
+    async def test_executor_and_judge_receive_turn_skill_provider_and_reload_per_turn(self):
+        host = FakeTurnHost([
+            JudgmentSubmission(
+                JudgmentDecision.DONE,
+                "done",
+                ("verified",),
+            ),
+        ])
+        skill_provider = object()
+
+        await self.service(host).start_goal(
+            "session-1",
+            "goal-1",
+            "executor-1",
+            "use skill",
+            invocation=TurnInvocation(skill_provider=skill_provider),
+        )
+
+        self.assertIsNone(host.invocations[0].skill_provider)
+        self.assertIs(host.invocations[1].skill_provider, skill_provider)
+        self.assertIs(host.invocations[2].skill_provider, skill_provider)
+        self.assertIsInstance(
+            host.invocations[1].capabilities[0],
+            GoalExecutorCapability,
+        )
+        self.assertIsInstance(
+            host.invocations[2].capabilities[0],
+            GoalJudgeCapability,
+        )
 
     async def test_continue_at_max_turns_becomes_exhausted(self):
         host = FakeTurnHost(

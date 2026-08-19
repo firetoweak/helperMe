@@ -18,6 +18,11 @@ from core.tools_runtime.progressive_toolsets import (
     SnapshotToolsetProvider,
     ToolsetProvider,
 )
+from core.tools_runtime.progressive_skills import (
+    SessionSkillSnapshot,
+    SkillProvider,
+    SnapshotSkillProvider,
+)
 from core.approval import ApprovalRequest
 from core.session.state import (
     Session,
@@ -67,6 +72,7 @@ class SessionRuntime:
         turn_runtime_factory: Callable[[str], TurnRuntime] | None = None,
         delete_session_resources: Callable[[str], None] | None = None,
         default_toolset_provider: ToolsetProvider | None = None,
+        default_skill_provider: SkillProvider | None = None,
     ):
         if (turn_runtime is None) == (turn_runtime_factory is None):
             raise ValueError(
@@ -84,6 +90,7 @@ class SessionRuntime:
         self.active_controls: dict[str, TurnControl] = {}
         self._turn_locks: dict[str, asyncio.Lock] = {}
         self.default_toolset_provider = default_toolset_provider
+        self.default_skill_provider = default_skill_provider
         self.environment_provider = environment_provider
         self.default_environment_selection = default_environment_selection
 
@@ -107,6 +114,11 @@ class SessionRuntime:
                     self.default_toolset_provider
                 )
                 if self.default_toolset_provider is not None
+                else None
+            ),
+            skill_snapshot=(
+                SessionSkillSnapshot.capture(self.default_skill_provider)
+                if self.default_skill_provider is not None
                 else None
             ),
         )
@@ -415,6 +427,15 @@ class SessionRuntime:
                 toolset_provider=SnapshotToolsetProvider(
                     provider,
                     session.capability_snapshot,
+                ),
+            )
+        skill_provider = effective_invocation.skill_provider
+        if skill_provider is not None and session.skill_snapshot is not None:
+            effective_invocation = replace(
+                effective_invocation,
+                skill_provider=SnapshotSkillProvider(
+                    skill_provider,
+                    session.skill_snapshot,
                 ),
             )
         turn_arguments["invocation"] = effective_invocation

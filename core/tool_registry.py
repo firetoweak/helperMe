@@ -99,6 +99,7 @@ class ToolSpec:
         Awaitable[dict[str, Any] | ApprovalRequest],
     ]
     control_boundary: bool = False
+    exclusive_batch: bool = False
 
     def to_openai_tool(self) -> dict[str, Any]:
         """导出当前 OpenAI-compatible 模型接口所需的工具格式。"""
@@ -162,6 +163,7 @@ def pydantic_tool_spec(
         Awaitable[dict[str, Any] | ApprovalRequest],
     ],
     control_boundary: bool = False,
+    exclusive_batch: bool = False,
 ) -> ToolSpec:
     return ToolSpec(
         name=name,
@@ -169,6 +171,7 @@ def pydantic_tool_spec(
         parameters=PydanticParameters(input_model),
         handler=handler,
         control_boundary=control_boundary,
+        exclusive_batch=exclusive_batch,
     )
 
 

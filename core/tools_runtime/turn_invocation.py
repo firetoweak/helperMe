@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from core.environment import EnvironmentBinding, EnvironmentSelection
     from core.runtime_modes import RuntimeMode
     from core.tools_runtime.progressive_toolsets import ToolsetProvider
+    from core.tools_runtime.progressive_skills import SkillProvider
 
 
 class TurnCapability(Protocol):
@@ -36,6 +37,7 @@ class TurnCapability(Protocol):
 class TurnInvocation:
     capabilities: tuple[TurnCapability, ...] = ()
     toolset_provider: ToolsetProvider | None = None
+    skill_provider: SkillProvider | None = None
     runtime_mode: RuntimeMode | None = None
     environment_selection: EnvironmentSelection | None = None
     environment_binding: EnvironmentBinding | None = None

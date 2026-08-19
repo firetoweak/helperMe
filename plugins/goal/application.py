@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 from uuid import uuid4
 
@@ -83,6 +83,7 @@ class GoalApplicationService:
         objective: str,
         max_turns: int | None = None,
         max_steps: int | None = None,
+        invocation: TurnInvocation | None = None,
     ) -> GoalLoopOutcome:
         self._turn_host.require_session(session_id)
         self._turn_host.validate_turn(
@@ -130,6 +131,7 @@ class GoalApplicationService:
             first_executor_turn_id=first_executor_turn_id,
             first_message=objective,
             max_steps=max_steps,
+            invocation=invocation or TurnInvocation(),
         )
         return GoalLoopOutcome(goal, contract_outcome, tuple(turns))
 
@@ -140,6 +142,7 @@ class GoalApplicationService:
         executor_turn_id: str,
         user_message: str,
         max_steps: int | None = None,
+        invocation: TurnInvocation | None = None,
     ) -> GoalLoopOutcome:
         goal = self._goal_for_session(session_id, goal_id)
         if goal.status is GoalStatus.PAUSED:
@@ -153,6 +156,7 @@ class GoalApplicationService:
             first_executor_turn_id=executor_turn_id,
             first_message=user_message,
             max_steps=max_steps,
+            invocation=invocation or TurnInvocation(),
         )
         return GoalLoopOutcome(goal, None, tuple(turns))
 
@@ -178,6 +182,7 @@ class GoalApplicationService:
         first_executor_turn_id: str,
         first_message: str,
         max_steps: int | None,
+        invocation: TurnInvocation,
     ) -> list[GoalTurnOutcome]:
         outcomes: list[GoalTurnOutcome] = []
         next_turn_id = first_executor_turn_id
@@ -186,7 +191,13 @@ class GoalApplicationService:
         while goal.status in {GoalStatus.ACTIVE, GoalStatus.JUDGING}:
             if goal.status is GoalStatus.JUDGING:
                 outcomes.append(
-                    await self._judge_current_turn(session_id, goal, None, max_steps)
+                    await self._judge_current_turn(
+                        session_id,
+                        goal,
+                        None,
+                        max_steps,
+                        invocation=invocation,
+                    )
                 )
                 continue
 
@@ -203,7 +214,8 @@ class GoalApplicationService:
                     turn_id=next_turn_id,
                     user_message=next_message,
                     max_steps=max_steps,
-                    invocation=TurnInvocation(
+                    invocation=replace(
+                        invocation,
                         capabilities=(
                             GoalExecutorCapability(
                                 goal_id=goal.id,
@@ -242,6 +254,7 @@ class GoalApplicationService:
                     goal,
                     executor_outcome,
                     max_steps,
+                    invocation=invocation,
                     judge_turn_id=judge_turn_id,
                 )
             )
@@ -257,6 +270,7 @@ class GoalApplicationService:
         executor_outcome: SessionTurnOutcome | None,
         max_steps: int | None,
         *,
+        invocation: TurnInvocation,
         judge_turn_id: str | None = None,
     ) -> GoalTurnOutcome:
         turn = goal.turns[-1]
@@ -272,7 +286,8 @@ class GoalApplicationService:
             purpose="judge",
             user_message="独立验证当前 Goal 是否完成。",
             max_steps=max_steps,
-            invocation=TurnInvocation(
+            invocation=replace(
+                invocation,
                 capabilities=(
                     GoalJudgeCapability(
                         goal_id=goal.id,

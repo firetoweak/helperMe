@@ -14,7 +14,7 @@ Channel yes/no → AgentApplication.resolve_approval
 → registered ApprovalActionHandler → resolution fact
 ```
 
-控制工具必须独占工具批次。若模型把 Proposal 与其他工具放在同一批，整批返回 `CONTROL_TOOL_REQUIRES_EXCLUSIVE_BATCH`，不执行任何 handler。Approval 请求和结果属于 Conversation 事实；Session 只保存 `pending_approval_id` 索引。
+控制工具必须独占工具批次。若模型把 Proposal 与其他工具放在同一批，整批返回 `EXCLUSIVE_TOOL_REQUIRES_EXCLUSIVE_BATCH`，不执行任何 handler。Approval 请求和结果属于 Conversation 事实；Session 只保存 `pending_approval_id` 索引。
 
 Channel 只接受去除首尾空白后精确的小写 `yes` 或 `no`。等待审批时其他输入不进入模型。批准与执行是同一个 Application use case，不增加可停留的 `approved/executed` 状态；执行结果直接记录为 succeeded/failed。
 
