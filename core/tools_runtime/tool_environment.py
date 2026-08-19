@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.tool_registry import ToolSpec
 from core.runtime_modes import RuntimeMode
 from core.tools_runtime.progressive_toolsets import (
     ToolsetLoadingState,
@@ -23,8 +24,18 @@ class ToolEnvironmentSnapshot:
 class TurnToolEnvironment:
     """管理一次 Turn 内的工具选择、渐进加载和逐 AgentStep 可见快照。"""
 
-    def __init__(self, tools_executor: ToolsExecutor, invocation: TurnInvocation) -> None:
+    def __init__(
+        self,
+        tools_executor: ToolsExecutor,
+        invocation: TurnInvocation,
+        environment_tool_specs: tuple[ToolSpec, ...] = (),
+    ) -> None:
         self.invocation = invocation
+        if environment_tool_specs:
+            environment_registry = tools_executor.registry.clone()
+            for spec in environment_tool_specs:
+                environment_registry.register(spec)
+            tools_executor = ToolsExecutor(environment_registry)
         if invocation.capabilities:
             selections = [
                 capability.base_tool_names()

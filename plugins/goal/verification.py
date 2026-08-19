@@ -9,7 +9,7 @@ from core.tools_runtime.turn_evidence import TurnEvidence, ToolEvidence
 @dataclass(frozen=True)
 class CommandRequirement:
     command_contains: str
-    root: str | None = None
+    workspace_root_id: str | None = None
     cwd: str | None = None
     expected_exit_codes: tuple[int, ...] | None = (0,)
 
@@ -22,12 +22,12 @@ class CommandRequirement:
 
 @dataclass(frozen=True)
 class WorkspaceRequirement:
-    root: str
+    root_id: str
     changed: bool | None = None
     allowed_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.root.strip():
+        if not self.root_id.strip():
             raise ValueError("workspace requirement root cannot be empty")
         if any(not path.strip() for path in self.allowed_paths):
             raise ValueError("allowed workspace paths cannot be empty")
@@ -82,9 +82,14 @@ class CompletionGate:
             arguments = json.loads(step.arguments)
             if requirement.command_contains not in arguments["command"]:
                 continue
-            if requirement.root is not None and arguments["root"] != requirement.root:
+            data = step.result.get("data") or {}
+            membership = data.get("workspace_membership") or {}
+            if (
+                requirement.workspace_root_id is not None
+                and membership.get("root_id") != requirement.workspace_root_id
+            ):
                 continue
-            if requirement.cwd is not None and arguments.get("cwd", ".") != requirement.cwd:
+            if requirement.cwd is not None and data.get("cwd") != requirement.cwd:
                 continue
             matching.append(step)
 
@@ -132,16 +137,21 @@ class CompletionGate:
             step
             for step in evidence.by_name("get_changes")
             if step.result.get("ok") is True
-            and (step.result.get("data") or {}).get("root") == requirement.root
+            and (
+                (step.result.get("data") or {})
+                .get("workspace_membership", {})
+                .get("root_id")
+                == requirement.root_id
+            )
         ]
         if not matching:
-            return f"缺少 Workspace 验收证据：{requirement.root}"
+            return f"缺少 Workspace 验收证据：{requirement.root_id}"
 
         data = matching[-1].result["data"]
         changed = bool(data.get("changed"))
         if requirement.changed is not None and changed is not requirement.changed:
             expected = "存在改动" if requirement.changed else "保持无改动"
-            return f"Workspace {requirement.root} 未{expected}"
+            return f"Workspace {requirement.root_id} 未{expected}"
 
         if requirement.allowed_paths:
             actual_paths = CompletionGate._status_paths(data.get("status") or "")

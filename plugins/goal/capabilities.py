@@ -39,13 +39,13 @@ class CompletionCriterionInput(BaseModel):
 
 class CommandRequirementInput(BaseModel):
     command_contains: str = Field(min_length=1)
-    root: str | None = None
+    workspace_root_id: str | None = None
     cwd: str | None = None
     expected_exit_codes: list[int] | None = Field(default_factory=lambda: [0])
 
 
 class WorkspaceRequirementInput(BaseModel):
-    root: str = Field(min_length=1)
+    root_id: str = Field(min_length=1)
     changed: bool | None = None
     allowed_paths: list[str] = Field(default_factory=list)
 
@@ -86,7 +86,7 @@ def _to_contract(data: CompletionContractInput) -> CompletionContractDraft:
             commands=tuple(
                 CommandRequirement(
                     command_contains=requirement.command_contains,
-                    root=requirement.root,
+                    workspace_root_id=requirement.workspace_root_id,
                     cwd=requirement.cwd,
                     expected_exit_codes=(
                         tuple(requirement.expected_exit_codes)
@@ -98,7 +98,7 @@ def _to_contract(data: CompletionContractInput) -> CompletionContractDraft:
             ),
             workspace=(
                 WorkspaceRequirement(
-                    root=workspace.root,
+                    root_id=workspace.root_id,
                     changed=workspace.changed,
                     allowed_paths=tuple(workspace.allowed_paths),
                 )
@@ -116,7 +116,8 @@ def _format_contract(contract: CompletionContract) -> str:
         for item in contract.criteria
     ]
     commands = [
-        f"- 命令包含 {item.command_contains!r}; root={item.root!r}; "
+        f"- 命令包含 {item.command_contains!r}; "
+        f"workspace_root_id={item.workspace_root_id!r}; "
         f"cwd={item.cwd!r}; exit_codes={item.expected_exit_codes!r}"
         for item in contract.verification.commands
     ]
@@ -125,7 +126,7 @@ def _format_contract(contract: CompletionContract) -> str:
         "无"
         if workspace is None
         else (
-            f"root={workspace.root!r}; changed={workspace.changed!r}; "
+            f"root_id={workspace.root_id!r}; changed={workspace.changed!r}; "
             f"allowed_paths={list(workspace.allowed_paths)!r}"
         )
     )
@@ -313,7 +314,6 @@ class GoalJudgeCapability:
 
     def base_tool_names(self) -> tuple[str, ...] | None:
         return (
-            "get_workspace_info",
             "glob",
             "grep",
             "read_file",
@@ -324,7 +324,7 @@ class GoalJudgeCapability:
 
     def evidence_roots(self) -> tuple[str, ...]:
         workspace = self.contract.verification.workspace
-        return (workspace.root,) if workspace is not None else ()
+        return (workspace.root_id,) if workspace is not None else ()
 
     def runtime_instructions(self) -> list[str]:
         return [

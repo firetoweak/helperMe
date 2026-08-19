@@ -57,12 +57,14 @@ class MicroCompactionPolicy:
         context_state: ContextState,
         runtime_instructions: list[str],
         tools: list[dict[str, Any]],
+        contextual_user_fragments: list[str] | None = None,
     ) -> MicroCompactionDecision:
         before = self._assess(
             conversation_records,
             context_state,
             runtime_instructions,
             tools,
+            contextual_user_fragments or [],
         )
         record_indexes = {
             record.message_id: index
@@ -121,6 +123,7 @@ class MicroCompactionPolicy:
                 candidate_state,
                 runtime_instructions,
                 tools,
+                contextual_user_fragments or [],
             )
         )
 
@@ -139,12 +142,14 @@ class MicroCompactionPolicy:
         state: ContextState,
         runtime_instructions: list[str],
         tools: list[dict[str, Any]],
+        contextual_user_fragments: list[str],
     ) -> BudgetAssessment:
         context = self.context_manager.build(
             ContextRequest(
                 conversation_records=records,
                 runtime_instructions=runtime_instructions,
                 context_state=state,
+                contextual_user_fragments=contextual_user_fragments,
             )
         )
         return self.context_budget.assess(context, tools)

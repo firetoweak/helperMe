@@ -4,6 +4,15 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any, Mapping
 
+from core.environment import (
+    EnvironmentSelection,
+    FilesystemAccessMode,
+    LocalEnvironmentProvider,
+    RootBinding,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+    discover_host_roots,
+)
 from core.agent_workspace import AgentWorkspace
 from core.agent_application import AgentApplication, DEFAULT_MAX_STEPS
 from core.model_call.client import LLMClient
@@ -40,16 +49,10 @@ from core.approval import ApprovalActionRegistry
 from core.tools_runtime.progressive_toolsets import ToolsetProvider
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tools.artifact_read import create_read_artifact_spec
-from tools import create_workspace_tool_specs
+from tools import create_environment_tool_specs
 from tools.powershell_runner import PowerShellCommandRunner
-from tools.workspace import (
-    FilesystemAccessMode,
-    WorkspaceSandbox,
-    WorkspaceSandboxes,
-    discover_host_filesystem_roots,
-)
 
-# 无状态内建工具通过导入注册；Workspace 工具在 composition root 中绑定。
+# 无状态内建工具通过导入注册；Environment 工具在 Turn 中绑定。
 import tools  # noqa: F401
 
 
@@ -78,19 +81,31 @@ def create_agent_application(
         raise ValueError("model 不能为空")
     effective_workspace_roots = dict(workspace_roots)
     if filesystem_access_mode is FilesystemAccessMode.HOST:
-        host_roots = discover_host_filesystem_roots()
-        duplicated_names = effective_workspace_roots.keys() & host_roots.keys()
+        host_roots = discover_host_roots()
+        host_root_map = {root.root_id: root.path for root in host_roots}
+        duplicated_names = (
+            effective_workspace_roots.keys() & host_root_map.keys()
+        )
         if duplicated_names:
             raise ValueError(
                 "显式 workspace root 与 Host root 名称冲突: "
                 f"{sorted(duplicated_names)}"
             )
-        effective_workspace_roots.update(host_roots)
+        effective_workspace_roots.update(host_root_map)
 
-    workspaces = WorkspaceSandboxes({
-        name: WorkspaceSandbox(root)
+    task_root_ids = set(workspace_roots)
+    workspace_view = WorkspaceViewSnapshot(tuple(
+        RootBinding(
+            root_id=name,
+            scope=(
+                WorkspaceScope.TASK
+                if name in task_root_ids
+                else WorkspaceScope.HOST
+            ),
+            path=root,
+        )
         for name, root in effective_workspace_roots.items()
-    })
+    ))
     configured_workspace_paths = [
         root.resolve()
         for root in workspace_roots.values()
@@ -107,8 +122,15 @@ def create_agent_application(
     for spec in additional_tool_specs:
         application_tool_registry.register(spec)
     command_runner = PowerShellCommandRunner()
-    for spec in create_workspace_tool_specs(workspaces, command_runner):
-        application_tool_registry.register(spec)
+    environment_provider = LocalEnvironmentProvider(
+        command_runner,
+        shell_path=command_runner.executable,
+    )
+    default_environment_selection = EnvironmentSelection(
+        environment_id=environment_provider.environment_id,
+        workspace_view=workspace_view,
+        cwd=str(next(iter(workspace_roots.values())).resolve()),
+    )
 
     owns_llm_client = llm_client is None
     if owns_llm_client:
@@ -167,6 +189,9 @@ def create_agent_application(
                 result_limit,
             ),
             progress_sink=progress_sink,
+            environment_tool_factory=lambda binding: (
+                create_environment_tool_specs(binding)
+            ),
             **mode_configuration,
         )
 
@@ -174,6 +199,8 @@ def create_agent_application(
         turn_runtime_factory=create_session_turn_runtime,
         delete_session_resources=artifact_drawers.delete,
         default_toolset_provider=default_toolset_provider,
+        environment_provider=environment_provider,
+        default_environment_selection=default_environment_selection,
     )
     return AgentApplication(
         session_runtime=session_runtime,

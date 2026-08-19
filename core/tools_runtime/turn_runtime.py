@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio  # 兼容既有重试测试的 patch 边界；重试实现位于 agent_step。
 import json
+from typing import Callable
+from core.environment import EnvironmentBinding, render_environment_context
+from core.tool_registry import ToolSpec
 from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
@@ -49,6 +52,9 @@ class TurnRuntime:
         *,
         mode_router: RuntimeModeRouter | None = None,
         runtime_modes: dict[TurnMode, RuntimeMode] | None = None,
+        environment_tool_factory: Callable[
+            [EnvironmentBinding], list[ToolSpec]
+        ] | None = None,
     ):
         if runtime_mode is None:
             if mode_router is None or runtime_modes is None:
@@ -68,6 +74,7 @@ class TurnRuntime:
         self.tools_executor = tools_executor
         self.tool_result_externalizer = tool_result_externalizer
         self.progress_sink = progress_sink or NullTurnProgressSink()
+        self.environment_tool_factory = environment_tool_factory
 
     @staticmethod
     def _finish(
@@ -105,24 +112,42 @@ class TurnRuntime:
         turn_control = control or TurnControl()
         current_context_state = context_state or ContextState()
         current_invocation = invocation or TurnInvocation()
+        environment_binding = current_invocation.environment_binding
+        if self.environment_tool_factory is not None and environment_binding is None:
+            raise ValueError("Turn 缺少 Environment Binding")
+        environment_tool_specs = (
+            tuple(self.environment_tool_factory(environment_binding))
+            if self.environment_tool_factory is not None
+            and environment_binding is not None
+            else ()
+        )
         agent_step_runner = AgentStepRunner(
             self.model_calls,
             self.model,
             self.context_preparation,
+            contextual_user_fragments=(
+                [render_environment_context(environment_binding)]
+                if environment_binding is not None
+                else []
+            ),
         )
         tool_environment = TurnToolEnvironment(
             self.tools_executor,
             current_invocation,
+            environment_tool_specs,
         )
         tool_batch_executor = ConcurrentToolBatchExecutor(
             self.tool_result_externalizer,
         )
         for root in tool_environment.evidence_roots():
-            evidence_recorder.record_workspace_baseline(
+            if environment_binding is None:
+                raise ValueError("Workspace Evidence 需要 Environment Binding")
+            root_binding = environment_binding.workspace_view.get(root)
+            evidence_recorder.record_environment_baseline(
                 root,
                 await tool_environment.base_executor.execute(
                     "get_changes",
-                    json.dumps({"root": root}),
+                    json.dumps({"path": str(root_binding.path)}),
                 ),
             )
         level2_performed = False

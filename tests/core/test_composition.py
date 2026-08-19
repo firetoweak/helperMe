@@ -6,10 +6,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.agent_workspace import AgentWorkspace
 from core.composition import create_agent_application
+from core.environment import (
+    FilesystemAccessMode,
+    RootBinding,
+    WorkspaceScope,
+)
 from core.runtime_artifacts import ArtifactNotFoundError
 from core.runtime_modes import PlainMode, TurnMode, RuntimeModeRouter
 from core.todos import TodoMode
-from tools.workspace import FilesystemAccessMode
+from core.tools_runtime.tools_executor import ToolsExecutor
 
 
 class CompositionTest(unittest.IsolatedAsyncioTestCase):
@@ -20,7 +25,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_scoped_access_does_not_discover_host_roots(self):
         with tempfile.TemporaryDirectory() as runtime_directory, patch(
-            "core.composition.discover_host_filesystem_roots"
+            "core.composition.discover_host_roots"
         ) as discover:
             application = create_agent_application(
                 model="test-model",
@@ -71,8 +76,12 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
     async def test_host_access_adds_discovered_roots_for_every_session(self):
         with tempfile.TemporaryDirectory() as runtime_directory, \
                 tempfile.TemporaryDirectory() as project_directory, patch(
-                    "core.composition.discover_host_filesystem_roots",
-                    return_value={"drive_z": Path(runtime_directory)},
+                    "core.composition.discover_host_roots",
+                    return_value=(RootBinding(
+                        "drive_z",
+                        WorkspaceScope.HOST,
+                        Path(runtime_directory),
+                    ),),
                 ):
             application = create_agent_application(
                 model="test-model",
@@ -83,25 +92,25 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             )
             await self.start_application(application)
             application.create_session("session-1")
-            runtime = application._session_runtime._session_turn_runtimes[
+            selection = application._session_runtime.sessions[
                 "session-1"
-            ]
+            ].default_environment_selection
 
-            result = await runtime.tools_executor.execute(
-                "get_workspace_info",
-                "{}",
-            )
-
+        self.assertIsNotNone(selection)
         self.assertEqual(
-            result["data"]["roots"],
-            [{"name": "project"}, {"name": "drive_z"}],
+            [root.root_id for root in selection.workspace_view.roots],
+            ["project", "drive_z"],
         )
 
     async def test_host_access_rejects_explicit_root_name_collision(self):
         with tempfile.TemporaryDirectory() as runtime_directory, \
                 tempfile.TemporaryDirectory() as workspace_directory, patch(
-                    "core.composition.discover_host_filesystem_roots",
-                    return_value={"drive_d": Path(workspace_directory)},
+                    "core.composition.discover_host_roots",
+                    return_value=(RootBinding(
+                        "drive_d",
+                        WorkspaceScope.HOST,
+                        Path(workspace_directory),
+                    ),),
                 ):
             with self.assertRaisesRegex(ValueError, "名称冲突"):
                 create_agent_application(
@@ -114,7 +123,7 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
                     filesystem_access_mode=FilesystemAccessMode.HOST,
                 )
 
-    async def test_workspace_tools_are_bound_by_composition_root(self):
+    async def test_environment_tools_are_bound_from_turn_selection(self):
         with tempfile.TemporaryDirectory() as runtime_directory, tempfile.TemporaryDirectory() as workspace_directory:
             workspace_root = Path(workspace_directory)
             application = create_agent_application(
@@ -126,29 +135,45 @@ class CompositionTest(unittest.IsolatedAsyncioTestCase):
             await self.start_application(application)
             application.create_session("session-1")
             runtime = application._session_runtime._session_turn_runtimes["session-1"]
-
-            missing_root = await runtime.tools_executor.execute(
-                "read_file",
-                '{"root":"missing","path":"a.txt"}',
+            session_runtime = application._session_runtime
+            selection = session_runtime.sessions[
+                "session-1"
+            ].default_environment_selection
+            binding = await session_runtime.environment_provider.attach(
+                selection
             )
+            registry = runtime.tools_executor.registry.clone()
+            for spec in runtime.environment_tool_factory(binding):
+                registry.register(spec)
+            executor = ToolsExecutor(registry)
+
+            self.assertIsNone(runtime.tools_executor.registry.get("read_file"))
             absolute_path = await runtime.tools_executor.execute(
                 "read_file",
-                json.dumps({"root": "project", "path": str(workspace_root / "a.txt")}),
+                json.dumps({"path": str(workspace_root / "a.txt")}),
             )
-            write_result = await runtime.tools_executor.execute(
+            write_result = await executor.execute(
                 "write_file",
-                '{"root":"project","path":"docs/a.txt","content":"hello"}',
+                '{"path":"docs/a.txt","content":"hello"}',
             )
-            read_result = await runtime.tools_executor.execute(
+            read_result = await executor.execute(
                 "read_file",
-                '{"root":"project","path":"docs/a.txt"}',
+                '{"path":"docs/a.txt"}',
             )
-            command_spec = runtime.tools_executor.registry.get("execute_command")
+            absolute_result = await executor.execute(
+                "read_file",
+                json.dumps({"path": str(workspace_root / "docs/a.txt")}),
+            )
+            command_spec = registry.get("execute_command")
 
-        self.assertEqual(missing_root["code"], "UNKNOWN_WORKSPACE_ROOT")
-        self.assertEqual(absolute_path["code"], "ABSOLUTE_PATH_NOT_ALLOWED")
+        self.assertEqual(absolute_path["code"], "TOOL_NOT_FOUND")
         self.assertEqual(write_result["code"], "FILE_CREATED")
         self.assertEqual(read_result["data"]["content"], "hello")
+        self.assertEqual(absolute_result["data"]["content"], "hello")
+        self.assertEqual(
+            absolute_result["data"]["location"]["environment_id"],
+            "local",
+        )
         self.assertIsNotNone(command_spec)
 
     async def test_runtime_router_is_the_default_runtime_capability(self):

@@ -30,7 +30,10 @@ def contract():
                 ),
             ),
             verification=GoalVerification(
-                commands=(CommandRequirement("pytest", root="project"),),
+                commands=(CommandRequirement(
+                    "pytest",
+                    workspace_root_id="project",
+                ),),
                 workspace=WorkspaceRequirement(
                     "project",
                     changed=True,
@@ -47,24 +50,30 @@ def evidence():
             ToolEvidence(
                 "call-1",
                 "execute_command",
-                json.dumps({"command": "python -m pytest", "root": "project"}),
+                json.dumps({"command": "python -m pytest"}),
                 {
                     "ok": True,
                     "code": "COMMAND_COMPLETED",
                     "data": {
                         "timed_out": False,
                         "exit_code": 0,
+                        "cwd": ".",
+                        "workspace_membership": {
+                            "root_id": "project",
+                        },
                     },
                 },
             ),
             ToolEvidence(
                 "call-2",
                 "get_changes",
-                json.dumps({"root": "project"}),
+                json.dumps({"path": "."}),
                 {
                     "ok": True,
                     "data": {
-                        "root": "project",
+                        "workspace_membership": {
+                            "root_id": "project",
+                        },
                         "changed": True,
                         "status": " M app.py",
                     },

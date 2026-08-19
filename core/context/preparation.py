@@ -127,12 +127,15 @@ class ContextPreparationService:
         tools: list[dict[str, Any]],
         level2_boundary_message_id: str | None = None,
         on_summary_request: Callable[[ModelContext], None] | None = None,
+        contextual_user_fragments: list[str] | None = None,
     ) -> PreparedContext:
+        fragments = contextual_user_fragments or []
         decision = self.micro_compaction_policy.propose(
             conversation_records=conversation_records,
             context_state=context_state,
             runtime_instructions=runtime_instructions,
             tools=tools,
+            contextual_user_fragments=fragments,
         )
         candidate_state = decision.candidate_state
         model_context = self.context_manager.build(
@@ -140,6 +143,7 @@ class ContextPreparationService:
                 conversation_records=conversation_records,
                 runtime_instructions=runtime_instructions,
                 context_state=candidate_state,
+                contextual_user_fragments=fragments,
             )
         )
         if decision.after.allowed:
@@ -200,6 +204,7 @@ class ContextPreparationService:
                 conversation_records=conversation_records,
                 runtime_instructions=runtime_instructions,
                 context_state=summarized_state,
+                contextual_user_fragments=fragments,
             )
         )
         after_summary = self.context_budget.assess(summarized_context, tools)

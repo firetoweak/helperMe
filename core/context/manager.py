@@ -15,6 +15,7 @@ class ContextRequest:
     conversation_records: list[ConversationMessage]
     runtime_instructions: list[str]
     context_state: ContextState = field(default_factory=ContextState)
+    contextual_user_fragments: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,15 @@ class ContextManager:
                 for instruction in request.runtime_instructions
             )
             first_message["content"] = system_content + instruction_block
+
+        if request.contextual_user_fragments:
+            messages.insert(1, {
+                "role": "user",
+                "content": "\n\n".join(
+                    fragment.strip()
+                    for fragment in request.contextual_user_fragments
+                ),
+            })
 
         for message in messages:
             if (

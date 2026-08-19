@@ -211,7 +211,7 @@ async def async_main() -> None:
     checks = {
         "agent_completed": outcome.result.status.value == "completed",
         "discovered_project": any(
-            step["name"] in {"get_workspace_info", "glob", "read_file", "grep"}
+            step["name"] in {"glob", "read_file", "grep"}
             for step in timeline
         ),
         "installed_dependencies": any(

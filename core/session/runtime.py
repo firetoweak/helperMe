@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass, replace
 from typing import Callable
 
+from core.environment import EnvironmentProvider, EnvironmentSelection
+
 from core.tools_runtime.turn_runtime import (
     TurnControl,
     TurnResult,
@@ -63,6 +65,8 @@ class SessionRuntime:
         turn_runtime_factory: Callable[[str], TurnRuntime] | None = None,
         delete_session_resources: Callable[[str], None] | None = None,
         default_toolset_provider: ToolsetProvider | None = None,
+        environment_provider: EnvironmentProvider | None = None,
+        default_environment_selection: EnvironmentSelection | None = None,
     ):
         if (turn_runtime is None) == (turn_runtime_factory is None):
             raise ValueError(
@@ -78,7 +82,17 @@ class SessionRuntime:
         self._session_turn_runtimes: dict[str, TurnRuntime] = {}
         self.sessions: dict[str, Session] = {}
         self.active_controls: dict[str, TurnControl] = {}
+        self._turn_locks: dict[str, asyncio.Lock] = {}
         self.default_toolset_provider = default_toolset_provider
+        if (environment_provider is None) != (
+            default_environment_selection is None
+        ):
+            raise ValueError(
+                "environment_provider 与 default_environment_selection "
+                "必须同时提供"
+            )
+        self.environment_provider = environment_provider
+        self.default_environment_selection = default_environment_selection
 
     def create_session(
         self,
@@ -94,6 +108,7 @@ class SessionRuntime:
 
         session = Session(
             id=session_id,
+            default_environment_selection=self.default_environment_selection,
             capability_snapshot=(
                 SessionCapabilitySnapshot.capture(
                     self.default_toolset_provider
@@ -114,6 +129,7 @@ class SessionRuntime:
             self._session_turn_runtimes[session.id] = self._turn_runtime_factory(
                 session.id
             )
+        self._turn_locks[session.id] = asyncio.Lock()
         self.sessions[session.id] = session
         return session
 
@@ -122,12 +138,16 @@ class SessionRuntime:
             raise ValueError("session_id 不能为空")
         if session_id not in self.sessions:
             raise KeyError(f"Session 不存在: {session_id}")
-        if session_id in self.active_controls:
+        if (
+            session_id in self.active_controls
+            or self._turn_locks[session_id].locked()
+        ):
             raise ValueError(f"不能删除正在执行的 Session: {session_id}")
 
         if self._delete_session_resources is not None:
             self._delete_session_resources(session_id)
         self._session_turn_runtimes.pop(session_id, None)
+        del self._turn_locks[session_id]
         del self.sessions[session_id]
 
     def get_session(self, session_id: str) -> Session:
@@ -256,10 +276,54 @@ class SessionRuntime:
         event_reason: str,
         invocation: TurnInvocation | None,
     ) -> SessionTurnOutcome:
+        async with self._turn_locks[session.id]:
+            return await self._execute_serialized_turn(
+                session,
+                turn_id,
+                user_message,
+                max_steps,
+                event_kind,
+                event_reason,
+                invocation,
+            )
+
+    async def _execute_serialized_turn(
+        self,
+        session: Session,
+        turn_id: str,
+        user_message: str,
+        max_steps: int,
+        event_kind: SessionEventType,
+        event_reason: str,
+        invocation: TurnInvocation | None,
+    ) -> SessionTurnOutcome:
         if session.id in self.active_controls:
             raise ValueError(f"Session 已有正在执行的 Turn: {session.id}")
+        allowed_statuses = (
+            {SessionStatus.INTERRUPTED}
+            if event_kind is SessionEventType.RESUMED
+            else {
+                SessionStatus.PENDING,
+                SessionStatus.COMPLETED,
+                SessionStatus.BLOCKED,
+                SessionStatus.FAILED,
+            }
+        )
+        if session.status not in allowed_statuses:
+            raise ValueError(
+                f"Session 当前状态不能进入该 Turn: {session.status.value}"
+            )
         if any(record.turn_id == turn_id for record in session.turn_records):
             raise ValueError(f"重复 turn_id: {turn_id}")
+
+        effective_invocation = (
+            await self._resolve_environment_invocation(
+                session,
+                invocation or TurnInvocation(),
+            )
+            if self.environment_provider is not None
+            else invocation
+        )
 
         turn_control = TurnControl()
         turn_record = SessionTurnRecord(
@@ -286,7 +350,7 @@ class SessionRuntime:
                 user_message=user_message,
                 max_steps=max_steps,
                 control=turn_control,
-                invocation=invocation,
+                invocation=effective_invocation,
             )
         except asyncio.CancelledError:
             if session.status is SessionStatus.RUNNING:
@@ -318,6 +382,24 @@ class SessionRuntime:
             raise
         finally:
             del self.active_controls[session.id]
+
+    async def _resolve_environment_invocation(
+        self,
+        session: Session,
+        invocation: TurnInvocation,
+    ) -> TurnInvocation:
+        if self.environment_provider is None:
+            return invocation
+        selection = (
+            invocation.environment_selection
+            or session.default_environment_selection
+        )
+        if selection is None:
+            raise RuntimeError("Session 缺少默认 Environment Selection")
+        binding = await self.environment_provider.attach(selection)
+        if invocation.environment_selection is not None:
+            session.default_environment_selection = selection
+        return replace(invocation, environment_binding=binding)
 
 
     async def _execute_turn(

@@ -30,6 +30,15 @@ PARALLEL_TOOL_CALLS_RULE = """
 """.strip()
 
 
+ENVIRONMENT_RULE = """
+执行环境：
+- Execution Environment 是独立的机器或工作区，拥有自己的文件、Shell 与可执行能力。environment_context 是当前 Turn 的具体环境事实。
+- 所有文件路径和命令启动目录都在当前 Environment 中解释；相对路径以当前 cwd 为基准，绝对路径保持该 Environment 的原生语义。
+- workspace_roots 描述可见工作区域和权限边界，不是普通相对路径的解析基准。文件工具和命令工具共享同一套路径语义。
+- 工具结果中的 location 是可定位身份；workspace_membership 只是归属和显示信息。命令字符串内部的路径由 Shell 解释；只有 environment_context 声明可用的 Runtime Sandbox 才能强制限制进程，cwd 本身不代表隔离。
+""".strip()
+
+
 FILE_RULE = """
 文件任务：
 - 有目标地获取上下文。目标未知时先用 glob 或 grep 定位；定位后只读取与任务相关的文件和片段。多个互不依赖的查找或读取应在同一 AgentStep 发出。
@@ -41,6 +50,7 @@ FILE_RULE = """
 
 DEFAULT_AGENT_PROMPT = (
     f"{DEFAULT_SYSTEM_PROMPT}\n\n"
+    f"{ENVIRONMENT_RULE}\n\n"
     f"{PARALLEL_TOOL_CALLS_RULE}\n\n"
     f"{FILE_RULE}"
 )

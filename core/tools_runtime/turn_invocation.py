@@ -7,6 +7,7 @@ from core.tool_registry import ToolSpec
 from core.tools_runtime.turn_evidence import TurnEvidence
 
 if TYPE_CHECKING:
+    from core.environment import EnvironmentBinding, EnvironmentSelection
     from core.runtime_modes import RuntimeMode
     from core.tools_runtime.progressive_toolsets import ToolsetProvider
 
@@ -36,3 +37,5 @@ class TurnInvocation:
     capabilities: tuple[TurnCapability, ...] = ()
     toolset_provider: ToolsetProvider | None = None
     runtime_mode: RuntimeMode | None = None
+    environment_selection: EnvironmentSelection | None = None
+    environment_binding: EnvironmentBinding | None = None

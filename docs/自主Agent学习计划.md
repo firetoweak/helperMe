@@ -312,11 +312,11 @@ Phase 8 Multi-Agent（从 SubAgent Delegation MVP 开始）
 
 ### 6D Skill Progressive Loading
 
-- 状态：设计完成，待工作区语义与工具路径契约回补后实现
-- 前置回补：在继续 Skill 前，先明确 Task Workspace、Agent Workspace 与 Host Filesystem 的模型可见边界，并统一文件、命令工具的 root/path/cwd 语义。详见[工作区语义与工具路径契约](专题/工作区语义与工具路径契约.md)。
+- 状态：设计完成；工作区语义与工具路径契约已完成第一版代码回补，待开始实现
+- 前置回补：已建立 Environment Selection/Binding、Workspace View、Permission、cwd-relative / Environment-absolute 路径解析、Environment Context 与 EnvironmentLocation；进程级 Sandbox 仍是明确记录的后续能力边界。详见[工作区语义与工具路径契约](专题/工作区语义与工具路径契约.md)。
 - 目标：按需发现并加载 Skill 的指令、知识与工作流，避免在 Turn 开始时注入全部 Skill 内容。
 - 边界：复用通用 Turn 生命周期与能力快照规则，但不与 Toolset 的目录、加载状态和工具 Schema 数据模型提前合并。
-- 当前设计：Agent Workspace 持久安装与 Task Workspace 执行分离；Turn 只注入精简目录，`load_skill` 独占一个 AgentStep 并从下一 AgentStep 完整注入主指令，supporting files 按需读取，脚本以 Task Workspace 为 cwd 复用命令执行链。安装默认 disabled；更新仅允许用户显式操作或重新部署触发，候选以 hash 冻结，并同时提供模型概括与机器 diff，禁止静默自动更新。
+- 当前设计：Agent Workspace 持久安装与 Task Workspace 执行分离；Turn 只注入精简目录，`load_skill` 独占一个 AgentStep 并从下一 AgentStep 完整注入主指令，supporting files 按需读取；脚本继承当前 Turn EnvironmentBinding，并以 Binding.cwd 复用同一命令执行链。安装默认 disabled；更新仅允许用户显式操作或重新部署触发，候选以 hash 冻结，并同时提供模型概括与机器 diff，禁止静默自动更新。
 - 详述：[phase_6D学习.md](6/phase_6D学习.md)
 
 ---

@@ -11,6 +11,15 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from core.environment import (
+    EnvironmentBinding,
+    FilesystemPermission,
+    PermissionBinding,
+    RootBinding,
+    RuntimeAttachment,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+)
 from core.tool_registry import ToolRegistry
 from core.tools_runtime.tools_executor import ToolsExecutor
 from tools.command_execution import (
@@ -22,7 +31,6 @@ from tools.powershell_runner import (
     CommandEnvironmentPolicy,
     PowerShellCommandRunner,
 )
-from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 
 
 POWERSHELL = shutil.which("powershell.exe")
@@ -209,14 +217,25 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.workspace_root = Path(self.directory.name)
-        self.workspaces = WorkspaceSandboxes({
-            "project": WorkspaceSandbox(self.workspace_root)
-        })
+        view = WorkspaceViewSnapshot((
+            RootBinding("project", WorkspaceScope.TASK, self.workspace_root),
+        ))
+        runner = PowerShellCommandRunner()
+        self.binding = EnvironmentBinding(
+            environment_id="local-test",
+            workspace_view=view,
+            permission_binding=PermissionBinding((
+                ("project", FilesystemPermission.READ_WRITE),
+            )),
+            cwd=self.workspace_root,
+            shell_name="powershell",
+            shell_path="powershell.exe",
+            runtime_attachment=RuntimeAttachment("local-test", runner),
+        )
         registry = ToolRegistry()
         registry.register(
             create_command_execution_spec(
-                self.workspaces,
-                PowerShellCommandRunner(),
+                self.binding,
             )
         )
         self.executor = ToolsExecutor(registry)
@@ -232,7 +251,6 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_nonzero_exit_is_a_completed_command(self):
         result = await self.execute({
-            "root": "project",
             "command": 'Write-Error "failed"',
         })
 
@@ -243,7 +261,6 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_workspace_effect_defaults_to_may_write(self):
         result = await self.execute({
-            "root": "project",
             "command": "Write-Output ok",
         })
 
@@ -251,19 +268,48 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_only_workspace_effect_is_returned(self):
         result = await self.execute({
-            "root": "project",
             "command": "Write-Output ok",
             "workspace_effect": "read_only",
         })
 
         self.assertEqual(result["data"]["workspace_effect"], "read_only")
 
+    async def test_permission_binding_rejects_potential_write_command(self):
+        read_only_binding = EnvironmentBinding(
+            environment_id=self.binding.environment_id,
+            workspace_view=self.binding.workspace_view,
+            permission_binding=PermissionBinding((
+                ("project", FilesystemPermission.READ_ONLY),
+            )),
+            cwd=self.binding.cwd,
+            shell_name=self.binding.shell_name,
+            shell_path=self.binding.shell_path,
+            runtime_attachment=self.binding.runtime_attachment,
+        )
+        registry = ToolRegistry()
+        registry.register(create_command_execution_spec(read_only_binding))
+        executor = ToolsExecutor(registry)
+
+        denied = await executor.execute(
+            "execute_command",
+            json.dumps({"command": "Write-Output ok"}),
+        )
+        allowed = await executor.execute(
+            "execute_command",
+            json.dumps({
+                "command": "Write-Output ok",
+                "workspace_effect": "read_only",
+            }),
+        )
+
+        self.assertEqual(denied["code"], "ENVIRONMENT_PERMISSION_DENIED")
+        self.assertEqual(allowed["code"], "COMMAND_COMPLETED")
+
     async def test_runs_in_workspace_relative_cwd(self):
         child = self.workspace_root / "child"
         child.mkdir()
 
         result = await self.execute({
-            "root": "project",
             "cwd": "child",
             "command": "(Get-Location).Path",
         })
@@ -275,20 +321,18 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
             child.resolve(),
         )
 
-    async def test_rejects_absolute_and_escaping_cwd(self):
+    async def test_accepts_absolute_environment_cwd_and_rejects_escape(self):
         absolute = await self.execute({
-            "root": "project",
             "cwd": str(self.workspace_root),
             "command": "Write-Output ok",
         })
         escaping = await self.execute({
-            "root": "project",
             "cwd": "../outside",
             "command": "Write-Output ok",
         })
 
-        self.assertEqual(absolute["code"], "ABSOLUTE_PATH_NOT_ALLOWED")
-        self.assertEqual(escaping["code"], "PATH_OUTSIDE_WORKSPACE")
+        self.assertEqual(absolute["code"], "COMMAND_COMPLETED")
+        self.assertEqual(escaping["code"], "PATH_OUTSIDE_WORKSPACE_VIEW")
 
     async def test_command_may_use_an_absolute_path_outside_workspace(self):
         with tempfile.TemporaryDirectory() as outside_directory:
@@ -297,7 +341,6 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
             literal_path = str(outside_file).replace("'", "''")
 
             result = await self.execute({
-                "root": "project",
                 "command": f"Get-Content -LiteralPath '{literal_path}' -Raw",
             })
 
@@ -308,13 +351,12 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_empty_command_is_rejected(self):
-        result = await self.execute({"root": "project", "command": "  "})
+        result = await self.execute({"command": "  "})
 
         self.assertEqual(result["code"], "EMPTY_COMMAND")
 
     async def test_timeout_is_a_tool_failure_with_partial_output(self):
         result = await self.execute({
-            "root": "project",
             "command": (
                 '[Console]::Out.WriteLine("started"); '
                 "Start-Sleep -Seconds 5"
@@ -333,13 +375,11 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schema["timeout_seconds"]["maximum"], 300)
         with self.assertRaises(ValidationError):
             ExecuteCommandInput.model_validate({
-                "root": "project",
                 "command": "ok",
                 "timeout_seconds": 301,
             })
         with self.assertRaises(ValidationError):
             ExecuteCommandInput.model_validate({
-                "root": "project",
                 "command": "ok",
                 "workspace_effect": "unknown",
             })

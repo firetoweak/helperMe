@@ -8,6 +8,15 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from core.context import ContextManager, ContextRequest, ContextState
+from core.environment import (
+    EnvironmentBinding,
+    FilesystemPermission,
+    PermissionBinding,
+    RootBinding,
+    RuntimeAttachment,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+)
 from core.messages import Conversation
 from core.model_call import LLMResponse, ToolCall
 from core.tool_registry import ToolRegistry
@@ -19,16 +28,28 @@ from tools.file_read import (
     MAX_READ_FILE_SIZE_BYTES,
     create_file_read_specs,
 )
-from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 
 
 class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
-        workspaces = WorkspaceSandboxes({"project": WorkspaceSandbox(self.root)})
+        view = WorkspaceViewSnapshot((
+            RootBinding("project", WorkspaceScope.TASK, self.root),
+        ))
+        binding = EnvironmentBinding(
+            environment_id="local-test",
+            workspace_view=view,
+            permission_binding=PermissionBinding((
+                ("project", FilesystemPermission.READ_WRITE),
+            )),
+            cwd=self.root,
+            shell_name="powershell",
+            shell_path="powershell.exe",
+            runtime_attachment=RuntimeAttachment("local-test", object()),
+        )
         registry = ToolRegistry()
-        for spec in create_file_read_specs(workspaces):
+        for spec in create_file_read_specs(binding):
             registry.register(spec)
         self.executor = ToolsExecutor(registry)
 
@@ -38,11 +59,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
     def execute(self, name: str, arguments: dict):
         return self.executor.execute(name, json.dumps(arguments))
 
-    async def test_workspace_info_exposes_only_logical_root_names(self):
-        result = await self.execute("get_workspace_info", {})
-
-        self.assertEqual(result["data"], {"roots": [{"name": "project"}]})
-
     async def test_read_file_returns_a_bounded_resumable_line_window(self):
         (self.root / "sample.txt").write_text(
             "first\nsecond\nthird\n",
@@ -50,7 +66,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await self.execute("read_file", {
-            "root": "project",
             "path": "sample.txt",
             "offset": 2,
             "limit": 1,
@@ -72,7 +87,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await self.execute("read_file", {
-            "root": "project",
             "path": "long.txt",
         })
 
@@ -86,7 +100,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         (self.root / "empty.txt").write_text("", encoding="utf-8")
 
         result = await self.execute("read_file", {
-            "root": "project",
             "path": "empty.txt",
         })
 
@@ -102,7 +115,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
             handle.write(b"x")
 
         result = await self.execute("read_file", {
-            "root": "project",
             "path": "huge.txt",
         })
 
@@ -117,12 +129,10 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         (self.root / "b.txt").write_text("needle last\n", encoding="utf-8")
 
         first = await self.execute("grep", {
-            "root": "project",
             "query": "needle",
             "max_results": 2,
         })
         second = await self.execute("grep", {
-            "root": "project",
             "query": "needle",
             "offset": 2,
             "max_results": 2,
@@ -139,7 +149,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_grep_rejects_an_empty_query(self):
         result = await self.execute("grep", {
-            "root": "project",
             "query": "  ",
         })
 
@@ -153,7 +162,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await self.execute("grep", {
-            "root": "project",
             "query": "needle",
         })
 
@@ -170,12 +178,10 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
             )
 
         first = await self.execute("grep", {
-            "root": "project",
             "query": "needle",
             "max_results": 100,
         })
         second = await self.execute("grep", {
-            "root": "project",
             "query": "needle",
             "offset": first["data"]["next_offset"],
             "max_results": 100,
@@ -195,7 +201,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await self.execute("grep", {
-            "root": "project",
             "query": "x",
         })
 
@@ -240,7 +245,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
             0.01,
         ):
             result = await self.execute("grep", {
-                "root": "project",
                 "query": "needle",
             })
 
@@ -254,26 +258,31 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         (self.root / "z.txt").write_text("", encoding="utf-8")
 
         first = await self.execute("glob", {
-            "root": "project",
             "pattern": "*.py",
             "kind": "file",
             "max_results": 1,
         })
         second = await self.execute("glob", {
-            "root": "project",
             "pattern": "*.py",
             "kind": "file",
             "offset": 1,
             "max_results": 1,
         })
 
-        self.assertEqual(first["data"]["matches"], [{"path": "a.py", "kind": "file"}])
+        self.assertEqual(
+            [(item["path"], item["kind"]) for item in first["data"]["matches"]],
+            [("a.py", "file")],
+        )
+        self.assertEqual(
+            first["data"]["matches"][0]["location"]["environment_id"],
+            "local-test",
+        )
         self.assertTrue(first["data"]["truncated"])
         self.assertEqual(first["data"]["next_offset"], 1)
         self.assertNotIn("total", first["data"])
         self.assertEqual(
-            second["data"]["matches"],
-            [{"path": "folder/b.py", "kind": "file"}],
+            [(item["path"], item["kind"]) for item in second["data"]["matches"]],
+            [("folder/b.py", "file")],
         )
         self.assertFalse(second["data"]["truncated"])
         self.assertIsNone(second["data"]["next_offset"])
@@ -285,14 +294,13 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         (self.root / "nested" / "tools" / "b.py").write_text("", encoding="utf-8")
 
         result = await self.execute("glob", {
-            "root": "project",
             "pattern": "tools/*.py",
             "kind": "file",
         })
 
         self.assertEqual(
-            result["data"]["matches"],
-            [{"path": "tools/a.py", "kind": "file"}],
+            [item["path"] for item in result["data"]["matches"]],
+            ["tools/a.py"],
         )
 
     async def test_glob_reports_partial_results_for_inaccessible_directory(self):
@@ -308,7 +316,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
 
         with patch("tools.file_read.os.scandir", side_effect=scandir):
             result = await self.execute("glob", {
-                "root": "project",
                 "path": ".",
                 "pattern": "*.py",
                 "kind": "file",
@@ -318,8 +325,8 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["code"], "GLOB_PARTIAL")
         self.assertFalse(result["data"]["complete"])
         self.assertEqual(
-            result["data"]["matches"],
-            [{"path": "visible.py", "kind": "file"}],
+            [item["path"] for item in result["data"]["matches"]],
+            ["visible.py"],
         )
         self.assertEqual(
             result["data"]["inaccessible_paths"],
@@ -348,7 +355,6 @@ class WorkspaceRetrievalTest(unittest.IsolatedAsyncioTestCase):
             calls=(ToolCall(tool_call_id, "read_file", "{}"),),
         ))
         read_result = await self.execute("read_file", {
-            "root": "project",
             "path": "secret.txt",
         })
         conversation.add_tools_result([{

@@ -26,7 +26,7 @@ from plugins.goal.console import GoalCommandError, GoalConsoleAdapter
 from plugins.mcp.composition import create_mcp_plugin
 from plugins.mcp.console import McpCommandError, McpConsoleAdapter
 from core.tools_runtime.turn_invocation import TurnInvocation
-from tools.workspace import FilesystemAccessMode
+from core.environment import FilesystemAccessMode
 from core.approval import ApprovalActionRegistry
 
 

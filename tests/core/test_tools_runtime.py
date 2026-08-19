@@ -7,6 +7,15 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from jsonschema.exceptions import SchemaError
 
+from core.environment import (
+    EnvironmentBinding,
+    FilesystemPermission,
+    PermissionBinding,
+    RootBinding,
+    RuntimeAttachment,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+)
 from core.tool_registry import (
     EmptyInput,
     JsonSchemaParameters,
@@ -22,7 +31,6 @@ from core.tools_runtime.tools_protocol import (
 )
 from core.tools_runtime.tools_state import ToolsState
 from tools.get_changes import GetChangesInput, _run_git, create_get_changes_specs
-from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 
 
 SUCCESS = {"ok": True, "code": "OK", "data": None, "error": None}
@@ -422,12 +430,24 @@ class GetChangesEarlyFailTest(unittest.IsolatedAsyncioTestCase):
     async def test_non_git_workspace_reports_verification_failure(self, run):
         run.return_value = (128, "", "not a repository")
         with tempfile.TemporaryDirectory() as directory:
-            workspaces = WorkspaceSandboxes({
-                "project": WorkspaceSandbox(Path(directory))
-            })
-            get_changes = create_get_changes_specs(workspaces)[0].handler
+            root = Path(directory)
+            view = WorkspaceViewSnapshot((
+                RootBinding("project", WorkspaceScope.TASK, root),
+            ))
+            binding = EnvironmentBinding(
+                "local-test",
+                view,
+                PermissionBinding((
+                    ("project", FilesystemPermission.READ_WRITE),
+                )),
+                root,
+                "powershell",
+                "powershell.exe",
+                RuntimeAttachment("local-test", object()),
+            )
+            get_changes = create_get_changes_specs(binding)[0].handler
 
-            result = await get_changes(GetChangesInput(root="project"))
+            result = await get_changes(GetChangesInput())
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "VERIFICATION_BACKEND_UNAVAILABLE")

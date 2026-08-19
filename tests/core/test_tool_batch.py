@@ -67,11 +67,39 @@ class ConcurrentToolBatchExecutorTest(unittest.IsolatedAsyncioTestCase):
             [step.call_id for step in evidence.snapshot().steps],
             ["call-1", "call-2"],
         )
+        self.assertEqual(
+            evidence.snapshot().steps[0].origin.tool_call_id,
+            "call-1",
+        )
+        self.assertEqual(
+            evidence.snapshot().steps[0].origin.tool_name,
+            "first",
+        )
         self.assertEqual(tools_state.summary(), {
             "total": 2,
             "pending": 0,
             "failed": 0,
         })
+
+    async def test_environment_baseline_keeps_location_and_root_membership(self):
+        recorder = TurnEvidenceRecorder()
+        recorder.record_environment_baseline("project", {
+            "ok": True,
+            "code": "CHANGES_READ",
+            "data": {
+                "location": {
+                    "environment_id": "local-test",
+                    "path": "file:///repo",
+                },
+            },
+            "error": None,
+            "hint": None,
+        })
+
+        baseline = recorder.snapshot().environment_baseline("project")
+
+        self.assertEqual(baseline.location.environment_id, "local-test")
+        self.assertEqual(baseline.location.path, "file:///repo")
 
     async def test_structured_failure_does_not_cancel_sibling_calls(self):
         dependencies = runtime_tool_dependencies()

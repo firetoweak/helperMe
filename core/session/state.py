@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from core.messages import Conversation
 from core.context import ContextState
+from core.environment import EnvironmentSelection
 from core.tools_runtime.progressive_toolsets import SessionCapabilitySnapshot
 
 
@@ -95,6 +96,7 @@ NON_TRANSITION_EVENT_KINDS = {
 @dataclass
 class Session:
     id: str
+    default_environment_selection: EnvironmentSelection | None = None
     conversation: Conversation = field(default_factory=Conversation)
     context_state: ContextState = field(default_factory=ContextState)
     status: SessionStatus = SessionStatus.PENDING

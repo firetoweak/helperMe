@@ -53,10 +53,12 @@ class AgentStepRunner:
         model_calls: ModelCallService,
         model: str,
         context_preparation: ContextPreparationService,
+        contextual_user_fragments: list[str] | None = None,
     ) -> None:
         self.model_calls = model_calls
         self.model = model
         self.context_preparation = context_preparation
+        self.contextual_user_fragments = contextual_user_fragments or []
 
     @staticmethod
     def _record_summary_compaction(
@@ -229,6 +231,7 @@ class AgentStepRunner:
                 conversation_records=records,
                 context_state=context_state,
                 runtime_instructions=preparation_prompts,
+                contextual_user_fragments=self.contextual_user_fragments,
                 tools=tools,
                 level2_boundary_message_id=level2_boundary_message_id,
                 on_summary_request=lambda model_context: checkpoints.append(

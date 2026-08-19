@@ -14,6 +14,13 @@ from uuid import uuid4
 import tiktoken
 
 from core.agent_application import AgentApplication
+from core.environment import (
+    EnvironmentSelection,
+    LocalEnvironmentProvider,
+    RootBinding,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+)
 from core.context import (
     ContextBudget,
     ContextManager,
@@ -47,10 +54,9 @@ from core.todos import TodoMode
 from core.tool_registry import BUILTIN_TOOL_REGISTRY
 from core.tools_runtime.turn_runtime import TurnRuntime
 from core.tools_runtime.tools_executor import ToolsExecutor
-from tools import create_workspace_tool_specs
+from tools import create_environment_tool_specs
 from tools.artifact_read import create_read_artifact_spec
 from tools.powershell_runner import PowerShellCommandRunner
-from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
 
 import tools  # noqa: F401
 
@@ -272,13 +278,7 @@ def request_token_count(encoding, messages, tools_schema) -> int:
 
 
 def build_registry(artifact_store):
-    workspaces = WorkspaceSandboxes({
-        "project": WorkspaceSandbox(WORKSPACE_ROOT),
-    })
     registry = BUILTIN_TOOL_REGISTRY.clone()
-    runner = PowerShellCommandRunner()
-    for spec in create_workspace_tool_specs(workspaces, runner):
-        registry.register(spec)
     registry.register(create_read_artifact_spec(artifact_store))
     return registry
 
@@ -298,6 +298,16 @@ def build_application(
         ),
     )
     model_calls = ModelCallService(llm_client, context_budget)
+    runner = PowerShellCommandRunner()
+    provider = LocalEnvironmentProvider(runner)
+    workspace_view = WorkspaceViewSnapshot((
+        RootBinding("project", WorkspaceScope.TASK, WORKSPACE_ROOT),
+    ))
+    selection = EnvironmentSelection(
+        provider.environment_id,
+        workspace_view,
+        str(WORKSPACE_ROOT),
+    )
     context_manager = ContextManager(ToolResultLimit().max_chars)
     policy_types = {
         "full": FullDehydrationPolicy,
@@ -332,9 +342,14 @@ def build_application(
             artifact_store,
             ToolResultLimit(),
         ),
+        environment_tool_factory=create_environment_tool_specs,
     )
     return AgentApplication(
-        session_runtime=SessionRuntime(turn_runtime=turn_runtime),
+        session_runtime=SessionRuntime(
+            turn_runtime=turn_runtime,
+            environment_provider=provider,
+            default_environment_selection=selection,
+        ),
         system_prompt=DEFAULT_AGENT_PROMPT,
     )
 

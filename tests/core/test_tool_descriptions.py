@@ -5,14 +5,23 @@ from unittest.mock import Mock
 
 from pydantic import ValidationError
 
+from core.environment import (
+    EnvironmentBinding,
+    FilesystemPermission,
+    PermissionBinding,
+    RootBinding,
+    RuntimeAttachment,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+)
 from core.runtime_artifacts import ArtifactStore
 from core.tool_registry import BUILTIN_TOOL_REGISTRY
 from core.todos.rewrite_todos import rewrite_todos_tool_schema
-from tools import create_workspace_tool_specs
+from tools import create_environment_tool_specs
 from tools.artifact_read import create_read_artifact_spec
 from tools.file_manage import WriteFileInput
 from tools.file_read import GlobInput, GrepInput, ReadFileInput
-from tools.workspace import WorkspaceSandbox, WorkspaceSandboxes
+from tools.powershell_runner import PowerShellCommandRunner
 
 
 REQUIRED_SECTIONS = (
@@ -26,11 +35,26 @@ REQUIRED_SECTIONS = (
 class ProductionToolDescriptionContractTest(unittest.TestCase):
     def test_all_production_tools_answer_the_four_contract_questions(self):
         with tempfile.TemporaryDirectory() as directory:
-            workspaces = WorkspaceSandboxes({
-                "project": WorkspaceSandbox(Path(directory))
-            })
+            root = Path(directory)
+            view = WorkspaceViewSnapshot((
+                RootBinding("project", WorkspaceScope.TASK, root),
+            ))
+            binding = EnvironmentBinding(
+                "local-test",
+                view,
+                PermissionBinding((
+                    ("project", FilesystemPermission.READ_WRITE),
+                )),
+                root,
+                "powershell",
+                "powershell.exe",
+                RuntimeAttachment(
+                    "local-test",
+                    PowerShellCommandRunner(),
+                ),
+            )
             specs = [
-                *create_workspace_tool_specs(workspaces),
+                *create_environment_tool_specs(binding),
                 create_read_artifact_spec(Mock(spec=ArtifactStore)),
                 BUILTIN_TOOL_REGISTRY.get("get_today_date"),
             ]
@@ -55,9 +79,8 @@ class WorkspaceToolInputSchemaContractTest(unittest.TestCase):
 
         self.assertIn("content", schema["required"])
         with self.assertRaises(ValidationError):
-            WriteFileInput.model_validate({"root": "project", "path": "empty.txt"})
+            WriteFileInput.model_validate({"path": "empty.txt"})
         validated = WriteFileInput.model_validate({
-            "root": "project",
             "path": "empty.txt",
             "content": "",
         })
@@ -86,13 +109,13 @@ class WorkspaceToolInputSchemaContractTest(unittest.TestCase):
 
     def test_invalid_numeric_limits_fail_at_input_boundary(self):
         invalid_inputs = (
-            (GlobInput, {"root": "project", "pattern": "*.py", "max_depth": 0}),
-            (GlobInput, {"root": "project", "pattern": "*.py", "offset": -1}),
-            (GlobInput, {"root": "project", "pattern": "*.py", "max_results": 0}),
-            (ReadFileInput, {"root": "project", "path": "a.py", "offset": 0}),
-            (ReadFileInput, {"root": "project", "path": "a.py", "limit": 2001}),
-            (GrepInput, {"root": "project", "query": "x", "offset": -1}),
-            (GrepInput, {"root": "project", "query": "x", "max_results": 101}),
+            (GlobInput, {"pattern": "*.py", "max_depth": 0}),
+            (GlobInput, {"pattern": "*.py", "offset": -1}),
+            (GlobInput, {"pattern": "*.py", "max_results": 0}),
+            (ReadFileInput, {"path": "a.py", "offset": 0}),
+            (ReadFileInput, {"path": "a.py", "limit": 2001}),
+            (GrepInput, {"query": "x", "offset": -1}),
+            (GrepInput, {"query": "x", "max_results": 101}),
         )
 
         for input_model, payload in invalid_inputs:

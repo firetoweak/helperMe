@@ -52,6 +52,25 @@ class ContextManagerTest(unittest.TestCase):
         self.assertIn("follow the current plan", context.messages[0]["content"])
         self.assertEqual(source[0]["content"], "system prompt")
 
+    def test_contextual_fragment_is_user_role_projection_only(self):
+        source = records(
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "完成任务"},
+        )
+
+        context = self.manager.build(ContextRequest(
+            conversation_records=source,
+            runtime_instructions=[],
+            contextual_user_fragments=[
+                "<environment_context><cwd>/repo</cwd></environment_context>"
+            ],
+        ))
+
+        self.assertEqual(context.messages[1]["role"], "user")
+        self.assertIn("<environment_context>", context.messages[1]["content"])
+        self.assertEqual(source[1].payload["content"], "完成任务")
+        self.assertEqual(len(source), 2)
+
     def test_build_rejects_runtime_instructions_without_system_message(self):
         request = ContextRequest(
             conversation_records=records(

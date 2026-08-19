@@ -10,42 +10,35 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from core.tool_registry import EmptyInput, PydanticParameters, ToolSpec
-from tools.workspace import (
-    AbsolutePathNotAllowed,
-    PathOutsideWorkspace,
-    WorkspaceInputError,
-    WorkspaceSandbox,
-    WorkspaceSandboxes,
-    workspace_error,
+from core.environment import (
+    EnvironmentBinding,
+    EnvironmentInputError,
+    EnvironmentPathResolver,
+    InvalidEnvironmentPath,
+    ResolvedEnvironmentPath,
+    environment_error,
 )
+from core.tool_registry import PydanticParameters, ToolSpec
 
-
-GET_WORKSPACE_INFO_DESCRIPTION = """
-用途：列出当前可用 workspace root 的逻辑名称。
-何时使用：不知道该选哪个 root 时使用；它用于发现工作区，不代替 glob/read_file 等文件操作工具。
-关键限制：无参数，必须传 {}；物理路径是内部配置，其他 Workspace 工具必须使用返回的 root 名称和 root 内相对 path。
-失败/截断后：结果不会截断；若缺少预期 root，应检查应用配置，不能猜测 root 名称或改用绝对 path 绕过。
-""".strip()
 
 GLOB_DESCRIPTION = """
-用途：在指定 workspace root 中按名称模式查找文件或目录，返回可继续传给其他文件工具的相对路径。
+用途：在当前 Environment 的可见工作区域中按名称模式查找文件或目录。
 何时使用：不知道目标文件位置、需要按扩展名或目录层级定位时使用；搜索文件内容用 grep，读取已知文件用 read_file。
-关键限制：root 必须是已配置名称；path 和 pattern 必须相对 root，不能包含越界；glob 只定位名称，不读取文件内容，指向 root 外的符号链接结果会被排除。
-失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path、pattern、kind、max_depth；GLOB_PARTIAL 与 complete=false 表示结果可用但搜索不完整，必须检查 inaccessible_paths，不能把无匹配当作完整结论；root/path 错误时先用 get_workspace_info 或修正相对路径。
+关键限制：相对 path 以当前 Turn cwd 为基准，绝对 path 使用 Environment 原生语义；pattern 相对搜索起点；结果必须位于 Workspace View 内。
+失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path、pattern、kind、max_depth；GLOB_PARTIAL 与 complete=false 表示结果可用但搜索不完整。
 """.strip()
 
 GREP_DESCRIPTION = """
-用途：在指定 workspace root 的文件或目录内按关键词或正则搜索文本，返回每个匹配行的位置和内容。
+用途：在当前 Environment 的可见文件或目录内按关键词或正则搜索文本，返回每个匹配行的位置和内容。
 何时使用：不知道内容出现在哪个文件、修改前需要定位原文时使用；找文件名用 glob，阅读匹配位置的完整上下文用 read_file。
-关键限制：root 必须是已配置名称，path 必须相对 root；query 按正则解释；一条 hit 表示一行匹配，正文和 submatches 都是有界预览，不能替代 read_file。
+关键限制：相对 path 以当前 Turn cwd 为基准，绝对 path 使用 Environment 原生语义；query 按正则解释；一条 hit 表示一行匹配。
 失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path/query；content_truncated=true 时用 read_file 查看该行；RG_TIMEOUT/RG_NOT_FOUND/RG_FAILED 时不能假定没有匹配。
 """.strip()
 
 READ_FILE_DESCRIPTION = """
-用途：读取指定 workspace root 内已知文本文件的行范围，返回内容、行号和分页状态。
+用途：读取当前 Environment Workspace View 内已知文本文件的行范围，返回内容、行号和分页状态。
 何时使用：已经知道文件路径、需要查看 grep 命中的完整上下文或在修改前取得真实 old_block 时使用；不知道路径先用 glob/grep，不要用它读取二进制文件。
-关键限制：root 必须是已配置名称，path 必须相对 root；offset 从 1 开始；文件最大 20 MiB，单次最多 2000 行和 8000 字符，不能把局部结果当作完整文件。
+关键限制：相对 path 以当前 Turn cwd 为基准，绝对 path 使用 Environment 原生语义；offset 从 1 开始；文件最大 20 MiB，单次最多 2000 行和 8000 字符。
 失败/截断后：truncated=true 时使用 next_offset 继续；LINE_TOO_LONG 返回有界 preview 但不声称读取成功；FILE_TOO_LARGE 时先用 grep 定位或改用专用工具。
 """.strip()
 
@@ -61,45 +54,57 @@ GREP_TIMEOUT_SECONDS = 30
 GREP_SHUTDOWN_TIMEOUT_SECONDS = 5
 
 
-class RootInput(BaseModel):
-    root: str = Field(description="workspace root 的逻辑名称；只能使用 get_workspace_info 返回的 name")
-
-
-class GlobInput(RootInput):
+class GlobInput(BaseModel):
     pattern: str = Field(description="glob 模式；不含 / 时递归匹配文件名，含 / 时匹配相对搜索起点的路径，例如 *.py、tools/*.py")
-    path: str = Field(default=".", description="root 内的相对搜索起点；默认搜索整个 root")
+    path: str = Field(default=".", description="搜索起点；相对路径基于当前 Turn cwd")
     kind: Literal["file", "dir", "any"] = Field(default="any", description="结果类型：file 仅文件、dir 仅目录、any 两者都要")
     max_depth: int | None = Field(default=None, ge=1, description="相对搜索起点的深度限制；默认不限制，1 表示只看当前层")
     offset: int = Field(default=0, ge=0, description="跳过的匹配结果数量，从 0 开始")
     max_results: int = Field(default=10, ge=1, le=100, description="最多返回的结果数量，范围 1 到 100")
 
 
-class ReadFileInput(RootInput):
-    path: str = Field(description="root 内要读取的相对文件路径")
+class ReadFileInput(BaseModel):
+    path: str = Field(description="要读取的文件路径；相对路径基于当前 Turn cwd")
     offset: int = Field(default=1, ge=1, description="读取起始行号，从 1 开始")
     limit: int = Field(default=200, ge=1, le=2000, description="最多读取行数，范围 1 到 2000")
 
 
-class GrepInput(RootInput):
+class GrepInput(BaseModel):
     query: str = Field(description="搜索关键词或正则表达式")
-    path: str = Field(default=".", description="root 内的相对搜索路径")
+    path: str = Field(default=".", description="搜索路径；相对路径基于当前 Turn cwd")
     offset: int = Field(default=0, ge=0, description="跳过的匹配行数量，从 0 开始")
     max_results: int = Field(default=10, ge=1, le=100, description="最多返回的匹配数量，范围 1 到 100")
 
 
 def _require_existing(
-    sandbox: WorkspaceSandbox,
+    resolver: EnvironmentPathResolver,
     path: str,
     *,
     expect: Literal["file", "dir", "any"],
-) -> tuple[Path | None, dict[str, Any] | None]:
-    resolved = sandbox.resolve(path)
-    if not resolved.exists():
-        return None, {"ok": False, "code": "NOT_FOUND", "error": f"路径不存在: {path}"}
-    if expect == "file" and not resolved.is_file():
-        return None, {"ok": False, "code": "NOT_A_FILE", "error": f"不是文件: {path}"}
-    if expect == "dir" and not resolved.is_dir():
-        return None, {"ok": False, "code": "NOT_A_DIR", "error": f"不是目录: {path}"}
+) -> tuple[ResolvedEnvironmentPath | None, dict[str, Any] | None]:
+    resolved = resolver.resolve(path)
+    native = resolved.native_path
+    if not native.exists():
+        return None, {
+            "ok": False,
+            "code": "NOT_FOUND",
+            "error": f"路径不存在: {path}",
+            **resolved.result_fields(),
+        }
+    if expect == "file" and not native.is_file():
+        return None, {
+            "ok": False,
+            "code": "NOT_A_FILE",
+            "error": f"不是文件: {path}",
+            **resolved.result_fields(),
+        }
+    if expect == "dir" and not native.is_dir():
+        return None, {
+            "ok": False,
+            "code": "NOT_A_DIR",
+            "error": f"不是目录: {path}",
+            **resolved.result_fields(),
+        }
     return resolved, None
 
 
@@ -141,32 +146,35 @@ def _matches_glob(path: str, pattern: str) -> bool:
     return PurePosixPath(f"/{path}").match(f"/{pattern}")
 
 
-def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
-    async def get_workspace_info(_: EmptyInput) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "code": "WORKSPACE_INFO_READ",
-            "roots": workspaces.info(),
-        }
+def create_file_read_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
+    resolver = binding.resolver
 
     async def glob(raw: GlobInput) -> dict[str, Any]:
         try:
-            sandbox = workspaces.get(raw.root)
-            search_root, err = _require_existing(sandbox, raw.path, expect="dir")
+            resolved_search, err = _require_existing(
+                resolver, raw.path, expect="dir"
+            )
             if err:
                 return err
+            assert resolved_search is not None
+            search_root = resolved_search.native_path
 
             pattern = raw.pattern.replace("\\", "/")
             pattern_path = Path(pattern)
             if pattern_path.is_absolute() or pattern_path.drive:
-                raise AbsolutePathNotAllowed(raw.pattern)
+                raise InvalidEnvironmentPath("glob pattern 必须相对搜索起点")
             if ".." in pattern_path.parts:
-                raise PathOutsideWorkspace(raw.pattern)
-        except WorkspaceInputError as exc:
-            return workspace_error(exc)
+                raise InvalidEnvironmentPath("glob pattern 不能包含 ..")
+        except EnvironmentInputError as exc:
+            return environment_error(exc)
 
         if not pattern.strip():
-            return {"ok": False, "error": "pattern 不能为空", "code": "EMPTY_PATTERN"}
+            return {
+                "ok": False,
+                "error": "pattern 不能为空",
+                "code": "EMPTY_PATTERN",
+                **resolved_search.result_fields(),
+            }
 
         matches = []
         skipped = 0
@@ -177,9 +185,9 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             inaccessible,
         ):
             try:
-                workspace_path = candidate.relative_to(sandbox.root).as_posix()
-                absolute_candidate = sandbox.resolve(workspace_path)
-            except WorkspaceInputError:
+                resolved_candidate = resolver.resolve(str(candidate))
+                absolute_candidate = resolved_candidate.native_path
+            except EnvironmentInputError:
                 continue
 
             if not absolute_candidate.exists():
@@ -195,23 +203,27 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
             if skipped < raw.offset:
                 skipped += 1
                 continue
-            matches.append({"path": workspace_path, "kind": candidate_kind})
+            matches.append({
+                **resolved_candidate.result_fields(),
+                "path": resolved_candidate.workspace_membership.display_path,
+                "kind": candidate_kind,
+            })
             if len(matches) > raw.max_results:
                 break
 
         truncated = len(matches) > raw.max_results
         page = matches[:raw.max_results]
         inaccessible_paths = [
-            path.relative_to(sandbox.root).as_posix()
+            resolver.resolve(str(path)).workspace_membership.display_path
             for path in inaccessible[:MAX_GLOB_INACCESSIBLE_PATHS]
         ]
         complete = not inaccessible
         return {
             "ok": True,
             "code": "GLOB_COMPLETED" if complete else "GLOB_PARTIAL",
-            "root": raw.root,
             "pattern": raw.pattern,
             "path": raw.path,
+            **resolved_search.result_fields(),
             "matches": page,
             "complete": complete,
             "inaccessible_paths": inaccessible_paths,
@@ -233,12 +245,15 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         if shutil.which("rg") is None:
             return {"ok": False, "code": "RG_NOT_FOUND", "error": "未找到 rg"}
         try:
-            sandbox = workspaces.get(raw.root)
-            path, err = _require_existing(sandbox, raw.path, expect="any")
-        except WorkspaceInputError as exc:
-            return workspace_error(exc)
+            resolved_path, err = _require_existing(
+                resolver, raw.path, expect="any"
+            )
+        except EnvironmentInputError as exc:
+            return environment_error(exc)
         if err:
             return err
+        assert resolved_path is not None
+        path = resolved_path.native_path
 
         hits = []
         skipped = 0
@@ -314,8 +329,10 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
                             truncated = True
                             break
                         submatches = data["submatches"]
+                        hit_path = resolver.resolve(data["path"]["text"])
                         hits.append({
-                            "file": sandbox.relative(data["path"]["text"]),
+                            "file": hit_path.workspace_membership.display_path,
+                            **hit_path.result_fields(),
                             "line": data["line_number"],
                             "content": content,
                             "content_truncated": len(content) < len(full_content),
@@ -349,19 +366,21 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
                 "ok": False,
                 "code": "RG_TIMEOUT",
                 "error": f"rg 搜索超过 {GREP_TIMEOUT_SECONDS} 秒",
+                **resolved_path.result_fields(),
             }
         if not truncated and return_code == 2:
             return {
                 "ok": False,
                 "code": "RG_FAILED",
                 "error": stderr or "rg 执行失败",
+                **resolved_path.result_fields(),
             }
 
         return {
             "ok": True,
             "code": "GREP_COMPLETED",
-            "root": raw.root,
-            "path": sandbox.relative(path),
+            "path": resolved_path.workspace_membership.display_path,
+            **resolved_path.result_fields(),
             "query": raw.query,
             "hits": hits,
             "truncated": truncated,
@@ -370,13 +389,16 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
 
     async def read_file(raw: ReadFileInput) -> dict[str, Any]:
         try:
-            sandbox = workspaces.get(raw.root)
-            path, err = _require_existing(sandbox, raw.path, expect="file")
-        except WorkspaceInputError as exc:
-            return workspace_error(exc)
+            resolved_path, err = _require_existing(
+                resolver, raw.path, expect="file"
+            )
+        except EnvironmentInputError as exc:
+            return environment_error(exc)
         if err:
             return err
-        relative_path = sandbox.relative(path)
+        assert resolved_path is not None
+        path = resolved_path.native_path
+        relative_path = resolved_path.workspace_membership.display_path
         file_size = path.stat().st_size
         if file_size > MAX_READ_FILE_SIZE_BYTES:
             return {
@@ -386,6 +408,7 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
                 "path": relative_path,
                 "size": file_size,
                 "max_size": MAX_READ_FILE_SIZE_BYTES,
+                **resolved_path.result_fields(),
             }
 
         selected: list[str] = []
@@ -418,6 +441,7 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
                             "line": line_number,
                             "preview": line[:MAX_READ_CHARS],
                             "max_chars": MAX_READ_CHARS,
+                            **resolved_path.result_fields(),
                         }
                     selected.append(line)
                     content_length += len(line)
@@ -428,6 +452,7 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
                 "code": "NOT_A_TEXT_FILE",
                 "error": f"无法以 UTF-8 文本读取: {relative_path}",
                 "path": relative_path,
+                **resolved_path.result_fields(),
             }
 
         if not selected and last_seen_line < raw.offset:
@@ -437,13 +462,14 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
                     "code": "OFFSET_OUT_OF_RANGE",
                     "error": f"起始行号超出文件末尾: {relative_path}",
                     "path": relative_path,
+                    **resolved_path.result_fields(),
                 }
 
         return {
             "ok": True,
             "code": "FILE_READ",
-            "root": raw.root,
             "path": relative_path,
+            **resolved_path.result_fields(),
             "content": "".join(selected),
             "start_line": raw.offset,
             "end_line": end_line,
@@ -453,12 +479,6 @@ def create_file_read_specs(workspaces: WorkspaceSandboxes) -> list[ToolSpec]:
         }
 
     return [
-        ToolSpec(
-            name="get_workspace_info",
-            description=GET_WORKSPACE_INFO_DESCRIPTION,
-            parameters=PydanticParameters(EmptyInput),
-            handler=get_workspace_info,
-        ),
         ToolSpec(
             name="glob",
             description=GLOB_DESCRIPTION,

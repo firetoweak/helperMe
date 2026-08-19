@@ -1,8 +1,18 @@
 import asyncio
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from core.context import ContextState
+from core.environment import (
+    EnvironmentSelection,
+    LocalEnvironmentProvider,
+    RootBinding,
+    WorkspaceScope,
+    WorkspaceViewSnapshot,
+)
 from core.session import MAX_USER_MESSAGE_CHARS, SessionRuntime
 from core.session.state import (
     Session,
@@ -11,6 +21,7 @@ from core.session.state import (
     SessionStatus,
 )
 from core.tools_runtime.turn_runtime import TurnStatus
+from core.tools_runtime.turn_invocation import TurnInvocation
 
 
 class SessionRuntimeCreateSessionTest(unittest.IsolatedAsyncioTestCase):
@@ -418,6 +429,253 @@ class SessionRuntimeResumeTest(unittest.IsolatedAsyncioTestCase):
         self.turn_runtime.run.assert_not_called()
         self.assertEqual(len(self.session.turn_records), 1)
         self.assertEqual(self.session.status, SessionStatus.INTERRUPTED)
+
+
+class SessionEnvironmentSelectionTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        base = Path(self.directory.name)
+        self.first = base / "first"
+        self.second = base / "second"
+        self.first.mkdir()
+        self.second.mkdir()
+        self.view = WorkspaceViewSnapshot((
+            RootBinding("first", WorkspaceScope.TASK, self.first),
+            RootBinding("second", WorkspaceScope.TASK, self.second),
+        ))
+        self.default_selection = EnvironmentSelection(
+            "local-test",
+            self.view,
+            str(self.first),
+        )
+        self.provider = LocalEnvironmentProvider(
+            Mock(),
+            environment_id="local-test",
+        )
+        self.turn_runtime = Mock()
+        self.turn_runtime.run = AsyncMock()
+        self.runtime = SessionRuntime(
+            turn_runtime=self.turn_runtime,
+            environment_provider=self.provider,
+            default_environment_selection=self.default_selection,
+        )
+        self.environment_session = self.runtime.create_session(
+            "session-environment",
+            system_prompt="prompt",
+        )
+    def completed_result(self, context_state):
+        return Mock(
+            status=TurnStatus.COMPLETED,
+            final_reason=None,
+            context_state=context_state,
+        )
+
+    async def test_session_stores_selection_and_turn_receives_binding(self):
+        self.turn_runtime.run.side_effect = lambda **kwargs: (
+            self.completed_result(kwargs["context_state"])
+        )
+
+        await self.runtime.start(
+            self.environment_session.id,
+            "environment-turn-1",
+            "执行",
+        )
+
+        invocation = self.turn_runtime.run.call_args.kwargs["invocation"]
+        self.assertIs(
+            self.environment_session.default_environment_selection,
+            self.default_selection,
+        )
+        self.assertEqual(invocation.environment_binding.cwd, self.first)
+        self.assertEqual(
+            invocation.environment_binding.runtime_attachment
+            .environment_instance_id,
+            "local-test",
+        )
+
+    async def test_explicit_selection_is_sticky_after_successful_attach(self):
+        self.turn_runtime.run.side_effect = lambda **kwargs: (
+            self.completed_result(kwargs["context_state"])
+        )
+        selection = EnvironmentSelection(
+            "local-test",
+            self.view,
+            str(self.second),
+        )
+
+        await self.runtime.start(
+            self.environment_session.id,
+            "environment-turn-1",
+            "切换位置",
+            invocation=TurnInvocation(environment_selection=selection),
+        )
+        await self.runtime.start(
+            self.environment_session.id,
+            "environment-turn-2",
+            "继续",
+        )
+
+        first_call, second_call = self.turn_runtime.run.call_args_list
+        self.assertIs(
+            self.environment_session.default_environment_selection,
+            selection,
+        )
+        self.assertEqual(
+            first_call.kwargs["invocation"].environment_binding.cwd,
+            self.second,
+        )
+        self.assertEqual(
+            second_call.kwargs["invocation"].environment_binding.cwd,
+            self.second,
+        )
+
+    async def test_attach_failure_does_not_commit_selection_or_turn(self):
+        invalid = EnvironmentSelection(
+            "missing",
+            self.view,
+            str(self.second),
+        )
+
+        with self.assertRaisesRegex(ValueError, "未知的 Environment"):
+            await self.runtime.start(
+                self.environment_session.id,
+                "environment-turn-1",
+                "切换位置",
+                invocation=TurnInvocation(environment_selection=invalid),
+            )
+
+        self.assertIs(
+            self.environment_session.default_environment_selection,
+            self.default_selection,
+        )
+        self.assertEqual(
+            self.environment_session.status,
+            SessionStatus.PENDING,
+        )
+        self.assertEqual(self.environment_session.turn_records, [])
+        self.turn_runtime.run.assert_not_called()
+
+    async def test_turn_failure_does_not_roll_back_attached_selection(self):
+        selection = EnvironmentSelection(
+            "local-test",
+            self.view,
+            str(self.second),
+        )
+        self.turn_runtime.run.side_effect = RuntimeError("task failed")
+
+        with self.assertRaisesRegex(RuntimeError, "task failed"):
+            await self.runtime.start(
+                self.environment_session.id,
+                "environment-turn-1",
+                "执行失败任务",
+                invocation=TurnInvocation(environment_selection=selection),
+            )
+
+        self.assertIs(
+            self.environment_session.default_environment_selection,
+            selection,
+        )
+
+    async def test_turn_binding_semantics_are_immutable(self):
+        self.turn_runtime.run.side_effect = lambda **kwargs: (
+            self.completed_result(kwargs["context_state"])
+        )
+
+        await self.runtime.start(
+            self.environment_session.id,
+            "environment-turn-1",
+            "执行",
+        )
+        binding = self.turn_runtime.run.call_args.kwargs[
+            "invocation"
+        ].environment_binding
+
+        with self.assertRaises(FrozenInstanceError):
+            binding.cwd = self.second
+
+    async def test_concurrent_admission_preserves_request_order(self):
+        first_attach_entered = asyncio.Event()
+        release_first_attach = asyncio.Event()
+        original_attach = self.provider.attach
+        attach_count = 0
+
+        async def attach(selection):
+            nonlocal attach_count
+            attach_count += 1
+            if attach_count == 1:
+                first_attach_entered.set()
+                await release_first_attach.wait()
+            return await original_attach(selection)
+
+        self.provider.attach = AsyncMock(side_effect=attach)
+        self.turn_runtime.run.side_effect = lambda **kwargs: (
+            self.completed_result(kwargs["context_state"])
+        )
+        first_selection = EnvironmentSelection(
+            "local-test",
+            self.view,
+            str(self.first),
+        )
+        second_selection = EnvironmentSelection(
+            "local-test",
+            self.view,
+            str(self.second),
+        )
+
+        first_task = asyncio.create_task(self.runtime.start(
+            self.environment_session.id,
+            "environment-turn-1",
+            "先到请求",
+            invocation=TurnInvocation(
+                environment_selection=first_selection
+            ),
+        ))
+        await first_attach_entered.wait()
+        second_task = asyncio.create_task(self.runtime.start(
+            self.environment_session.id,
+            "environment-turn-2",
+            "后到请求",
+            invocation=TurnInvocation(
+                environment_selection=second_selection
+            ),
+        ))
+        await asyncio.sleep(0)
+        release_first_attach.set()
+
+        await asyncio.gather(first_task, second_task)
+
+        self.assertEqual(
+            [
+                record.turn_id
+                for record in self.environment_session.turn_records
+            ],
+            ["environment-turn-1", "environment-turn-2"],
+        )
+        self.assertIs(
+            self.environment_session.default_environment_selection,
+            second_selection,
+        )
+
+
+class SessionRuntimeResumeContinuationTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.turn_runtime = Mock()
+        self.turn_runtime.run = AsyncMock()
+        self.runtime = SessionRuntime(turn_runtime=self.turn_runtime)
+        self.session = self.runtime.create_session(
+            "session-1",
+            system_prompt="prompt",
+        )
+        self.turn_runtime.run.return_value = Mock(
+            status=TurnStatus.INTERRUPTED,
+            final_reason="user_requested",
+            context_state=self.session.context_state,
+        )
+
+    async def asyncSetUp(self):
+        await self.runtime.start(self.session.id, "turn-1", "开始任务")
+        self.turn_runtime.reset_mock()
 
     async def test_resume_rejects_oversized_user_message_without_entering_turn(self):
         oversized = "x" * (MAX_USER_MESSAGE_CHARS + 1)

@@ -5,35 +5,31 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from core.environment import (
+    EnvironmentBinding,
+    EnvironmentInputError,
+    environment_error,
+)
 from core.tool_registry import ToolSpec, PydanticParameters
 from tools.powershell_runner import (
     CommandStartError,
     CommandResult,
-    PowerShellCommandRunner,
     PowerShellNotFoundError,
-)
-from tools.workspace import (
-    WorkspaceInputError,
-    WorkspaceSandboxes,
-    workspace_error,
 )
 
 
 EXECUTE_COMMAND_DESCRIPTION = """
-用途：在指定 Workspace 工作目录中使用 PowerShell 执行本机 CLI 命令。
+用途：在当前 Turn Environment 中使用 PowerShell 执行本机 CLI 命令。
 何时使用：用于依赖安装、构建、测试、格式化、静态检查、Git、包管理器和运行脚本；常规文件发现、搜索、读取和修改应使用专用文件工具。
-关键限制：root 必须是已配置名称，cwd 必须是 root 内的相对目录；cwd 只决定启动位置，不限制命令访问 Workspace 外资源；command 使用 PowerShell 语义；workspace_effect 必须按命令的预期副作用声明，明确只读查询时使用 read_only，其他情况使用 may_write；仅支持有超时的前台非交互命令，不支持 stdin、PTY、后台进程、服务器或守护进程；非零 exit_code 是真实命令结果，不是工具协议失败。
+关键限制：相对 cwd 基于当前 Turn cwd，绝对 cwd 使用 Environment 原生语义；cwd 只决定启动位置，当前本地实现尚无进程级 Sandbox；command 使用 PowerShell 语义；workspace_effect 必须按预期副作用声明；仅支持有超时的前台非交互命令。
 失败/截断后：检查 exit_code、stdout、stderr、timed_out 和各流的 truncated；超时或失败时不能假定命令成功，也不要无条件重试可能产生副作用的命令；命令产生的文件变化需通过文件工具或 Git diff 重新验证。
 """.strip()
 
 
 class ExecuteCommandInput(BaseModel):
-    root: str = Field(
-        description="workspace root 的逻辑名称；只能使用 get_workspace_info 返回的 name"
-    )
-    cwd: str = Field(
-        default=".",
-        description="Workspace root 内的相对工作目录，默认使用 root",
+    cwd: str | None = Field(
+        default=None,
+        description="命令启动目录；省略时使用当前 Turn cwd，相对路径也基于它",
     )
     command: str = Field(description="要执行的完整 PowerShell 命令字符串")
     workspace_effect: Literal["read_only", "may_write"] = Field(
@@ -62,9 +58,9 @@ def _result_data(result: CommandResult) -> dict[str, Any]:
 
 
 def create_command_execution_spec(
-    workspaces: WorkspaceSandboxes,
-    runner: PowerShellCommandRunner,
+    binding: EnvironmentBinding,
 ) -> ToolSpec:
+    runner = binding.runtime_attachment.command_executor
     async def execute_command(raw: ExecuteCommandInput) -> dict[str, Any]:
         if not raw.command.strip():
             return {
@@ -74,22 +70,37 @@ def create_command_execution_spec(
             }
 
         try:
-            sandbox = workspaces.get(raw.root)
-            cwd = sandbox.resolve(raw.cwd)
-        except WorkspaceInputError as exc:
-            return workspace_error(exc)
+            resolved_cwd = binding.resolver.resolve(
+                raw.cwd or ".",
+                access=(
+                    "write"
+                    if raw.workspace_effect == "may_write"
+                    else "read"
+                ),
+            )
+        except EnvironmentInputError as exc:
+            return environment_error(exc)
+        cwd = resolved_cwd.native_path
 
         if not cwd.exists():
             return {
                 "ok": False,
                 "code": "CWD_NOT_FOUND",
                 "error": f"工作目录不存在: {raw.cwd}",
+                "execution_location": resolved_cwd.location.to_dict(),
+                "workspace_membership": (
+                    resolved_cwd.workspace_membership.to_dict()
+                ),
             }
         if not cwd.is_dir():
             return {
                 "ok": False,
                 "code": "CWD_NOT_A_DIRECTORY",
                 "error": f"工作目录不是目录: {raw.cwd}",
+                "execution_location": resolved_cwd.location.to_dict(),
+                "workspace_membership": (
+                    resolved_cwd.workspace_membership.to_dict()
+                ),
             }
 
         try:
@@ -99,17 +110,28 @@ def create_command_execution_spec(
                 "ok": False,
                 "code": "POWERSHELL_NOT_FOUND",
                 "error": str(exc),
+                "execution_location": resolved_cwd.location.to_dict(),
+                "workspace_membership": (
+                    resolved_cwd.workspace_membership.to_dict()
+                ),
             }
         except CommandStartError as exc:
             return {
                 "ok": False,
                 "code": "COMMAND_START_FAILED",
                 "error": str(exc),
+                "execution_location": resolved_cwd.location.to_dict(),
+                "workspace_membership": (
+                    resolved_cwd.workspace_membership.to_dict()
+                ),
             }
 
         data = {
-            "root": raw.root,
-            "cwd": sandbox.relative(cwd),
+            "execution_location": resolved_cwd.location.to_dict(),
+            "workspace_membership": (
+                resolved_cwd.workspace_membership.to_dict()
+            ),
+            "cwd": resolved_cwd.workspace_membership.display_path,
             "workspace_effect": raw.workspace_effect,
             **_result_data(result),
         }

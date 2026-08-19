@@ -12,7 +12,8 @@ from core.tools_runtime.progressive_toolsets import (
 from core.tools_runtime.turn_evidence import (
     TurnEvidence,
     ToolEvidence,
-    WorkspaceBaseline,
+    EnvironmentBaseline,
+    EvidenceOrigin,
 )
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     "ToolsetProvider",
     "SessionCapabilitySnapshot",
     "SnapshotToolsetProvider",
-    "WorkspaceBaseline",
+    "EnvironmentBaseline",
+    "EvidenceOrigin",
 ]
