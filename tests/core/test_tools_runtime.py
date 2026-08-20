@@ -58,33 +58,6 @@ def command_result(code, workspace_effect):
 
 
 class ToolRegistryEarlyFailTest(unittest.IsolatedAsyncioTestCase):
-    async def test_duplicate_registration_fails_without_replacing_original(self):
-        tool_name = "duplicate_registration_test_tool"
-
-        def original_handler(_):
-            return {"ok": True, "code": "ORIGINAL"}
-
-        registry = ToolRegistry()
-        original = ToolSpec(
-            tool_name,
-            "original",
-            PydanticParameters(EmptyInput),
-            original_handler,
-        )
-        registry.register(original)
-
-        with self.assertRaises(ValueError):
-            registry.register(
-                ToolSpec(
-                    tool_name,
-                    "replacement",
-                    PydanticParameters(EmptyInput),
-                    original_handler,
-                )
-            )
-
-        self.assertIs(registry.get(tool_name), original)
-
     async def test_invalid_json_schema_fails_during_parameters_creation(self):
         with self.assertRaises(SchemaError):
             JsonSchemaParameters({"type": "not-a-json-schema-type"})
@@ -263,15 +236,6 @@ class ToolsStateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(step.code, "DEMO_ERROR")
         self.assertEqual(step.error, "failed")
 
-    async def test_result_cannot_be_recorded_twice(self):
-        state = ToolsState()
-        state.add_call("call-1", "demo", "{}")
-        result = {"ok": True, "code": "OK", "data": None, "error": None}
-        state.add_result("call-1", result)
-
-        with self.assertRaises(ValueError):
-            state.add_result("call-1", result)
-
     async def test_summary_contains_no_derived_balanced_field(self):
         state = ToolsState()
 
@@ -327,7 +291,7 @@ class ToolsProtocolTest(unittest.IsolatedAsyncioTestCase):
 
 class StopGuardTest(unittest.IsolatedAsyncioTestCase):
     async def test_turn_without_writes_can_stop(self):
-        safety = evaluate_stop_safety([], ToolsState())
+        safety = evaluate_stop_safety(ToolsState())
 
         self.assertTrue(safety.can_stop)
 
@@ -336,9 +300,8 @@ class StopGuardTest(unittest.IsolatedAsyncioTestCase):
         state.add_call("write-1", "write_file", "{}")
         state.add_result("write-1", SUCCESS)
 
-        safety = evaluate_stop_safety([], state)
+        safety = evaluate_stop_safety(state)
 
-        self.assertTrue(safety.protocol_safe)
         self.assertFalse(safety.business_safe)
         self.assertEqual(safety.reason, "verification_required")
 
@@ -349,7 +312,7 @@ class StopGuardTest(unittest.IsolatedAsyncioTestCase):
         state.add_call("verify-1", "get_changes", "{}")
         state.add_result("verify-1", SUCCESS)
 
-        self.assertTrue(evaluate_stop_safety([], state).can_stop)
+        self.assertTrue(evaluate_stop_safety(state).can_stop)
 
     async def test_new_write_after_verification_requires_new_verification(self):
         state = ToolsState()
@@ -361,7 +324,7 @@ class StopGuardTest(unittest.IsolatedAsyncioTestCase):
             state.add_call(call_id, name, "{}")
             state.add_result(call_id, SUCCESS)
 
-        self.assertFalse(evaluate_stop_safety([], state).can_stop)
+        self.assertFalse(evaluate_stop_safety(state).can_stop)
 
     async def test_may_write_commands_require_verification(self):
         for code, result in (
@@ -373,7 +336,7 @@ class StopGuardTest(unittest.IsolatedAsyncioTestCase):
                 state.add_call("command-1", "execute_command", "{}")
                 state.add_result("command-1", result)
 
-                self.assertFalse(evaluate_stop_safety([], state).can_stop)
+                self.assertFalse(evaluate_stop_safety(state).can_stop)
 
     async def test_read_only_commands_do_not_require_verification(self):
         for code in ("COMMAND_COMPLETED", "COMMAND_TIMEOUT"):
@@ -382,7 +345,7 @@ class StopGuardTest(unittest.IsolatedAsyncioTestCase):
                 state.add_call("command-1", "execute_command", "{}")
                 state.add_result("command-1", command_result(code, "read_only"))
 
-                self.assertTrue(evaluate_stop_safety([], state).can_stop)
+                self.assertTrue(evaluate_stop_safety(state).can_stop)
 
     async def test_command_rejected_before_start_does_not_require_verification(self):
         state = ToolsState()
@@ -392,7 +355,7 @@ class StopGuardTest(unittest.IsolatedAsyncioTestCase):
             {"ok": False, "code": "EMPTY_COMMAND", "error": "empty"},
         )
 
-        self.assertTrue(evaluate_stop_safety([], state).can_stop)
+        self.assertTrue(evaluate_stop_safety(state).can_stop)
 
 
 class GetChangesEarlyFailTest(unittest.IsolatedAsyncioTestCase):

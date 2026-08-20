@@ -197,13 +197,10 @@ class MicroCompactionPolicy:
                 later.get("role") == "assistant"
                 for later in payloads[result_end:max_index_exclusive]
             )
-            try:
-                batch_succeeded = all(
-                    json.loads(result["content"])["ok"] is True
-                    for result in results
-                )
-            except (TypeError, ValueError, KeyError, json.JSONDecodeError):
-                batch_succeeded = False
+            batch_succeeded = all(
+                json.loads(result["content"])["ok"] is True
+                for result in results
+            )
 
             if batch_was_consumed and batch_succeeded:
                 for tool_index in range(index + 1, result_end):

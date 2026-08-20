@@ -119,9 +119,6 @@ class ModeActivator:
                     )
                     runtime_mode = self.runtime_modes[decision.mode]
 
-        if runtime_mode is None:
-            raise AssertionError("runtime mode was not configured")
-
         mode_state = runtime_mode.create_state()
         start_prompt = runtime_mode.start(mode_state)
         if start_prompt is None:

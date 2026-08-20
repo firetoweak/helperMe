@@ -74,15 +74,7 @@ mode 只能是 "plain" 或 "todo"。只返回严格 JSON，不要输出 Markdown
         records: list[ConversationMessage],
     ) -> list[dict[str, str]]:
         """生成只属于本次路由调用的一次性模型消息。"""
-        if not records or records[0].payload.get("role") != "system":
-            raise ValueError("routing conversation 必须以 system 消息开头")
         current = records[-1].payload
-        if (
-            current.get("role") != "user"
-            or not isinstance(current.get("content"), str)
-            or not current["content"].strip()
-        ):
-            raise ValueError("routing conversation 必须以非空 user 消息结尾")
 
         previous_answer = next(
             (

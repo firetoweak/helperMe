@@ -65,8 +65,6 @@ class ToolResultExternalizer:
             "hint": "需要更多内容时调用 read_artifact 分页读取。",
         }
         projected_chars = len(encode_tool_result(projected))
-        if projected_chars > self.limit.max_chars:
-            raise ValueError("外置后的工具结果仍超过 max_chars")
         return ExternalizeOutcome(
             result=projected,
             original_chars=original_chars,

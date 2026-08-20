@@ -34,6 +34,10 @@ class McpRegistry:
         async with self._lock:
             return self._read_unlocked()
 
+    def snapshot(self) -> tuple[McpServerRecord, ...]:
+        """同步读取一次文件快照，供 Toolset 目录投影。"""
+        return self._read_unlocked()
+
     async def get(self, server_id: str) -> McpServerRecord | None:
         async with self._lock:
             return self._index_unlocked().get(server_id)

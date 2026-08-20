@@ -4,7 +4,7 @@ import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Protocol
+from typing import Any, Awaitable, Callable, Mapping, Protocol, cast
 
 import httpx2
 from mcp import Client
@@ -31,6 +31,18 @@ from plugins.mcp.models import (
     sanitize_error_summary,
 )
 from plugins.mcp.secrets import McpSecretStore
+
+
+class McpClientError(RuntimeError):
+    """MCP 外部连接边界的预期失败。"""
+
+
+class McpSdkError(McpClientError):
+    """MCP SDK/transport 在外部调用边界返回的失败。"""
+
+
+class McpConnectionInvalidatedError(McpClientError):
+    """连接建立期间被外部配置变更主动失效。"""
 
 
 async def _finish_cleanup(cleanup: Awaitable[None]) -> None:
@@ -185,7 +197,6 @@ class ManagedMcpConnection:
         if self.close_handler is not None:
             await self.close_handler()
             return
-        assert self.stack is not None
         await self.stack.aclose()
 
     def is_alive(self) -> bool:
@@ -339,7 +350,12 @@ class _SdkConnectionOwner:
         await stack.__aenter__()
         current: _SdkOperation | None = None
         try:
-            facade = await self._open_facade(stack)
+            try:
+                facade = await self._open_facade(stack)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                raise McpSdkError(str(exc) or type(exc).__name__) from exc
             connection = ManagedMcpConnection(
                 session=_OwnedSdkSession(
                     self,
@@ -363,7 +379,14 @@ class _SdkConnectionOwner:
                     value = await operation(*current.args, **current.kwargs)
                 except BaseException as exc:
                     if not current.result.done():
-                        current.result.set_exception(exc)
+                        if isinstance(exc, asyncio.CancelledError):
+                            current.result.set_exception(exc)
+                        else:
+                            sdk_error = McpSdkError(
+                                str(exc) or type(exc).__name__
+                            )
+                            sdk_error.__cause__ = exc
+                            current.result.set_exception(sdk_error)
                     if isinstance(exc, asyncio.CancelledError):
                         raise
                 else:
@@ -385,23 +408,20 @@ class _SdkConnectionOwner:
     async def _open_facade(self, stack: AsyncExitStack) -> _SdkClientFacade:
         read_timeout: float | None = None
         if self._record.transport is TransportKind.STDIO:
-            assert isinstance(
-                self._record.transport_config,
-                StdioTransportConfig,
-            )
+            config = cast(StdioTransportConfig, self._record.transport_config)
             params = StdioServerParameters(
-                command=self._record.transport_config.command,
-                args=list(self._record.transport_config.args),
+                command=config.command,
+                args=list(config.args),
                 env=dict(self._secrets) or None,
-                cwd=self._record.transport_config.cwd,
+                cwd=config.cwd,
             )
             transport = stdio_client(params)
         else:
-            assert isinstance(
-                self._record.transport_config,
+            config = cast(
                 StreamableHttpTransportConfig,
+                self._record.transport_config,
             )
-            read_timeout = self._record.transport_config.timeout_seconds
+            read_timeout = config.timeout_seconds
             http_client = await stack.enter_async_context(
                 httpx2.AsyncClient(
                     headers=dict(self._secrets),
@@ -410,7 +430,7 @@ class _SdkConnectionOwner:
                 )
             )
             transport = streamable_http_client(
-                self._record.transport_config.url,
+                config.url,
                 http_client=http_client,
             )
         client = await stack.enter_async_context(
@@ -477,12 +497,9 @@ class McpClientManager:
         )
 
     def secret_values(self, record: McpServerRecord) -> tuple[str, ...]:
-        try:
-            return tuple(
-                self._secret_store.resolve_many(record.credential_refs).values()
-            )
-        except Exception:
-            return ()
+        return tuple(
+            self._secret_store.resolve_many(record.credential_refs).values()
+        )
 
     async def invalidate(self, server_id: str) -> None:
         async with self._lock:
@@ -498,15 +515,16 @@ class McpClientManager:
         async with self._lock:
             entries = list(self._connections.values())
             self._connections.clear()
-        first_error: BaseException | None = None
+        errors: list[BaseException] = []
         for entry in entries:
             try:
                 await entry.connection.aclose()
             except BaseException as exc:
-                if first_error is None:
-                    first_error = exc
-        if first_error is not None:
-            raise first_error
+                errors.append(exc)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("关闭 MCP 连接时发生多个错误", errors)
 
     async def test_connection(
         self,
@@ -660,10 +678,14 @@ class McpClientManager:
                 else:
                     await connection.aclose()
             raise
-        except Exception as exc:
+        except (OSError, McpClientError) as exc:
             if connection is not None:
                 await connection.aclose()
             state.mark_unavailable(self.sanitized_error(record, exc))
+            raise
+        except BaseException:
+            if connection is not None:
+                await connection.aclose()
             raise
 
         if not connection.cacheable:
@@ -673,7 +695,7 @@ class McpClientManager:
                         self._closed
                         or self._generations.get(record.id, 0) != generation
                     ):
-                        raise RuntimeError(
+                        raise McpConnectionInvalidatedError(
                             "MCP connection invalidated while opening: "
                             f"{record.id}"
                         )
@@ -688,7 +710,7 @@ class McpClientManager:
                     self._closed
                     or self._generations.get(record.id, 0) != generation
                 ):
-                    raise RuntimeError(
+                    raise McpConnectionInvalidatedError(
                         f"MCP connection invalidated while opening: {record.id}"
                     )
                 current = self._connections.get(record.id)
@@ -742,8 +764,8 @@ class McpClientManager:
         secrets: Mapping[str, str],
     ) -> ManagedMcpConnection:
         if record.transport is TransportKind.STDIO:
-            assert isinstance(record.transport_config, StdioTransportConfig)
-            cwd = record.transport_config.cwd
+            config = cast(StdioTransportConfig, record.transport_config)
+            cwd = config.cwd
             if cwd is None:
                 default_cwd = self._runtime_root / record.id
                 default_cwd.mkdir(parents=True, exist_ok=True)
@@ -751,10 +773,10 @@ class McpClientManager:
             record = replace(
                 record,
                 transport_config=StdioTransportConfig(
-                    command=record.transport_config.command,
-                    args=record.transport_config.args,
+                    command=config.command,
+                    args=config.args,
                     cwd=cwd,
-                    env_refs=record.transport_config.env_refs,
+                    env_refs=config.env_refs,
                 ),
             )
         return await _SdkConnectionOwner(record, secrets).start()

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from core.tool_registry import PydanticParameters, ToolRegistry, ToolSpec
 from core.tools_runtime.tools_executor import ToolsExecutor
-from core.todos.todo_list import TodoDraft, TodoList, TodoStatus
+from core.todos.todo_list import TodoDraft, TodoList, TodoPhase, TodoStatus
 
 
 REWRITE_TODOS_NAME = "rewrite_todos"
@@ -63,29 +63,30 @@ async def execute_rewrite_todos(todo_list: TodoList, arguments: str) -> dict:
 
 def _create_spec(todo_list: TodoList) -> ToolSpec:
     async def apply(data: RewriteTodosInput) -> dict:
-        try:
-            changed = todo_list.apply_snapshot(
-                data.objective,
-                [
-                    TodoDraft(
-                        id=item.id,
-                        content=item.content,
-                        status=item.status,
-                        note=item.note,
-                    )
-                    for item in data.todos
-                ],
-            )
-        except ValueError as exc:
+        error = _validate_rewrite(todo_list, data)
+        if error is not None:
             return {
                 "ok": False,
                 "code": "INVALID_TODO_REWRITE",
-                "error": str(exc),
+                "error": error,
                 "hint": (
                     "提交完整快照；首次创建时所有 id 为 null、status 为 pending；"
                     "后续旧项使用已有 id，新增项的 id 传 null。"
                 ),
             }
+
+        changed = todo_list.apply_snapshot(
+            data.objective,
+            [
+                TodoDraft(
+                    id=item.id,
+                    content=item.content,
+                    status=item.status,
+                    note=item.note,
+                )
+                for item in data.todos
+            ],
+        )
 
         return {
             "ok": True,
@@ -103,3 +104,26 @@ def _create_spec(todo_list: TodoList) -> ToolSpec:
         parameters=PydanticParameters(RewriteTodosInput),
         handler=apply,
     )
+
+
+def _validate_rewrite(
+    todo_list: TodoList,
+    data: RewriteTodosInput,
+) -> str | None:
+    submitted_ids = [item.id for item in data.todos if item.id is not None]
+    if todo_list.phase is TodoPhase.UNINITIALIZED:
+        if not 2 <= len(data.todos) <= 6:
+            return "initial todo list must contain 2 to 6 items"
+        if submitted_ids:
+            return "initial todo ids must be null"
+        if any(item.status != "pending" for item in data.todos):
+            return "initial todo status must be pending"
+    if len(submitted_ids) != len(set(submitted_ids)):
+        return "todo ids must not be duplicated"
+    known_ids = {item.id for item in todo_list.items}
+    unknown_ids = set(submitted_ids) - known_ids
+    if unknown_ids:
+        return f"unknown todo ids: {sorted(unknown_ids)}"
+    if sum(item.status == "doing" for item in data.todos) > 1:
+        return "todo list can contain at most one doing item"
+    return None

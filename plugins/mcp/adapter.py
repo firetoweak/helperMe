@@ -16,6 +16,7 @@ from mcp.types import (
 
 from core.tool_registry import JsonSchemaParameters, ToolSpec
 from core.tools_runtime.progressive_toolsets import ToolsetLoadError
+from jsonschema.exceptions import SchemaError, ValidationError
 from jsonschema.validators import validator_for
 from plugins.mcp.models import sanitize_error_summary
 
@@ -60,7 +61,7 @@ def parse_toolset_id(toolset_id: str) -> str:
 def build_parameters(tool_name: str, input_schema: Mapping[str, Any]) -> JsonSchemaParameters:
     try:
         return JsonSchemaParameters(input_schema)
-    except Exception as exc:
+    except (SchemaError, TypeError, ValueError) as exc:
         raise ToolsetLoadError(
             "MCP_INVALID_TOOL_SCHEMA",
             f"工具 {tool_name} 的 inputSchema 非法: {exc}",
@@ -80,7 +81,7 @@ def build_output_validator(
         validator_class = validator_for(schema)
         validator_class.check_schema(schema)
         return validator_class(schema)
-    except Exception as exc:
+    except (SchemaError, TypeError, ValueError) as exc:
         raise ToolsetLoadError(
             "MCP_INVALID_TOOL_SCHEMA",
             f"工具 {tool_name} 的 outputSchema 非法: {exc}",
@@ -134,7 +135,7 @@ def adapt_call_result(
             }
         try:
             output_validator.validate(result.structured_content)
-        except Exception as exc:
+        except ValidationError as exc:
             return {
                 "ok": False,
                 "code": "MCP_INVALID_TOOL_RESULT",
@@ -208,22 +209,6 @@ def adapt_transport_error(
             str(exc) or exc.__class__.__name__
         ),
         "hint": "检查 Server 是否可用、地址/命令是否正确，稍后重试。",
-    }
-
-
-def adapt_protocol_error(
-    exc: BaseException,
-    *,
-    error_summary: str | None = None,
-) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "code": "MCP_PROTOCOL_ERROR",
-        "data": {},
-        "error": error_summary or sanitize_error_summary(
-            str(exc) or exc.__class__.__name__
-        ),
-        "hint": "检查 MCP Server 协议兼容性后重试。",
     }
 
 

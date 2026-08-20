@@ -147,7 +147,7 @@ def create_agent_application(
         context_budget=context_budget,
     )
     result_limit = ToolResultLimit()
-    context_manager = ContextManager(result_limit.max_chars)
+    context_manager = ContextManager()
     summary_generator = LLMContextSummaryGenerator(model_calls, model)
     artifact_drawers = FileArtifactDrawers(agent_workspace.sessions_root)
     mode_configuration = (

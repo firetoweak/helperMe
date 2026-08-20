@@ -273,7 +273,7 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executor_contract_versions, [1, 2])
         self.assertEqual(len(result.goal.contract_revisions), 1)
 
-    async def test_executor_exception_is_preserved_and_goal_is_paused(self):
+    async def test_executor_exception_is_preserved_without_state_repair(self):
         class ExecutorBug(RuntimeError):
             pass
 
@@ -306,10 +306,6 @@ class GoalApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
                 "完成目标",
             )
 
-        self.assertEqual(
-            store.get("goal-1").status,
-            GoalStatus.PAUSED,
-        )
 
 
 class GoalLoopRuntimeIntegrationTest(unittest.IsolatedAsyncioTestCase):

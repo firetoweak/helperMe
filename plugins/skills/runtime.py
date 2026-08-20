@@ -202,15 +202,7 @@ class SkillRuntimeCapability:
         record: SkillRecord,
     ) -> tuple[Path, SkillBundle]:
         package_directory = (self.packages_root / record.name).resolve()
-        if (
-            not package_directory.is_relative_to(self.packages_root.resolve())
-            or not package_directory.is_relative_to(self.registry.root)
-        ):
-            raise RuntimeError("Skill Registry 推导出越界包路径")
-        if (
-            package_directory.name != record.name
-            or not package_directory.is_dir()
-        ):
+        if not package_directory.is_dir():
             raise RuntimeError(f"已登记 Skill 包目录丢失: {record.name}")
         bundle = self.package_reader.read(package_directory)
         if bundle.name != record.name:
@@ -241,14 +233,7 @@ class SkillRuntimeCapability:
                 data={"skill_id": record.name, "relative_path": relative_path},
             ) from exc
         resource = package_directory.joinpath(*PurePosixPath(normalized).parts)
-        resolved = resource.resolve()
-        if not resolved.is_relative_to(package_directory):
-            raise SkillRuntimeError(
-                "INVALID_SKILL_RESOURCE_PATH",
-                f"Skill 资源路径越界: {relative_path}",
-                hint="只能读取当前 Skill 的包内文件。",
-            )
-        if not resolved.is_file():
+        if not resource.is_file():
             raise SkillRuntimeError(
                 "SKILL_RESOURCE_NOT_FOUND",
                 f"Skill 资源不存在: {relative_path}",
@@ -256,7 +241,7 @@ class SkillRuntimeCapability:
                 data={"skill_id": record.name, "relative_path": relative_path},
             )
         try:
-            content = resolved.read_text(encoding="utf-8")
+            content = resource.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise SkillRuntimeError(
                 "SKILL_RESOURCE_NOT_TEXT",

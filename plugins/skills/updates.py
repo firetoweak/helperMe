@@ -95,16 +95,12 @@ class SkillCandidateStore:
                 raise RuntimeError("candidate hash 目录与冻结内容不一致")
             return frozen
 
-        safe_root = self._safe_root()
-        safe_root.mkdir(parents=True, exist_ok=True)
-        safe_root = self._safe_root()
-        temporary = Path(tempfile.mkdtemp(prefix="candidate-", dir=safe_root))
+        self.root.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix="candidate-", dir=self.root))
         try:
             package = temporary / "package" / bundle.name
             write_skill_bundle(package, bundle)
-            verified = self.package_reader.read(package)
-            if verified.content_hash != bundle.content_hash:
-                raise RuntimeError("candidate staging hash 与冻结包不一致")
+            self.package_reader.read(package)
             (temporary / "candidate.json").write_text(
                 json.dumps(candidate.to_dict(), ensure_ascii=False, indent=2)
                 + "\n",
@@ -146,14 +142,4 @@ class SkillCandidateStore:
             or any(character not in "0123456789abcdef" for character in candidate_hash)
         ):
             raise ValueError("candidate_hash 必须是 64 位小写 SHA-256")
-        safe_root = self._safe_root()
-        directory = (safe_root / candidate_hash).resolve()
-        if not directory.is_relative_to(safe_root):
-            raise ValueError("candidate path 越界")
-        return directory
-
-    def _safe_root(self) -> Path:
-        resolved = self.root.resolve()
-        if not resolved.is_relative_to(self.skills_root):
-            raise ValueError("Skill candidate staging root 越界")
-        return resolved
+        return self.root / candidate_hash

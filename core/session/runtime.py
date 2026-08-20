@@ -68,14 +68,6 @@ class SessionRuntime:
         delete_session_resources: Callable[[str], None] | None = None,
         default_toolset_provider: ToolsetProvider | None = None,
     ):
-        if (turn_runtime is None) == (turn_runtime_factory is None):
-            raise ValueError(
-                "turn_runtime 与 turn_runtime_factory 必须且只能提供一个"
-            )
-        if turn_runtime_factory is not None and delete_session_resources is None:
-            raise ValueError(
-                "使用 turn_runtime_factory 时必须提供 delete_session_resources"
-            )
         self.turn_runtime = turn_runtime
         self._turn_runtime_factory = turn_runtime_factory
         self._delete_session_resources = delete_session_resources
@@ -203,10 +195,6 @@ class SessionRuntime:
         if session.status != SessionStatus.RUNNING:
             raise ValueError(
                 f"Session 状态必须为 running，当前为: {session.status.value}"
-            )
-        if session_id not in self.active_controls:
-            raise RuntimeError(
-                f"运行中的 Session 缺少 active control: {session_id}"
             )
         control = self.active_controls[session_id]
         control.request_interrupt(reason)
@@ -355,20 +343,6 @@ class SessionRuntime:
                 turn_record.ended_at = ended_at
                 turn_record.final_reason = "task_cancelled"
             raise
-        except Exception:
-            if session.status is SessionStatus.RUNNING:
-                ended_at = datetime.now(timezone.utc)
-                event = SessionEvent(
-                    kind=SessionEventType.FAILED,
-                    session_id=session.id,
-                    reason="TurnRuntime raised an exception",
-                    turn_id=turn_id,
-                )
-                session.transition_to(SessionStatus.FAILED, event)
-                turn_record.status = TurnStatus.FAILED.value
-                turn_record.ended_at = ended_at
-                turn_record.final_reason = "runtime_exception"
-            raise
         finally:
             del self.active_controls[session.id]
 
@@ -420,8 +394,6 @@ class SessionRuntime:
         turn_arguments["invocation"] = effective_invocation
         result = await turn_runtime.run(**turn_arguments)
         if isinstance(result.approval_request, ApprovalRequest):
-            if result.status is not TurnStatus.BLOCKED:
-                raise ValueError("ApprovalRequest 必须阻塞当前 Turn")
             session.pending_approval_id = result.approval_request.id
         session.context_state = result.context_state
         target_status, event_kind = TURN_STATUS_MAPPING[result.status]

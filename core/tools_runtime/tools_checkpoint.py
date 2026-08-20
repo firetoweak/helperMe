@@ -207,17 +207,6 @@ def context_prepared_checkpoint(
     )
 
 
-def message_chain_invalid_checkpoint(validation: dict[str, Any]) -> Checkpoint:
-    return Checkpoint(
-        kind="turn",
-        reason="message_chain_invalid",
-        message="运行已停止：messages 中的工具调用链路不合法。",
-        data={
-            "validation": validation,
-        },
-    )
-
-
 def context_length_exceeded_checkpoint(
     *,
     stage: str,
@@ -326,13 +315,6 @@ def budget_stop_checkpoint(max_steps: int, tools_state: ToolsState) -> Checkpoin
 
 
 def format_checkpoint(checkpoint: Checkpoint) -> str:
-    if checkpoint.reason == "message_chain_invalid":
-        validation = checkpoint.data["validation"]
-        lines = [checkpoint.message]
-        for error in validation["errors"]:
-            lines.append(f"- {error}")
-        return "\n".join(lines)
-
     if checkpoint.reason == "llm_error":
         lines = [
             checkpoint.message,

@@ -7,3 +7,4 @@ tests/.parallel_logs/
 model_config.yaml
 tests/benchmarks/*_last_report.json
 tests/benchmarks/*_progress.json
+docs/.obsidian/

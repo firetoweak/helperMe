@@ -88,8 +88,4 @@ class McpSecretStore:
 
     @staticmethod
     def _restrict_file(path: Path) -> None:
-        try:
-            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            # Windows 上 chmod 语义有限；尽力限制即可。
-            pass
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)

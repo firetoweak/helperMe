@@ -7,6 +7,10 @@ from core.model_call.client import LLMClient
 from plugins.skills.models import SkillUpdateCandidate
 
 
+class InvalidSkillSummaryResponse(ValueError):
+    pass
+
+
 class SkillDiffSummarizer(Protocol):
     async def summarize(
         self,
@@ -62,8 +66,10 @@ class LlmSkillDiffSummarizer:
             tools=None,
         )
         if result.response.calls:
-            raise RuntimeError("Skill diff summarizer 不应返回 tool calls")
+            raise InvalidSkillSummaryResponse(
+                "Skill diff summarizer 不应返回 tool calls"
+            )
         summary = result.response.content.strip()
         if not summary:
-            raise RuntimeError("Skill diff summarizer 返回空概括")
+            raise InvalidSkillSummaryResponse("Skill diff summarizer 返回空概括")
         return summary

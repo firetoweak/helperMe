@@ -80,37 +80,23 @@ class TurnToolEnvironment:
             turn_executor = self.base_executor
         else:
             turn_registry = self.base_registry.clone()
-            if self.toolset_provider is not None:
-                turn_registry.register(
-                    create_load_toolset_spec(
-                        self.toolset_descriptors,
-                        self.toolset_state,
-                        self.toolset_provider,
-                    )
+            turn_registry.register(
+                create_load_toolset_spec(
+                    self.toolset_descriptors,
+                    self.toolset_state,
+                    self.toolset_provider,
                 )
-                for descriptor in self.toolset_descriptors:
-                    loaded_specs = self.toolset_state.loaded_specs.get(descriptor.id)
-                    if loaded_specs is None:
-                        continue
-                    for spec in loaded_specs:
-                        turn_registry.register(spec)
+            )
+            for descriptor in self.toolset_descriptors:
+                loaded_specs = self.toolset_state.loaded_specs.get(descriptor.id)
+                if loaded_specs is None:
+                    continue
+                for spec in loaded_specs:
+                    turn_registry.register(spec)
             turn_executor = ToolsExecutor(turn_registry)
 
         external_tools = turn_registry.get_tools()
         runtime_tools = runtime_mode.runtime_tools(mode_state)
-        external_names = {
-            tool["function"]["name"] for tool in external_tools
-        }
-        runtime_names = {
-            tool["function"]["name"] for tool in runtime_tools
-        }
-        duplicated_names = external_names & runtime_names
-        if duplicated_names:
-            raise ValueError(
-                "runtime tool conflicts with external tool: "
-                f"{sorted(duplicated_names)}"
-            )
-
         runtime_prompts = list(runtime_mode.runtime_instructions(mode_state))
         for capability in self.invocation.capabilities:
             runtime_prompts.extend(capability.runtime_instructions())

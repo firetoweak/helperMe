@@ -26,13 +26,8 @@ class MicroCompactor:
             if record.message_id not in tool_artifacts:
                 continue
             message = messages[index]
-            if message.get("role") != "tool":
-                raise ValueError(
-                    "tool_artifacts 只能指向 tool 消息: "
-                    f"{record.message_id}"
-                )
             artifact_id = tool_artifacts[record.message_id]
-            chars = content_char_length(message.get("content", ""))
+            chars = content_char_length(message["content"])
             message["content"] = dehydrated_tool_content(chars, artifact_id)
 
         return messages

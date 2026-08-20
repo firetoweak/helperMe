@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Mapping
+import json
+from typing import Any, Mapping, cast
 
-from plugins.mcp.client_manager import McpClientManager
+from plugins.mcp.client_manager import McpClientError, McpClientManager
 from plugins.mcp.content import McpContentService
 from plugins.mcp.models import (
     McpServerRecord,
@@ -174,19 +175,19 @@ class McpApplicationService:
             # 先写 Secret，再原子替换 Registry；失败则恢复旧命名空间。
             refs = self.secret_store.put_namespace(server_id, prepared_secrets)
             if kind is TransportKind.STDIO:
-                assert isinstance(config, StdioTransportConfig)
+                current = cast(StdioTransportConfig, config)
                 config = StdioTransportConfig(
-                    command=config.command,
-                    args=config.args,
-                    cwd=config.cwd,
+                    command=current.command,
+                    args=current.args,
+                    cwd=current.cwd,
                     env_refs=refs,
                 )
             else:
-                assert isinstance(config, StreamableHttpTransportConfig)
+                current = cast(StreamableHttpTransportConfig, config)
                 config = StreamableHttpTransportConfig(
-                    url=config.url,
+                    url=current.url,
                     header_refs=refs,
-                    timeout_seconds=config.timeout_seconds,
+                    timeout_seconds=current.timeout_seconds,
                 )
 
         record = McpServerRecord(
@@ -201,12 +202,21 @@ class McpApplicationService:
         )
         try:
             stored = await self.registry.upsert(record)
-        except Exception:
+        except (OSError, json.JSONDecodeError) as registry_error:
             if updated_secrets:
-                if previous_secrets:
-                    self.secret_store.put_namespace(server_id, previous_secrets)
-                else:
-                    self.secret_store.delete_namespace(server_id)
+                try:
+                    if previous_secrets:
+                        self.secret_store.put_namespace(
+                            server_id,
+                            previous_secrets,
+                        )
+                    else:
+                        self.secret_store.delete_namespace(server_id)
+                except OSError as rollback_error:
+                    raise ExceptionGroup(
+                        "MCP Registry 写入失败且 Secret 回滚失败",
+                        [registry_error, rollback_error],
+                    )
             raise
         await self.client_manager.invalidate(server_id)
         return stored
@@ -267,7 +277,7 @@ class McpApplicationService:
     ) -> McpServerRuntimeState:
         try:
             return await self.client_manager.test_connection(record)
-        except Exception as exc:
+        except (TimeoutError, OSError, McpClientError) as exc:
             state = self.client_manager.runtime_state(record.id)
             state.mark_unavailable(
                 self.client_manager.sanitized_error(record, exc)

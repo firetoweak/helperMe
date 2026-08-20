@@ -31,7 +31,7 @@ SUCCESS = {
 
 
 class TurnEnvironmentContractTest(unittest.IsolatedAsyncioTestCase):
-    async def test_turn_rejects_invocation_without_environment_binding(self):
+    async def test_missing_internal_environment_binding_is_not_wrapped(self):
         runner = CoreTurnRuntime(
             model_call_service(RecordingLLMClient([])),
             "test-model",
@@ -40,7 +40,7 @@ class TurnEnvironmentContractTest(unittest.IsolatedAsyncioTestCase):
             **runtime_tool_dependencies(),
         )
 
-        with self.assertRaisesRegex(ValueError, "Environment Binding"):
+        with self.assertRaises(AttributeError):
             await runner.run(
                 Conversation(),
                 "hello",

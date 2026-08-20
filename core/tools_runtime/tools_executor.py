@@ -68,18 +68,6 @@ class ToolsExecutor:
 
         try:
             payload = json.loads(tool_arguments)
-            if not isinstance(payload, dict):
-                raise ToolArgumentsError("tool arguments 必须是 JSON object")
-            data = spec.parameters.validate(payload)
-            result = await spec.handler(data)
-            if isinstance(result, ApprovalRequest):
-                if not spec.control_boundary:
-                    raise ValueError(
-                        "普通工具不能返回 ApprovalRequest: "
-                        f"{tool_name}"
-                    )
-                return result
-            return normalize_tool_result(result)
         except json.JSONDecodeError as exc:
             return normalize_tool_result(
                 {
@@ -89,6 +77,11 @@ class ToolsExecutor:
                     "hint": "修正工具 arguments 的 JSON 格式后重试。",
                 }
             )
+
+        try:
+            if not isinstance(payload, dict):
+                raise ToolArgumentsError("tool arguments 必须是 JSON object")
+            data = spec.parameters.validate(payload)
         except ToolArgumentsError as exc:
             return normalize_tool_result(
                 {
@@ -98,6 +91,11 @@ class ToolsExecutor:
                     "hint": "按工具 schema 修正参数后重试。",
                 }
             )
+
+        result = await spec.handler(data)
+        if isinstance(result, ApprovalRequest):
+            return result
+        return normalize_tool_result(result)
 
     def is_control_boundary(self, tool_name: str) -> bool:
         spec = self.registry.get(tool_name)

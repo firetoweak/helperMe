@@ -121,9 +121,6 @@ def write_skill_bundle(target: Path, bundle: SkillBundle) -> None:
     for item in bundle.files:
         relative_path = validate_relative_skill_path(item.relative_path)
         destination = target.joinpath(*PurePosixPath(relative_path).parts)
-        resolved_parent = destination.parent.resolve()
-        if not resolved_parent.is_relative_to(target.resolve()):
-            raise SkillPackageError(f"Skill 包路径越界: {relative_path}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(item.content)
 

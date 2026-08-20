@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from core.agent_workspace import AgentWorkspace
+from core.model_call.client import LLMTransientError
 from plugins.skills.application import SkillApplicationService
 from plugins.skills.console import SkillConsoleAdapter
 from plugins.skills.models import SkillSourceRef
@@ -37,6 +38,20 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.temporary.cleanup()
+
+    async def test_storage_lives_under_plugins_root_beside_mcp(self):
+        self.assertEqual(
+            self.service.skills_root,
+            (self.workspace.plugins_root / "skills").resolve(),
+        )
+        self.assertTrue(
+            self.service.skills_root.is_relative_to(
+                self.workspace.plugins_root
+            )
+        )
+        self.assertFalse(
+            (self.workspace.root / "skills").exists()
+        )
 
     async def test_inspect_test_enable_disable_and_remove(self):
         inspection = await self.service.inspect("demo")
@@ -181,7 +196,9 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         failed_service = SkillApplicationService(
             self.workspace,
             registry=self.service.registry,
-            diff_summarizer=RecordingSummarizer(error=RuntimeError("offline")),
+            diff_summarizer=RecordingSummarizer(
+                error=LLMTransientError("offline")
+            ),
         )
         failed = await failed_service.check_update("demo")
         self.assertIsNone(failed.semantic_summary)

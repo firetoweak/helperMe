@@ -381,7 +381,16 @@ class TurnRuntimeRoutingTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         conversation.add_tools_result(
-            [{"tool_call_id": "call-old", "content": "TOOL_RESULT_MARKER"}]
+            [{
+                "tool_call_id": "call-old",
+                "content": json.dumps({
+                    "ok": True,
+                    "code": "OK",
+                    "data": "TOOL_RESULT_MARKER",
+                    "error": None,
+                    "hint": None,
+                }),
+            }]
         )
         conversation.add_assistant(
             LLMResponse(content="历史最终回答")

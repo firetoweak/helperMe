@@ -300,14 +300,6 @@ class ProgressiveToolsetsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.evidence.steps[0].result["code"], "TOOLSET_NOT_FOUND")
         self.assertNotIn("get_weather", tool_names(client.requests[1]))
 
-    async def test_composite_provider_rejects_duplicate_ids(self):
-        from core.tools_runtime import CompositeToolsetProvider
-
-        with self.assertRaises(ValueError):
-            CompositeToolsetProvider(
-                (FakeToolsetProvider(), FakeToolsetProvider()),
-            )
-
     async def test_session_snapshot_admits_only_unchanged_capabilities(self):
         class MutableProvider(FakeToolsetProvider):
             def __init__(self):

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-import json
 import os
 from pathlib import Path
 import shutil
@@ -12,6 +10,8 @@ from plugins.skills.package import LocalSkillPackageReader, write_skill_bundle
 
 
 class SkillInstallCandidateStore:
+    """按内容 hash 冻结包；来源身份属于每次安装候选，不参与去重。"""
+
     def __init__(
         self,
         skills_root: Path,
@@ -31,68 +31,45 @@ class SkillInstallCandidateStore:
         )
         destination = self._directory(candidate.content_hash)
         if destination.exists():
-            frozen, frozen_bundle = self.load(
+            frozen_bundle = self.load_bundle(
                 candidate.skill_id,
                 candidate.content_hash,
             )
             if (
-                frozen.skill_id != candidate.skill_id
-                or frozen.description != candidate.description
-                or frozen.source != candidate.source
-                or frozen.resolved_ref != candidate.resolved_ref
+                frozen_bundle.name != candidate.skill_id
+                or frozen_bundle.description != candidate.description
                 or frozen_bundle.content_hash != bundle.content_hash
             ):
                 raise RuntimeError("install candidate hash 与已冻结内容冲突")
-            return frozen
+            return candidate
 
-        safe_root = self._safe_root()
-        safe_root.mkdir(parents=True, exist_ok=True)
-        safe_root = self._safe_root()
+        self.root.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(
             prefix="install-candidate-",
-            dir=safe_root,
+            dir=self.root,
         ))
         try:
             package = temporary / "package" / bundle.name
             write_skill_bundle(package, bundle)
-            verified = self.package_reader.read(package)
-            if verified.content_hash != bundle.content_hash:
-                raise RuntimeError("install candidate staging hash 不一致")
-            (temporary / "candidate.json").write_text(
-                json.dumps(candidate.to_dict(), ensure_ascii=False, indent=2)
-                + "\n",
-                encoding="utf-8",
-            )
+            self.package_reader.read(package)
             os.replace(temporary, destination)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
         return candidate
 
-    def load(
+    def load_bundle(
         self,
         skill_id: str,
         content_hash: str,
-    ) -> tuple[SkillInstallCandidate, SkillBundle]:
+    ) -> SkillBundle:
         directory = self._directory(content_hash)
-        metadata_path = directory / "candidate.json"
-        if not metadata_path.is_file():
-            raise KeyError(content_hash)
-        candidate = SkillInstallCandidate.from_dict(json.loads(
-            metadata_path.read_text(encoding="utf-8")
-        ))
-        if candidate.skill_id != skill_id or candidate.content_hash != content_hash:
-            raise RuntimeError("install candidate 索引与内容身份不一致")
         bundle = self.package_reader.read(
-            directory / "package" / candidate.skill_id
+            directory / "package" / skill_id
         )
-        if bundle.content_hash != candidate.content_hash:
+        if bundle.content_hash != content_hash:
             raise RuntimeError("install candidate 冻结包 hash 已变化")
-        return candidate, replace(
-            bundle,
-            source=candidate.source,
-            resolved_ref=candidate.resolved_ref,
-        )
+        return bundle
 
     def _directory(self, content_hash: str) -> Path:
         if (
@@ -100,10 +77,4 @@ class SkillInstallCandidateStore:
             or any(character not in "0123456789abcdef" for character in content_hash)
         ):
             raise ValueError("content_hash 必须是 64 位小写 SHA-256")
-        return (self._safe_root() / content_hash).resolve()
-
-    def _safe_root(self) -> Path:
-        resolved = self.root.resolve()
-        if not resolved.is_relative_to(self.skills_root):
-            raise ValueError("Skill install candidate staging root 越界")
-        return resolved
+        return self.root / content_hash

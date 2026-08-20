@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import shutil
 import tempfile
@@ -19,6 +19,9 @@ from plugins.skills.models import SkillUpdateCandidate, SkillUpdateReport
 from plugins.skills.models import SkillSourceRef
 from plugins.skills.sources import SkillSourceRouter
 from plugins.skills.summarizer import SkillDiffSummarizer
+from plugins.skills.summarizer import InvalidSkillSummaryResponse
+from core.model_call.client import LLMContextLengthError, LLMTransientError
+from core.model_call.types import InvalidLLMResponse
 from plugins.skills.install_candidates import SkillInstallCandidateStore
 from plugins.skills.models import SkillInstallCandidate
 
@@ -46,9 +49,7 @@ class SkillApplicationService:
     ) -> None:
         if max_catalog_chars <= 0:
             raise ValueError("max_catalog_chars 必须大于 0")
-        resolved_skills_root = (workspace.root / "skills").resolve()
-        if not resolved_skills_root.is_relative_to(workspace.root):
-            raise ValueError("Agent Workspace skills root 不能通过链接越界")
+        resolved_skills_root = (workspace.plugins_root / "skills").resolve()
         if registry is not None and registry.root != resolved_skills_root:
             raise ValueError("Skill Registry 必须属于当前 Plugin storage root")
         self.skills_root = resolved_skills_root
@@ -111,15 +112,19 @@ class SkillApplicationService:
         self,
         skill_id: str,
         content_hash: str,
+        source: SkillSourceRef,
+        resolved_ref: str,
     ) -> SkillRecord:
-        candidate, bundle = self.install_candidates.load(
+        bundle = self.install_candidates.load_bundle(
             skill_id,
             content_hash,
         )
-        if candidate.skill_id != bundle.name:
-            raise RuntimeError("install candidate 严格身份不一致")
         async with self._management_lock:
-            return await self.installer.install_bundle(bundle)
+            return await self.installer.install_bundle(replace(
+                bundle,
+                source=source,
+                resolved_ref=resolved_ref,
+            ))
 
     async def inspect(self, skill_id: str) -> SkillInspection:
         record, bundle = await self._validated_bundle(skill_id)
@@ -207,7 +212,12 @@ class SkillApplicationService:
                     installed.main_instructions,
                     candidate_bundle.main_instructions,
                 )
-            except Exception as exc:
+            except (
+                InvalidLLMResponse,
+                InvalidSkillSummaryResponse,
+                LLMContextLengthError,
+                LLMTransientError,
+            ) as exc:
                 return SkillUpdateReport(
                     candidate,
                     summary_error=(
@@ -247,9 +257,7 @@ class SkillApplicationService:
         bundle: SkillBundle,
     ) -> SkillRecord:
         target = self._package_directory(current.name)
-        self.installer.validate_managed_path(self.installer.staging_root)
         self.installer.staging_root.mkdir(parents=True, exist_ok=True)
-        self.installer.validate_managed_path(self.installer.staging_root)
         temporary = Path(tempfile.mkdtemp(
             prefix=f"update-{current.name}-",
             dir=self.installer.staging_root,
@@ -260,9 +268,7 @@ class SkillApplicationService:
         cleanup_temporary = True
         try:
             write_skill_bundle(replacement, bundle)
-            verified = self.package_reader.read(replacement)
-            if verified.content_hash != bundle.content_hash:
-                raise RuntimeError("Skill update staging hash 不一致")
+            self.package_reader.read(replacement)
             target.replace(backup)
             replacement.replace(target)
             proposed = SkillRecord(
@@ -282,13 +288,13 @@ class SkillApplicationService:
                     shutil.rmtree(target)
                 try:
                     backup.replace(target)
-                except Exception as rollback_error:
+                except BaseException as rollback_error:
                     cleanup_temporary = False
-                    raise RuntimeError(
-                        "Skill Registry 更新失败且包回滚失败；"
-                        f"备份保留在 {backup}"
-                    ) from rollback_error
-                raise registry_error
+                    raise BaseExceptionGroup(
+                        f"Skill Registry 更新失败且包回滚失败；备份保留在 {backup}",
+                        [registry_error, rollback_error],
+                    )
+                raise
         finally:
             if cleanup_temporary and temporary.exists():
                 shutil.rmtree(temporary)
@@ -304,9 +310,7 @@ class SkillApplicationService:
             target = self._package_directory(skill_id)
             if not target.is_dir():
                 raise RuntimeError(f"已登记 Skill 包目录丢失: {skill_id}")
-            self.installer.validate_managed_path(self.installer.staging_root)
             self.installer.staging_root.mkdir(parents=True, exist_ok=True)
-            self.installer.validate_managed_path(self.installer.staging_root)
             temporary_parent = Path(tempfile.mkdtemp(
                 prefix=f"remove-{skill_id}-",
                 dir=self.installer.staging_root,
@@ -319,13 +323,13 @@ class SkillApplicationService:
             except BaseException as registry_error:
                 try:
                     held_package.replace(target)
-                except Exception as rollback_error:
+                except BaseException as rollback_error:
                     cleanup_temporary = False
-                    raise RuntimeError(
-                        "Skill Registry 删除失败且包回滚失败；"
-                        f"备份保留在 {held_package}"
-                    ) from rollback_error
-                raise registry_error
+                    raise BaseExceptionGroup(
+                        f"Skill Registry 删除失败且包回滚失败；备份保留在 {held_package}",
+                        [registry_error, rollback_error],
+                    )
+                raise
             finally:
                 if cleanup_temporary and temporary_parent.exists():
                     shutil.rmtree(temporary_parent)
@@ -340,7 +344,7 @@ class SkillApplicationService:
         if record is None:
             raise KeyError(skill_id)
         package_directory = self._package_directory(skill_id)
-        if package_directory.name != skill_id or not package_directory.is_dir():
+        if not package_directory.is_dir():
             raise RuntimeError(f"已登记 Skill 包目录丢失: {skill_id}")
         bundle = self.package_reader.read(package_directory)
         if bundle.name != skill_id:
@@ -355,13 +359,7 @@ class SkillApplicationService:
         return record, bundle
 
     def _package_directory(self, skill_id: str) -> Path:
-        directory = (self.installer.packages_root / skill_id).resolve()
-        if (
-            not directory.is_relative_to(self.installer.packages_root.resolve())
-            or not directory.is_relative_to(self.skills_root)
-        ):
-            raise RuntimeError("Skill package directory 越界")
-        return directory
+        return (self.installer.packages_root / skill_id).resolve()
 
     @staticmethod
     def _catalog_text(records: tuple[SkillRecord, ...]) -> str:

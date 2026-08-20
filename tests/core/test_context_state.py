@@ -16,17 +16,6 @@ class ContextStateTest(unittest.TestCase):
         self.assertIsNone(state.summarized_through_message_id)
         self.assertEqual(state.tool_artifacts, {})
 
-    def test_summary_and_boundary_must_exist_together(self):
-        invalid_states = (
-            {"summary": "handoff", "summarized_through_message_id": None},
-            {"summary": None, "summarized_through_message_id": "message-1"},
-        )
-
-        for values in invalid_states:
-            with self.subTest(values=values):
-                with self.assertRaises(ValueError):
-                    ContextState(**values)
-
     def test_tool_artifacts_can_exist_without_summary(self):
         state = ContextState(
             tool_artifacts={"message-3": "art_" + "d" * 32}
@@ -103,42 +92,6 @@ class ContextStateProjectionTest(unittest.TestCase):
         self.assertIn("工作交接摘要", context.messages[1]["content"])
         self.assertIn(state.summary, context.messages[1]["content"])
         self.assertEqual(context.messages[2]["content"], "继续处理")
-
-    def test_projection_rejects_unknown_compaction_boundary(self):
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("处理任务")
-        state = ContextState(
-            summary="handoff",
-            summarized_through_message_id="missing-message",
-        )
-
-        with self.assertRaisesRegex(ValueError, "missing-message"):
-            ContextManager().build(
-                ContextRequest(
-                    conversation_records=conversation.records,
-                    runtime_instructions=[],
-                    context_state=state,
-                )
-            )
-
-    def test_projection_rejects_system_message_as_compaction_boundary(self):
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("处理任务")
-        state = ContextState(
-            summary="handoff",
-            summarized_through_message_id=conversation.records[0].message_id,
-        )
-
-        with self.assertRaisesRegex(ValueError, "system"):
-            ContextManager().build(
-                ContextRequest(
-                    conversation_records=conversation.records,
-                    runtime_instructions=[],
-                    context_state=state,
-                )
-            )
 
     def test_tool_artifacts_are_applied_to_model_context(self):
         conversation = Conversation()

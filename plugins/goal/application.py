@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable
+from typing import Callable, cast
 from uuid import uuid4
 
 from core.turn_host import TurnHost
@@ -17,9 +17,11 @@ from plugins.goal.capabilities import (
 from plugins.goal.submissions import (
     ContractCompilationBuffer,
     JudgmentBuffer,
+    JudgmentSubmission,
 )
 from plugins.goal.goal import (
     CompletionContract,
+    CompletionContractDraft,
     Goal,
     GoalJudgment,
     GoalStatus,
@@ -51,7 +53,7 @@ class GoalLoopOutcome:
             return latest.judge_outcome or latest.executor_outcome
         if self.contract_outcome is not None:
             return self.contract_outcome
-        raise ValueError("goal loop produced no turn outcome")
+        return cast(SessionTurnOutcome, self.contract_outcome)
 
 
 class GoalApplicationService:
@@ -112,16 +114,17 @@ class GoalApplicationService:
         )
         if contract_outcome.result.status is not TurnStatus.COMPLETED:
             return GoalLoopOutcome(None, contract_outcome, ())
-        if contract_buffer.contract is None:
-            raise RuntimeError("completed contract turn has no contract")
-
         resolved_max_turns = (
             self._default_max_turns if max_turns is None else max_turns
         )
+        if resolved_max_turns < 1:
+            raise ValueError("max_turns must be positive")
         goal = Goal(
             goal_id,
             objective,
-            CompletionContract.initial(contract_buffer.contract),
+            CompletionContract.initial(
+                cast(CompletionContractDraft, contract_buffer.contract)
+            ),
             resolved_max_turns,
         )
         self._goals.add(session_id, goal)
@@ -207,32 +210,25 @@ class GoalApplicationService:
                 next_message,
             )
             turn = goal.start_turn(next_turn_id)
-            try:
-                executor_outcome = await self._execute(
-                    owner_session_id=session_id,
-                    actual_session_id=session_id,
-                    turn_id=next_turn_id,
-                    user_message=next_message,
-                    max_steps=max_steps,
-                    invocation=replace(
-                        invocation,
-                        capabilities=(*invocation.capabilities,
-                            GoalExecutorCapability(
-                                goal_id=goal.id,
-                                objective=goal.objective,
-                                turn_index=turn.index,
-                                contract=goal.contract,
-                                judge_feedback=goal.latest_feedback,
-                            ),
+            executor_outcome = await self._execute(
+                owner_session_id=session_id,
+                actual_session_id=session_id,
+                turn_id=next_turn_id,
+                user_message=next_message,
+                max_steps=max_steps,
+                invocation=replace(
+                    invocation,
+                    capabilities=(*invocation.capabilities,
+                        GoalExecutorCapability(
+                            goal_id=goal.id,
+                            objective=goal.objective,
+                            turn_index=turn.index,
+                            contract=goal.contract,
+                            judge_feedback=goal.latest_feedback,
                         ),
                     ),
-                )
-            except Exception:
-                goal.interrupt_turn(
-                    next_turn_id,
-                    "executor_runtime_exception",
-                )
-                raise
+                ),
+            )
             if executor_outcome.result.status is not TurnStatus.COMPLETED:
                 goal.interrupt_turn(
                     next_turn_id,
@@ -274,12 +270,11 @@ class GoalApplicationService:
         judge_turn_id: str | None = None,
     ) -> GoalTurnOutcome:
         turn = goal.turns[-1]
-        resolved_judge_turn_id = judge_turn_id or turn.judge_turn_id
-        if resolved_judge_turn_id is None:
-            raise RuntimeError("judging turn has no judge_turn_id")
-        if turn.executor_answer is None:
-            raise RuntimeError("judging turn has no executor answer")
-
+        resolved_judge_turn_id = (
+            judge_turn_id
+            if judge_turn_id is not None
+            else turn.judge_turn_id
+        )
         buffer = JudgmentBuffer()
         judge_outcome = await self._execute_isolated(
             owner_session_id=session_id,
@@ -308,10 +303,7 @@ class GoalApplicationService:
                 or judge_outcome.result.status.value
             )
             return GoalTurnOutcome(executor_outcome, judge_outcome, None)
-        if buffer.submission is None:
-            raise RuntimeError("completed judge turn has no judgment")
-
-        submission = buffer.submission
+        submission = cast(JudgmentSubmission, buffer.submission)
         if submission.contract_revision is not None:
             goal.revise_contract(
                 submission.contract_revision,

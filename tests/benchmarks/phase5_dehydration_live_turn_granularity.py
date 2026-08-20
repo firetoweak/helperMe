@@ -119,7 +119,7 @@ def build_turn_granularity_application(
         ),
     )
     model_calls = ModelCallService(llm_client, context_budget)
-    context_manager = ContextManager(ToolResultLimit().max_chars)
+    context_manager = ContextManager()
     policy = TurnGranularityPolicy(
         context_manager=context_manager,
         context_budget=context_budget,

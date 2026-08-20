@@ -5,6 +5,7 @@ from pathlib import Path
 
 from plugins.skills.application import SkillApplicationService
 from plugins.skills.models import SkillSourceRef
+from plugins.skills.sources import SkillSourceError
 
 
 class SkillCommandError(ValueError):
@@ -23,29 +24,24 @@ class SkillConsoleAdapter:
             return self._help()
         action = parts[1]
         rest = parts[2] if len(parts) > 2 else ""
-        try:
-            if action == "list":
-                return await self._list()
-            if action == "install":
-                return await self._install(rest)
-            if action == "inspect":
-                return await self._inspect(rest)
-            if action == "test":
-                return await self._test(rest)
-            if action == "enable":
-                return self._with_next_turn(await self._set_enabled(rest, True))
-            if action == "disable":
-                return self._with_next_turn(await self._set_enabled(rest, False))
-            if action == "remove":
-                return self._with_next_turn(await self._remove(rest))
-            if action == "check-update":
-                return await self._check_update(rest)
-            if action == "update":
-                return self._with_next_turn(await self._update(rest))
-        except KeyError as exc:
-            raise SkillCommandError(f"未找到 Skill: {exc}") from exc
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
-            raise SkillCommandError(str(exc)) from exc
+        if action == "list":
+            return await self._list()
+        if action == "install":
+            return await self._install(rest)
+        if action == "inspect":
+            return await self._inspect(rest)
+        if action == "test":
+            return await self._test(rest)
+        if action == "enable":
+            return self._with_next_turn(await self._set_enabled(rest, True))
+        if action == "disable":
+            return self._with_next_turn(await self._set_enabled(rest, False))
+        if action == "remove":
+            return self._with_next_turn(await self._remove(rest))
+        if action == "check-update":
+            return await self._check_update(rest)
+        if action == "update":
+            return self._with_next_turn(await self._update(rest))
         raise SkillCommandError(f"未知 /skill 子命令: {action}")
 
     async def _list(self) -> str:
@@ -76,7 +72,10 @@ class SkillConsoleAdapter:
             source_ref = SkillSourceRef(kind, locator, requested_ref)
         else:
             source_ref = SkillSourceRef("local", str(Path(source).resolve()))
-        record = await self._service.install_source(source_ref)
+        try:
+            record = await self._service.install_source(source_ref)
+        except SkillSourceError as exc:
+            raise SkillCommandError(str(exc)) from exc
         return (
             f"已安装 Skill `{record.name}` 为 disabled。"
             "\n检查后执行 /skill enable，从下一个 Turn 发布给模型。"

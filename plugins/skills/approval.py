@@ -9,6 +9,7 @@ from core.approval import ApprovalExecution, ApprovalRequest
 from core.tool_registry import PydanticParameters, ToolSpec
 from plugins.skills.application import SkillApplicationService
 from plugins.skills.models import SkillSourceRef
+from plugins.skills.sources import SkillSourceError
 
 
 SKILL_INSTALL_ACTION = "skill.install"
@@ -28,18 +29,32 @@ def create_skill_install_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: SkillInstallProposalInput,
-    ) -> ApprovalRequest:
-        candidate = await service.prepare_install(SkillSourceRef(
-            input_data.source_kind,
-            input_data.locator,
-            input_data.requested_ref,
-        ))
+    ) -> ApprovalRequest | dict:
+        try:
+            candidate = await service.prepare_install(SkillSourceRef(
+                input_data.source_kind,
+                input_data.locator,
+                input_data.requested_ref,
+            ))
+        except SkillSourceError as exc:
+            return {
+                "ok": False,
+                "code": "SKILL_SOURCE_ERROR",
+                "data": {
+                    "source_kind": input_data.source_kind,
+                    "locator": input_data.locator,
+                },
+                "error": str(exc),
+                "hint": "检查网络、来源地址或本地路径后重试。",
+            }
         return ApprovalRequest(
             id=f"approval-{uuid4().hex}",
             action=SKILL_INSTALL_ACTION,
             payload={
                 "skill_id": candidate.skill_id,
                 "content_hash": candidate.content_hash,
+                "source": candidate.source.to_dict(),
+                "resolved_ref": candidate.resolved_ref,
             },
             summary=(
                 f"准备安装 Skill `{candidate.skill_id}`\n"
@@ -77,9 +92,12 @@ class SkillInstallApprovalHandler:
         self.service = service
 
     async def execute(self, payload: Mapping[str, object]) -> ApprovalExecution:
+        source = payload["source"]
         record = await self.service.install_frozen(
             str(payload["skill_id"]),
             str(payload["content_hash"]),
+            SkillSourceRef.from_dict(dict(source)),
+            str(payload["resolved_ref"]),
         )
         return ApprovalExecution(
             succeeded=True,

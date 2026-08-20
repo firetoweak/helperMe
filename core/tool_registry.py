@@ -122,8 +122,6 @@ class ToolRegistry:
         self._specs: dict[str, ToolSpec] = {}
 
     def register(self, spec: ToolSpec) -> None:
-        if spec.name in self._specs:
-            raise ValueError(f"duplicate tool registration: {spec.name}")
         self._specs[spec.name] = spec
 
     def get(self, name: str) -> ToolSpec | None:
@@ -138,9 +136,6 @@ class ToolRegistry:
         return registry
 
     def select(self, names: set[str]) -> "ToolRegistry":
-        unknown = names - self._specs.keys()
-        if unknown:
-            raise ValueError(f"unknown base tools: {sorted(unknown)}")
         registry = ToolRegistry()
         registry._specs = {
             name: spec

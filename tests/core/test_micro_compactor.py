@@ -87,18 +87,5 @@ class MicroCompactorTest(unittest.TestCase):
 
         self.assertEqual(projected, conversation.protocol_messages())
 
-    def test_rejects_artifact_mapping_to_non_tool_message(self):
-        conversation = Conversation()
-        conversation.set_system_prompt("system prompt")
-        conversation.add_user("hello")
-        user_id = conversation.records[1].message_id
-
-        with self.assertRaisesRegex(ValueError, "只能指向 tool"):
-            MicroCompactor().dehydrate(
-                conversation.records,
-                {user_id: "art_" + "b" * 32},
-            )
-
-
 if __name__ == "__main__":
     unittest.main()

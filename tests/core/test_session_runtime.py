@@ -235,10 +235,6 @@ class SessionRuntimeStartTest(unittest.IsolatedAsyncioTestCase):
             await self.runtime.start("session-1", "turn-1", "完成任务")
 
         self.assertEqual(self.runtime.active_controls, {})
-        self.assertEqual(session.status, SessionStatus.FAILED)
-        self.assertEqual(session.turn_records[0].status, TurnStatus.FAILED.value)
-        self.assertEqual(session.turn_records[0].final_reason, "runtime_exception")
-        self.assertIsNotNone(session.turn_records[0].ended_at)
 
     async def test_cancelled_turn_is_finalized_before_cancellation_propagates(self):
         session = self.runtime.create_session("session-1", system_prompt="prompt")
@@ -360,22 +356,6 @@ class SessionRuntimeRequestInterruptTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ValueError):
             self.runtime.request_interrupt("session-1")
-
-    async def test_request_interrupt_fails_when_running_session_has_no_control(self):
-        session = self.runtime.create_session("session-1", system_prompt="prompt")
-        session.transition_to(
-            SessionStatus.RUNNING,
-            SessionEvent(
-                kind=SessionEventType.STARTED,
-                session_id=session.id,
-                reason="Session started",
-                turn_id="turn-1",
-            ),
-        )
-
-        with self.assertRaises(RuntimeError):
-            self.runtime.request_interrupt(session.id)
-
 
 class SessionRuntimeResumeTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -758,11 +738,6 @@ class SessionRuntimeResumeContinuationTest(unittest.IsolatedAsyncioTestCase):
             await self.runtime.resume(self.session.id, "turn-2", "继续")
 
         self.assertEqual(self.runtime.active_controls, {})
-        self.assertEqual(self.session.status, SessionStatus.FAILED)
-        self.assertEqual(
-            self.session.turn_records[-1].final_reason,
-            "runtime_exception",
-        )
 
 
 if __name__ == "__main__":

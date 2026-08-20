@@ -136,6 +136,13 @@ class TiktokenTokenEstimatorTest(unittest.TestCase):
 
     def test_breakdown_roles_and_tools_sum_to_estimated_total(self):
         estimator = TiktokenTokenEstimator()
+        tool_content = json.dumps({
+            "ok": True,
+            "code": "OK",
+            "data": "x" * 5_000,
+            "error": None,
+            "hint": None,
+        })
         context = ModelContext(
             messages=[
                 {"role": "system", "content": "系统指令"},
@@ -157,7 +164,7 @@ class TiktokenTokenEstimatorTest(unittest.TestCase):
                 {
                     "role": "tool",
                     "tool_call_id": "call_1",
-                    "content": "x" * 5_000,
+                    "content": tool_content,
                 },
             ]
         )
@@ -178,13 +185,13 @@ class TiktokenTokenEstimatorTest(unittest.TestCase):
         self.assertEqual(total_parts, composition.estimated_total_tokens)
         self.assertGreater(composition.by_role_tokens["tool"], 0)
         self.assertGreater(composition.tools_schema_tokens, 0)
-        self.assertEqual(composition.tool_result_chars, 5_000)
+        self.assertEqual(composition.tool_result_chars, len(tool_content))
         self.assertEqual(composition.input_budget_tokens, 10_000)
         self.assertEqual(len(composition.tool_results), 1)
         tool_stat = composition.tool_results[0]
         self.assertEqual(tool_stat.tool_call_id, "call_1")
         self.assertEqual(tool_stat.tool_name, "grep")
-        self.assertEqual(tool_stat.chars, 5_000)
+        self.assertEqual(tool_stat.chars, len(tool_content))
         self.assertFalse(tool_stat.externalized)
         self.assertIsNone(tool_stat.artifact_id)
         self.assertEqual(

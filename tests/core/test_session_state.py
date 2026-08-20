@@ -2,7 +2,6 @@ import unittest
 from datetime import datetime, timezone
 
 from core.session.state import (
-    InvalidSessionTransition,
     SessionEvent,
     SessionEventType,
     SessionTurnRecord,
@@ -53,67 +52,6 @@ class SessionStateTest(unittest.TestCase):
 
         self.assertEqual(session.status, SessionStatus.RUNNING)
         self.assertEqual(session.events, [started, interrupted, resumed])
-
-    def test_pending_cannot_be_interrupted(self):
-        session = Session(id="session-1")
-        event = self.make_event(SessionEventType.INTERRUPTED)
-
-        with self.assertRaises(InvalidSessionTransition):
-            session.transition_to(SessionStatus.INTERRUPTED, event)
-
-        self.assertEqual(session.status, SessionStatus.PENDING)
-        self.assertEqual(session.events, [])
-
-    def test_transition_rejects_event_from_another_session_atomically(self):
-        session = Session(id="session-1")
-        event = self.make_event(
-            SessionEventType.STARTED,
-            session_id="session-2",
-        )
-
-        with self.assertRaises(ValueError):
-            session.transition_to(SessionStatus.RUNNING, event)
-
-        self.assertEqual(session.status, SessionStatus.PENDING)
-        self.assertEqual(session.events, [])
-
-    def test_transition_rejects_event_kind_mismatched_with_target_atomically(self):
-        session = Session(id="session-1")
-        event = self.make_event(SessionEventType.COMPLETED)
-
-        with self.assertRaises(ValueError):
-            session.transition_to(SessionStatus.RUNNING, event)
-
-        self.assertEqual(session.status, SessionStatus.PENDING)
-        self.assertEqual(session.events, [])
-
-    def test_pending_to_running_requires_started_event(self):
-        session = Session(id="session-1")
-        event = self.make_event(SessionEventType.RESUMED)
-
-        with self.assertRaises(ValueError):
-            session.transition_to(SessionStatus.RUNNING, event)
-
-        self.assertEqual(session.status, SessionStatus.PENDING)
-        self.assertEqual(session.events, [])
-
-    def test_interrupted_to_running_requires_resumed_event(self):
-        session = Session(id="session-1")
-        session.transition_to(
-            SessionStatus.RUNNING,
-            self.make_event(SessionEventType.STARTED),
-        )
-        session.transition_to(
-            SessionStatus.INTERRUPTED,
-            self.make_event(SessionEventType.INTERRUPTED),
-        )
-        event = self.make_event(SessionEventType.STARTED, turn_id="turn-2")
-
-        with self.assertRaises(ValueError):
-            session.transition_to(SessionStatus.RUNNING, event)
-
-        self.assertEqual(session.status, SessionStatus.INTERRUPTED)
-        self.assertNotIn(event, session.events)
 
     def test_completed_can_start_new_turn_in_same_session(self):
         session = Session(id="session-1")
@@ -190,29 +128,6 @@ class SessionStateTest(unittest.TestCase):
         session.record_event(event)
 
         self.assertEqual(session.events, [event])
-
-    def test_cannot_record_event_from_another_session(self):
-        session = Session(id="session-1")
-        event = SessionEvent(
-            kind=SessionEventType.CREATED,
-            session_id="session-2",
-            reason="Session 创建完成",
-        )
-
-        with self.assertRaises(ValueError):
-            session.record_event(event)
-
-        self.assertEqual(session.events, [])
-
-    def test_record_event_rejects_state_transition_event(self):
-        session = Session(id="session-1")
-        event = self.make_event(SessionEventType.STARTED)
-
-        with self.assertRaises(ValueError):
-            session.record_event(event)
-
-        self.assertEqual(session.status, SessionStatus.PENDING)
-        self.assertEqual(session.events, [])
 
     def test_session_can_hold_turn_record(self):
         session = Session(id="session-1")

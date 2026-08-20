@@ -42,10 +42,15 @@ class SkillSourceRouter:
 
     async def fetch(self, source: SkillSourceRef) -> SkillBundle:
         if source.kind == "local":
-            bundle = await asyncio.to_thread(
-                self.package_reader.read,
-                Path(source.locator),
-            )
+            try:
+                bundle = await asyncio.to_thread(
+                    self.package_reader.read,
+                    Path(source.locator),
+                )
+            except (OSError, SkillPackageError) as exc:
+                raise SkillSourceError(
+                    f"无法读取本地 Skill source: {source.locator}"
+                ) from exc
             return replace(bundle, source=source)
         if source.kind == "url":
             return await self._fetch_url(source)
@@ -56,13 +61,16 @@ class SkillSourceRouter:
     async def _fetch_url(self, source: SkillSourceRef) -> SkillBundle:
         self._validate_https_url(source.locator)
         content, final_url = await self._download(source.locator)
-        if content.startswith(b"PK\x03\x04"):
-            bundle = self._read_zip(content)
-        else:
-            with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                (root / "SKILL.md").write_bytes(content)
-                bundle = self.package_reader.read(root)
+        try:
+            if content.startswith(b"PK\x03\x04"):
+                bundle = self._read_zip(content)
+            else:
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root / "SKILL.md").write_bytes(content)
+                    bundle = self.package_reader.read(root)
+        except SkillPackageError as exc:
+            raise SkillSourceError("远程 Skill package 格式无效") from exc
         return replace(
             bundle,
             source=source,
@@ -92,7 +100,10 @@ class SkillSourceRouter:
             f"https://codeload.github.com/{owner}/{repository}/zip/{commit}"
         )
         archive, _ = await self._download(archive_url)
-        bundle = self._read_zip(archive, package_subpath=subpath)
+        try:
+            bundle = self._read_zip(archive, package_subpath=subpath)
+        except SkillPackageError as exc:
+            raise SkillSourceError("GitHub Skill package 格式无效") from exc
         return replace(
             bundle,
             source=source,
@@ -114,16 +125,29 @@ class SkillSourceRouter:
             timeout=self.timeout_seconds,
             transport=self.transport,
         ) as client:
-            async with client.stream("GET", url, headers=headers) as response:
-                response.raise_for_status()
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > self.max_download_bytes:
-                        raise SkillSourceError("Skill source 下载超出大小限制")
-                    chunks.append(chunk)
-                return b"".join(chunks), str(response.url)
+            try:
+                async with client.stream(
+                    "GET",
+                    url,
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > self.max_download_bytes:
+                            raise SkillSourceError(
+                                "Skill source 下载超出大小限制"
+                            )
+                        chunks.append(chunk)
+                    return b"".join(chunks), str(response.url)
+            except httpx.HTTPError as exc:
+                host = urlparse(url).hostname or "unknown host"
+                raise SkillSourceError(
+                    "Skill source 下载失败："
+                    f"{host} ({type(exc).__name__})"
+                ) from exc
 
     def _read_zip(
         self,

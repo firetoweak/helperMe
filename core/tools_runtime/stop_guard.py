@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.tools_state import ToolStep, ToolsState
 
 WRITE_TOOL_NAMES = frozenset({"apply_patch", "replace_all", "write_file"})
@@ -13,13 +12,12 @@ COMMAND_WRITE_RESULT_CODES = frozenset({"COMMAND_COMPLETED", "COMMAND_TIMEOUT"})
 
 @dataclass(frozen=True)
 class StopSafety:
-    protocol_safe: bool
     business_safe: bool
     reason: str | None = None
 
     @property
     def can_stop(self) -> bool:
-        return self.protocol_safe and self.business_safe
+        return self.business_safe
 
 
 def _requires_verification(step: ToolStep) -> bool:
@@ -72,22 +70,12 @@ def verification_status(tools_state: ToolsState) -> dict[str, Any]:
 
 
 def evaluate_stop_safety(
-    messages: list[dict[str, Any]],
     tools_state: ToolsState,
 ) -> StopSafety:
-    validation = validate_tool_message_chain(messages)
-    if not validation.ok:
-        return StopSafety(
-            protocol_safe=False,
-            business_safe=not needs_verification(tools_state),
-            reason="message_chain_invalid",
-        )
-
     if needs_verification(tools_state):
         return StopSafety(
-            protocol_safe=True,
             business_safe=False,
             reason="verification_required",
         )
 
-    return StopSafety(protocol_safe=True, business_safe=True)
+    return StopSafety(business_safe=True)

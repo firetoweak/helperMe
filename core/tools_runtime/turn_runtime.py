@@ -9,7 +9,6 @@ from core.tools_runtime.tools_checkpoint import (
     Checkpoint,
     budget_stop_checkpoint,
     format_checkpoint,
-    message_chain_invalid_checkpoint,
     turn_completed_checkpoint,
     turn_interrupted_checkpoint,
     turn_started_checkpoint,
@@ -21,7 +20,6 @@ from core.messages import Conversation
 from core.model_call.service import ModelCallService
 from core.tools_runtime.stop_guard import evaluate_stop_safety
 from core.tools_runtime.tools_executor import ToolsExecutor
-from core.tools_runtime.tools_protocol import validate_tool_message_chain
 from core.tools_runtime.tools_state import ToolsState
 from core.runtime_modes import TurnMode, RuntimeMode, RuntimeModeRouter
 from core.context import ContextPreparationService, ContextState
@@ -56,15 +54,6 @@ class TurnRuntime:
             [EnvironmentBinding], list[ToolSpec]
         ] | None = None,
     ):
-        if runtime_mode is None:
-            if mode_router is None or runtime_modes is None:
-                raise ValueError(
-                    "mode_router and runtime_modes are required without runtime_mode"
-                )
-        elif mode_router is not None or runtime_modes is not None:
-            raise ValueError(
-                "runtime_mode cannot be combined with mode_router/runtime_modes"
-            )
         self.model_calls = model_calls
         self.model = model
         self.runtime_mode = runtime_mode
@@ -114,8 +103,6 @@ class TurnRuntime:
         current_context_state = context_state or ContextState()
         current_invocation = invocation
         environment_binding = current_invocation.environment_binding
-        if environment_binding is None:
-            raise ValueError("Turn 缺少 Environment Binding")
         environment_tool_specs = (
             tuple(self.environment_tool_factory(environment_binding))
             if self.environment_tool_factory is not None
@@ -195,24 +182,9 @@ class TurnRuntime:
             )
         runtime_mode = activation.runtime_mode
         mode_state = activation.mode_state
-        if runtime_mode is None:
-            raise AssertionError("mode activation completed without a runtime mode")
         for step_index in range(1, max_steps + 1):
             tool_snapshot = tool_environment.snapshot(runtime_mode, mode_state)
             tools = tool_snapshot.model_tools
-            validation = validate_tool_message_chain(
-                conversation.protocol_messages()
-            )
-            if not validation.ok:
-                checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
-                return self._finish(
-                    status=TurnStatus.FAILED,
-                    answer=format_checkpoint(checkpoint),
-                    checkpoint=checkpoint,
-                    checkpoints=checkpoints,
-                    context_state=current_context_state,
-                    evidence=evidence_recorder.snapshot(),
-                )
             turn_outcome = await agent_step_runner.prepare_and_call(
                 conversation_records=conversation.records,
                 context_state=current_context_state,
@@ -267,23 +239,7 @@ class TurnRuntime:
                 if final_feedback is not None:
                     continue
 
-                stop_safety = evaluate_stop_safety(
-                    conversation.protocol_messages(),
-                    tools_state,
-                )
-                if not stop_safety.protocol_safe:
-                    validation = validate_tool_message_chain(
-                        conversation.protocol_messages()
-                    )
-                    checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
-                    return self._finish(
-                        status=TurnStatus.FAILED,
-                        answer=format_checkpoint(checkpoint),
-                        checkpoint=checkpoint,
-                        checkpoints=checkpoints,
-                        context_state=current_context_state,
-                        evidence=evidence_recorder.snapshot(),
-                    )
+                stop_safety = evaluate_stop_safety(tools_state)
 
                 if not stop_safety.business_safe:
                     checkpoint = verification_required_checkpoint()
@@ -298,12 +254,6 @@ class TurnRuntime:
                 completion_data = runtime_mode.checkpoint_data(mode_state) or {}
                 for capability in current_invocation.capabilities:
                     capability_data = capability.checkpoint_data() or {}
-                    duplicated_keys = completion_data.keys() & capability_data.keys()
-                    if duplicated_keys:
-                        raise ValueError(
-                            "capability checkpoint data conflicts with existing "
-                            f"data: {sorted(duplicated_keys)}"
-                        )
                     completion_data.update(capability_data)
                 checkpoint = turn_completed_checkpoint(
                     answer=answer,
@@ -365,23 +315,7 @@ class TurnRuntime:
                 )
 
             if turn_control.interrupt_requested:
-                stop_safety = evaluate_stop_safety(
-                    conversation.protocol_messages(),
-                    tools_state,
-                )
-                if not stop_safety.protocol_safe:
-                    validation = validate_tool_message_chain(
-                        conversation.protocol_messages()
-                    )
-                    checkpoint = message_chain_invalid_checkpoint(validation.to_dict())
-                    return self._finish(
-                        status=TurnStatus.FAILED,
-                        answer=format_checkpoint(checkpoint),
-                        checkpoint=checkpoint,
-                        checkpoints=checkpoints,
-                        context_state=current_context_state,
-                        evidence=evidence_recorder.snapshot(),
-                    )
+                stop_safety = evaluate_stop_safety(tools_state)
 
                 if not stop_safety.business_safe:
                     checkpoint = verification_required_checkpoint()

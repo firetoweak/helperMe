@@ -57,10 +57,10 @@ Skill Plugin storage
 
 相对路径默认属于 Task Workspace，不因加载或执行 Skill 而改变。HelperMe 不做 `chdir(skill_dir)`；Skill 脚本必须通过显式 `<skill-dir>` 路径执行。
 
-第一版目录仍可位于 Agent Workspace 根目录之下，但路径由 Skill Plugin 自己派生和管理，不在 `AgentWorkspace` 上增加 `skills_root` 领域接口：
+路径由 Skill Plugin 自己从通用 `plugins_root` 派生，不在 `AgentWorkspace` 上增加 `skills_root` 领域接口；布局与 MCP 同级：
 
 ```text
-~/.helperme/skills/
+~/.helperme/plugins/skills/
 ├─ registry.json
 ├─ packages/
 │  └─ python-testing/

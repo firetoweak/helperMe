@@ -754,7 +754,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
             transport_config={"command": "python"},
             enabled=True,
         )
-        with self.assertRaises(ToolsetLoadError):
+        with self.assertRaisesRegex(RuntimeError, "metadata broken"):
             await service.toolset_provider.tool_specs("mcp:metadata")
         self.assertTrue(closed)
         await manager.aclose()

@@ -10,7 +10,6 @@ from typing import Protocol
 from plugins.skills.models import SkillBundle, SkillRecord
 from plugins.skills.package import (
     LocalSkillPackageReader,
-    SkillPackageError,
     write_skill_bundle,
 )
 
@@ -54,24 +53,17 @@ class LocalSkillInstaller:
                     f"Skill 安装目录已存在但未登记: {target}"
                 )
 
-            self.validate_managed_path(self.packages_root)
-            self.validate_managed_path(self.staging_root)
             self.packages_root.mkdir(parents=True, exist_ok=True)
             self.staging_root.mkdir(parents=True, exist_ok=True)
-            self.validate_managed_path(self.packages_root)
-            self.validate_managed_path(self.staging_root)
             staging_parent = Path(tempfile.mkdtemp(
                 prefix=f"{bundle.name}-",
                 dir=self.staging_root,
             ))
             staging_package = staging_parent / bundle.name
-            published = False
             try:
                 write_skill_bundle(staging_package, bundle)
-                staged = self.package_reader.read(staging_package)
-                self._assert_same_bundle(bundle, staged)
+                self.package_reader.read(staging_package)
                 os.replace(staging_package, target)
-                published = True
                 record = SkillRecord(
                     name=bundle.name,
                     description=bundle.description,
@@ -84,34 +76,10 @@ class LocalSkillInstaller:
                     return await self.registry.add(record)
                 except BaseException:
                     shutil.rmtree(target)
-                    published = False
                     raise
             finally:
                 if staging_parent.exists():
                     shutil.rmtree(staging_parent)
-                if published and not target.is_dir():
-                    raise RuntimeError("Skill 发布后目录意外丢失")
 
     def _target(self, skill_id: str) -> Path:
-        target = (self.packages_root / skill_id).resolve()
-        if (
-            not target.is_relative_to(self.packages_root.resolve())
-            or not target.is_relative_to(self.skills_root)
-        ):
-            raise SkillPackageError("Skill 安装目标越界")
-        return target
-
-    def validate_managed_path(self, path: Path) -> Path:
-        resolved = path.resolve()
-        if not resolved.is_relative_to(self.skills_root):
-            raise SkillPackageError(f"Skill 管理目录越界: {path}")
-        return resolved
-
-    @staticmethod
-    def _assert_same_bundle(expected: SkillBundle, actual: SkillBundle) -> None:
-        if (
-            actual.name != expected.name
-            or actual.description != expected.description
-            or actual.content_hash != expected.content_hash
-        ):
-            raise RuntimeError("Skill staging 校验结果与冻结候选不一致")
+        return (self.packages_root / skill_id).resolve()

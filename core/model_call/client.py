@@ -40,7 +40,7 @@ class LLMClient:
             trust_env=False,
             timeout=httpx.Timeout(
                 connect=10.0,
-                read=120.0,
+                read=300.0,
                 write=30.0,
                 pool=10.0,
             ),

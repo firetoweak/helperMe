@@ -24,43 +24,36 @@ class McpConsoleAdapter:
             return self._help()
         action = parts[1]
         rest = parts[2] if len(parts) > 2 else ""
-        try:
-            if action == "list":
-                return await self._list(rest)
-            if action == "upsert":
-                return self._with_reload_notice(await self._upsert(rest))
-            if action == "enable":
-                return self._with_reload_notice(
-                    await self._set_enabled(rest, True)
-                )
-            if action == "disable":
-                return self._with_reload_notice(
-                    await self._set_enabled(rest, False)
-                )
-            if action == "remove":
-                return self._with_reload_notice(await self._remove(rest))
-            if action == "test":
-                return await self._test(rest)
-            if action == "retry":
-                return self._with_reload_notice(await self._retry(rest))
-            if action == "resources":
-                return await self._resources(rest)
-            if action == "resource-templates":
-                return await self._resource_templates(rest)
-            if action == "prompts":
-                return await self._prompts(rest)
-            if action == "read-resource":
-                return await self._read_resource(rest)
-            if action == "get-prompt":
-                return await self._get_prompt(rest)
-            if action == "help":
-                return self._help()
-        except KeyError as exc:
-            raise McpCommandError(f"未找到 Server: {exc}") from exc
-        except PermissionError as exc:
-            raise McpCommandError(str(exc)) from exc
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise McpCommandError(str(exc)) from exc
+        if action == "list":
+            return await self._list(rest)
+        if action == "upsert":
+            return self._with_reload_notice(await self._upsert(rest))
+        if action == "enable":
+            return self._with_reload_notice(
+                await self._set_enabled(rest, True)
+            )
+        if action == "disable":
+            return self._with_reload_notice(
+                await self._set_enabled(rest, False)
+            )
+        if action == "remove":
+            return self._with_reload_notice(await self._remove(rest))
+        if action == "test":
+            return await self._test(rest)
+        if action == "retry":
+            return self._with_reload_notice(await self._retry(rest))
+        if action == "resources":
+            return await self._resources(rest)
+        if action == "resource-templates":
+            return await self._resource_templates(rest)
+        if action == "prompts":
+            return await self._prompts(rest)
+        if action == "read-resource":
+            return await self._read_resource(rest)
+        if action == "get-prompt":
+            return await self._get_prompt(rest)
+        if action == "help":
+            return self._help()
         raise McpCommandError(f"未知 /mcp 子命令: {action}")
 
     async def _list(self, rest: str) -> str:

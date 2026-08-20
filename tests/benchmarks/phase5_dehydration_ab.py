@@ -308,7 +308,7 @@ def build_application(
         workspace_view,
         str(WORKSPACE_ROOT),
     )
-    context_manager = ContextManager(ToolResultLimit().max_chars)
+    context_manager = ContextManager()
     policy_types = {
         "full": FullDehydrationPolicy,
         "current": MicroCompactionPolicy,

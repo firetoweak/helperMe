@@ -17,6 +17,43 @@ from tests.plugins.test_skill_package import write_skill
 
 
 class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
+    async def test_same_content_from_new_source_keeps_current_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = AgentWorkspace(root / ".helperme")
+            workspace.initialize()
+            first_source = root / "first-source"
+            current_source = root / "current-source"
+            write_skill(first_source, name="demo", body="same body\n")
+            write_skill(current_source, name="demo", body="same body\n")
+            service = SkillApplicationService(workspace)
+            spec = create_skill_install_proposal_spec(service)
+
+            first = await spec.handler(SkillInstallProposalInput(
+                source_kind="local",
+                locator=str(first_source),
+            ))
+            current = await spec.handler(SkillInstallProposalInput(
+                source_kind="local",
+                locator=str(current_source),
+            ))
+
+            self.assertIsInstance(first, ApprovalRequest)
+            self.assertIsInstance(current, ApprovalRequest)
+            self.assertEqual(
+                first.payload["content_hash"],
+                current.payload["content_hash"],
+            )
+            self.assertEqual(
+                current.payload["source"]["locator"],
+                str(current_source),
+            )
+
+            await SkillInstallApprovalHandler(service).execute(current.payload)
+
+            record = await service.registry.get("demo")
+            self.assertEqual(record.source.locator, str(current_source))
+
     async def test_proposal_freezes_candidate_and_approval_installs_exact_hash(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

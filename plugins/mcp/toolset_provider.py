@@ -13,7 +13,6 @@ from core.tools_runtime.progressive_toolsets import (
 )
 from plugins.mcp.adapter import (
     adapt_call_result,
-    adapt_protocol_error,
     adapt_transport_error,
     build_parameters,
     build_output_validator,
@@ -22,8 +21,7 @@ from plugins.mcp.adapter import (
     input_required_unsupported,
     parse_toolset_id,
 )
-from plugins.mcp.client_manager import McpClientManager
-from plugins.mcp.models import McpServerRecord
+from plugins.mcp.client_manager import McpClientError, McpClientManager
 from plugins.mcp.registry import McpRegistry
 
 
@@ -39,8 +37,9 @@ class McpToolsetProvider:
         self._client_manager = client_manager
 
     def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
-        # 同步接口：直接读盘快照。Registry 的 list 在测试/单线程下可同步读。
-        records = self._read_enabled_records_sync()
+        records = tuple(
+            record for record in self._registry.snapshot() if record.enabled
+        )
         descriptors: list[ToolsetDescriptor] = []
         for record in records:
             runtime = self._client_manager.runtime_state(record.id)
@@ -61,7 +60,7 @@ class McpToolsetProvider:
     def toolset_snapshot_token(self) -> object:
         return tuple(
             (record.id, record.revision, record.enabled)
-            for record in self._read_records_sync()
+            for record in self._registry.snapshot()
         )
 
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
@@ -78,7 +77,14 @@ class McpToolsetProvider:
             tools = await self._client_manager.list_tools(record)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (
+            TimeoutError,
+            OSError,
+            McpClientError,
+            anyio.EndOfStream,
+            anyio.BrokenResourceError,
+            anyio.ClosedResourceError,
+        ) as exc:
             summary = self._client_manager.sanitized_error(record, exc)
             self._client_manager.runtime_state(server_id).mark_unavailable(summary)
             await self._client_manager.invalidate(server_id)
@@ -155,6 +161,7 @@ class McpToolsetProvider:
             except (
                 TimeoutError,
                 OSError,
+                McpClientError,
                 anyio.EndOfStream,
                 anyio.BrokenResourceError,
                 anyio.ClosedResourceError,
@@ -165,13 +172,6 @@ class McpToolsetProvider:
                 )
                 await self._client_manager.invalidate(record_id)
                 return adapt_transport_error(exc, error_summary=summary)
-            except Exception as exc:
-                # SDK/协议层错误
-                message = self._client_manager.sanitized_error(record, exc)
-                if "input_required" in message.lower():
-                    return input_required_unsupported()
-                return adapt_protocol_error(exc, error_summary=message)
-
             if isinstance(result, InputRequiredResult):
                 return input_required_unsupported()
 
@@ -182,22 +182,3 @@ class McpToolsetProvider:
             )
 
         return handler
-
-    def _read_enabled_records_sync(self) -> tuple[McpServerRecord, ...]:
-        return tuple(
-            record for record in self._read_records_sync() if record.enabled
-        )
-
-    def _read_records_sync(self) -> tuple[McpServerRecord, ...]:
-        # descriptors() 必须同步且禁止网络。直接读取 Registry 文件。
-        if not self._registry.path.exists():
-            return ()
-        import json
-
-        payload = json.loads(self._registry.path.read_text(encoding="utf-8"))
-        servers = payload.get("servers", payload)
-        records = [
-            McpServerRecord.from_dict(item)
-            for item in servers
-        ]
-        return tuple(sorted(records, key=lambda item: item.id))

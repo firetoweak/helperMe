@@ -218,6 +218,16 @@ class ApprovalApplicationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.application.resolve_approval("session-1", "yes")
 
+        messages = self.session.conversation.protocol_messages()
+        self.assertEqual(
+            [message["role"] for message in messages],
+            ["system", "user"],
+        )
+        self.assertEqual(messages[-1]["content"], "yes")
+        self.assertFalse(
+            any("安装成功" in str(message.get("content")) for message in messages)
+        )
+
     async def test_no_records_rejection_without_executing(self):
         resolution = await self.application.resolve_approval(
             "session-1",

@@ -100,8 +100,6 @@ class ConcurrentToolBatchExecutor:
         approval_request = None
         for call, handler_result in zip(calls, tool_results, strict=True):
             if isinstance(handler_result, ApprovalRequest):
-                if approval_request is not None:
-                    raise ValueError("同一工具批次产生了多个 ApprovalRequest")
                 approval_request = handler_result
                 tool_result = {
                     "ok": True,

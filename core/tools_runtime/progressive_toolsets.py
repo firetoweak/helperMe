@@ -157,20 +157,9 @@ class SnapshotToolsetProvider:
 
 @dataclass(frozen=True)
 class CompositeToolsetProvider:
-    """合并多个 Provider；ID 冲突在构造期失败。"""
+    """合并多个 Provider。"""
 
     providers: tuple[ToolsetProvider, ...]
-
-    def __post_init__(self) -> None:
-        seen: dict[str, int] = {}
-        for index, provider in enumerate(self.providers):
-            for descriptor in provider.descriptors():
-                if descriptor.id in seen:
-                    raise ValueError(
-                        "duplicate toolset id across providers: "
-                        f"{descriptor.id!r}"
-                    )
-                seen[descriptor.id] = index
 
     def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
         return tuple(

@@ -108,38 +108,6 @@ class TodoListTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(todos.revision, 1)
         self.assertEqual(todos.sync_state, TodoSyncState.CLEAN)
 
-    async def test_dirty_or_unresolved_todo_list_cannot_complete(self):
-        todos = TodoList()
-        self._initialize(todos)
-
-        with self.assertRaises(ValueError):
-            todos.complete()
-
-        todos.mark_dirty()
-        with self.assertRaises(ValueError):
-            todos.complete()
-
-    async def test_rewrite_rejects_unknown_duplicate_ids_and_multiple_doing(self):
-        todos = TodoList()
-        self._initialize(todos)
-
-        invalid_drafts = (
-            [TodoDraft(9, "未知", "pending")],
-            [
-                TodoDraft(1, "分析", "pending"),
-                TodoDraft(1, "重复", "done"),
-            ],
-            [
-                TodoDraft(1, "分析", "doing"),
-                TodoDraft(2, "实现", "doing"),
-            ],
-        )
-        for drafts in invalid_drafts:
-            with self.subTest(drafts=drafts):
-                with self.assertRaises(ValueError):
-                    todos.apply_snapshot("完成任务", drafts)
-
-
 class TodoModeTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _snapshot(todos, *, reason="同步") -> str:
@@ -323,6 +291,37 @@ class RewriteTodosTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "VALIDATION_ERROR")
+
+    async def test_rewrite_boundary_rejects_unknown_duplicate_ids_and_multiple_doing(self):
+        state = TodoList()
+        initialized = await execute_rewrite_todos(
+            state,
+            self._arguments([
+                {"id": None, "content": "分析", "status": "pending"},
+                {"id": None, "content": "实现", "status": "pending"},
+            ]),
+        )
+        self.assertTrue(initialized["ok"])
+
+        invalid_todos = (
+            [{"id": 9, "content": "未知", "status": "pending"}],
+            [
+                {"id": 1, "content": "分析", "status": "pending"},
+                {"id": 1, "content": "重复", "status": "done"},
+            ],
+            [
+                {"id": 1, "content": "分析", "status": "doing"},
+                {"id": 2, "content": "实现", "status": "doing"},
+            ],
+        )
+        for todos in invalid_todos:
+            with self.subTest(todos=todos):
+                result = await execute_rewrite_todos(
+                    state,
+                    self._arguments(todos, reason="非法重写"),
+                )
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["code"], "INVALID_TODO_REWRITE")
 
     async def test_schema_exposes_full_snapshot_contract(self):
         tool = rewrite_todos_tool_schema()

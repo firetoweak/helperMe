@@ -19,20 +19,6 @@ class SessionStatus(str, Enum):
     FAILED = "failed"
 
 
-class InvalidSessionTransition(ValueError):
-    def __init__(
-        self,
-        current: SessionStatus,
-        target: SessionStatus,
-        ) -> None:
-        super().__init__(
-            f"非法的 Session 状态转换：{current.value} -> {target.value}"
-        )
-        self.current = current
-        self.target = target
-
-
-# transition_to state
 class SessionEventType(str, Enum):
     CREATED = "session_created"
     STARTED = "session_started"
@@ -63,36 +49,6 @@ class SessionTurnRecord:
     ended_at: datetime | None = None
     final_reason: str | None = None
 
-ALLOWED_TRANSITIONS = {
-    SessionStatus.PENDING: {SessionStatus.RUNNING},
-    SessionStatus.RUNNING: {
-        SessionStatus.INTERRUPTED,
-        SessionStatus.COMPLETED,
-        SessionStatus.BLOCKED,
-        SessionStatus.FAILED,
-    },
-    SessionStatus.INTERRUPTED: {SessionStatus.RUNNING},
-    SessionStatus.COMPLETED: {SessionStatus.RUNNING},
-    SessionStatus.BLOCKED: {SessionStatus.RUNNING},
-    SessionStatus.FAILED: {SessionStatus.RUNNING},
-}
-
-EVENT_KIND_BY_TRANSITION = {
-    (SessionStatus.PENDING, SessionStatus.RUNNING): SessionEventType.STARTED,
-    (SessionStatus.COMPLETED, SessionStatus.RUNNING): SessionEventType.STARTED,
-    (SessionStatus.BLOCKED, SessionStatus.RUNNING): SessionEventType.STARTED,
-    (SessionStatus.FAILED, SessionStatus.RUNNING): SessionEventType.STARTED,
-    (SessionStatus.RUNNING, SessionStatus.INTERRUPTED): SessionEventType.INTERRUPTED,
-    (SessionStatus.INTERRUPTED, SessionStatus.RUNNING): SessionEventType.RESUMED,
-    (SessionStatus.RUNNING, SessionStatus.COMPLETED): SessionEventType.COMPLETED,
-    (SessionStatus.RUNNING, SessionStatus.BLOCKED): SessionEventType.BLOCKED,
-    (SessionStatus.RUNNING, SessionStatus.FAILED): SessionEventType.FAILED,
-}
-
-NON_TRANSITION_EVENT_KINDS = {
-    SessionEventType.CREATED,
-}
-
 @dataclass
 class Session:
     id: str
@@ -110,29 +66,8 @@ class Session:
         target: SessionStatus,
         event: SessionEvent,
     ) -> None:
-        current = self.status
-        if target not in ALLOWED_TRANSITIONS[self.status]:
-            raise InvalidSessionTransition(current, target)
-        if event.session_id != self.id:
-            raise ValueError(
-                f"事件属于 {event.session_id}，不能记录到 {self.id}"
-            )
-        expected_event_kind = EVENT_KIND_BY_TRANSITION[(current, target)]
-        if event.kind != expected_event_kind:
-            raise ValueError(
-                f"状态迁移 {current.value} -> {target.value} 需要事件 "
-                f"{expected_event_kind.value}，不能使用 {event.kind.value}"
-            )
         self.status = target
         self.events.append(event)
 
     def record_event(self, event: SessionEvent) -> None:
-        if event.session_id != self.id:
-            raise ValueError(
-                f"事件属于 {event.session_id}，不能记录到 {self.id}"
-            )
-        if event.kind not in NON_TRANSITION_EVENT_KINDS:
-            raise ValueError(
-                f"状态事件 {event.kind.value} 必须通过 transition_to 记录"
-            )
         self.events.append(event)

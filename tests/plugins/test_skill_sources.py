@@ -3,11 +3,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 import zipfile
 
 import httpx
 
 from plugins.skills.models import SkillSourceRef
+from plugins.skills.approval import (
+    SkillInstallProposalInput,
+    create_skill_install_proposal_spec,
+)
 from plugins.skills.sources import SkillSourceError, SkillSourceRouter
 from tests.plugins.test_skill_package import write_skill
 
@@ -30,6 +35,23 @@ def skill_zip(
 
 
 class SkillSourceRouterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_error_becomes_external_skill_source_error(self):
+        async def handler(request):
+            raise httpx.ConnectError("offline", request=request)
+
+        router = SkillSourceRouter(transport=httpx.MockTransport(handler))
+
+        with self.assertRaisesRegex(
+            SkillSourceError,
+            "ConnectError",
+        ) as captured:
+            await router.fetch(SkillSourceRef(
+                "url",
+                "https://example.test/SKILL.md",
+            ))
+
+        self.assertIsInstance(captured.exception.__cause__, httpx.ConnectError)
+
     async def test_local_source_keeps_explicit_source_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "skill"
@@ -155,6 +177,37 @@ class SkillSourceRouterTest(unittest.IsolatedAsyncioTestCase):
                 await router.fetch(SkillSourceRef(
                     "url", "https://example.test/skill.zip"
                 ))
+
+
+class SkillInstallProposalBoundaryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_expected_source_error_is_a_recoverable_tool_result(self):
+        service = Mock()
+        service.prepare_install = AsyncMock(
+            side_effect=SkillSourceError("source offline")
+        )
+        spec = create_skill_install_proposal_spec(service)
+
+        result = await spec.handler(SkillInstallProposalInput(
+            source_kind="url",
+            locator="https://example.test/SKILL.md",
+        ))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "SKILL_SOURCE_ERROR")
+        self.assertIn("source offline", result["error"])
+
+    async def test_internal_error_is_not_converted(self):
+        service = Mock()
+        service.prepare_install = AsyncMock(
+            side_effect=RuntimeError("internal bug")
+        )
+        spec = create_skill_install_proposal_spec(service)
+
+        with self.assertRaisesRegex(RuntimeError, "internal bug"):
+            await spec.handler(SkillInstallProposalInput(
+                source_kind="url",
+                locator="https://example.test/SKILL.md",
+            ))
 
 
 if __name__ == "__main__":

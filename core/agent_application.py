@@ -172,9 +172,6 @@ class AgentApplication:
                 approval_id=approval_id,
                 decision="rejected",
             )
-            event_message = (
-                f"Approval `{approval_id}` 已被用户拒绝，未执行任何操作。"
-            )
         else:
             execution = await self._approval_actions.execute(request)
             resolution = ApprovalResolution(
@@ -182,11 +179,7 @@ class AgentApplication:
                 decision="approved",
                 execution=execution,
             )
-            event_message = (
-                f"Approval `{approval_id}` 执行结果：{execution.message}"
-            )
         session.conversation.record_approval_resolution(resolution)
-        session.conversation.add_system_event(event_message)
         session.pending_approval_id = None
         return resolution
 

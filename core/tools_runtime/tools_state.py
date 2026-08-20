@@ -13,15 +13,15 @@ class ToolStep:
 
     @property
     def ok(self) -> bool | None:
-        return None if self.result is None else self.result.get("ok")
+        return None if self.result is None else self.result["ok"]
 
     @property
     def code(self) -> str | None:
-        return None if self.result is None else self.result.get("code")
+        return None if self.result is None else self.result["code"]
 
     @property
     def error(self) -> str | None:
-        return None if self.result is None else self.result.get("error")
+        return None if self.result is None else self.result["error"]
 
 
 class ToolsState:
@@ -29,8 +29,6 @@ class ToolsState:
         self.steps: list[ToolStep] = []
 
     def add_call(self, call_id: str, name: str, arguments: str) -> ToolStep:
-        if self.find_step(call_id) is not None:
-            raise ValueError(f"duplicate tool call: {call_id}")
         step = ToolStep(
             call_id=call_id,
             name=name,
@@ -47,8 +45,6 @@ class ToolsState:
 
     def add_result(self, call_id: str, result: dict[str, Any]) -> None:
         step = self.get_step(call_id)
-        if step.result is not None:
-            raise ValueError(f"duplicate tool result: {call_id}")
         step.result = result
 
     def find_step(self, call_id: str) -> ToolStep | None:
@@ -58,10 +54,7 @@ class ToolsState:
         return None
 
     def get_step(self, call_id: str) -> ToolStep:
-        step = self.find_step(call_id)
-        if step is not None:
-            return step
-        raise ValueError(f"tool call not found: {call_id}")
+        return next(step for step in self.steps if step.call_id == call_id)
 
     def pending_calls(self) -> list[ToolStep]:
         """工具调用总步长"""

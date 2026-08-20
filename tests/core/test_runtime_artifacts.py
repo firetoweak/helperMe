@@ -238,7 +238,7 @@ class RuntimeArtifactsTest(unittest.IsolatedAsyncioTestCase):
             model="test-model",
             runtime_mode=PlainMode(),
             context_preparation=context_preparation_service(
-                ContextManager(limit.max_chars)
+                ContextManager()
             ),
             tools_executor=ToolsExecutor(registry),
             tool_result_externalizer=ToolResultExternalizer(

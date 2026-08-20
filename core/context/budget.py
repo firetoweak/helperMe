@@ -26,24 +26,6 @@ class BudgetAssessment:
     input_budget_tokens: int
     composition: ContextComposition
 
-    def __post_init__(self) -> None:
-        if (
-            self.composition.estimated_total_tokens
-            != self.estimated_input_tokens
-        ):
-            raise ValueError(
-                "composition.estimated_total_tokens 必须等于 "
-                "estimated_input_tokens"
-            )
-        if (
-            self.composition.input_budget_tokens
-            != self.input_budget_tokens
-        ):
-            raise ValueError(
-                "composition.input_budget_tokens 必须等于 "
-                "input_budget_tokens"
-            )
-
     @property
     def allowed(self) -> bool:
         return self.estimated_input_tokens <= self.input_budget_tokens

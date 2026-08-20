@@ -50,7 +50,7 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
-            skills_root = workspace.root / "skills"
+            skills_root = workspace.plugins_root / "skills"
             source = Path(directory) / "source-directory-name-differs"
             write_skill(source, name="python-testing")
             script = source / "scripts" / "run.py"
@@ -73,7 +73,7 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
-            skills_root = workspace.root / "skills"
+            skills_root = workspace.plugins_root / "skills"
             source = Path(directory) / "source"
             write_skill(source, name="demo")
             installer = LocalSkillInstaller(
@@ -93,7 +93,7 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
-            skills_root = workspace.root / "skills"
+            skills_root = workspace.plugins_root / "skills"
             source = Path(directory) / "source"
             write_skill(source, name="demo")
             orphan = skills_root / "packages" / "demo"
@@ -110,7 +110,7 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = AgentWorkspace(Path(directory) / ".helperme")
             workspace.initialize()
-            skills_root = workspace.root / "skills"
+            skills_root = workspace.plugins_root / "skills"
             source = Path(directory) / "source"
             write_skill(source, name="demo")
             registry = SkillRegistry(skills_root)

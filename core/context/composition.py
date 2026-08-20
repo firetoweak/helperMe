@@ -45,14 +45,7 @@ def content_char_length(content: Any) -> int:
 
 def parse_tool_result_meta(content: Any) -> tuple[bool, str | None]:
     """从 tool content 解析是否已外置及 artifact_id。"""
-    payload: Any = content
-    if isinstance(content, str):
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError:
-            return False, None
-    if not isinstance(payload, dict):
-        return False, None
+    payload: Any = json.loads(content) if isinstance(content, str) else content
     data = payload.get("data")
     if not isinstance(data, dict):
         return False, None
