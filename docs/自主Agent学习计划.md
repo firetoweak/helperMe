@@ -49,7 +49,7 @@ Memory（后置，外挂）
 
 ## Phase 0～6 回补专题
 
-暂不进入 Phase 7，先处理已由现有实现暴露出的前置问题：建立可重放执行历史，并以此验证连续上下文脱水的可靠性；同时观察 TodoList 的真实使用价值，暂不重构。详见 [Phase 0～6 回补方向](专题/前六章回补方向.md)；执行历史已升级为独立的 [Execution Journal 与可重放执行历史](专题/Execution%20Journal与可重放执行历史.md) 专题。
+暂不进入 Phase 7，先处理已由现有实现暴露出的前置问题：以 Execution Journal 为事实骨架建立新的 Agent Runtime，并以可重放历史验证连续上下文脱水的可靠性；同时观察 TodoList 的真实使用价值，暂不重构。Agent Runtime 的 14.1 语义 MVP 与 14.2 Durable MVP 已于 2026-08-21 完成，下一步进入 14.3 边界切片。详见 [Phase 0～6 回补方向](专题/前六章回补方向.md)、[Execution Journal 与可重放执行历史](专题/Execution%20Journal与可重放执行历史.md)、[Agent Runtime 状态推进模型](专题/Agent%20Runtime状态推进模型.md)、[Agent Runtime 语义 MVP 实现总结](专题/Agent%20Runtime语义MVP实现总结.md) 和 [Agent Runtime Durable MVP 实现总结](专题/Agent%20Runtime%20Durable%20MVP实现总结.md)。
 
 详细执行过程按 Phase 编号见 [`docs/0/`](0/) … [`docs/6/`](6/)。涉及架构变更时，使用独立于 Phase 的 [`项目架构方向`](项目架构方向.md) 校准长期方向；它不是逐条强制执行的规则。
 
