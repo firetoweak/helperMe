@@ -136,6 +136,22 @@ class StepCommitted:
 
 
 @dataclass(frozen=True, slots=True)
+class CommandAuthorized:
+    command_id: str
+
+    def __post_init__(self) -> None:
+        _require_str(self.command_id, "command id")
+
+
+@dataclass(frozen=True, slots=True)
+class CommandRejected:
+    command_id: str
+
+    def __post_init__(self) -> None:
+        _require_str(self.command_id, "command id")
+
+
+@dataclass(frozen=True, slots=True)
 class DispatchAttemptStarted:
     attempt_id: str
     command_id: str
@@ -238,6 +254,8 @@ EventPayload: TypeAlias = (
     UserMessageReceived
     | UserInterruptReceived
     | StepCommitted
+    | CommandAuthorized
+    | CommandRejected
     | DispatchAttemptStarted
     | CommandReconcileStarted
     | ExternalOperationAccepted
@@ -250,6 +268,8 @@ _EVENT_PAYLOAD_TYPES = (
     UserMessageReceived,
     UserInterruptReceived,
     StepCommitted,
+    CommandAuthorized,
+    CommandRejected,
     DispatchAttemptStarted,
     CommandReconcileStarted,
     ExternalOperationAccepted,

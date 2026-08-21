@@ -5,8 +5,10 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 
 from agent_runtime.events import (
+    CommandAuthorized,
     CommandRecoveryRequired,
     CommandReconcileStarted,
+    CommandRejected,
     CommandOutcomeReceived,
     DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
@@ -90,6 +92,10 @@ class _StateBuilder:
             self.user_messages.append(payload.content)
         elif isinstance(payload, UserInterruptReceived):
             self.interrupts.append(payload.reason)
+        elif isinstance(payload, CommandAuthorized):
+            self._apply_authorized(event, payload)
+        elif isinstance(payload, CommandRejected):
+            self._apply_rejected(event, payload)
         elif isinstance(payload, DispatchAttemptStarted):
             self._apply_dispatch_started(event, payload)
         elif isinstance(payload, CommandReconcileStarted):
@@ -105,6 +111,52 @@ class _StateBuilder:
         else:
             raise TypeError(f"not a regular event: {type(payload).__name__}")
         self.visible_event_ids.append(event.event_id)
+
+    def _apply_authorized(
+        self,
+        event: Event,
+        payload: CommandAuthorized,
+    ) -> None:
+        state = self.commands[payload.command_id]
+        if state.authorization_rejected_by_event_id is not None:
+            raise ValueError(f"command already rejected: {payload.command_id}")
+        if state.dispatch_eligible_by_event_id is not None:
+            raise ValueError(
+                f"command already authorized: {payload.command_id}"
+            )
+        if state.phase is not CommandPhase.PENDING:
+            raise ValueError(f"command is not pending: {payload.command_id}")
+        if event.causation_id != state.issued_by_event_id:
+            raise ValueError(
+                f"authorization causation mismatch: {payload.command_id}"
+            )
+        self.commands[payload.command_id] = replace(
+            state,
+            dispatch_eligible_by_event_id=event.event_id,
+        )
+
+    def _apply_rejected(
+        self,
+        event: Event,
+        payload: CommandRejected,
+    ) -> None:
+        state = self.commands[payload.command_id]
+        if state.authorization_rejected_by_event_id is not None:
+            raise ValueError(f"command already rejected: {payload.command_id}")
+        if state.dispatch_eligible_by_event_id is not None:
+            raise ValueError(
+                f"cannot reject authorized command: {payload.command_id}"
+            )
+        if state.phase is not CommandPhase.PENDING:
+            raise ValueError(f"command is not pending: {payload.command_id}")
+        if event.causation_id != state.issued_by_event_id:
+            raise ValueError(
+                f"rejection causation mismatch: {payload.command_id}"
+            )
+        self.commands[payload.command_id] = replace(
+            state,
+            authorization_rejected_by_event_id=event.event_id,
+        )
 
     def _apply_dispatch_started(
         self,
@@ -452,7 +504,11 @@ class _StateBuilder:
                 command=command,
                 phase=CommandPhase.PENDING,
                 issued_by_event_id=event.event_id,
-                dispatch_eligible_by_event_id=event.event_id,
+                dispatch_eligible_by_event_id=(
+                    None
+                    if command.requires_authorization
+                    else event.event_id
+                ),
             )
         self.steps.append(step)
         self.step_ids.add(step.step_id)
@@ -542,19 +598,33 @@ class StateProjector:
             else None
         )
         command_states = tuple(operational.commands.values())
+        unauthorized_pending = tuple(
+            state.command.command_id
+            for state in command_states
+            if state.phase is CommandPhase.PENDING
+            and not state.abandoned
+            and state.dispatch_eligible_by_event_id is None
+            and state.authorization_rejected_by_event_id is None
+        )
         waiting_command_ids = tuple(
             state.command.command_id
             for state in command_states
             if state.phase is not CommandPhase.TERMINAL
             and not state.abandoned
+            and state.authorization_rejected_by_event_id is None
         )
         waiting_for = (
             ()
             if next_frame is not None
             else (
                 tuple(
+                    f"authorization:{command_id}"
+                    for command_id in unauthorized_pending
+                )
+                + tuple(
                     f"command:{command_id}"
                     for command_id in waiting_command_ids
+                    if command_id not in unauthorized_pending
                 )
                 or ("user_message",)
             )
@@ -633,6 +703,8 @@ class StateProjector:
         payload = event.payload
         if isinstance(payload, (UserMessageReceived, UserInterruptReceived)):
             return True
+        if isinstance(payload, CommandRejected):
+            return not state.commands[payload.command_id].abandoned
         if isinstance(payload, CommandRecoveryRequired):
             return not state.commands[payload.command_id].abandoned
         if isinstance(payload, CommandOutcomeReceived):

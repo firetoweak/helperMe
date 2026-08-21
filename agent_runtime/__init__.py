@@ -1,3 +1,10 @@
+from agent_runtime.artifacts import (
+    ArtifactRef,
+    ArtifactResolution,
+    ArtifactStore,
+    MemoryArtifactStore,
+    resolve_artifacts,
+)
 from agent_runtime.dispatcher import (
     AttemptContext,
     CancellationContract,
@@ -11,9 +18,11 @@ from agent_runtime.dispatcher import (
     ToolTerminal,
 )
 from agent_runtime.events import (
+    CommandAuthorized,
     CommandOutcomeReceived,
     CommandRecoveryRequired,
     CommandReconcileStarted,
+    CommandRejected,
     DeliveryIdentity,
     DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
@@ -73,6 +82,9 @@ from agent_runtime.step import DecisionMaker, IdFactory, StepRunner
 __all__ = [
     "AgentRuntime",
     "AppendResult",
+    "ArtifactRef",
+    "ArtifactResolution",
+    "ArtifactStore",
     "AttemptContext",
     "AttemptPhase",
     "AttemptState",
@@ -80,11 +92,13 @@ __all__ = [
     "CancellationContract",
     "CanonicalState",
     "Command",
+    "CommandAuthorized",
     "CommandEffect",
     "CommandOutcome",
     "CommandOutcomeReceived",
     "CommandRecoveryRequired",
     "CommandReconcileStarted",
+    "CommandRejected",
     "CommandPhase",
     "CommandState",
     "DecisionFrame",
@@ -104,6 +118,7 @@ __all__ = [
     "InterruptView",
     "Journal",
     "LeaseLostError",
+    "MemoryArtifactStore",
     "MemoryJournal",
     "ModelDecision",
     "OutcomeStatus",
@@ -136,4 +151,5 @@ __all__ = [
     "project_trace",
     "project_turn",
     "replay",
+    "resolve_artifacts",
 ]

@@ -99,8 +99,11 @@ class ToolBinding:
     reconcile_unknown: UnknownReconciler | None = None
     query_running: RunningQuery | None = None
     cancellation: CancellationContract = CancellationContract.UNSUPPORTED
+    requires_authorization: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.requires_authorization) is not bool:
+            raise TypeError("requires_authorization must be bool")
         if self.recovery.reconcile_unknown != (
             self.reconcile_unknown is not None
         ):
@@ -162,6 +165,8 @@ class Dispatcher:
             for command_state in state.commands
             if command_state.phase is CommandPhase.PENDING
             and not command_state.abandoned
+            and command_state.dispatch_eligible_by_event_id is not None
+            and command_state.authorization_rejected_by_event_id is None
             and command_state.command.command_id not in cancel_targets
             and (
                 command_state.command.command_id not in self._tasks

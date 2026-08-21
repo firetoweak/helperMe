@@ -116,4 +116,4 @@ python -m unittest tests.test_agent_runtime_suite tests.test_core_suite tests.te
 - Turn 与产品交互对象的正式映射；
 - 旧 HelperMe 的 Adapter、灰度切换与最终替换。
 
-14.2 Durable 切片已经完成。它只补持久化、Claim、去重和恢复，没有改写本次验证的 Event / State / Step / Command / Turn 职责；下一步进入 14.3 边界切片。
+14.2 Durable 切片已经完成。它只补持久化、Claim、去重和恢复，没有改写本次验证的 Event / State / Step / Command / Turn 职责。14.3 边界切片也已完成，见 [Agent Runtime 边界切片实现总结](Agent%20Runtime边界切片实现总结.md)。

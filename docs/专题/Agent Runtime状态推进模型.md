@@ -647,9 +647,11 @@ UserMessage
 
 ### 14.3 边界切片
 
+> 已于 2026-08-21 完成独立切片，见 [Agent Runtime 边界切片实现总结](Agent%20Runtime边界切片实现总结.md)。本切片按实现原则留白 Completion / Termination：Interrupt 只验收不被旧 Step 跨越或吞掉。
+
 - 未授权 Command 不会被 Dispatcher 认领；
-- Step 决策期间到达的 Interrupt 会阻止旧 Step 越过它完成 Runtime；
-- 已 Commit 的用户输出可以可靠投递，临时流式预览不污染事实；
+- Step 决策期间到达的 Interrupt 不会被旧 Step 跨越或吞掉；
+- 已 Commit 的用户输出通过 Command 投递，临时流式预览不进入 Journal；
 - Artifact 缺失时重放明确降级，不使用当前内容静默替换；
 - Turn 和 Trace 可以只依赖 Journal、Artifact 与 Projection 代码重建。
 

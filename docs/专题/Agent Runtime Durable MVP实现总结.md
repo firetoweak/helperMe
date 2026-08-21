@@ -2,7 +2,8 @@
 
 > 状态：14.2 Durable 切片已完成（2026-08-21）  
 > 权威设计：[Agent Runtime 状态推进模型](Agent%20Runtime状态推进模型.md)  
-> 前置切片：[Agent Runtime 语义 MVP 实现总结](Agent%20Runtime语义MVP实现总结.md)
+> 前置切片：[Agent Runtime 语义 MVP 实现总结](Agent%20Runtime语义MVP实现总结.md)  
+> 后续实现：[Agent Runtime 边界切片实现总结](Agent%20Runtime边界切片实现总结.md)
 
 ## 1. 本次结论
 
@@ -129,12 +130,12 @@ python -m unittest
 
 本次不声称外部副作用 exactly-once。它保证先记录 Attempt、保留 unknown、遵守工具恢复契约，并通过 receipt、幂等身份、查询或人工决策继续闭环。
 
-以下内容进入 14.3，而不继续扩张 14.2：
+以下内容曾列入 14.3。其中授权门、Interrupt 不可跨越、输出投递边界和 Artifact 缺失降级已完成；Completion / Termination、Turn 产品映射和旧系统迁移仍后置：
 
-- Authorization / Approval 的持久事实与派发门；
-- Completion / Termination 的 Finalization Barrier；
-- 已提交用户输出的可靠投递；
-- Artifact Store 与精确 Context Replay Manifest；
+- Authorization / Approval 的持久事实与派发门（14.3 已落地为授权门，不含审批工作流）；
+- Completion / Termination 的 Finalization Barrier（仍留白）；
+- 已提交用户输出的可靠投递（14.3 已把投递收敛为 Command，预览不得进入 Journal）；
+- Artifact Store 与精确 Context Replay Manifest（14.3 已做缺失降级；完整 Manifest 仍后置）；
 - Turn、Stream 与产品交互对象的正式映射；
 - 旧 HelperMe 的 Adapter、迁移、灰度与最终替换。
 

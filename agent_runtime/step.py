@@ -40,11 +40,13 @@ class StepRunner:
         decision_maker: DecisionMaker,
         recovery_contracts: Mapping[str, RecoveryContract],
         id_factory: IdFactory = random_id,
+        requires_authorization: Mapping[str, bool] | None = None,
     ) -> None:
         self._journal = journal
         self._projector = projector
         self._decision_maker = decision_maker
         self._recovery_contracts = dict(recovery_contracts)
+        self._requires_authorization = dict(requires_authorization or {})
         self._id_factory = id_factory
 
     async def commit(
@@ -85,6 +87,10 @@ class StepRunner:
                     effect=request,
                     recovery=self._recovery_contracts[request.name],
                     idempotency_key=command_id,
+                    requires_authorization=self._requires_authorization.get(
+                        request.name,
+                        False,
+                    ),
                 )
             elif isinstance(request, CancelTool):
                 if request.target_command_id not in known_commands:

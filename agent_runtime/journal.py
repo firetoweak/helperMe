@@ -8,9 +8,11 @@ from typing import Protocol
 
 from agent_runtime.codec import EVENT_SCHEMA_VERSION, delivery_fingerprint
 from agent_runtime.events import (
+    CommandAuthorized,
     CommandOutcomeReceived,
     CommandRecoveryRequired,
     CommandReconcileStarted,
+    CommandRejected,
     DeliveryIdentity,
     DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
@@ -106,6 +108,12 @@ class Journal(Protocol):
         *,
         lease_seconds: float = 30.0,
     ) -> Event | None:
+        ...
+
+    async def grant_command(self, draft: EventDraft) -> Event | None:
+        ...
+
+    async def reject_command(self, draft: EventDraft) -> Event | None:
         ...
 
     async def renew_attempt(
@@ -208,6 +216,7 @@ class MemoryJournal:
         self._command_definitions: dict[str, Command] = {}
         self._abandoned_commands: set[str] = set()
         self._dispatch_eligibility: dict[str, str] = {}
+        self._rejected_commands: dict[str, str] = {}
         self._attempts: dict[tuple[str, int], Event] = {}
         self._attempt_ids: dict[str, Event] = {}
         self._attempt_claim_tokens: dict[str, Event] = {}
@@ -432,7 +441,10 @@ class MemoryJournal:
             if payload.command_id in self._terminal_commands:
                 return None
             expected_cause = self._dispatch_eligibility.get(payload.command_id)
-            if draft.causation_id != expected_cause:
+            if (
+                expected_cause is None
+                or draft.causation_id != expected_cause
+            ):
                 return None
             if payload.attempt_number != self._attempt_count(payload.command_id) + 1:
                 return None
@@ -440,6 +452,49 @@ class MemoryJournal:
                 draft,
                 attempt_lease_expires_at=self._clock() + lease_seconds,
             ).event
+
+    async def grant_command(self, draft: EventDraft) -> Event | None:
+        self._validate_internal_draft(draft)
+        payload = draft.payload
+        if not isinstance(payload, CommandAuthorized):
+            raise TypeError(type(payload).__name__)
+        async with self._lock:
+            if not self._authorization_is_open(draft, payload.command_id):
+                return None
+            return self._append_locked(draft).event
+
+    async def reject_command(self, draft: EventDraft) -> Event | None:
+        self._validate_internal_draft(draft)
+        payload = draft.payload
+        if not isinstance(payload, CommandRejected):
+            raise TypeError(type(payload).__name__)
+        async with self._lock:
+            if not self._authorization_is_open(draft, payload.command_id):
+                return None
+            return self._append_locked(draft).event
+
+    def _authorization_is_open(
+        self,
+        draft: EventDraft,
+        command_id: str,
+    ) -> bool:
+        command = self._commands.get(command_id)
+        if command is None or command[0] != draft.stream_id:
+            raise KeyError(command_id)
+        issued_event_id = command[1]
+        if draft.causation_id != issued_event_id:
+            return False
+        if command_id in self._abandoned_commands:
+            return False
+        if command_id in self._terminal_commands:
+            return False
+        if command_id in self._rejected_commands:
+            return False
+        if command_id in self._dispatch_eligibility:
+            return False
+        if self._attempt_count(command_id) != 0:
+            return False
+        return True
 
     async def renew_attempt(
         self,
@@ -949,7 +1004,30 @@ class MemoryJournal:
                     event.event_id,
                 )
                 self._command_definitions[command.command_id] = command
-                self._dispatch_eligibility[command.command_id] = event.event_id
+                if not command.requires_authorization:
+                    self._dispatch_eligibility[command.command_id] = (
+                        event.event_id
+                    )
+        elif isinstance(payload, CommandAuthorized):
+            if payload.command_id in self._dispatch_eligibility:
+                raise ValueError(
+                    f"command already authorized: {payload.command_id}"
+                )
+            if payload.command_id in self._rejected_commands:
+                raise ValueError(
+                    f"command already rejected: {payload.command_id}"
+                )
+            self._dispatch_eligibility[payload.command_id] = event.event_id
+        elif isinstance(payload, CommandRejected):
+            if payload.command_id in self._rejected_commands:
+                raise ValueError(
+                    f"command already rejected: {payload.command_id}"
+                )
+            if payload.command_id in self._dispatch_eligibility:
+                raise ValueError(
+                    f"cannot reject authorized command: {payload.command_id}"
+                )
+            self._rejected_commands[payload.command_id] = event.event_id
         elif isinstance(payload, DispatchAttemptStarted):
             self._attempts[(
                 payload.command_id,
@@ -1028,6 +1106,9 @@ class MemoryJournal:
             ), None)
             if duplicate is not None:
                 raise ValueError(f"duplicate command id: {duplicate}")
+        elif isinstance(payload, (CommandAuthorized, CommandRejected)):
+            if payload.command_id not in self._commands:
+                raise KeyError(payload.command_id)
         elif isinstance(payload, DispatchAttemptStarted):
             if (payload.command_id, payload.attempt_number) in self._attempts:
                 raise ValueError("duplicate command attempt")
@@ -1157,6 +1238,8 @@ class MemoryJournal:
             draft.payload,
             (
                 StepCommitted,
+                CommandAuthorized,
+                CommandRejected,
                 DispatchAttemptStarted,
                 CommandReconcileStarted,
                 DispatchAttemptConfirmedNoEffect,

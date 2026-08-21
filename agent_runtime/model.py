@@ -158,6 +158,7 @@ class Command:
     effect: CommandEffect
     recovery: RecoveryContract = RecoveryContract()
     idempotency_key: str | None = None
+    requires_authorization: bool = False
 
     def __post_init__(self) -> None:
         _require_str(self.command_id, "command id")
@@ -166,6 +167,8 @@ class Command:
         if type(self.recovery) is not RecoveryContract:
             raise TypeError("command recovery is invalid")
         _require_optional_str(self.idempotency_key, "idempotency key")
+        if type(self.requires_authorization) is not bool:
+            raise TypeError("requires_authorization must be bool")
         if (
             self.recovery.retry_semantics
             is RetrySemantics.IDEMPOTENCY_KEY_REQUIRED
@@ -351,6 +354,7 @@ class CommandState:
     outcome: CommandOutcome | None = None
     canonical_outcome_event_id: str | None = None
     dispatch_eligible_by_event_id: str | None = None
+    authorization_rejected_by_event_id: str | None = None
 
     @property
     def attempt_ids(self) -> tuple[str, ...]:

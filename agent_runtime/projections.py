@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from agent_runtime.artifacts import ArtifactResolution, ArtifactStore, resolve_artifacts
 from agent_runtime.events import (
     CommandOutcomeReceived,
     Event,
@@ -61,6 +62,7 @@ class ReplayView:
     state: CanonicalState
     turn: TurnView
     trace: TraceView
+    artifacts: ArtifactResolution | None = None
 
 
 def project_turn(
@@ -126,10 +128,17 @@ def project_trace(
 def replay(
     stream_id: str,
     events: tuple[Event, ...],
+    artifact_store: ArtifactStore | None = None,
 ) -> ReplayView:
     projector = StateProjector()
+    artifacts = (
+        resolve_artifacts(events, artifact_store)
+        if artifact_store is not None
+        else None
+    )
     return ReplayView(
         state=projector.project(stream_id, events).state,
         turn=project_turn(stream_id, events, projector),
         trace=project_trace(stream_id, events),
+        artifacts=artifacts,
     )

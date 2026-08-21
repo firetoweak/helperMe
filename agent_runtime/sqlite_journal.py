@@ -20,9 +20,11 @@ from agent_runtime.codec import (
     encode_state,
 )
 from agent_runtime.events import (
+    CommandAuthorized,
     CommandOutcomeReceived,
     CommandRecoveryRequired,
     CommandReconcileStarted,
+    CommandRejected,
     DeliveryIdentity,
     DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
@@ -165,6 +167,11 @@ CREATE TABLE IF NOT EXISTS recovery_requirements (
     attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
     event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
     PRIMARY KEY (command_id, attempt_id)
+);
+
+CREATE TABLE IF NOT EXISTS command_rejections (
+    command_id TEXT PRIMARY KEY REFERENCES commands(command_id),
+    event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id)
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -318,6 +325,22 @@ class SqliteJournal:
                 ))
                 await _await_task_uninterruptibly(compensation)
             raise
+
+    async def grant_command(self, draft: EventDraft) -> Event | None:
+        self._validate_internal_draft(draft)
+        if not isinstance(draft.payload, CommandAuthorized):
+            raise TypeError(type(draft.payload).__name__)
+        return await self._write(
+            lambda connection: self._grant_command_tx(connection, draft)
+        )
+
+    async def reject_command(self, draft: EventDraft) -> Event | None:
+        self._validate_internal_draft(draft)
+        if not isinstance(draft.payload, CommandRejected):
+            raise TypeError(type(draft.payload).__name__)
+        return await self._write(
+            lambda connection: self._reject_command_tx(connection, draft)
+        )
 
     async def renew_attempt(
         self,
@@ -991,7 +1014,10 @@ class SqliteJournal:
             raise KeyError(payload.command_id)
         if command["abandoned"] or command["canonical_outcome_event_id"]:
             return None
-        if draft.causation_id != command["dispatch_eligible_event_id"]:
+        if (
+            command["dispatch_eligible_event_id"] is None
+            or draft.causation_id != command["dispatch_eligible_event_id"]
+        ):
             return None
         count = connection.execute(
             "SELECT COUNT(*) AS count FROM attempts WHERE command_id = ?",
@@ -1004,6 +1030,74 @@ class SqliteJournal:
             draft,
             attempt_lease_expires_at=self._clock() + lease_seconds,
         ).event
+
+    def _authorization_is_open_tx(
+        self,
+        connection: sqlite3.Connection,
+        draft: EventDraft,
+        command_id: str,
+    ) -> bool:
+        command = connection.execute(
+            "SELECT * FROM commands WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        if command is None or command["stream_id"] != draft.stream_id:
+            raise KeyError(command_id)
+        if draft.causation_id != command["issued_event_id"]:
+            return False
+        if command["abandoned"] or command["canonical_outcome_event_id"]:
+            return False
+        if command["dispatch_eligible_event_id"] is not None:
+            return False
+        if connection.execute(
+            "SELECT 1 FROM command_rejections WHERE command_id = ?",
+            (command_id,),
+        ).fetchone() is not None:
+            return False
+        if connection.execute(
+            "SELECT 1 FROM attempts WHERE command_id = ?",
+            (command_id,),
+        ).fetchone() is not None:
+            return False
+        return True
+
+    def _grant_command_tx(
+        self,
+        connection: sqlite3.Connection,
+        draft: EventDraft,
+    ) -> Event | None:
+        payload = draft.payload
+        if not self._authorization_is_open_tx(
+            connection,
+            draft,
+            payload.command_id,
+        ):
+            return None
+        try:
+            return self._append_tx(connection, draft).event
+        except ValueError as error:
+            if str(error).startswith("command is not grantable"):
+                return None
+            raise
+
+    def _reject_command_tx(
+        self,
+        connection: sqlite3.Connection,
+        draft: EventDraft,
+    ) -> Event | None:
+        payload = draft.payload
+        if not self._authorization_is_open_tx(
+            connection,
+            draft,
+            payload.command_id,
+        ):
+            return None
+        try:
+            return self._append_tx(connection, draft).event
+        except ValueError as error:
+            if str(error).startswith("command is not rejectable"):
+                return None
+            raise
 
     def _renew_attempt_tx(
         self,
@@ -1541,8 +1635,58 @@ class SqliteJournal:
                         command.command_id,
                         event.stream_id,
                         event.event_id,
-                        event.event_id,
+                        None if command.requires_authorization else event.event_id,
                     ),
+                )
+        elif isinstance(payload, CommandAuthorized):
+            cursor = connection.execute(
+                """
+                UPDATE commands SET dispatch_eligible_event_id = ?
+                WHERE command_id = ?
+                    AND dispatch_eligible_event_id IS NULL
+                    AND abandoned = 0
+                    AND canonical_outcome_event_id IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM command_rejections
+                        WHERE command_rejections.command_id = commands.command_id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM attempts
+                        WHERE attempts.command_id = commands.command_id
+                    )
+                """,
+                (event.event_id, payload.command_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    f"command is not grantable: {payload.command_id}"
+                )
+        elif isinstance(payload, CommandRejected):
+            cursor = connection.execute(
+                """
+                INSERT INTO command_rejections(command_id, event_id)
+                SELECT ?, ?
+                WHERE EXISTS (
+                    SELECT 1 FROM commands
+                    WHERE command_id = ?
+                        AND dispatch_eligible_event_id IS NULL
+                        AND abandoned = 0
+                        AND canonical_outcome_event_id IS NULL
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM attempts WHERE command_id = ?
+                )
+                """,
+                (
+                    payload.command_id,
+                    event.event_id,
+                    payload.command_id,
+                    payload.command_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    f"command is not rejectable: {payload.command_id}"
                 )
         elif isinstance(payload, DispatchAttemptStarted):
             if attempt_lease_expires_at is None:
@@ -1907,6 +2051,8 @@ class SqliteJournal:
             draft.payload,
             (
                 StepCommitted,
+                CommandAuthorized,
+                CommandRejected,
                 DispatchAttemptStarted,
                 CommandReconcileStarted,
                 DispatchAttemptConfirmedNoEffect,

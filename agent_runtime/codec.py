@@ -5,9 +5,11 @@ from collections.abc import Mapping
 from hashlib import sha256
 
 from agent_runtime.events import (
+    CommandAuthorized,
     CommandOutcomeReceived,
     CommandRecoveryRequired,
     CommandReconcileStarted,
+    CommandRejected,
     DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
     EventDraft,
@@ -39,12 +41,14 @@ from agent_runtime.model import (
 
 EVENT_SCHEMA_VERSION = 1
 DELIVERY_FINGERPRINT_VERSION = 1
-STATE_CODEC_VERSION = 1
+STATE_CODEC_VERSION = 2
 STATE_PROJECTION_VERSION = "canonical-state-v1"
 
 _USER_MESSAGE = "user.message.received"
 _USER_INTERRUPT = "user.interrupt.received"
 _STEP_COMMITTED = "step.committed"
+_COMMAND_AUTHORIZED = "command.authorized"
+_COMMAND_REJECTED = "command.rejected"
 _ATTEMPT_STARTED = "command.attempt.started"
 _RECONCILE_STARTED = "command.reconcile.started"
 _EXTERNAL_ACCEPTED = "command.external.accepted"
@@ -168,13 +172,14 @@ def _command_to_data(command: Command) -> dict[str, object]:
         "effect": _effect_to_data(command.effect),
         "recovery": _recovery_to_data(command.recovery),
         "idempotency_key": command.idempotency_key,
+        "requires_authorization": command.requires_authorization,
     }
 
 
 def _command_from_data(data: dict[str, object]) -> Command:
     _require_object(
         data,
-        {"command_id", "effect", "recovery", "idempotency_key"},
+        {"command_id", "effect", "recovery", "idempotency_key", "requires_authorization"},
         "command",
     )
     return Command(
@@ -182,6 +187,7 @@ def _command_from_data(data: dict[str, object]) -> Command:
         effect=_effect_from_data(data["effect"]),
         recovery=_recovery_from_data(data["recovery"]),
         idempotency_key=data["idempotency_key"],
+        requires_authorization=data["requires_authorization"],
     )
 
 
@@ -276,6 +282,12 @@ def encode_payload(payload: EventPayload) -> tuple[str, str]:
     elif isinstance(payload, StepCommitted):
         kind = _STEP_COMMITTED
         data = {"step": _step_to_data(payload.step)}
+    elif isinstance(payload, CommandAuthorized):
+        kind = _COMMAND_AUTHORIZED
+        data = {"command_id": payload.command_id}
+    elif isinstance(payload, CommandRejected):
+        kind = _COMMAND_REJECTED
+        data = {"command_id": payload.command_id}
     elif isinstance(payload, DispatchAttemptStarted):
         kind = _ATTEMPT_STARTED
         data = {
@@ -349,6 +361,12 @@ def decode_payload(
     if kind == _STEP_COMMITTED:
         _require_object(data, {"step"}, kind)
         return StepCommitted(_step_from_data(data["step"]))
+    if kind == _COMMAND_AUTHORIZED:
+        _require_object(data, {"command_id"}, kind)
+        return CommandAuthorized(data["command_id"])
+    if kind == _COMMAND_REJECTED:
+        _require_object(data, {"command_id"}, kind)
+        return CommandRejected(data["command_id"])
     if kind == _ATTEMPT_STARTED:
         _require_object(
             data,
@@ -498,6 +516,9 @@ def _command_state_to_data(state: CommandState) -> dict[str, object]:
         ),
         "canonical_outcome_event_id": state.canonical_outcome_event_id,
         "dispatch_eligible_by_event_id": state.dispatch_eligible_by_event_id,
+        "authorization_rejected_by_event_id": (
+            state.authorization_rejected_by_event_id
+        ),
     }
 
 
@@ -513,6 +534,7 @@ def _command_state_from_data(data: dict[str, object]) -> CommandState:
             "outcome",
             "canonical_outcome_event_id",
             "dispatch_eligible_by_event_id",
+            "authorization_rejected_by_event_id",
         },
         "command state",
     )
@@ -531,6 +553,9 @@ def _command_state_from_data(data: dict[str, object]) -> CommandState:
         ),
         canonical_outcome_event_id=data["canonical_outcome_event_id"],
         dispatch_eligible_by_event_id=data["dispatch_eligible_by_event_id"],
+        authorization_rejected_by_event_id=data[
+            "authorization_rejected_by_event_id"
+        ],
     )
 
 
