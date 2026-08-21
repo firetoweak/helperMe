@@ -15,7 +15,10 @@ from agent_runtime.events import (
     EventDraft,
     EventPayload,
     ExternalOperationAccepted,
+    RuntimeCompleted,
+    RuntimeTerminated,
     StepCommitted,
+    TerminationRequested,
     UserInterruptReceived,
     UserMessageReceived,
 )
@@ -29,6 +32,7 @@ from agent_runtime.model import (
     CommandPhase,
     CommandState,
     InvokeTool,
+    LifecycleIntent,
     ModelDecision,
     OutcomeStatus,
     RecoveryContract,
@@ -55,6 +59,9 @@ _EXTERNAL_ACCEPTED = "command.external.accepted"
 _NO_EFFECT = "command.attempt.no_effect"
 _RECOVERY_REQUIRED = "command.recovery.required"
 _OUTCOME_RECEIVED = "command.outcome.received"
+_TERMINATION_REQUESTED = "runtime.termination.requested"
+_RUNTIME_COMPLETED = "runtime.completed"
+_RUNTIME_TERMINATED = "runtime.terminated"
 
 
 def _json_dumps(value: object) -> str:
@@ -199,6 +206,7 @@ def _decision_to_data(decision: ModelDecision) -> dict[str, object]:
         ],
         "abandon_command_ids": list(decision.abandon_command_ids),
         "retry_command_ids": list(decision.retry_command_ids),
+        "lifecycle_intent": decision.lifecycle_intent.value,
     }
 
 
@@ -210,6 +218,7 @@ def _decision_from_data(data: dict[str, object]) -> ModelDecision:
             "command_requests",
             "abandon_command_ids",
             "retry_command_ids",
+            "lifecycle_intent",
         },
         "model decision",
     )
@@ -221,6 +230,7 @@ def _decision_from_data(data: dict[str, object]) -> ModelDecision:
         ),
         abandon_command_ids=tuple(data["abandon_command_ids"]),
         retry_command_ids=tuple(data["retry_command_ids"]),
+        lifecycle_intent=LifecycleIntent(data["lifecycle_intent"]),
     )
 
 
@@ -334,6 +344,18 @@ def encode_payload(payload: EventPayload) -> tuple[str, str]:
             "attempt_id": payload.attempt_id,
             "outcome": _outcome_to_data(payload.outcome),
         }
+    elif isinstance(payload, TerminationRequested):
+        kind = _TERMINATION_REQUESTED
+        data = {"reason": payload.reason}
+    elif isinstance(payload, RuntimeCompleted):
+        kind = _RUNTIME_COMPLETED
+        data = {"declared_by_event_id": payload.declared_by_event_id}
+    elif isinstance(payload, RuntimeTerminated):
+        kind = _RUNTIME_TERMINATED
+        data = {
+            "declared_by_event_id": payload.declared_by_event_id,
+            "abandoned_command_ids": list(payload.abandoned_command_ids),
+        }
     else:
         raise TypeError(type(payload).__name__)
     return kind, _json_dumps(data)
@@ -430,6 +452,22 @@ def decode_payload(
             command_id=data["command_id"],
             attempt_id=data["attempt_id"],
             outcome=_outcome_from_data(data["outcome"]),
+        )
+    if kind == _TERMINATION_REQUESTED:
+        _require_object(data, {"reason"}, kind)
+        return TerminationRequested(data["reason"])
+    if kind == _RUNTIME_COMPLETED:
+        _require_object(data, {"declared_by_event_id"}, kind)
+        return RuntimeCompleted(data["declared_by_event_id"])
+    if kind == _RUNTIME_TERMINATED:
+        _require_object(
+            data,
+            {"declared_by_event_id", "abandoned_command_ids"},
+            kind,
+        )
+        return RuntimeTerminated(
+            declared_by_event_id=data["declared_by_event_id"],
+            abandoned_command_ids=tuple(data["abandoned_command_ids"]),
         )
     raise ValueError(f"unsupported event type: {kind}")
 

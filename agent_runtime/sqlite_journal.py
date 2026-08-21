@@ -31,9 +31,17 @@ from agent_runtime.events import (
     Event,
     EventDraft,
     ExternalOperationAccepted,
+    RuntimeCompleted,
+    RuntimeTerminated,
     StepCommitted,
+    TerminationRequested,
     UserInterruptReceived,
     UserMessageReceived,
+)
+from agent_runtime.finalization import (
+    FinalizationKind,
+    finalization_opportunity,
+    terminal_event_draft,
 )
 from agent_runtime.journal import (
     AppendResult,
@@ -181,6 +189,12 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     codec_version INTEGER NOT NULL,
     projection_version TEXT NOT NULL,
     state_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stream_terminals (
+    stream_id TEXT PRIMARY KEY REFERENCES streams(stream_id),
+    event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
+    kind TEXT NOT NULL CHECK (kind IN ('completed', 'terminated'))
 );
 
 PRAGMA user_version = 1;
@@ -533,6 +547,33 @@ class SqliteJournal:
             (stream_id,),
         ))
 
+    async def finalize(self, stream_id: str, event_id: str) -> Event | None:
+        return await self._write(
+            lambda connection: self._finalize_tx(
+                connection,
+                stream_id,
+                event_id,
+            )
+        )
+
+    async def accept_termination(
+        self,
+        request_draft: EventDraft,
+        *,
+        terminal_event_id: str,
+    ) -> AppendResult:
+        if not isinstance(request_draft.payload, TerminationRequested):
+            raise ValueError("delivery payload is not an external event")
+        if request_draft.delivery is None:
+            raise ValueError("external event requires delivery identity")
+        return await self._write(
+            lambda connection: self._accept_termination_tx(
+                connection,
+                request_draft,
+                terminal_event_id,
+            )
+        )
+
     def _initialize(self) -> None:
         connection = sqlite3.connect(
             self._path,
@@ -619,6 +660,73 @@ class SqliteJournal:
             return tuple(self._event_from_row(row) for row in rows)
         finally:
             connection.close()
+
+    def _events_tx(
+        self,
+        connection: sqlite3.Connection,
+        stream_id: str,
+    ) -> tuple[Event, ...]:
+        rows = connection.execute(
+            """
+            SELECT * FROM events
+            WHERE stream_id = ?
+            ORDER BY sequence
+            """,
+            (stream_id,),
+        ).fetchall()
+        return tuple(self._event_from_row(row) for row in rows)
+
+    def _finalize_tx(
+        self,
+        connection: sqlite3.Connection,
+        stream_id: str,
+        event_id: str,
+    ) -> Event | None:
+        existing = connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        if existing is not None:
+            event = self._event_from_row(existing)
+            if not isinstance(
+                event.payload,
+                (RuntimeCompleted, RuntimeTerminated),
+            ):
+                raise ValueError(f"event id conflict: {event_id}")
+            return event
+        opportunity = finalization_opportunity(
+            stream_id,
+            self._events_tx(connection, stream_id),
+        )
+        if opportunity is None:
+            return None
+        draft = terminal_event_draft(stream_id, event_id, opportunity)
+        return self._append_tx(connection, draft).event
+
+    def _accept_termination_tx(
+        self,
+        connection: sqlite3.Connection,
+        request_draft: EventDraft,
+        terminal_event_id: str,
+    ) -> AppendResult:
+        result = self._append_tx(connection, request_draft)
+        if not result.inserted:
+            return result
+        opportunity = finalization_opportunity(
+            request_draft.stream_id,
+            self._events_tx(connection, request_draft.stream_id),
+        )
+        if (
+            opportunity is not None
+            and opportunity.kind is FinalizationKind.TERMINATE_FROM_REQUEST
+            and opportunity.declared_by_event_id == result.event.event_id
+        ):
+            self._finalize_tx(
+                connection,
+                request_draft.stream_id,
+                terminal_event_id,
+            )
+        return result
 
     def _append_tx(
         self,
@@ -787,6 +895,11 @@ class SqliteJournal:
             WHERE trigger_event_id = ?
             """,
             (request.trigger_event_id,),
+        ).fetchone() is not None:
+            return None
+        if connection.execute(
+            "SELECT 1 FROM stream_terminals WHERE stream_id = ?",
+            (request.stream_id,),
         ).fetchone() is not None:
             return None
 
@@ -974,6 +1087,11 @@ class SqliteJournal:
             WHERE trigger_event_id = ?
             """,
             (lease.request.trigger_event_id,),
+        ).fetchone() is not None:
+            raise LeaseLostError(lease.token)
+        if connection.execute(
+            "SELECT 1 FROM stream_terminals WHERE stream_id = ?",
+            (lease.request.stream_id,),
         ).fetchone() is not None:
             raise LeaseLostError(lease.token)
 
@@ -1852,6 +1970,34 @@ class SqliteJournal:
                     connection,
                     payload.attempt_id,
                 )
+        elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
+            kind = (
+                "completed"
+                if isinstance(payload, RuntimeCompleted)
+                else "terminated"
+            )
+            connection.execute(
+                """
+                INSERT INTO stream_terminals(stream_id, event_id, kind)
+                VALUES (?, ?, ?)
+                """,
+                (event.stream_id, event.event_id, kind),
+            )
+            if isinstance(payload, RuntimeTerminated):
+                for command_id in payload.abandoned_command_ids:
+                    connection.execute(
+                        """
+                        UPDATE commands SET
+                            abandoned = 1,
+                            dispatch_eligible_event_id = NULL
+                        WHERE command_id = ?
+                        """,
+                        (command_id,),
+                    )
+            connection.execute(
+                "DELETE FROM step_claims WHERE stream_id = ?",
+                (event.stream_id,),
+            )
 
     @staticmethod
     def _clear_attempt_claims_tx(
@@ -2045,6 +2191,9 @@ class SqliteJournal:
                 CommandRecoveryRequired,
                 UserMessageReceived,
                 UserInterruptReceived,
+                TerminationRequested,
+                RuntimeCompleted,
+                RuntimeTerminated,
             ),
         ):
             raise ValueError("conditional event requires its Journal method")

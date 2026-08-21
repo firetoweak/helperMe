@@ -14,7 +14,10 @@ from agent_runtime.events import (
     DispatchAttemptStarted,
     Event,
     ExternalOperationAccepted,
+    RuntimeCompleted,
+    RuntimeTerminated,
     StepCommitted,
+    TerminationRequested,
     UserInterruptReceived,
     UserMessageReceived,
 )
@@ -62,6 +65,8 @@ class _StateBuilder:
         self.reconcile_counts: dict[tuple[str, str], int] = {}
         self.recovery_required: set[tuple[str, str]] = set()
         self.canonical_outcome_event_ids: set[str] = set()
+        self.terminal_event_id: str | None = None
+        self.terminal_status: RuntimeStatus | None = None
 
     def version(self) -> str:
         content = json.dumps(
@@ -108,6 +113,12 @@ class _StateBuilder:
             self._apply_recovery_required(event, payload)
         elif isinstance(payload, CommandOutcomeReceived):
             self._apply_outcome(event, payload)
+        elif isinstance(payload, TerminationRequested):
+            pass
+        elif isinstance(payload, RuntimeCompleted):
+            self._apply_runtime_completed(event, payload)
+        elif isinstance(payload, RuntimeTerminated):
+            self._apply_runtime_terminated(event, payload)
         else:
             raise TypeError(f"not a regular event: {type(payload).__name__}")
         self.visible_event_ids.append(event.event_id)
@@ -441,6 +452,33 @@ class _StateBuilder:
             for attempt in state.attempts
         )
 
+    def _apply_runtime_completed(
+        self,
+        event: Event,
+        payload: RuntimeCompleted,
+    ) -> None:
+        if self.terminal_event_id is not None:
+            raise ValueError("runtime already terminal")
+        if payload.declared_by_event_id not in self.visible_event_ids:
+            raise ValueError("completion declaration is missing")
+        self.terminal_event_id = event.event_id
+        self.terminal_status = RuntimeStatus.COMPLETED
+
+    def _apply_runtime_terminated(
+        self,
+        event: Event,
+        payload: RuntimeTerminated,
+    ) -> None:
+        if self.terminal_event_id is not None:
+            raise ValueError("runtime already terminal")
+        if payload.declared_by_event_id not in self.visible_event_ids:
+            raise ValueError("termination declaration is missing")
+        for command_id in payload.abandoned_command_ids:
+            state = self.commands[command_id]
+            self.commands[command_id] = replace(state, abandoned=True)
+        self.terminal_event_id = event.event_id
+        self.terminal_status = RuntimeStatus.TERMINATED
+
     def apply_step(
         self,
         event: Event,
@@ -450,6 +488,8 @@ class _StateBuilder:
         payload = event.payload
         if not isinstance(payload, StepCommitted):
             raise TypeError(f"not a step event: {type(payload).__name__}")
+        if self.terminal_event_id is not None:
+            raise ValueError("step committed after runtime terminal")
         step = payload.step
         if step.step_id in self.step_ids:
             raise ValueError(f"duplicate step id: {step.step_id}")
@@ -629,14 +669,22 @@ class StateProjector:
                 or ("user_message",)
             )
         )
+        if operational.terminal_status is not None:
+            next_frame = None
+            next_trigger = None
+            waiting_for = ()
         state = CanonicalState(
             stream_id=stream_id,
             journal_position=journal_position,
             decision_cursor=len(consumed),
             status=(
-                RuntimeStatus.RUNNABLE
-                if next_frame is not None
-                else RuntimeStatus.WAITING
+                operational.terminal_status
+                if operational.terminal_status is not None
+                else (
+                    RuntimeStatus.RUNNABLE
+                    if next_frame is not None
+                    else RuntimeStatus.WAITING
+                )
             ),
             commands=command_states,
             steps=tuple(decision.steps),

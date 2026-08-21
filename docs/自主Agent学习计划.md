@@ -49,7 +49,7 @@ Memory（后置，外挂）
 
 ## Phase 0～6 回补专题
 
-暂不进入 Phase 7，先处理已由现有实现暴露出的前置问题：以 Execution Journal 为事实骨架建立新的 Agent Runtime，并以可重放历史验证连续上下文脱水的可靠性；同时观察 TodoList 的真实使用价值，暂不重构。Agent Runtime 的 14.1 语义 MVP、14.2 Durable MVP 与 14.3 边界切片已于 2026-08-21 完成。后续先决定是否补 Completion / Termination，或开始评估脱水与旧系统迁移。详见 [Phase 0～6 回补方向](专题/前六章回补方向.md)、[Execution Journal 与可重放执行历史](专题/Execution%20Journal与可重放执行历史.md)、[Agent Runtime 状态推进模型](专题/Agent%20Runtime状态推进模型.md)、[Agent Runtime 语义 MVP 实现总结](专题/Agent%20Runtime语义MVP实现总结.md)、[Agent Runtime Durable MVP 实现总结](专题/Agent%20Runtime%20Durable%20MVP实现总结.md) 和 [Agent Runtime 边界切片实现总结](专题/Agent%20Runtime边界切片实现总结.md)。
+暂不进入 Phase 7。Agent Runtime 的 14.1 / 14.2 / 14.3 与 Completion / Termination Finalization Barrier 已完成。下一步是接管 HelperMe 前的外围收口：Turn 产品映射、Approval 接线、Artifact Store、旧 Core Adapter；用同一真实任务对照新旧实现，而不是继续给 Runtime 加宏大能力。TodoList 只观察、不重构。详见 [Phase 0～6 回补方向](专题/前六章回补方向.md)、[Execution Journal 与可重放执行历史](专题/Execution%20Journal与可重放执行历史.md)、[Agent Runtime 状态推进模型](专题/Agent%20Runtime状态推进模型.md)、[Agent Runtime 语义 MVP 实现总结](专题/Agent%20Runtime语义MVP实现总结.md)、[Agent Runtime Durable MVP 实现总结](专题/Agent%20Runtime%20Durable%20MVP实现总结.md)、[Agent Runtime 边界切片实现总结](专题/Agent%20Runtime边界切片实现总结.md) 和 [Agent Runtime 终态与 Finalization Barrier 实现总结](专题/Agent%20Runtime终态与Finalization%20Barrier实现总结.md)。
 
 详细执行过程按 Phase 编号见 [`docs/0/`](0/) … [`docs/6/`](6/)。涉及架构变更时，使用独立于 Phase 的 [`项目架构方向`](项目架构方向.md) 校准长期方向；它不是逐条强制执行的规则。
 

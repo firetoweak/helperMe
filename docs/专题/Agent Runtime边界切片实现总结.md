@@ -103,7 +103,7 @@ python -m unittest
 
 本次继续留白，不进入当前切片：
 
-- `COMPLETED` / `TERMINATED` 与 Finalization Barrier；
+- `COMPLETED` / `TERMINATED` 与 Finalization Barrier（已由后续终态切片补上）；
 - Approval 工作流、授权策略和「为什么批准」；
 - Artifact Store 与精确 Context Replay Manifest；
 - Turn 与产品对话对象的正式映射；

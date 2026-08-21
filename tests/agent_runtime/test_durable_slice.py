@@ -38,11 +38,14 @@ from agent_runtime import (
     RecoveryNoEffect,
     RetrySemantics,
     RunningRecovery,
+    RuntimeCompleted,
+    RuntimeTerminated,
     SqliteJournal,
     StateProjector,
     Step,
     StepClaimRequest,
     StepCommitted,
+    TerminationRequested,
     ToolBinding,
     ToolTerminal,
     UserInterruptReceived,
@@ -2137,6 +2140,9 @@ class DurableCodecContractTest(unittest.TestCase):
                 ("retry", "abandon"),
             ),
             CommandOutcomeReceived("command-1", "attempt-1", outcome),
+            TerminationRequested("host stop"),
+            RuntimeCompleted("step-event-1"),
+            RuntimeTerminated("stop-event-1", ("command-1",)),
         )
         expected_tags = {
             "user.message.received",
@@ -2150,6 +2156,9 @@ class DurableCodecContractTest(unittest.TestCase):
             "command.attempt.no_effect",
             "command.recovery.required",
             "command.outcome.received",
+            "runtime.termination.requested",
+            "runtime.completed",
+            "runtime.terminated",
         }
 
         encoded = [encode_payload(payload) for payload in payloads]

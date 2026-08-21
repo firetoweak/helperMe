@@ -187,12 +187,19 @@ class Command:
         return isinstance(self.effect, InvokeTool)
 
 
+class LifecycleIntent(str, Enum):
+    NONE = "none"
+    COMPLETE = "complete"
+    TERMINATE = "terminate"
+
+
 @dataclass(frozen=True, slots=True)
 class ModelDecision:
     content: str = ""
     command_requests: tuple[CommandEffect, ...] = ()
     abandon_command_ids: tuple[str, ...] = ()
     retry_command_ids: tuple[str, ...] = ()
+    lifecycle_intent: LifecycleIntent = LifecycleIntent.NONE
 
     def __post_init__(self) -> None:
         if type(self.content) is not str:
@@ -226,11 +233,22 @@ class ModelDecision:
             raise ValueError("retry command ids contain duplicates")
         if set(self.abandon_command_ids) & set(self.retry_command_ids):
             raise ValueError("a command cannot be abandoned and retried")
+        if type(self.lifecycle_intent) is not LifecycleIntent:
+            raise TypeError("lifecycle intent must be LifecycleIntent")
+        if self.lifecycle_intent is not LifecycleIntent.NONE:
+            if any(
+                isinstance(request, InvokeTool)
+                for request in self.command_requests
+            ):
+                raise ValueError("lifecycle intent cannot start new tools")
+            if self.retry_command_ids:
+                raise ValueError("lifecycle intent cannot retry commands")
         if (
             not self.content.strip()
             and not self.command_requests
             and not self.abandon_command_ids
             and not self.retry_command_ids
+            and self.lifecycle_intent is LifecycleIntent.NONE
         ):
             raise ValueError("decision must contain content or effects")
 

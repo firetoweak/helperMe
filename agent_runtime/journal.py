@@ -19,9 +19,17 @@ from agent_runtime.events import (
     Event,
     EventDraft,
     ExternalOperationAccepted,
+    RuntimeCompleted,
+    RuntimeTerminated,
     StepCommitted,
+    TerminationRequested,
     UserInterruptReceived,
     UserMessageReceived,
+)
+from agent_runtime.finalization import (
+    FinalizationKind,
+    finalization_opportunity,
+    terminal_event_draft,
 )
 from agent_runtime.model import (
     CancelTool,
@@ -194,6 +202,17 @@ class Journal(Protocol):
     async def delete_checkpoint(self, stream_id: str) -> None:
         ...
 
+    async def finalize(self, stream_id: str, event_id: str) -> Event | None:
+        ...
+
+    async def accept_termination(
+        self,
+        request_draft: EventDraft,
+        *,
+        terminal_event_id: str,
+    ) -> AppendResult:
+        ...
+
 
 class MemoryJournal:
     def __init__(
@@ -229,6 +248,7 @@ class MemoryJournal:
         self._external_operations: dict[str, Event] = {}
         self._recovery_required: dict[tuple[str, str], Event] = {}
         self._terminal_commands: set[str] = set()
+        self._terminals: dict[str, Event] = {}
         self._checkpoints: dict[str, tuple[int, str, CanonicalState]] = {}
         self._clock = clock
         self._lock = asyncio.Lock()
@@ -244,7 +264,11 @@ class MemoryJournal:
             )
         is_external = isinstance(
             event.payload,
-            (UserMessageReceived, UserInterruptReceived),
+            (
+                UserMessageReceived,
+                UserInterruptReceived,
+                TerminationRequested,
+            ),
         )
         if is_external != (event.delivery is not None):
             raise ValueError("restored event delivery boundary is invalid")
@@ -317,6 +341,8 @@ class MemoryJournal:
             if trigger is None or trigger.stream_id != request.stream_id:
                 raise KeyError(request.trigger_event_id)
             if request.trigger_event_id in self._step_consumptions:
+                return None
+            if request.stream_id in self._terminals:
                 return None
             current = self._step_claims.get(request.stream_id)
             now = self._clock()
@@ -393,6 +419,8 @@ class MemoryJournal:
                     raise LeaseLostError(lease.token)
                 return existing
             self._validate_step_lease(lease, draft)
+            if draft.stream_id in self._terminals:
+                raise LeaseLostError(lease.token)
             event = self._append_locked(draft).event
             del self._step_claims[lease.request.stream_id]
             if self._step_claim_tokens.get(
@@ -915,6 +943,64 @@ class MemoryJournal:
         async with self._lock:
             self._checkpoints.pop(stream_id, None)
 
+    async def finalize(self, stream_id: str, event_id: str) -> Event | None:
+        async with self._lock:
+            return self._finalize_locked(stream_id, event_id)
+
+    async def accept_termination(
+        self,
+        request_draft: EventDraft,
+        *,
+        terminal_event_id: str,
+    ) -> AppendResult:
+        self._validate_termination_delivery(request_draft)
+        if request_draft.delivery is None:
+            raise ValueError("external event requires delivery identity")
+        async with self._lock:
+            receipt = self._deliveries.get(request_draft.delivery)
+            if receipt is not None:
+                existing, fingerprint = receipt
+                if fingerprint != delivery_fingerprint(request_draft):
+                    raise DeliveryConflictError(
+                        f"delivery content conflict: {request_draft.delivery}"
+                    )
+                return AppendResult(existing, False)
+            result = self._append_locked(request_draft)
+            self._deliveries[request_draft.delivery] = (
+                result.event,
+                delivery_fingerprint(request_draft),
+            )
+            opportunity = finalization_opportunity(
+                request_draft.stream_id,
+                tuple(self._events.get(request_draft.stream_id, ())),
+            )
+            if (
+                opportunity is not None
+                and opportunity.kind is FinalizationKind.TERMINATE_FROM_REQUEST
+                and opportunity.declared_by_event_id == result.event.event_id
+            ):
+                self._finalize_locked(
+                    request_draft.stream_id,
+                    terminal_event_id,
+                )
+            return result
+
+    def _finalize_locked(self, stream_id: str, event_id: str) -> Event | None:
+        existing = self._event_ids.get(event_id)
+        if existing is not None:
+            if not isinstance(
+                existing.payload,
+                (RuntimeCompleted, RuntimeTerminated),
+            ):
+                raise ValueError(f"event id conflict: {event_id}")
+            return existing
+        events = tuple(self._events.get(stream_id, ()))
+        opportunity = finalization_opportunity(stream_id, events)
+        if opportunity is None:
+            return None
+        draft = terminal_event_draft(stream_id, event_id, opportunity)
+        return self._append_locked(draft).event
+
     def _append_locked(
         self,
         draft: EventDraft,
@@ -1084,6 +1170,13 @@ class MemoryJournal:
                 self._clear_attempt_claims(payload.attempt_id)
             self._terminal_commands.add(payload.command_id)
             self._dispatch_eligibility.pop(payload.command_id, None)
+        elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
+            self._terminals[event.stream_id] = event
+            if isinstance(payload, RuntimeTerminated):
+                for command_id in payload.abandoned_command_ids:
+                    self._abandoned_commands.add(command_id)
+                    self._dispatch_eligibility.pop(command_id, None)
+            self._clear_stream_step_claim(event.stream_id)
 
     def _clear_attempt_claims(self, attempt_id: str) -> None:
         self._attempt_leases.pop(attempt_id, None)
@@ -1152,6 +1245,40 @@ class MemoryJournal:
                 raise ValueError(
                     f"attempt already terminal: {payload.attempt_id}"
                 )
+        elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
+            if event.stream_id in self._terminals:
+                raise ValueError("runtime already terminal")
+            declared = self._event_ids.get(payload.declared_by_event_id)
+            if declared is None or declared.stream_id != event.stream_id:
+                raise KeyError(payload.declared_by_event_id)
+            if isinstance(payload, RuntimeCompleted):
+                if not isinstance(declared.payload, StepCommitted):
+                    raise ValueError("completion must be declared by a step")
+            elif not isinstance(
+                declared.payload,
+                (StepCommitted, TerminationRequested),
+            ):
+                raise ValueError("termination declaration source is invalid")
+            if isinstance(payload, RuntimeTerminated):
+                missing = next((
+                    command_id
+                    for command_id in payload.abandoned_command_ids
+                    if command_id not in self._commands
+                ), None)
+                if missing is not None:
+                    raise KeyError(missing)
+
+    def _clear_stream_step_claim(self, stream_id: str) -> None:
+        current = self._step_claims.pop(stream_id, None)
+        if current is None:
+            return
+        if self._step_claim_tokens.get(current.token) == stream_id:
+            self._step_claim_tokens.pop(current.token, None)
+
+    @staticmethod
+    def _validate_termination_delivery(draft: EventDraft) -> None:
+        if not isinstance(draft.payload, TerminationRequested):
+            raise ValueError("delivery payload is not an external event")
 
     def _validate_step_lease(
         self,
@@ -1246,6 +1373,9 @@ class MemoryJournal:
                 CommandRecoveryRequired,
                 UserMessageReceived,
                 UserInterruptReceived,
+                TerminationRequested,
+                RuntimeCompleted,
+                RuntimeTerminated,
             ),
         ):
             raise ValueError("conditional event requires its Journal method")

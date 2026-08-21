@@ -9,6 +9,15 @@ from typing import TypeAlias
 from agent_runtime.model import CommandOutcome, Step
 
 
+def _require_str_tuple(value: object, name: str) -> None:
+    if type(value) is not tuple:
+        raise TypeError(f"{name} must be tuple")
+    if any(type(item) is not str or not item for item in value):
+        raise ValueError(f"{name} are invalid")
+    if len(value) != len(set(value)):
+        raise ValueError(f"{name} contain duplicates")
+
+
 MAX_EVENT_PAYLOAD_BYTES = 256 * 1024
 MAX_EVENT_PAYLOAD_DEPTH = 48
 
@@ -250,6 +259,32 @@ class CommandOutcomeReceived:
             raise TypeError("outcome must be CommandOutcome")
 
 
+@dataclass(frozen=True, slots=True)
+class TerminationRequested:
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_optional_str(self.reason, "termination reason")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeCompleted:
+    declared_by_event_id: str
+
+    def __post_init__(self) -> None:
+        _require_str(self.declared_by_event_id, "declared by event id")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeTerminated:
+    declared_by_event_id: str
+    abandoned_command_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_str(self.declared_by_event_id, "declared by event id")
+        _require_str_tuple(self.abandoned_command_ids, "abandoned command ids")
+
+
 EventPayload: TypeAlias = (
     UserMessageReceived
     | UserInterruptReceived
@@ -262,6 +297,9 @@ EventPayload: TypeAlias = (
     | DispatchAttemptConfirmedNoEffect
     | CommandRecoveryRequired
     | CommandOutcomeReceived
+    | TerminationRequested
+    | RuntimeCompleted
+    | RuntimeTerminated
 )
 
 _EVENT_PAYLOAD_TYPES = (
@@ -276,6 +314,9 @@ _EVENT_PAYLOAD_TYPES = (
     DispatchAttemptConfirmedNoEffect,
     CommandRecoveryRequired,
     CommandOutcomeReceived,
+    TerminationRequested,
+    RuntimeCompleted,
+    RuntimeTerminated,
 )
 
 

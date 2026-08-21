@@ -649,7 +649,7 @@ UserMessage
 
 ### 14.3 边界切片
 
-> 已于 2026-08-21 完成独立切片，见 [Agent Runtime 边界切片实现总结](Agent%20Runtime边界切片实现总结.md)。本切片按实现原则留白 Completion / Termination：Interrupt 只验收不被旧 Step 跨越或吞掉。
+> 已于 2026-08-21 完成独立切片，见 [Agent Runtime 边界切片实现总结](Agent%20Runtime边界切片实现总结.md)。本切片按实现原则留白 Completion / Termination：Interrupt 只验收不被旧 Step 跨越或吞掉。该留白已由 [终态与 Finalization Barrier](Agent%20Runtime终态与Finalization%20Barrier实现总结.md) 补上。
 
 - 未授权 Command 不会被 Dispatcher 认领；
 - Step 决策期间到达的 Interrupt 不会被旧 Step 跨越或吞掉；

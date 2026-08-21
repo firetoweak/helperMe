@@ -13,6 +13,7 @@ from agent_runtime.events import (
     Event,
     EventDraft,
     DeliveryIdentity,
+    TerminationRequested,
     UserInterruptReceived,
     UserMessageReceived,
 )
@@ -116,6 +117,32 @@ class AgentRuntime:
             DeliveryIdentity(source, delivery_id),
         )
 
+    async def receive_termination(
+        self,
+        stream_id: str,
+        reason: str | None = None,
+        *,
+        delivery_id: str,
+        source: str = "user",
+    ) -> Event:
+        result = await self._journal.accept_termination(
+            EventDraft(
+                event_id=self._id_factory("event"),
+                stream_id=stream_id,
+                payload=TerminationRequested(reason),
+                occurred_at=datetime.now(timezone.utc),
+                delivery=DeliveryIdentity(source, delivery_id),
+            ),
+            terminal_event_id=self._id_factory("event"),
+        )
+        return result.event
+
+    async def finalize(self, stream_id: str) -> Event | None:
+        return await self._journal.finalize(
+            stream_id,
+            self._id_factory("event"),
+        )
+
     async def grant_command(
         self,
         stream_id: str,
@@ -158,12 +185,14 @@ class AgentRuntime:
     async def advance(self, stream_id: str) -> Step | None:
         lock = self._step_locks.setdefault(stream_id, asyncio.Lock())
         async with lock:
+            await self.finalize(stream_id)
             events = await self._journal.snapshot(stream_id)
             frame = self.projector.project(
                 stream_id,
                 events,
             ).next_decision
             if frame is None:
+                await self.dispatcher.start_pending(stream_id)
                 return None
             request = StepClaimRequest(
                 stream_id=stream_id,
@@ -213,6 +242,7 @@ class AgentRuntime:
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
             step = step_event.payload.step
+            await self.finalize(stream_id)
             await self.dispatcher.start_pending(stream_id)
             return step
 
@@ -243,6 +273,7 @@ class AgentRuntime:
         return state
 
     async def recover_once(self, stream_id: str) -> tuple[str, ...]:
+        await self.finalize(stream_id)
         return await self.dispatcher.recover_once(stream_id)
 
     async def status(self, stream_id: str) -> RuntimeStatus:
