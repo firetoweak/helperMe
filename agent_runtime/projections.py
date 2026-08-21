@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
-from agent_runtime.artifacts import ArtifactResolution, ArtifactStore, resolve_artifacts
 from agent_runtime.events import (
     CommandOutcomeReceived,
     Event,
@@ -58,11 +58,35 @@ class TraceView:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactResolution:
+    refs: tuple[str, ...]
+    missing: tuple[str, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayView:
     state: CanonicalState
     turn: TurnView
     trace: TraceView
-    artifacts: ArtifactResolution | None = None
+    artifacts: ArtifactResolution
+
+
+def diagnose_artifacts(
+    events: tuple[Event, ...],
+    available_refs: Collection[str] = (),
+) -> ArtifactResolution:
+    refs = tuple(dict.fromkeys(
+        ref
+        for event in events
+        for ref in event.artifact_refs
+    ))
+    available = frozenset(available_refs)
+    missing = tuple(ref for ref in refs if ref not in available)
+    return ArtifactResolution(refs=refs, missing=missing)
 
 
 def project_turn(
@@ -128,17 +152,12 @@ def project_trace(
 def replay(
     stream_id: str,
     events: tuple[Event, ...],
-    artifact_store: ArtifactStore | None = None,
+    available_artifact_refs: Collection[str] = (),
 ) -> ReplayView:
     projector = StateProjector()
-    artifacts = (
-        resolve_artifacts(events, artifact_store)
-        if artifact_store is not None
-        else None
-    )
     return ReplayView(
         state=projector.project(stream_id, events).state,
         turn=project_turn(stream_id, events, projector),
         trace=project_trace(stream_id, events),
-        artifacts=artifacts,
+        artifacts=diagnose_artifacts(events, available_artifact_refs),
     )

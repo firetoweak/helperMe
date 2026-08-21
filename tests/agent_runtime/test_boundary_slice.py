@@ -9,7 +9,6 @@ from pathlib import Path
 
 from agent_runtime import (
     AgentRuntime,
-    ArtifactRef,
     CommandAuthorized,
     CommandPhase,
     CommandRejected,
@@ -18,7 +17,6 @@ from agent_runtime import (
     DispatchAttemptStarted,
     EventDraft,
     InvokeTool,
-    MemoryArtifactStore,
     MemoryJournal,
     ModelDecision,
     RuntimeStatus,
@@ -26,8 +24,8 @@ from agent_runtime import (
     ToolBinding,
     UserInterruptReceived,
     UserMessageReceived,
+    diagnose_artifacts,
     replay,
-    resolve_artifacts,
 )
 from agent_runtime.events import EventPayload
 
@@ -71,12 +69,7 @@ class RecordingTool:
         self.executions: list[Mapping[str, object]] = []
 
     def binding(self) -> dict[str, ToolBinding]:
-        return {
-            self.name: ToolBinding(
-                self._handler,
-                requires_authorization=self.requires_authorization,
-            )
-        }
+        return {self.name: ToolBinding(self._handler)}
 
     async def _handler(self, _context, arguments: Mapping[str, object]) -> object:
         self.executions.append(arguments)
@@ -85,21 +78,35 @@ class RecordingTool:
         return f"{self.name}-result"
 
 
+def runtime_for(
+    tool: RecordingTool,
+    model: ScriptedDecisionMaker,
+    journal=None,
+):
+    return AgentRuntime(
+        journal or MemoryJournal(),
+        model,
+        tool.binding(),
+        SequentialIds(),
+        requires_authorization=(
+            {tool.name: True} if tool.requires_authorization else None
+        ),
+    )
+
+
 class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
     STREAM_ID = "boundary-stream"
 
     async def test_unauthorized_command_is_not_claimed_until_granted(self):
         tool = RecordingTool("transfer", requires_authorization=True)
-        runtime = AgentRuntime(
-            MemoryJournal(),
+        runtime = runtime_for(
+            tool,
             ScriptedDecisionMaker((
                 lambda _frame: ModelDecision(
                     content="request transfer",
                     command_requests=(InvokeTool("transfer"),),
                 ),
             )),
-            tool.binding(),
-            SequentialIds(),
         )
 
         await runtime.receive_user_message(
@@ -152,12 +159,7 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             ),
             lambda _frame: ModelDecision(content="publish rejected"),
         ))
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            model,
-            tool.binding(),
-            SequentialIds(),
-        )
+        runtime = runtime_for(tool, model)
         await runtime.receive_user_message(
             self.STREAM_ID,
             "publish this",
@@ -207,12 +209,7 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             decide_first,
             lambda _frame: ModelDecision(content="interrupt handled"),
         ))
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            model,
-            tool.binding(),
-            SequentialIds(),
-        )
+        runtime = runtime_for(tool, model)
         user_message = await runtime.receive_user_message(
             self.STREAM_ID,
             "start",
@@ -252,8 +249,8 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_decision_content_is_not_delivered_user_message(self):
         tool = RecordingTool("deliver")
-        runtime = AgentRuntime(
-            MemoryJournal(),
+        runtime = runtime_for(
+            tool,
             ScriptedDecisionMaker((
                 lambda _frame: ModelDecision(
                     content="任务完成",
@@ -262,8 +259,6 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
                     ),
                 ),
             )),
-            tool.binding(),
-            SequentialIds(),
         )
         inbound = await runtime.receive_user_message(
             self.STREAM_ID,
@@ -310,8 +305,6 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CommandAuthorized", payload_names)
 
     async def test_missing_artifact_degrades_replay_without_substitution(self):
-        planted = Path(tempfile.mkdtemp()) / "workspace-body.txt"
-        planted.write_bytes(b"SUBSTITUTE-FROM-WORKSPACE")
         digest = "a" * 64
         journal = MemoryJournal()
         await journal.accept_delivery(EventDraft(
@@ -322,19 +315,19 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             artifact_refs=(digest,),
             delivery=DeliveryIdentity("user", "ask-1"),
         ))
-        store = MemoryArtifactStore()
         events = await journal.snapshot(self.STREAM_ID)
-        resolution = resolve_artifacts(events, store)
-        rebuilt = replay(self.STREAM_ID, events, artifact_store=store)
+        resolution = diagnose_artifacts(events)
+        rebuilt = replay(self.STREAM_ID, events)
 
         self.assertEqual(resolution.refs, (digest,))
         self.assertEqual(resolution.missing, (digest,))
         self.assertFalse(resolution.complete)
-        self.assertIsNone(store.get(ArtifactRef(digest)))
-        self.assertEqual(planted.read_bytes(), b"SUBSTITUTE-FROM-WORKSPACE")
         self.assertEqual(rebuilt.turn.user_messages[0].content, "read this")
         self.assertEqual(rebuilt.trace.entries[0].kind, "UserMessageReceived")
         self.assertFalse(rebuilt.artifacts.complete)
+        self.assertTrue(
+            diagnose_artifacts(events, available_refs=(digest,)).complete
+        )
 
     async def test_sqlite_grant_is_single_winner_and_survives_restart(self):
         temporary = tempfile.TemporaryDirectory()
@@ -342,16 +335,15 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         path = Path(temporary.name) / "boundary.db"
         first = SqliteJournal(path)
         tool = RecordingTool("sensitive", requires_authorization=True)
-        runtime = AgentRuntime(
-            first,
+        runtime = runtime_for(
+            tool,
             ScriptedDecisionMaker((
                 lambda _frame: ModelDecision(
                     content="need grant",
                     command_requests=(InvokeTool("sensitive"),),
                 ),
             )),
-            tool.binding(),
-            SequentialIds(),
+            journal=first,
         )
         await runtime.receive_user_message(
             self.STREAM_ID,

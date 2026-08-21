@@ -426,6 +426,8 @@ Policy evaluates
 DispatchEligible = issued + authorized
 ```
 
+`CommandPhase` 只描述执行生命周期；authorization 是正交的派发门。`PENDING` 表示已签发且尚未终态，不等于 Dispatcher 可以认领。
+
 Policy 是确定性安全边界，不由模型自行放宽。实现也可以在 Step Commit 前完成同步授权检查，但最终 Journal 必须能够证明某个 Command 为什么具有派发资格。持久信任、权限或能力状态的变化继续经过用户审批。
 
 发送消息、提交表单、发布内容等用户或外部系统可见动作同样属于 Command。模型生成期间的流式 token 尚未 Commit：可以作为明确标记的临时 UI 预览，但不能进入 Conversation、驱动外部动作或被表示成已送达消息。需要可靠交付的 Agent 输出必须在 Step Commit 后通过带 delivery identity 的 Command 发送并记录 Outcome。

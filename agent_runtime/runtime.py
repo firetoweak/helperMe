@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from hashlib import sha256
 
-from agent_runtime.artifacts import ArtifactStore
 from agent_runtime.dispatcher import Dispatcher, ToolBinding
 from agent_runtime.events import (
     CommandAuthorized,
@@ -43,7 +42,7 @@ class AgentRuntime:
         step_lease_seconds: float = 30.0,
         attempt_lease_seconds: float = 30.0,
         reconcile_lease_seconds: float = 30.0,
-        artifact_store: ArtifactStore | None = None,
+        requires_authorization: Mapping[str, bool] | None = None,
     ) -> None:
         if step_lease_seconds <= 0:
             raise ValueError("step lease duration must be positive")
@@ -51,7 +50,6 @@ class AgentRuntime:
         self._id_factory = id_factory
         self._worker_id = worker_id or id_factory("worker")
         self._step_lease_seconds = step_lease_seconds
-        self._artifact_store = artifact_store
         self.projector = StateProjector()
         self.step_runner = StepRunner(
             journal,
@@ -62,10 +60,7 @@ class AgentRuntime:
                 for name, binding in tool_bindings.items()
             },
             id_factory,
-            requires_authorization={
-                name: binding.requires_authorization
-                for name, binding in tool_bindings.items()
-            },
+            requires_authorization=requires_authorization,
         )
         self.dispatcher = Dispatcher(
             journal,
@@ -263,11 +258,7 @@ class AgentRuntime:
 
     async def replay(self, stream_id: str) -> ReplayView:
         events = await self._journal.snapshot(stream_id)
-        return replay(
-            stream_id,
-            events,
-            artifact_store=self._artifact_store,
-        )
+        return replay(stream_id, events)
 
     @staticmethod
     def _event_fingerprint(events: tuple[Event, ...]) -> str:

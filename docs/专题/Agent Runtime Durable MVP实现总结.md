@@ -135,7 +135,7 @@ python -m unittest
 - Authorization / Approval 的持久事实与派发门（14.3 已落地为授权门，不含审批工作流）；
 - Completion / Termination 的 Finalization Barrier（仍留白）；
 - 已提交用户输出的可靠投递（14.3 已把投递收敛为 Command，预览不得进入 Journal）；
-- Artifact Store 与精确 Context Replay Manifest（14.3 已做缺失降级；完整 Manifest 仍后置）；
+- Artifact Store 与精确 Context Replay Manifest（14.3 只做 `artifact_refs` 缺失诊断；存储契约后置）；
 - Turn、Stream 与产品交互对象的正式映射；
 - 旧 HelperMe 的 Adapter、迁移、灰度与最终替换。
 

@@ -99,11 +99,8 @@ class ToolBinding:
     reconcile_unknown: UnknownReconciler | None = None
     query_running: RunningQuery | None = None
     cancellation: CancellationContract = CancellationContract.UNSUPPORTED
-    requires_authorization: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.requires_authorization) is not bool:
-            raise TypeError("requires_authorization must be bool")
         if self.recovery.reconcile_unknown != (
             self.reconcile_unknown is not None
         ):

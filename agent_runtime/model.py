@@ -154,6 +154,12 @@ class RecoveryContract:
 
 @dataclass(frozen=True, slots=True)
 class Command:
+    """Committed side-effect.
+
+    `requires_authorization` is assembly information captured at issue
+    time. It is not an approval policy.
+    """
+
     command_id: str
     effect: CommandEffect
     recovery: RecoveryContract = RecoveryContract()
@@ -318,6 +324,13 @@ class CommandOutcome:
 
 
 class CommandPhase(str, Enum):
+    """Execution lifecycle only.
+
+    Authorization is an orthogonal dispatch gate. PENDING means the
+    command is issued and not yet terminal; it does not mean Dispatcher
+    may claim it.
+    """
+
     PENDING = "pending"
     UNKNOWN = "unknown"
     RUNNING = "running"

@@ -123,7 +123,12 @@ CREATE TABLE IF NOT EXISTS commands (
     issued_event_id TEXT NOT NULL REFERENCES events(event_id),
     abandoned INTEGER NOT NULL DEFAULT 0 CHECK (abandoned IN (0, 1)),
     dispatch_eligible_event_id TEXT REFERENCES events(event_id),
-    canonical_outcome_event_id TEXT UNIQUE REFERENCES events(event_id)
+    authorization_rejected_event_id TEXT UNIQUE REFERENCES events(event_id),
+    canonical_outcome_event_id TEXT UNIQUE REFERENCES events(event_id),
+    CHECK (
+        dispatch_eligible_event_id IS NULL
+        OR authorization_rejected_event_id IS NULL
+    )
 );
 
 CREATE TABLE IF NOT EXISTS attempts (
@@ -167,11 +172,6 @@ CREATE TABLE IF NOT EXISTS recovery_requirements (
     attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
     event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
     PRIMARY KEY (command_id, attempt_id)
-);
-
-CREATE TABLE IF NOT EXISTS command_rejections (
-    command_id TEXT PRIMARY KEY REFERENCES commands(command_id),
-    event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id)
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -1049,10 +1049,7 @@ class SqliteJournal:
             return False
         if command["dispatch_eligible_event_id"] is not None:
             return False
-        if connection.execute(
-            "SELECT 1 FROM command_rejections WHERE command_id = ?",
-            (command_id,),
-        ).fetchone() is not None:
+        if command["authorization_rejected_event_id"] is not None:
             return False
         if connection.execute(
             "SELECT 1 FROM attempts WHERE command_id = ?",
@@ -1646,10 +1643,7 @@ class SqliteJournal:
                     AND dispatch_eligible_event_id IS NULL
                     AND abandoned = 0
                     AND canonical_outcome_event_id IS NULL
-                    AND NOT EXISTS (
-                        SELECT 1 FROM command_rejections
-                        WHERE command_rejections.command_id = commands.command_id
-                    )
+                    AND authorization_rejected_event_id IS NULL
                     AND NOT EXISTS (
                         SELECT 1 FROM attempts
                         WHERE attempts.command_id = commands.command_id
@@ -1664,25 +1658,17 @@ class SqliteJournal:
         elif isinstance(payload, CommandRejected):
             cursor = connection.execute(
                 """
-                INSERT INTO command_rejections(command_id, event_id)
-                SELECT ?, ?
-                WHERE EXISTS (
-                    SELECT 1 FROM commands
-                    WHERE command_id = ?
-                        AND dispatch_eligible_event_id IS NULL
-                        AND abandoned = 0
-                        AND canonical_outcome_event_id IS NULL
-                )
-                AND NOT EXISTS (
-                    SELECT 1 FROM attempts WHERE command_id = ?
-                )
+                UPDATE commands SET authorization_rejected_event_id = ?
+                WHERE command_id = ?
+                    AND authorization_rejected_event_id IS NULL
+                    AND dispatch_eligible_event_id IS NULL
+                    AND abandoned = 0
+                    AND canonical_outcome_event_id IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM attempts WHERE command_id = ?
+                    )
                 """,
-                (
-                    payload.command_id,
-                    event.event_id,
-                    payload.command_id,
-                    payload.command_id,
-                ),
+                (event.event_id, payload.command_id, payload.command_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError(
