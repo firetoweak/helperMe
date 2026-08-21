@@ -3,22 +3,25 @@ from __future__ import annotations
 import unittest
 from collections.abc import Awaitable, Callable
 
+from adapters.delivery import (
+    DELIVER_TOOL_NAME,
+    DeliveringDecisionMaker,
+    deliver_binding,
+    ensure_deliver,
+)
 from agent_runtime import (
     AgentRuntime,
     CancelTool,
     Command,
     CommandOutcomeReceived,
-    DELIVER_TOOL_NAME,
-    DeliveringDecisionMaker,
     InvokeTool,
     LifecycleIntent,
     MemoryJournal,
     ModelDecision,
     OutcomeStatus,
+    RetrySemantics,
     RuntimeStatus,
     ToolBinding,
-    deliver_binding,
-    ensure_deliver,
 )
 from agent_runtime.state import DecisionFrame
 
@@ -61,9 +64,17 @@ class AgentRuntimeDeliverAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             Command(
                 "c3",
-                InvokeTool(DELIVER_TOOL_NAME),
+                InvokeTool("note"),
                 decision_on_outcome=False,
             ).decision_on_outcome,
+        )
+
+    def test_deliver_binding_does_not_claim_safe_retry(self):
+        binding = deliver_binding(lambda _text: None)[DELIVER_TOOL_NAME]
+        self.assertFalse(binding.decision_on_outcome)
+        self.assertEqual(
+            binding.recovery.retry_semantics,
+            RetrySemantics.PROHIBITED,
         )
 
     def test_ensure_deliver_appends_invoke_once(self):
@@ -73,7 +84,8 @@ class AgentRuntimeDeliverAdapterTest(unittest.IsolatedAsyncioTestCase):
             (InvokeTool(DELIVER_TOOL_NAME, (("text", "hello"),)),),
         )
         self.assertEqual(mapped.content, "  hello  ")
-        self.assertEqual(ensure_deliver(mapped), mapped)
+        with self.assertRaisesRegex(ValueError, "product command"):
+            ensure_deliver(mapped)
         self.assertEqual(
             ensure_deliver(
                 ModelDecision(lifecycle_intent=LifecycleIntent.COMPLETE),
@@ -81,13 +93,15 @@ class AgentRuntimeDeliverAdapterTest(unittest.IsolatedAsyncioTestCase):
             (),
         )
 
-    def test_ensure_deliver_does_not_duplicate_existing_deliver(self):
-        existing = InvokeTool(DELIVER_TOOL_NAME, (("text", "already"),))
+    def test_ensure_deliver_rejects_model_issued_deliver(self):
         decision = ModelDecision(
-            content="ignored extra",
-            command_requests=(existing,),
+            content="extra",
+            command_requests=(
+                InvokeTool(DELIVER_TOOL_NAME, (("text", "already"),)),
+            ),
         )
-        self.assertEqual(ensure_deliver(decision), decision)
+        with self.assertRaisesRegex(ValueError, "product command"):
+            ensure_deliver(decision)
 
     async def test_content_becomes_delivered_command_then_waits_for_user(self):
         delivered: list[str] = []
@@ -123,6 +137,10 @@ class AgentRuntimeDeliverAdapterTest(unittest.IsolatedAsyncioTestCase):
             InvokeTool(DELIVER_TOOL_NAME, (("text", "hello there"),)),
         )
         self.assertFalse(step.commands[0].decision_on_outcome)
+        self.assertEqual(
+            step.commands[0].recovery.retry_semantics,
+            RetrySemantics.PROHIBITED,
+        )
         self.assertEqual(delivered, ["hello there"])
         self.assertEqual(len(outcomes), 1)
         self.assertEqual(outcomes[0].outcome.status, OutcomeStatus.SUCCEEDED)

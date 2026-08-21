@@ -78,11 +78,27 @@ def _format_token_limit(tokens: int) -> str:
     return str(tokens)
 
 
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="配置统一从 model_config.yaml 读取"
+    )
+    parser.add_argument(
+        "--engine",
+        choices=("core", "runtime"),
+        default="core",
+        help="core 为冻结旧栈；runtime 为新 Agent Runtime 对照入口",
+    )
+    return parser.parse_args(argv)
+
+
 async def async_main(argv: list[str] | None = None) -> None:
     sys.stdout.reconfigure(encoding="utf-8")
-    argparse.ArgumentParser(
-        description="配置统一从 model_config.yaml 读取"
-    ).parse_args(argv)
+    args = _parse_args(argv)
+    if args.engine == "runtime":
+        from adapters.runtime_host import run_runtime_console
+
+        await run_runtime_console()
+        return
     app_config = load_app_config()
     model_config = app_config.model
     runtime_config = app_config.runtime

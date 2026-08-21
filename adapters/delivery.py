@@ -10,28 +10,27 @@ from agent_runtime.model import (
     RecoveryContract,
     RetrySemantics,
 )
-from agent_runtime.step import DecisionMaker
 from agent_runtime.state import DecisionFrame
+from agent_runtime.step import DecisionMaker
 
 
 DELIVER_TOOL_NAME = "deliver"
 
 
 def ensure_deliver(decision: ModelDecision) -> ModelDecision:
-    """Map assistant text onto an ordinary deliver Command.
+    """Map assistant text onto a host-owned deliver Command.
 
-    Runtime does not promote `decision.content` into a user-visible
-    delivery. Product adapters do that here, the same way they map
-    tool_calls onto `InvokeTool`.
+    `deliver` is not a model-visible tool. Runtime does not promote
+    `decision.content` into a user-visible delivery.
     """
 
-    text = decision.content.strip()
-    if not text:
-        return decision
     if any(
         isinstance(request, InvokeTool) and request.name == DELIVER_TOOL_NAME
         for request in decision.command_requests
     ):
+        raise ValueError("deliver is a product command, not a model tool")
+    text = decision.content.strip()
+    if not text:
         return decision
     return replace(
         decision,
@@ -63,7 +62,9 @@ def deliver_binding(sink: Callable[[str], None]) -> dict[str, ToolBinding]:
     return {
         DELIVER_TOOL_NAME: ToolBinding(
             handler,
-            recovery=RecoveryContract(retry_semantics=RetrySemantics.SAFE),
+            recovery=RecoveryContract(
+                retry_semantics=RetrySemantics.PROHIBITED,
+            ),
             decision_on_outcome=False,
         ),
     }

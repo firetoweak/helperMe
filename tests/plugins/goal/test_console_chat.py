@@ -7,6 +7,7 @@ from console_chat import (
     _format_token_limit,
     _handle_new_session_command,
     _latest_input_tokens,
+    _parse_args,
     main,
 )
 
@@ -52,6 +53,12 @@ class ConsoleTurnMetadataTest(unittest.TestCase):
 
         self.assertIsNone(session_id)
         application.create_session.assert_not_called()
+
+    def test_engine_defaults_to_core(self):
+        self.assertEqual(_parse_args([]).engine, "core")
+
+    def test_engine_runtime_is_accepted(self):
+        self.assertEqual(_parse_args(["--engine", "runtime"]).engine, "runtime")
 
 
 if __name__ == "__main__":

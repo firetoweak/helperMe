@@ -328,7 +328,7 @@ class EventDraft:
     occurred_at: datetime
     causation_id: str | None = None
     correlation_id: str | None = None
-    schema_version: int = 1
+    schema_version: int = 2
     artifact_refs: tuple[str, ...] = ()
     delivery: DeliveryIdentity | None = None
 

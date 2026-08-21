@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
+from agent_runtime.codec import EVENT_SCHEMA_VERSION
 from agent_runtime import (
     AgentRuntime,
     CancelTool,
@@ -165,17 +166,11 @@ class AbandonScenario:
 class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
     STREAM_ID = "stream-1"
 
-    async def test_parallel_tools_b_first_and_wait_keeps_a_c_active(self):
+    async def test_parallel_tools_join_until_the_cohort_is_terminal(self):
         tools = ControlledTools(("A", "B", "C"))
-
-        def wait_for_siblings(frame: DecisionFrame) -> ModelDecision:
-            payload = frame.trigger_event.payload
-            self.assertIsInstance(payload, CommandOutcomeReceived)
-            return ModelDecision(content="wait for A and C")
-
         model = ScriptedDecisionMaker((
             initial_tool_decision,
-            wait_for_siblings,
+            lambda frame: ModelDecision(content="all three ready"),
         ))
         journal = MemoryJournal()
         runtime = AgentRuntime(
@@ -196,79 +191,98 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         await asyncio.wait_for(tools.all_started.wait(), timeout=1)
         self.assertEqual(tools.started_names, {"A", "B", "C"})
-        events = await journal.snapshot(self.STREAM_ID)
-        step_commit_sequence = next(
-            event.sequence
-            for event in events
-            if isinstance(event.payload, StepCommitted)
-        )
-        dispatch_events = [
-            event
-            for event in events
-            if isinstance(event.payload, DispatchAttemptStarted)
-        ]
-        self.assertEqual(len(dispatch_events), 3)
-        self.assertEqual(
-            {event.payload.command_id for event in dispatch_events},
-            set(command_ids.values()),
-        )
-        self.assertTrue(all(
-            step_commit_sequence < event.sequence
-            for event in dispatch_events
-        ))
 
         tools.release["B"].set()
         await runtime.dispatcher.wait(command_ids["B"])
-        events = await journal.snapshot(self.STREAM_ID)
-        self.assertEqual(
-            [event.payload.command_id for event in outcome_events(events)],
-            [command_ids["B"]],
-        )
-
-        step_2 = await runtime.advance(self.STREAM_ID)
-        self.assertIsNotNone(step_2)
-        self.assertEqual(step_2.commands, ())
-        self.assertEqual(step_2.decision.abandon_command_ids, ())
-        frame = model.frames[1]
-        self.assertEqual(
-            frame.trigger_event.payload.command_id,
-            command_ids["B"],
-        )
-        self.assertEqual(
-            frame.state.command(command_ids["B"]).phase,
-            CommandPhase.TERMINAL,
-        )
-        self.assertEqual(
-            frame.state.command(command_ids["A"]).phase,
-            CommandPhase.UNKNOWN,
-        )
-        self.assertEqual(
-            frame.state.command(command_ids["C"]).phase,
-            CommandPhase.UNKNOWN,
-        )
-
+        self.assertIsNone(await runtime.advance(self.STREAM_ID))
+        self.assertEqual(len(model.frames), 1)
         state = await runtime.state(self.STREAM_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertEqual(
             set(state.waiting_command_ids),
             {command_ids["A"], command_ids["C"]},
         )
-        self.assertEqual(
-            set(state.waiting_for),
-            {
-                f"command:{command_ids['A']}",
-                f"command:{command_ids['C']}",
-            },
-        )
-        self.assertFalse(state.command(command_ids["A"]).abandoned)
-        self.assertFalse(state.command(command_ids["C"]).abandoned)
-        self.assertFalse(tools.cancelled["A"].is_set())
-        self.assertFalse(tools.cancelled["C"].is_set())
 
         tools.release["A"].set()
         tools.release["C"].set()
         await runtime.dispatcher.wait(command_ids["A"])
         await runtime.dispatcher.wait(command_ids["C"])
+        step_2 = await runtime.advance(self.STREAM_ID)
+        self.assertIsNotNone(step_2)
+        frame = model.frames[1]
+        self.assertEqual(len(model.frames), 2)
+        self.assertEqual(
+            frame.state.command(command_ids["A"]).phase,
+            CommandPhase.TERMINAL,
+        )
+        self.assertEqual(
+            frame.state.command(command_ids["B"]).phase,
+            CommandPhase.TERMINAL,
+        )
+        self.assertEqual(
+            frame.state.command(command_ids["C"]).phase,
+            CommandPhase.TERMINAL,
+        )
+        self.assertIn(
+            frame.trigger_event.payload.command_id,
+            set(command_ids.values()),
+        )
+
+    async def test_later_user_message_supersedes_unconsumed_outcome_triggers(self):
+        tools = ControlledTools(("A", "B", "C"))
+        model = ScriptedDecisionMaker((
+            initial_tool_decision,
+            lambda _frame: ModelDecision(content="follow user intent"),
+        ))
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            model,
+            tools.handlers(),
+            SequentialIds(),
+        )
+
+        await runtime.receive_user_message(
+            self.STREAM_ID,
+            "collect",
+            delivery_id="collect-1",
+        )
+        step_1 = await runtime.advance(self.STREAM_ID)
+        command_ids = tool_command_ids(step_1)
+        await asyncio.wait_for(tools.all_started.wait(), timeout=1)
+        for name in tools.names:
+            tools.release[name].set()
+            await runtime.dispatcher.wait(command_ids[name])
+
+        before = await runtime.state(self.STREAM_ID)
+        self.assertEqual(before.status, RuntimeStatus.RUNNABLE)
+
+        follow_up = await runtime.receive_user_message(
+            self.STREAM_ID,
+            "stop, summarize what you already read",
+            delivery_id="collect-2",
+        )
+        step_2 = await runtime.advance(self.STREAM_ID)
+        self.assertIsNotNone(step_2)
+        frame = model.frames[1]
+
+        self.assertEqual(len(model.frames), 2)
+        self.assertEqual(step_2.trigger_event_id, follow_up.event_id)
+        self.assertEqual(frame.trigger_event.event_id, follow_up.event_id)
+        self.assertIsInstance(frame.trigger_event.payload, UserMessageReceived)
+        self.assertEqual(
+            frame.trigger_event.payload.content,
+            "stop, summarize what you already read",
+        )
+        for command_id in command_ids.values():
+            self.assertEqual(
+                frame.state.command(command_id).phase,
+                CommandPhase.TERMINAL,
+            )
+        events = await runtime._journal.snapshot(self.STREAM_ID)
+        outcome_ids = {
+            event.event_id for event in outcome_events(events)
+        }
+        self.assertTrue(outcome_ids <= set(frame.state.visible_event_ids))
 
     async def test_abandon_cancel_and_late_outcomes_remain_distinct(self):
         scenario = await self._run_abandon_scenario()
@@ -352,24 +366,20 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_decision_events_use_acceptance_order_and_frozen_views(self):
         tools = ControlledTools(("A", "B", "C"))
-        b_model_entered = asyncio.Event()
-        release_b_model = asyncio.Event()
+        joined_entered = asyncio.Event()
+        release_joined = asyncio.Event()
 
-        async def decide_b(_frame: DecisionFrame) -> ModelDecision:
-            b_model_entered.set()
-            await release_b_model.wait()
-            return ModelDecision(content="B handled; continue waiting")
-
-        def decide_a(_frame: DecisionFrame) -> ModelDecision:
-            return ModelDecision(content="A handled")
+        async def decide_joined(_frame: DecisionFrame) -> ModelDecision:
+            joined_entered.set()
+            await release_joined.wait()
+            return ModelDecision(content="cohort handled")
 
         def decide_interrupt(_frame: DecisionFrame) -> ModelDecision:
             return ModelDecision(content="interrupt handled")
 
         model = ScriptedDecisionMaker((
             initial_tool_decision,
-            decide_b,
-            decide_a,
+            decide_joined,
             decide_interrupt,
         ))
         journal = MemoryJournal()
@@ -393,72 +403,61 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         await runtime.dispatcher.wait(command_ids["B"])
         tools.release["A"].set()
         await runtime.dispatcher.wait(command_ids["A"])
+        tools.release["C"].set()
+        await runtime.dispatcher.wait(command_ids["C"])
 
-        b_step_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
-        await asyncio.wait_for(b_model_entered.wait(), timeout=1)
+        joined_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
+        await asyncio.wait_for(joined_entered.wait(), timeout=1)
         interrupt = await runtime.receive_interrupt(
             self.STREAM_ID,
             "change intent",
             delivery_id="interrupt-1",
         )
-        release_b_model.set()
-        step_b = await b_step_task
-        step_a = await runtime.advance(self.STREAM_ID)
+        release_joined.set()
+        step_joined = await joined_task
         step_interrupt = await runtime.advance(self.STREAM_ID)
 
         frames = model.frames
-        self.assertEqual(
-            [
-                frames[1].trigger_event.payload.command_id,
-                frames[2].trigger_event.payload.command_id,
-            ],
-            [command_ids["B"], command_ids["A"]],
+        self.assertIsInstance(
+            frames[1].trigger_event.payload,
+            CommandOutcomeReceived,
         )
         self.assertIsInstance(
-            frames[3].trigger_event.payload,
+            frames[2].trigger_event.payload,
             UserInterruptReceived,
         )
+        trigger_id = frames[1].trigger_event.payload.command_id
+        self.assertIn(trigger_id, set(command_ids.values()))
+        for command_id in command_ids.values():
+            self.assertEqual(
+                frames[1].state.command(command_id).phase,
+                CommandPhase.TERMINAL,
+            )
 
         events = await journal.snapshot(self.STREAM_ID)
-        b_outcome = next(
+        last_outcome = next(
             event
             for event in outcome_events(events)
-            if event.payload.command_id == command_ids["B"]
+            if event.payload.command_id == trigger_id
         )
-        a_outcome = next(
-            event
-            for event in outcome_events(events)
-            if event.payload.command_id == command_ids["A"]
-        )
-        b_step_event = next(
+        joined_event = next(
             event
             for event in events
             if isinstance(event.payload, StepCommitted)
-            and event.payload.step.step_id == step_b.step_id
+            and event.payload.step.step_id == step_joined.step_id
         )
-        self.assertLess(b_outcome.sequence, a_outcome.sequence)
-        self.assertLess(a_outcome.sequence, interrupt.sequence)
-        self.assertLess(interrupt.sequence, b_step_event.sequence)
-
-        self.assertNotIn(a_outcome.event_id, frames[1].state.visible_event_ids)
+        self.assertLess(last_outcome.sequence, interrupt.sequence)
+        self.assertLess(interrupt.sequence, joined_event.sequence)
         self.assertNotIn(interrupt.event_id, frames[1].state.visible_event_ids)
-        self.assertIn(b_step_event.event_id, frames[2].state.visible_event_ids)
-        self.assertIn(a_outcome.event_id, frames[2].state.visible_event_ids)
-        self.assertNotIn(interrupt.event_id, frames[2].state.visible_event_ids)
-        self.assertIn(interrupt.event_id, frames[3].state.visible_event_ids)
-        self.assertEqual(
-            [step.trigger_event_id for step in (step_b, step_a, step_interrupt)],
-            [b_outcome.event_id, a_outcome.event_id, interrupt.event_id],
-        )
-        self.assertEqual(len(model.frames), 4)
+        self.assertIn(interrupt.event_id, frames[2].state.visible_event_ids)
+        self.assertEqual(step_joined.trigger_event_id, last_outcome.event_id)
+        self.assertEqual(step_interrupt.trigger_event_id, interrupt.event_id)
+        self.assertEqual(len(model.frames), 3)
 
         turn = await runtime.turn(self.STREAM_ID)
         self.assertEqual(len(turn.interrupts), 1)
         self.assertEqual(turn.interrupts[0].event_id, interrupt.event_id)
         self.assertEqual(turn.interrupts[0].reason, "change intent")
-
-        tools.release["C"].set()
-        await runtime.dispatcher.wait(command_ids["C"])
 
     async def test_replay_rebuilds_views_without_model_or_tool_calls(self):
         scenario = await self._run_abandon_scenario()
@@ -973,7 +972,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
                 stream_id=self.STREAM_ID,
                 payload=UserMessageReceived("hello"),
                 occurred_at=datetime.now(timezone.utc),
-                schema_version=2,
+                schema_version=EVENT_SCHEMA_VERSION + 1,
                 delivery=DeliveryIdentity("user", "future-event"),
             ))
 
@@ -1101,6 +1100,11 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         tools.release["B"].set()
         await runtime.dispatcher.wait(command_ids["B"])
+        await runtime.receive_interrupt(
+            self.STREAM_ID,
+            "keep B only",
+            delivery_id="interrupt-1",
+        )
         step_2_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
         await asyncio.wait_for(step_2_entered.wait(), timeout=1)
 

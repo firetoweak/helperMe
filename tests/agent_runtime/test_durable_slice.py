@@ -52,6 +52,7 @@ from agent_runtime import (
     UserMessageReceived,
 )
 from agent_runtime.codec import (
+    EVENT_SCHEMA_VERSION,
     decode_payload,
     delivery_fingerprint,
     encode_payload,
@@ -1008,7 +1009,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                         stream_id=self.STREAM_ID,
                         payload=UserMessageReceived("future"),
                         occurred_at=NOW,
-                        schema_version=2,
+                        schema_version=EVENT_SCHEMA_VERSION + 1,
                         delivery=DeliveryIdentity("user", "future-1"),
                     ))
                 with self.assertRaisesRegex(ValueError, "attempt fact"):
@@ -1564,7 +1565,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ),
             occurred_at=NOW,
             causation_id=dispatch.event_id,
-            schema_version=2,
+            schema_version=EVENT_SCHEMA_VERSION + 1,
         )
         before = await journal.snapshot(self.STREAM_ID)
         with self.assertRaisesRegex(ValueError, "schema version"):
@@ -2181,21 +2182,24 @@ class DurableCodecContractTest(unittest.TestCase):
 
         self.assertEqual({tag for tag, _ in encoded}, expected_tags)
         self.assertEqual(
-            tuple(decode_payload(tag, 1, data) for tag, data in encoded),
+            tuple(
+                decode_payload(tag, EVENT_SCHEMA_VERSION, data)
+                for tag, data in encoded
+            ),
             payloads,
         )
 
     def test_unknown_schema_and_fields_fail_without_losing_facts(self):
         tag, payload_json = encode_payload(UserMessageReceived("hello"))
         with self.assertRaisesRegex(ValueError, "schema version"):
-            decode_payload(tag, 2, payload_json)
+            decode_payload(tag, EVENT_SCHEMA_VERSION + 1, payload_json)
 
         data = json.loads(payload_json)
         data["future_fact"] = "must not disappear"
         with self.assertRaisesRegex(ValueError, "fields"):
             decode_payload(
                 tag,
-                1,
+                EVENT_SCHEMA_VERSION,
                 json.dumps(data, ensure_ascii=False),
             )
 
@@ -2213,6 +2217,5 @@ class DurableCodecContractTest(unittest.TestCase):
 
         self.assertEqual(
             delivery_fingerprint(draft),
-            "v1:30403014a93bd3a74247c1b3980abb1e"
-            "d06f9eaad32c15bf37e1ef0e373c3ebf",
+            "v1:86309430b017562b818f72ffb2d344b42ce2aadda078222ff23d3bbe547be884",
         )

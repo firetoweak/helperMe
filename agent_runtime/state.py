@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, replace
 from hashlib import sha256
 
+from agent_runtime.codec import EVENT_SCHEMA_VERSION
 from agent_runtime.events import (
     CommandAuthorized,
     CommandRecoveryRequired,
@@ -579,11 +580,16 @@ class StateProjector:
         applied_step_event_ids: set[str] = set()
         next_trigger: Event | None = None
 
-        for event in events:
+        for index, event in enumerate(events):
             if isinstance(event.payload, StepCommitted):
                 continue
             decision.apply_regular(event)
-            if not self._requires_decision(event, decision):
+            if not self._requires_decision(
+                event,
+                decision,
+                step_events,
+                events[index + 1 :],
+            ):
                 continue
             step_event = step_events.get(event.event_id)
             if step_event is None:
@@ -708,7 +714,7 @@ class StateProjector:
                 raise ValueError(
                     f"invalid event sequence: {event.event_id}"
                 )
-            if event.schema_version != 1:
+            if event.schema_version != EVENT_SCHEMA_VERSION:
                 raise ValueError(
                     f"unsupported event schema version: "
                     f"{event.schema_version}"
@@ -747,7 +753,12 @@ class StateProjector:
         return result
 
     @staticmethod
-    def _requires_decision(event: Event, state: _StateBuilder) -> bool:
+    def _requires_decision(
+        event: Event,
+        state: _StateBuilder,
+        step_events: dict[str, Event],
+        later_events: tuple[Event, ...],
+    ) -> bool:
         payload = event.payload
         if isinstance(payload, (UserMessageReceived, UserInterruptReceived)):
             return True
@@ -757,9 +768,41 @@ class StateProjector:
             return not state.commands[payload.command_id].abandoned
         if isinstance(payload, CommandOutcomeReceived):
             command_state = state.commands[payload.command_id]
-            return (
+            if not (
                 event.event_id in state.canonical_outcome_event_ids
                 and command_state.command.decision_on_outcome
                 and not command_state.abandoned
-            )
+                and _decision_cohort_closed(state, command_state)
+            ):
+                return False
+            if event.event_id in step_events:
+                return True
+            return not _has_later_user_intent(later_events)
         return False
+
+
+def _has_later_user_intent(later_events: tuple[Event, ...]) -> bool:
+    return any(
+        isinstance(
+            event.payload,
+            (UserMessageReceived, UserInterruptReceived),
+        )
+        for event in later_events
+    )
+
+
+def _decision_cohort_closed(
+    state: _StateBuilder,
+    command_state: CommandState,
+) -> bool:
+    issued_by = command_state.issued_by_event_id
+    for sibling in state.commands.values():
+        if sibling.issued_by_event_id != issued_by:
+            continue
+        if not sibling.command.decision_on_outcome:
+            continue
+        if sibling.abandoned:
+            continue
+        if sibling.phase is not CommandPhase.TERMINAL:
+            return False
+    return True
