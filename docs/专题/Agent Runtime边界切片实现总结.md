@@ -71,7 +71,7 @@ Runtime 不理解输出内容含义，因此 Turn 不会按「这句话像不像
 
 ### 3.4 Artifact 缺失诊断
 
-14.3 不引入 Artifact Store。`diagnose_artifacts(events, available_refs=())` 只根据 Journal 上的 `artifact_refs` 报告哪些引用当前不可用。没有可用集合时，所有引用都记为 missing。
+14.3 不引入 Artifact Store。`diagnose_artifacts(events)` 在调用者未提供可用集合时只报告引用、不把它们记成 missing；显式传入 `available_refs=()` 才表示“检查过且当前一个都没有”。
 
 `replay` 附带该诊断；Turn / Trace / Canonical State 仍从 Journal 重建。精确正文存储、校验和 Replay Manifest 后置。
 
@@ -89,7 +89,7 @@ Runtime 不理解输出内容含义，因此 Turn 不会按「这句话像不像
 - Interrupt 不被旧 Step 跨越或吞掉；
 - 决策话术不是已投递用户消息；
 - 预览 token 不能进入 Journal；
-- `artifact_refs` 缺失时 replay 明确降级，提供 available_refs 后诊断为 complete；
+- `artifact_refs` 在显式检查后缺失时 replay 明确降级，提供 available_refs 后诊断为 complete；未检查时不把引用记成 missing；
 - SQLite 上两个 Worker 竞争 grant 只有一个成功，重启后资格仍在。
 
 验证命令：

@@ -316,15 +316,21 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             delivery=DeliveryIdentity("user", "ask-1"),
         ))
         events = await journal.snapshot(self.STREAM_ID)
-        resolution = diagnose_artifacts(events)
+        uninspected = diagnose_artifacts(events)
         rebuilt = replay(self.STREAM_ID, events)
+        inspected_empty = diagnose_artifacts(events, available_refs=())
 
-        self.assertEqual(resolution.refs, (digest,))
-        self.assertEqual(resolution.missing, (digest,))
-        self.assertFalse(resolution.complete)
+        self.assertEqual(uninspected.refs, (digest,))
+        self.assertEqual(uninspected.missing, ())
+        self.assertFalse(uninspected.inspected)
+        self.assertFalse(uninspected.complete)
         self.assertEqual(rebuilt.turn.user_messages[0].content, "read this")
         self.assertEqual(rebuilt.trace.entries[0].kind, "UserMessageReceived")
-        self.assertFalse(rebuilt.artifacts.complete)
+        self.assertFalse(rebuilt.artifacts.inspected)
+        self.assertEqual(rebuilt.artifacts.missing, ())
+        self.assertTrue(inspected_empty.inspected)
+        self.assertEqual(inspected_empty.missing, (digest,))
+        self.assertFalse(inspected_empty.complete)
         self.assertTrue(
             diagnose_artifacts(events, available_refs=(digest,)).complete
         )

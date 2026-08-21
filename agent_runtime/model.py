@@ -235,14 +235,6 @@ class ModelDecision:
             raise ValueError("a command cannot be abandoned and retried")
         if type(self.lifecycle_intent) is not LifecycleIntent:
             raise TypeError("lifecycle intent must be LifecycleIntent")
-        if self.lifecycle_intent is not LifecycleIntent.NONE:
-            if any(
-                isinstance(request, InvokeTool)
-                for request in self.command_requests
-            ):
-                raise ValueError("lifecycle intent cannot start new tools")
-            if self.retry_command_ids:
-                raise ValueError("lifecycle intent cannot retry commands")
         if (
             not self.content.strip()
             and not self.command_requests

@@ -144,13 +144,39 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rebuilt.state.status, RuntimeStatus.COMPLETED)
         self.assertEqual(step.decision.lifecycle_intent, LifecycleIntent.COMPLETE)
 
-    async def test_lifecycle_intent_cannot_start_new_tools(self):
-        with self.assertRaises(ValueError):
-            ModelDecision(
-                content="start then complete",
-                command_requests=(InvokeTool("A"),),
-                lifecycle_intent=LifecycleIntent.COMPLETE,
-            )
+    async def test_same_step_may_declare_complete_and_start_tools(self):
+        tool = RecordingTool("A")
+        runtime = runtime_for(
+            tool,
+            ScriptedDecisionMaker((
+                lambda _frame: ModelDecision(
+                    content="start then complete",
+                    command_requests=(InvokeTool("A"),),
+                    lifecycle_intent=LifecycleIntent.COMPLETE,
+                ),
+            )),
+        )
+        await runtime.receive_user_message(
+            self.STREAM_ID,
+            "work",
+            delivery_id="ask-1",
+        )
+        step = await runtime.advance(self.STREAM_ID)
+        await asyncio.wait_for(tool.started.wait(), timeout=1)
+        state = await runtime.state(self.STREAM_ID)
+        events = await runtime._journal.snapshot(self.STREAM_ID)
+
+        self.assertEqual(step.decision.lifecycle_intent, LifecycleIntent.COMPLETE)
+        self.assertEqual(state.status, RuntimeStatus.WAITING)
+        self.assertIn(step.commands[0].command_id, state.waiting_command_ids)
+        self.assertEqual(terminal_payloads(events), [])
+
+        tool.release.set()
+        await runtime.dispatcher.wait(step.commands[0].command_id)
+        state = await runtime.state(self.STREAM_ID)
+        events = await runtime._journal.snapshot(self.STREAM_ID)
+        self.assertEqual(state.status, RuntimeStatus.RUNNABLE)
+        self.assertEqual(terminal_payloads(events), [])
 
     async def test_complete_with_open_tool_does_not_finalize(self):
         tool = RecordingTool("A")

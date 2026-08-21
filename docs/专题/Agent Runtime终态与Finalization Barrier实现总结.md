@@ -66,7 +66,7 @@ content-only 不得推导为完成。Interrupt 仍是决策输入；旧 Step 的
 
 Abandon 不等于 Cancel。本切片不自动签发 Cancel；迟到 Outcome 仍可写入，但不触发新 Step，也不能复活终态。
 
-Step 自己声明 terminate/complete 时仍须显式 `abandon_command_ids`。Runtime 不替模型收拾飞行中的 InvokeTool。
+Step 自己声明 terminate/complete 时，飞行中的 InvokeTool 仍是必要依赖；Runtime 不替模型自动 Abandon，也不因“说了完成”而拒绝同时签发工具。Outcome 到来后需要新的 Step 再声明。
 
 ### 3.4 终态之后
 

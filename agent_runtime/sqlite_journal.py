@@ -59,6 +59,7 @@ from agent_runtime.model import (
 
 
 _T = TypeVar("_T")
+SCHEMA_VERSION = 2
 
 
 async def _await_task_uninterruptibly(task: asyncio.Task[_T]) -> _T:
@@ -197,7 +198,7 @@ CREATE TABLE IF NOT EXISTS stream_terminals (
     kind TEXT NOT NULL CHECK (kind IN ('completed', 'terminated'))
 );
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 """
 
 
@@ -591,7 +592,7 @@ class SqliteJournal:
             version = connection.execute(
                 "PRAGMA user_version"
             ).fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, SCHEMA_VERSION):
                 raise ValueError(
                     f"unsupported database schema version: {version}"
                 )

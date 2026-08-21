@@ -1813,6 +1813,22 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             connection.close()
         self.assertEqual(version, 999)
 
+    def test_legacy_schema_version_is_rejected(self):
+        self.journal()
+        connection = sqlite3.connect(self.database_path)
+        try:
+            version = connection.execute(
+                "PRAGMA user_version"
+            ).fetchone()[0]
+            connection.execute("PRAGMA user_version = 1")
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertEqual(version, 2)
+
+        with self.assertRaisesRegex(ValueError, "database schema version"):
+            self.journal()
+
     async def _accept_message(self, journal: SqliteJournal) -> None:
         await journal.accept_delivery(EventDraft(
             event_id="message-event",

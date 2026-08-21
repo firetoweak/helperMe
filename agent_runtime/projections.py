@@ -61,9 +61,12 @@ class TraceView:
 class ArtifactResolution:
     refs: tuple[str, ...]
     missing: tuple[str, ...]
+    inspected: bool = True
 
     @property
     def complete(self) -> bool:
+        if not self.inspected:
+            return not self.refs
         return not self.missing
 
 
@@ -77,16 +80,18 @@ class ReplayView:
 
 def diagnose_artifacts(
     events: tuple[Event, ...],
-    available_refs: Collection[str] = (),
+    available_refs: Collection[str] | None = None,
 ) -> ArtifactResolution:
     refs = tuple(dict.fromkeys(
         ref
         for event in events
         for ref in event.artifact_refs
     ))
+    if available_refs is None:
+        return ArtifactResolution(refs=refs, missing=(), inspected=False)
     available = frozenset(available_refs)
     missing = tuple(ref for ref in refs if ref not in available)
-    return ArtifactResolution(refs=refs, missing=missing)
+    return ArtifactResolution(refs=refs, missing=missing, inspected=True)
 
 
 def project_turn(
@@ -152,7 +157,7 @@ def project_trace(
 def replay(
     stream_id: str,
     events: tuple[Event, ...],
-    available_artifact_refs: Collection[str] = (),
+    available_artifact_refs: Collection[str] | None = None,
 ) -> ReplayView:
     projector = StateProjector()
     return ReplayView(
