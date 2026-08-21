@@ -99,8 +99,11 @@ class ToolBinding:
     reconcile_unknown: UnknownReconciler | None = None
     query_running: RunningQuery | None = None
     cancellation: CancellationContract = CancellationContract.UNSUPPORTED
+    decision_on_outcome: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.decision_on_outcome) is not bool:
+            raise TypeError("decision_on_outcome must be bool")
         if self.recovery.reconcile_unknown != (
             self.reconcile_unknown is not None
         ):

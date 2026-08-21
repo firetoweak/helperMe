@@ -156,8 +156,9 @@ class RecoveryContract:
 class Command:
     """Committed side-effect.
 
-    `requires_authorization` is assembly information captured at issue
-    time. It is not an approval policy.
+    `requires_authorization` and `decision_on_outcome` are assembly
+    information captured at issue time. They are not an approval policy
+    and not inferred from the tool name.
     """
 
     command_id: str
@@ -165,6 +166,7 @@ class Command:
     recovery: RecoveryContract = RecoveryContract()
     idempotency_key: str | None = None
     requires_authorization: bool = False
+    decision_on_outcome: bool | None = None
 
     def __post_init__(self) -> None:
         _require_str(self.command_id, "command id")
@@ -181,10 +183,14 @@ class Command:
             and not self.idempotency_key
         ):
             raise ValueError("idempotency key is required")
-
-    @property
-    def decision_on_outcome(self) -> bool:
-        return isinstance(self.effect, InvokeTool)
+        if self.decision_on_outcome is None:
+            object.__setattr__(
+                self,
+                "decision_on_outcome",
+                isinstance(self.effect, InvokeTool),
+            )
+        elif type(self.decision_on_outcome) is not bool:
+            raise TypeError("decision_on_outcome must be bool")
 
 
 class LifecycleIntent(str, Enum):

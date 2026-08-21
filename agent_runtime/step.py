@@ -41,12 +41,14 @@ class StepRunner:
         recovery_contracts: Mapping[str, RecoveryContract],
         id_factory: IdFactory = random_id,
         requires_authorization: Mapping[str, bool] | None = None,
+        decision_on_outcome: Mapping[str, bool] | None = None,
     ) -> None:
         self._journal = journal
         self._projector = projector
         self._decision_maker = decision_maker
         self._recovery_contracts = dict(recovery_contracts)
         self._requires_authorization = dict(requires_authorization or {})
+        self._decision_on_outcome = dict(decision_on_outcome or {})
         self._id_factory = id_factory
 
     async def commit(
@@ -90,6 +92,10 @@ class StepRunner:
                     requires_authorization=self._requires_authorization.get(
                         request.name,
                         False,
+                    ),
+                    decision_on_outcome=self._decision_on_outcome.get(
+                        request.name,
+                        True,
                     ),
                 )
             elif isinstance(request, CancelTool):

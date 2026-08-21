@@ -45,7 +45,7 @@ from agent_runtime.model import (
 
 EVENT_SCHEMA_VERSION = 1
 DELIVERY_FINGERPRINT_VERSION = 1
-STATE_CODEC_VERSION = 2
+STATE_CODEC_VERSION = 3
 STATE_PROJECTION_VERSION = "canonical-state-v1"
 
 _USER_MESSAGE = "user.message.received"
@@ -180,13 +180,21 @@ def _command_to_data(command: Command) -> dict[str, object]:
         "recovery": _recovery_to_data(command.recovery),
         "idempotency_key": command.idempotency_key,
         "requires_authorization": command.requires_authorization,
+        "decision_on_outcome": command.decision_on_outcome,
     }
 
 
 def _command_from_data(data: dict[str, object]) -> Command:
     _require_object(
         data,
-        {"command_id", "effect", "recovery", "idempotency_key", "requires_authorization"},
+        {
+            "command_id",
+            "effect",
+            "recovery",
+            "idempotency_key",
+            "requires_authorization",
+            "decision_on_outcome",
+        },
         "command",
     )
     return Command(
@@ -195,6 +203,7 @@ def _command_from_data(data: dict[str, object]) -> Command:
         recovery=_recovery_from_data(data["recovery"]),
         idempotency_key=data["idempotency_key"],
         requires_authorization=data["requires_authorization"],
+        decision_on_outcome=data["decision_on_outcome"],
     )
 
 

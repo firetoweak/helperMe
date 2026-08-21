@@ -62,6 +62,10 @@ class AgentRuntime:
             },
             id_factory,
             requires_authorization=requires_authorization,
+            decision_on_outcome={
+                name: binding.decision_on_outcome
+                for name, binding in tool_bindings.items()
+            },
         )
         self.dispatcher = Dispatcher(
             journal,
