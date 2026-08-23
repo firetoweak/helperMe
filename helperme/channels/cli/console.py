@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import time
 from uuid import uuid4
 
 from helperme.assistant.streams import (
@@ -17,8 +19,105 @@ from helperme.skills.console import SkillCommandError, SkillConsoleAdapter
 from helperme.skills.errors import SkillInputError
 
 
+_TURN_RULE = "─" * 72
+
+
 class _ConsoleInputClosed(Exception):
     pass
+
+
+class _InputPrompt:
+    def __init__(self) -> None:
+        self._ready = asyncio.Event()
+
+    def ask(self) -> None:
+        self._ready.set()
+
+    async def wait(self) -> None:
+        await self._ready.wait()
+        self._ready.clear()
+
+
+def _poll_line(timeout: float) -> str | None:
+    """Read a line without printing 你：. None means timeout."""
+
+    if sys.platform == "win32":
+        import msvcrt
+
+        buf: list[str] = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not msvcrt.kbhit():
+                time.sleep(0.03)
+                continue
+            char = msvcrt.getwch()
+            if char in {"\x00", "\xe0"}:
+                msvcrt.getwch()
+                continue
+            if char == "\x03":
+                raise KeyboardInterrupt
+            if char in {"\r", "\n"}:
+                print(flush=True)
+                return "".join(buf).strip()
+            if char == "\x08":
+                if buf:
+                    buf.pop()
+                    print("\b \b", end="", flush=True)
+                continue
+            buf.append(char)
+            print(char, end="", flush=True)
+        return None
+
+    import select
+
+    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    if not ready:
+        return None
+    line = sys.stdin.readline()
+    if line == "":
+        return None
+    return line.strip()
+
+
+async def _running_input(
+    drive: asyncio.Task[StreamView],
+    input_queue: asyncio.Queue[str | None],
+    *,
+    poll_keyboard: bool,
+) -> str | None:
+    incoming = asyncio.create_task(input_queue.get())
+    try:
+        while not drive.done():
+            watchers: set[asyncio.Task[object]] = {drive, incoming}
+            poll: asyncio.Task[str | None] | None = None
+            if poll_keyboard:
+                poll = asyncio.create_task(asyncio.to_thread(_poll_line, 0.15))
+                watchers.add(poll)
+            done, _ = await asyncio.wait(
+                watchers,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if poll is not None and poll not in done:
+                poll.cancel()
+                try:
+                    await poll
+                except asyncio.CancelledError:
+                    pass
+            elif poll is not None:
+                line = poll.result()
+                if line is not None:
+                    return line
+                continue
+            if incoming in done:
+                return incoming.result()
+        return None
+    finally:
+        if not incoming.done():
+            incoming.cancel()
+            try:
+                await incoming
+            except asyncio.CancelledError:
+                pass
 
 
 async def drive_with_console_interrupts(
@@ -27,32 +126,27 @@ async def drive_with_console_interrupts(
     input_queue: asyncio.Queue[str | None],
     *,
     evaluate_completion: bool = True,
+    prompt: _InputPrompt | None = None,
 ) -> StreamView:
     """Drive one Stream while concurrent CLI text becomes a durable interrupt."""
 
+    print("\n● 运行中", flush=True)
     drive = asyncio.create_task(streams.drive(
         stream_id,
         evaluate_completion=evaluate_completion,
     ))
     try:
         while not drive.done():
-            incoming = asyncio.create_task(input_queue.get())
-            done, _ = await asyncio.wait(
-                (drive, incoming),
-                return_when=asyncio.FIRST_COMPLETED,
+            text = await _running_input(
+                drive,
+                input_queue,
+                poll_keyboard=prompt is not None,
             )
-            if incoming not in done:
-                incoming.cancel()
-                try:
-                    await incoming
-                except asyncio.CancelledError:
-                    pass
-                continue
-
-            text = incoming.result()
+            if drive.done() and text is None:
+                break
             if text is None:
-                if drive in done:
-                    await drive
+                if drive.done():
+                    break
                 raise _ConsoleInputClosed
             if not text:
                 continue
@@ -76,10 +170,15 @@ async def drive_with_console_interrupts(
                 await drive
             except asyncio.CancelledError:
                 pass
+        print("\n○ 空闲", flush=True)
 
 
-async def read_console_input(queue: asyncio.Queue[str | None]) -> None:
+async def read_console_input(
+    queue: asyncio.Queue[str | None],
+    prompt: _InputPrompt,
+) -> None:
     while True:
+        await prompt.wait()
         try:
             text = await asyncio.to_thread(input, "\n你：")
         except EOFError:
@@ -129,15 +228,22 @@ async def run_runtime_console() -> None:
         print("直接输入任务。运行中再输入会打断当前任务。")
         print("Ctrl+C 或 Ctrl+D 退出。")
 
-        reader = asyncio.create_task(read_console_input(input_queue))
+        prompt = _InputPrompt()
+        reader = asyncio.create_task(read_console_input(input_queue, prompt))
         try:
+            separate_turns = False
             while True:
+                if separate_turns:
+                    print(f"\n{_TURN_RULE}", flush=True)
+                    separate_turns = False
+                prompt.ask()
                 user_message = await input_queue.get()
                 if user_message is None:
                     print("\n已退出。")
                     return
                 if not user_message:
                     continue
+                separate_turns = True
                 if user_message == "/new":
                     stream_id = f"stream-{uuid4().hex}"
                     await streams.create(stream_id)
@@ -169,6 +275,7 @@ async def run_runtime_console() -> None:
                                 streams,
                                 stream_id,
                                 input_queue,
+                                prompt=prompt,
                             )
                         except _ConsoleInputClosed:
                             print("\n已退出。")
@@ -223,6 +330,7 @@ async def run_runtime_console() -> None:
                             stream_id,
                             input_queue,
                             evaluate_completion=False,
+                            prompt=prompt,
                         )
                     except _ConsoleInputClosed:
                         print("\n已退出。")
@@ -245,6 +353,7 @@ async def run_runtime_console() -> None:
                             streams,
                             stream_id,
                             input_queue,
+                            prompt=prompt,
                         )
                     except _ConsoleInputClosed:
                         print("\n已退出。")
@@ -267,6 +376,7 @@ async def run_runtime_console() -> None:
                         streams,
                         stream_id,
                         input_queue,
+                        prompt=prompt,
                     )
                 except _ConsoleInputClosed:
                     print("\n已退出。")
