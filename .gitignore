@@ -4,6 +4,7 @@ __pycache__/
 .cursor/
 logs/
 tests/.parallel_logs/
+tests/.live_workspace/
 model_config.yaml
 tests/benchmarks/*_last_report.json
 tests/benchmarks/*_progress.json

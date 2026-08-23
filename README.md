@@ -27,7 +27,7 @@ helperMe 不以成为通用 Agent Framework 为目标，也不为未知用户预
 
 > 功能可以持续生长，但复杂度仍应由一个人掌控。
 
-更完整的设计立场见[项目架构方向](docs/项目架构方向.md)，学习过程与当前路线见[自主 Agent 学习计划](docs/自主Agent学习计划.md)。
+更完整的设计立场见[项目架构方向](docs/项目架构方向.md)，当前架构见[架构总览](docs/架构/总览.md)，行动依据见[自主 Agent 学习计划](docs/自主Agent学习计划.md)。
 
 ## 如何使用
 
@@ -60,13 +60,14 @@ python console_chat.py
 
 进入对话后：
 
-- 直接输入内容，执行一次普通 Agent Turn。
-- 输入 `/goal <目标>`，启动可持续执行和独立验证的 Goal 工作流。
-- 用自然语言要求安装 MCP，或使用 `/mcp` 管理已有 MCP Server。
-- 用自然语言提交 Skill 安装/启用审批，或使用 `/skill` 管理本地、GitHub 与 URL Skill。
-- 按 `Ctrl+C`，请求 Agent 在安全点中断当前任务。
+- 直接输入内容。系统按 Step 推进，不是按旧 Turn 循环。
+- 使用 `/mcp` 管理 MCP Server；模型通过 `load_toolset` 按需加载工具。
+- 使用 `/skill` 管理 Skill；模型通过 `load_skill` / `read_skill_resource` 读取指令。
+- `/new` 开新 Stream；`/resume <stream_id>` 恢复明确指定的历史 Stream；`/stop` 结束当前 Stream。
+- Agent 运行期间直接输入新内容，会作为持久 `UserInterruptReceived` 在当前模型 Step 提交后优先处理。
+- `Ctrl+C` 完全退出程序，不表示 Agent Interrupt；`Ctrl+D` 同样退出。
 
-Skill 安装后默认为 disabled。使用 `/skill inspect|test|enable` 检查并启用，能力目录从下一个 Turn 自动生效。`check-update` 只冻结候选和展示概括/diff，`update` 必须显式提交该 candidate hash，不会后台自动更新。
+Skill 安装后默认为 disabled。使用 `/skill inspect|test|enable` 检查并启用，下一 Step 可见。`check-update` 只冻结候选，`update` 必须显式提交 candidate hash。
 
 ## Web 与浏览器能力
 

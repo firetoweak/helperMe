@@ -7,9 +7,9 @@ import shutil
 import sys
 import tempfile
 
-from core.agent_workspace import AgentWorkspace
-from plugins.skills.application import SkillApplicationService
-from plugins.skills.models import SkillSourceRef
+from helperme.paths import HelperMeHome
+from helperme.skills.application import SkillApplicationService
+from helperme.skills.models import SkillSourceRef
 
 
 SOURCE = SkillSourceRef(
@@ -21,7 +21,7 @@ SOURCE = SkillSourceRef(
 async def run() -> dict:
     temporary = Path(tempfile.mkdtemp(prefix="helperme-phase6d-remote-"))
     try:
-        workspace = AgentWorkspace(temporary / ".helperme")
+        workspace = HelperMeHome(temporary / ".helperme")
         workspace.initialize()
         service = SkillApplicationService(workspace)
         record = await service.install_source(SOURCE)
