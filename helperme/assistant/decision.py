@@ -6,6 +6,10 @@ from copy import deepcopy
 from typing import AbstractSet, Protocol
 
 from helperme.assistant.artifacts import ArtifactGateway
+from helperme.assistant.control import (
+    AssistantControlPlane,
+    ControlArgumentsError,
+)
 from helperme.assistant.completion.criteria import (
     current_criteria,
     format_criteria_for_worker,
@@ -18,6 +22,7 @@ from helperme.assistant.context.projection import (
 )
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.assistant.toolsets import ToolSurface
+from helperme.assistant.management import ManagementSurface
 from helperme.runtime import (
     InvokeTool,
     ModelDecision,
@@ -146,6 +151,8 @@ class JournalBackedLlmDecisionMaker:
         projector: ModelContextProjector | None = None,
         surface: ToolSurface | None = None,
         skill_tools: SkillToolAdapter | None = None,
+        control: AssistantControlPlane | None = None,
+        management: ManagementSurface | None = None,
     ) -> None:
         self._journal = journal
         self._llm = llm
@@ -157,8 +164,13 @@ class JournalBackedLlmDecisionMaker:
         )
         self._surface = surface
         self._skill_tools = skill_tools
+        self._control = control
+        self._management = management
 
-    def _schemas(self, frame: DecisionFrame) -> list[dict[str, object]]:
+    def _schemas(
+        self,
+        frame: DecisionFrame,
+    ) -> tuple[list[dict[str, object]], frozenset[str]]:
         if self._surface is not None:
             schemas = self._surface.schemas(
                 frame.state.stream_id,
@@ -168,7 +180,77 @@ class JournalBackedLlmDecisionMaker:
             schemas = list(self._tool_schemas)
         if self._skill_tools is not None:
             schemas = [*schemas, *self._skill_tools.schemas()]
-        return deepcopy(schemas)
+        if self._management is not None:
+            schemas = [
+                *schemas,
+                *self._management.schemas(frame.state.stream_id, frame.state),
+            ]
+        offered_control_names = frozenset()
+        if self._control is not None:
+            allowed_control_names = (
+                None
+                if self._management is None
+                else self._management.control_names(
+                    frame.state.stream_id,
+                    frame.state,
+                )
+            )
+            control_schemas = self._control.schemas(
+                frame.state.stream_id,
+                allowed_control_names,
+            )
+            offered_control_names = _tool_names(control_schemas)
+            schemas = [
+                *schemas,
+                *control_schemas,
+            ]
+        return deepcopy(schemas), offered_control_names
+
+    def _decision_from_response(
+        self,
+        frame: DecisionFrame,
+        response: LLMResponse,
+        allowed_tool_names: AbstractSet[str],
+        control_names: AbstractSet[str],
+    ) -> ModelDecision:
+        control_calls = tuple(
+            call for call in response.calls if call.name in control_names
+        )
+        if not control_calls:
+            return decision_from_llm(response, allowed_tool_names)
+        if len(response.calls) != 1:
+            raise InvalidLLMResponse(
+                "invalid_control_batch",
+                "a host control tool must be the only tool call",
+            )
+        call = control_calls[0]
+        try:
+            arguments = json.loads(call.arguments)
+        except json.JSONDecodeError as exc:
+            raise InvalidLLMResponse(
+                "invalid_tool_arguments",
+                f"tool {call.name} arguments are not valid JSON",
+            ) from exc
+        if type(arguments) is not dict:
+            raise InvalidLLMResponse(
+                "invalid_tool_arguments",
+                f"tool {call.name} arguments must be a JSON object",
+            )
+        if self._control is None:
+            raise RuntimeError("control call accepted without control plane")
+        try:
+            self._control.stage(frame, call.name, arguments)
+        except ControlArgumentsError as exc:
+            raise InvalidLLMResponse(
+                "invalid_tool_arguments",
+                f"tool {call.name} arguments violate its schema: {exc.details}",
+            ) from exc
+        return ModelDecision(
+            content=(
+                response.content
+                or "已提交控制操作方案，等待主机生成确认信息。"
+            ),
+        )
 
     async def decide(self, frame: DecisionFrame) -> RecordedDecision:
         # Host-owned context is captured before the first await. Journal facts
@@ -182,7 +264,7 @@ class JournalBackedLlmDecisionMaker:
             if self._surface is not None
             else None
         )
-        schemas = self._schemas(frame)
+        schemas, control_names = self._schemas(frame)
         allowed_tool_names = _tool_names(schemas)
         journal_tail = await self._journal.snapshot(frame.state.stream_id)
         events = tuple(
@@ -199,6 +281,12 @@ class JournalBackedLlmDecisionMaker:
             prompt = f"{prompt}\n\n{block}"
         if catalog is not None:
             prompt = f"{prompt}\n\n{catalog}"
+        if self._management is not None:
+            management_catalog = self._management.catalog_instruction(
+                frame.state.stream_id,
+                frame.state,
+            )
+            prompt = f"{prompt}\n\n{management_catalog}"
         prepared = self._projector.prepare(
             events,
             frame.state.visible_event_ids,
@@ -218,9 +306,11 @@ class JournalBackedLlmDecisionMaker:
                 schemas,
                 usage.input_tokens,
             )
-        decision = ensure_deliver(decision_from_llm(
+        decision = ensure_deliver(self._decision_from_response(
+            frame,
             result.response,
             allowed_tool_names,
+            control_names,
         ))
         manifest = {
             "schema": "decision-replay-manifest/v1",

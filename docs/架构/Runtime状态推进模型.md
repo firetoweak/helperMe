@@ -2,7 +2,6 @@
 
 > 状态：架构决策。活文档入口见 [总览](总览.md)、[Runtime](Runtime.md)。  
 > 决策日期：2026-08-21  
-> 来源已归档：[Execution Journal 与可重放执行历史](../归档/专题-旧架构/Execution%20Journal与可重放执行历史.md)  
 > 适用方式：从本模型推导设计。旧 Turn Runtime 不是兼容约束。
 
 ## 1. 决策
@@ -656,8 +655,6 @@ UserMessage
 
 ### 14.1 语义切片
 
-> 切片实现记录已归档：[语义 MVP](../归档/专题-新栈历程/Agent%20Runtime语义MVP实现总结.md)。
-
 - 建立最小 Journal、Reducer、Step Commit 和内存 Dispatcher；
 - 跑通 A/B/C 并行、任意顺序返回、全部终态后只决策一次；
 - 证明 UserInterrupt 可以越过尚未闭合的并行集合；
@@ -667,8 +664,6 @@ UserMessage
 - 重放不重新调用模型和工具。
 
 ### 14.2 Durable 切片
-
-> 切片实现记录已归档：[Durable MVP](../归档/专题-新栈历程/Agent%20Runtime%20Durable%20MVP实现总结.md)。
 
 - 重复 delivery 不产生第二个决策 Event；
 - 两个 Worker 竞争同一决策 Event 时只有一个 Step 能 Commit；
@@ -680,8 +675,6 @@ UserMessage
 - Checkpoint 删除后仍可恢复同一逻辑 State。
 
 ### 14.3 边界切片
-
-> 切片实现记录已归档：[边界切片](../归档/专题-新栈历程/Agent%20Runtime边界切片实现总结.md)、[终态与 Finalization Barrier](../归档/专题-新栈历程/Agent%20Runtime终态与Finalization%20Barrier实现总结.md)。
 
 - 未授权 Command 不会被 Dispatcher 认领；
 - Step 决策期间到达的 Interrupt 不会被旧 Step 跨越或吞掉；

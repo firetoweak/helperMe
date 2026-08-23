@@ -6,6 +6,10 @@ from helperme.paths import HelperMeHome
 from helperme.llm.api import LLMTransientError
 from helperme.skills.application import SkillApplicationService
 from helperme.skills.console import SkillConsoleAdapter
+from helperme.skills.errors import (
+    SkillInstalledPackageError,
+    SkillPreconditionError,
+)
 from helperme.skills.models import SkillSourceRef
 from tests.skills.test_package import write_skill
 
@@ -81,6 +85,41 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
             await self.service.set_enabled("demo", True)
 
         self.assertFalse((await self.service.registry.get("demo")).enabled)
+
+    async def test_repair_restores_registered_hash_and_preserves_enabled(self):
+        enabled = await self.service.set_enabled("demo", True)
+        installed = self.service.skills_root / "packages" / "demo" / "SKILL.md"
+        installed.write_text("broken", encoding="utf-8")
+        with self.assertRaises(SkillInstalledPackageError):
+            await self.service.test_skill("demo")
+
+        record, candidate = await self.service.prepare_repair("demo")
+        repaired = await self.service.repair_frozen(
+            "demo",
+            candidate.content_hash,
+            candidate.source,
+            candidate.resolved_ref,
+            expected_revision=record.revision,
+            expected_content_hash=record.content_hash,
+        )
+
+        self.assertTrue(repaired.enabled)
+        self.assertEqual(repaired.revision, enabled.revision + 1)
+        self.assertEqual(repaired.content_hash, enabled.content_hash)
+        self.assertEqual((await self.service.test_skill("demo")).record, repaired)
+
+    async def test_repair_refuses_source_drift_as_implicit_update(self):
+        installed = self.service.skills_root / "packages" / "demo" / "SKILL.md"
+        installed.write_text("broken", encoding="utf-8")
+        write_skill(
+            self.source,
+            name="demo",
+            description="Changed source",
+            body="new version\n",
+        )
+
+        with self.assertRaisesRegex(SkillPreconditionError, "内容已变化"):
+            await self.service.prepare_repair("demo")
 
     async def test_enable_rejects_catalog_over_budget_without_state_change(self):
         constrained = SkillApplicationService(

@@ -89,6 +89,15 @@ async def read_console_input(queue: asyncio.Queue[str | None]) -> None:
 
 
 def _print_runtime_status(view: StreamView) -> None:
+    if view.control_message is not None:
+        print(f"控制面：\n{view.control_message}")
+    elif view.control_approval is not None:
+        print(
+            "控制面待确认：\n"
+            f"{view.control_approval.summary}\n"
+            f"风险：{view.control_approval.risk}\n"
+            "输入 yes 确认，no 取消。"
+        )
     print(f"Runtime 状态：{view.status}")
     if view.waiting_for:
         print("等待：" + ", ".join(view.waiting_for))
@@ -112,25 +121,13 @@ async def run_runtime_console() -> None:
         await streams.create(stream_id)
         input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         access = "整台电脑" if config.full_access else "配置的 Workspace"
-        print(f"新栈 Agent Runtime 已启动。model={config.model_name}")
-        print(f"事实骨架：Event Journal（{app.journal_path}）")
-        print(f"文件工具访问：{access}")
-        print("推进单元是 Step，不是 Turn。Turn 只是人类交互投影。")
-        print("MCP：目录里只有 load_toolset；加载后下一 Step 才出现 mcp__server__tool。")
-        print("Skill：load_skill / read_skill_resource 是普通工具；目录在 load_skill 描述里。")
-        print("授权：yes / no 写入 CommandAuthorized / CommandRejected；其他话仍是 UserMessage。")
-        print("MCP / Skill 安装走控制面 /mcp /skill，不进入 Runtime 等待态。")
-        print("MCP 管理：输入 /mcp help")
-        print("Skill 管理：输入 /skill help")
-        print("上下文：最近一句用户话之后不脱水；过大工具结果外置为 Artifact。")
-        print("写文件或跑命令后会冻结判定标准；严格收口由独立 Judge 核对，不是干活模型投票。")
-        print("后一句用户话默认放松 inferred，不换任务；明确改做别的事才换目标。")
-        print("输入任务开始；Agent 运行期间输入的新文本会作为 Interrupt。")
-        print("Ctrl+C 完全退出程序；Ctrl+D 也会退出。")
-        print(f"当前 stream：{stream_id}")
-        print("新建 stream：输入 /new")
-        print("恢复历史 stream：输入 /resume <stream_id>")
-        print("结束当前 stream：输入 /stop")
+        print(f"HelperMe 已启动。model={config.model_name}")
+        print(f"工作区：{access}")
+        print(f"当前对话：{stream_id}")
+        print("/new 新对话    /resume <id> 恢复    /stop 结束")
+        print("/mcp  /skill  管理外部能力")
+        print("直接输入任务。运行中再输入会打断当前任务。")
+        print("Ctrl+C 或 Ctrl+D 退出。")
 
         reader = asyncio.create_task(read_console_input(input_queue))
         try:
@@ -200,6 +197,17 @@ async def run_runtime_console() -> None:
                     print(f"\nSkill：\n{skill_reply}")
                     continue
                 view = await streams.view(stream_id)
+                if (
+                    view.control_approval is not None
+                    and user_message.lower() in {"yes", "y", "no", "n"}
+                ):
+                    message = await streams.resolve_control(
+                        stream_id,
+                        approved=user_message.lower() in {"yes", "y"},
+                    )
+                    print(f"\n控制面：{message}")
+                    _print_runtime_status(await streams.view(stream_id))
+                    continue
                 if user_message == "/stop":
                     if view.terminal:
                         print("当前 stream 已经结束。")

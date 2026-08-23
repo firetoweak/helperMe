@@ -36,6 +36,8 @@ Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`
 | `helperme/assistant/assembly.py` | Assistant 能力装配 |
 | `helperme/assistant/builtin_tools.py` | 当前 Sandbox/环境与内置工具装配 |
 | `helperme/assistant/mcp.py` | MCP Toolset 到 Assistant Toolset 端口的翻译 |
+| `helperme/assistant/control.py` | 对话控制提案的提交后执行、待确认状态与 Application 审批分派 |
+| `helperme/assistant/management.py` | MCP / Skill 管理域目录、渐进激活投影，以及诊断 ToolSpec 到普通 Runtime Binding 的窄适配 |
 | `helperme/assistant/skills.py` | Skill 到两个普通 Runtime 工具的翻译 |
 | `helperme/assistant/toolsets.py` | Toolset 目录端口、渐进加载、激活投影与缓存恢复 |
 | `helperme/config.py` / `paths.py` | 完整应用配置与 `HelperMeHome` 产品数据布局（MCP / Skills 独立根） |

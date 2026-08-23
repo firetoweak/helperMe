@@ -1,8 +1,8 @@
 # 自主 Agent 学习计划
 
-当前实现以新架构为准。旧 Phase 0～6（TurnRuntime / Session / Goal / Todo）已归档，见 [归档](归档/README.md)。
+当前实现以 [架构总览](架构/总览.md) 为准。下一轮从 [计划](计划.md) 第 1 章起。
 
-涉及架构边界或抽象调整时，先读 [项目架构方向](项目架构方向.md) 和 [架构总览](架构/总览.md)。
+涉及架构边界或抽象调整时，先读 [项目架构方向](项目架构方向.md)。
 
 ## Rule 同步区
 
@@ -18,7 +18,7 @@
 - Runtime 不代替模型判断用户一句话的含义。Host 只把明确的 yes/no 写成 `CommandAuthorized` / `CommandRejected`；其他话一律 `UserMessage`。副作用安全边界是授权，不是模型自述。
 - MCP 与 Skill 不是同一端口。MCP 经 Assistant `load_toolset`，下一 Step 才出现工具。Skill 是两个普通工具。见 [工具与能力](架构/工具与能力.md)。
 - 生产代码不保留泛化 `adapters` 包。内置工具只在 `helperme/assistant/builtin_tools.py` 装配；`helperme.runtime` 除自身子模块外不得 import 其他 `helperme` 模块，也不得 import `host` / `plugins` / `tools`；Sandbox 和 Tools 不得反向依赖 Assistant 或 Runtime。
-- SubAgent、后台定时任务、Long Memory 是已确认的后续方向，但当前不预建其状态机；它们分别从 Assistant 委派、Automation 外部唤醒、Memory 投影接入，不进入 Runtime Core。
+- SubAgent、后台定时任务、Long Memory 是已确认的后续方向，但当前不预建其状态机；分别从 Assistant 委派、Automation 外部唤醒、Memory 投影接入。见 [计划](计划.md) 第 3～5 章。
 
 ## 当前系统
 
@@ -31,13 +31,15 @@ python console_chat.py
   → SqliteJournal              Event
 ```
 
-分层与文件见 [架构总览](架构/总览.md)。
+分层与文件见 [架构总览](架构/总览.md)。MCP 与 Web（经 MCP）现网可用。
 
-## 未做
+## 判定遗留
 
-- 对话里 yes 安装 MCP / Skill（现用 `/mcp` `/skill`）
-- Toolset 加载状态写成 Journal 事实
-- Level 2 摘要
-- 换目标拿不准时主动问一句
-- inferred 的自然语言编译（现为模板）
-- Phase 7 及以后
+- inferred 的自然语言编译。现在是「写过文件 / 跑过命令」的模板。
+- 换目标拿不准时主动问一句。现在靠关键词，其余一律当继续当前任务。
+
+`get_changes` 与 Level 2 见 [计划](计划.md) 第 1、2 章。
+
+## 计划
+
+从第 1 章起，见 [计划](计划.md)。当前不预建第 3～5 章的状态机。

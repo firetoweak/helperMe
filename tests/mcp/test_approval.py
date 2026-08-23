@@ -1,16 +1,25 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from helperme.mcp.application import McpApplicationService
+from helperme.mcp.client_manager import McpClientManager
+from helperme.mcp.registry import McpRegistry
+from helperme.mcp.secrets import McpSecretStore
+from helperme.paths import HelperMeHome
 from helperme.tools.control import ControlApprovalRequest
 from helperme.tools.spec import ToolArgumentsError
 from helperme.mcp.approval import (
     MCP_INSTALL_ACTION,
     MCP_RECOVER_ACTION,
     McpInstallApprovalHandler,
+    McpRecoveryProposalInput,
     McpRecoveryApprovalHandler,
     create_mcp_install_proposal_spec,
     create_mcp_recovery_proposal_spec,
+    create_mcp_update_proposal_spec,
 )
 from helperme.mcp.errors import McpRecoveryPreconditionError
 from helperme.mcp.models import McpServerRuntimeState, RuntimeAvailability
@@ -18,8 +27,15 @@ from helperme.mcp.console import McpConsoleAdapter
 
 
 class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _spec(existing=None):
+        service = SimpleNamespace(
+            registry=SimpleNamespace(get=AsyncMock(return_value=existing)),
+        )
+        return create_mcp_install_proposal_spec(service)
+
     async def test_agent_constructs_frozen_stdio_proposal(self):
-        spec = create_mcp_install_proposal_spec()
+        spec = self._spec()
         input_data = spec.parameters.validate({
             "server_id": "filesystem",
             "display_name": "Filesystem MCP",
@@ -54,8 +70,44 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secrets", result.payload)
         self.assertIn("Executable：npx", result.summary)
 
+    async def test_yes_install_accepts_frozen_stdio_args(self):
+        spec = self._spec()
+        input_data = spec.parameters.validate({
+            "server_id": "playwright",
+            "display_name": "Playwright",
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp@latest"],
+            "source": "official_documentation",
+        })
+        request = await spec.handler(input_data)
+        self.assertIsInstance(request.payload["transport_config"]["args"], tuple)
+
+        with TemporaryDirectory() as directory:
+            home = HelperMeHome(Path(directory) / ".helperme")
+            home.initialize()
+            secrets = McpSecretStore.from_home(home)
+            service = McpApplicationService(
+                McpRegistry.from_home(home),
+                secrets,
+                McpClientManager(secrets, runtime_root=home.mcp_root / "runtime"),
+            )
+            record = await service.upsert_server(
+                server_id=request.payload["server_id"],
+                display_name=request.payload["display_name"],
+                description=request.payload["description"],
+                transport=request.payload["transport"],
+                transport_config=request.payload["transport_config"],
+                enabled=False,
+            )
+
+        self.assertEqual(
+            record.transport_config.args,
+            ("-y", "@playwright/mcp@latest"),
+        )
+
     async def test_rejects_shell_and_unverified_model_inference(self):
-        spec = create_mcp_install_proposal_spec()
+        spec = self._spec()
         base = {
             "server_id": "demo",
             "display_name": "Demo",
@@ -73,7 +125,7 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
             spec.parameters.validate(base)
 
     async def test_rejects_secret_fields(self):
-        spec = create_mcp_install_proposal_spec()
+        spec = self._spec()
         with self.assertRaises(ToolArgumentsError):
             spec.parameters.validate({
                 "server_id": "remote",
@@ -83,6 +135,46 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
                 "source": "user_input",
                 "headers": {"Authorization": "secret"},
             })
+
+    async def test_existing_id_is_not_silently_overwritten(self):
+        existing = SimpleNamespace(id="demo", enabled=True, revision=7)
+        spec = self._spec(existing)
+        input_data = spec.parameters.validate({
+            "server_id": "demo",
+            "display_name": "Demo",
+            "transport": "stdio",
+            "command": "python",
+            "args": ["server.py"],
+            "source": "user_input",
+        })
+
+        result = await spec.handler(input_data)
+
+        self.assertEqual(result["code"], "MCP_SERVER_ALREADY_REGISTERED")
+
+    async def test_update_is_explicit_and_freezes_existing_revision(self):
+        existing = SimpleNamespace(id="demo", enabled=True, revision=7)
+        service = SimpleNamespace(
+            registry=SimpleNamespace(get=AsyncMock(return_value=existing)),
+        )
+        spec = create_mcp_update_proposal_spec(service)
+        input_data = spec.parameters.validate({
+            "server_id": "demo",
+            "display_name": "Demo v2",
+            "transport": "stdio",
+            "command": "python",
+            "args": ["server-v2.py"],
+            "source": "official_documentation",
+        })
+
+        request = await spec.handler(input_data)
+
+        self.assertIsInstance(request, ControlApprovalRequest)
+        self.assertEqual(request.payload["expected_revision"], 7)
+        self.assertEqual(
+            request.payload["transport_config"]["args"],
+            ("server-v2.py",),
+        )
 
 
 class McpInstallApprovalHandlerTest(unittest.IsolatedAsyncioTestCase):
@@ -180,6 +272,25 @@ class McpRecoveryApprovalTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.payload["server_id"], "demo")
         self.assertEqual(result.payload["expected_revision"], 4)
         self.assertTrue(spec.control_boundary)
+
+    async def test_enabled_state_does_not_claim_server_is_healthy(self):
+        record = SimpleNamespace(
+            id="demo",
+            display_name="Demo",
+            enabled=True,
+            revision=6,
+        )
+        service = SimpleNamespace(
+            registry=SimpleNamespace(get=AsyncMock(return_value=record)),
+        )
+
+        result = await create_mcp_recovery_proposal_spec(service).handler(
+            McpRecoveryProposalInput(server_id="demo")
+        )
+
+        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertEqual(result.payload["expected_revision"], 6)
+        self.assertIn("enabled", result.summary)
 
     async def test_missing_server_does_not_create_approval(self):
         service = SimpleNamespace(

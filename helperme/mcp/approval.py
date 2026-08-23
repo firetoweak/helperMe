@@ -15,8 +15,10 @@ from helperme.mcp.errors import McpInputError, McpRecoveryPreconditionError
 
 MCP_INSTALL_ACTION = "mcp.install"
 MCP_RECOVER_ACTION = "mcp.recover"
+MCP_UPDATE_ACTION = "mcp.update"
 PROPOSE_MCP_INSTALL = "propose_mcp_install"
 PROPOSE_MCP_RECOVERY = "propose_mcp_recovery"
+PROPOSE_MCP_UPDATE = "propose_mcp_update"
 
 _SHELL_EXECUTABLES = {
     "bash",
@@ -109,10 +111,25 @@ class McpInstallProposalInput(BaseModel):
         return "\n".join(lines)
 
 
-def create_mcp_install_proposal_spec() -> ToolSpec:
+def create_mcp_install_proposal_spec(
+    service: McpApplicationService,
+) -> ToolSpec:
     async def propose(
         input_data: McpInstallProposalInput,
-    ) -> ControlApprovalRequest:
+    ) -> ControlApprovalRequest | dict[str, Any]:
+        existing = await service.registry.get(input_data.server_id)
+        if existing is not None:
+            return {
+                "ok": False,
+                "code": "MCP_SERVER_ALREADY_REGISTERED",
+                "data": {
+                    "server_id": existing.id,
+                    "enabled": existing.enabled,
+                    "revision": existing.revision,
+                },
+                "error": f"MCP Server 已注册: {existing.id}",
+                "hint": "先诊断现有登记；安装不会隐式覆盖配置。",
+            }
         return ControlApprovalRequest(
             id=f"approval-{uuid4().hex}",
             action=MCP_INSTALL_ACTION,
@@ -203,6 +220,106 @@ class McpInstallApprovalHandler:
         )
 
 
+def create_mcp_update_proposal_spec(
+    service: McpApplicationService,
+) -> ToolSpec:
+    async def propose(
+        input_data: McpInstallProposalInput,
+    ) -> ControlApprovalRequest | dict[str, Any]:
+        existing = await service.registry.get(input_data.server_id)
+        if existing is None:
+            return {
+                "ok": False,
+                "code": "MCP_SERVER_NOT_FOUND",
+                "data": {"server_id": input_data.server_id},
+                "error": f"MCP Server 未注册: {input_data.server_id}",
+                "hint": "新增 Server 应走 propose_mcp_install。",
+            }
+        return ControlApprovalRequest(
+            id=f"approval-{uuid4().hex}",
+            action=MCP_UPDATE_ACTION,
+            payload={
+                **input_data.frozen_payload(),
+                "expected_revision": existing.revision,
+            },
+            summary=(
+                f"准备更新 MCP Server `{existing.id}`\n"
+                f"当前 Revision：{existing.revision}\n"
+                f"{input_data.approval_summary()}"
+            ),
+            risk=(
+                "批准后将替换冻结 revision 的启动配置并真实连接测试；"
+                "测试失败时新配置保持 disabled。"
+            ),
+        )
+
+    return ToolSpec(
+        name=PROPOSE_MCP_UPDATE,
+        description=(
+            "在诊断证明已登记 MCP Server 的配置需要变化时，"
+            "冻结新配置与当前 revision 并提交更新审批。"
+            "不得用于单纯重连；本工具必须单独调用。"
+        ),
+        parameters=PydanticParameters(McpInstallProposalInput),
+        handler=propose,
+        control_boundary=True,
+        exclusive_batch=True,
+    )
+
+
+class McpUpdateApprovalHandler:
+    action = MCP_UPDATE_ACTION
+
+    def __init__(self, service: McpApplicationService) -> None:
+        self._service = service
+
+    async def execute(
+        self,
+        payload: Mapping[str, Any],
+    ) -> ControlApprovalExecution:
+        data = _approval_payload(payload, {
+            "server_id",
+            "display_name",
+            "description",
+            "transport",
+            "transport_config",
+            "source",
+            "expected_revision",
+        })
+        try:
+            record = await self._service.update_server(
+                server_id=data["server_id"],
+                expected_revision=data["expected_revision"],
+                display_name=data["display_name"],
+                description=data["description"],
+                transport=data["transport"],
+                transport_config=data["transport_config"],
+            )
+        except McpRecoveryPreconditionError as exc:
+            return ControlApprovalExecution(
+                False,
+                f"MCP 更新条件已变化，未执行：{exc}",
+            )
+        activation = await self._service.test_and_enable(
+            record.id,
+            expected_revision=record.revision,
+        )
+        return ControlApprovalExecution(
+            activation.succeeded,
+            (
+                f"MCP Server `{record.id}` 已更新并启用。"
+                if activation.succeeded
+                else f"MCP Server `{record.id}` 已更新，但连接测试失败，保持 disabled。"
+            ),
+            {
+                "server_id": record.id,
+                "revision": activation.record.revision,
+                "enabled": activation.record.enabled,
+                "runtime": activation.runtime.to_dict(),
+            },
+        )
+
+
 class McpRecoveryProposalInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -224,17 +341,6 @@ def create_mcp_recovery_proposal_spec(
                 "error": f"未注册 MCP Server `{input_data.server_id}`",
                 "hint": "先调用 list_mcp_servers 核对状态；确需新增时提交安装方案。",
             }
-        if record.enabled:
-            return {
-                "ok": True,
-                "code": "MCP_SERVER_ALREADY_ENABLED",
-                "data": {
-                    "server_id": record.id,
-                    "revision": record.revision,
-                },
-                "error": None,
-                "hint": "无需恢复；如当前 Session 尚不可见，请创建新 Session。",
-            }
         return ControlApprovalRequest(
             id=f"approval-{uuid4().hex}",
             action=MCP_RECOVER_ACTION,
@@ -244,7 +350,8 @@ def create_mcp_recovery_proposal_spec(
             },
             summary=(
                 f"准备恢复 MCP Server `{record.id}`（{record.display_name}）\n"
-                f"当前状态：disabled\nRevision：{record.revision}"
+                f"登记状态：{'enabled' if record.enabled else 'disabled'}\n"
+                f"Revision：{record.revision}"
             ),
             risk=(
                 "批准后 Application 将启动已登记的外部 MCP Server 进行测试；"
@@ -255,8 +362,9 @@ def create_mcp_recovery_proposal_spec(
     return ToolSpec(
         name=PROPOSE_MCP_RECOVERY,
         description=(
-            "为已注册但 disabled 的 MCP Server 提交恢复审批。"
-            "仅在 list_mcp_servers 或 test_mcp_server 已确认状态后调用；"
+            "按已注册 MCP Server 的冻结 revision 提交重测与重连审批，"
+            "不根据 enabled 推断健康。"
+            "应先用 list_mcp_servers / test_mcp_server 获取事实；"
             "不得把 TOOLSET_NOT_FOUND 直接解释为未安装。"
             "本工具必须单独调用。"
         ),

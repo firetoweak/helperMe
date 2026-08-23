@@ -23,9 +23,15 @@ from helperme.skills.summarizer import LlmSkillDiffSummarizer, SkillDiffSummariz
 from helperme.skills.approval import (
     PROPOSE_SKILL_ENABLE,
     PROPOSE_SKILL_INSTALL,
+    PROPOSE_SKILL_REPAIR,
+    PROPOSE_SKILL_UPDATE,
     SkillEnableApprovalHandler,
     SkillInstallApprovalHandler,
+    SkillRepairApprovalHandler,
+    SkillUpdateApprovalHandler,
     create_skill_install_proposal_spec,
+    create_skill_repair_proposal_spec,
+    create_skill_update_proposal_spec,
 )
 
 __all__ = [
@@ -52,7 +58,13 @@ __all__ = [
     "LlmSkillDiffSummarizer",
     "PROPOSE_SKILL_INSTALL",
     "PROPOSE_SKILL_ENABLE",
+    "PROPOSE_SKILL_UPDATE",
+    "PROPOSE_SKILL_REPAIR",
     "SkillEnableApprovalHandler",
     "SkillInstallApprovalHandler",
+    "SkillUpdateApprovalHandler",
+    "SkillRepairApprovalHandler",
     "create_skill_install_proposal_spec",
+    "create_skill_update_proposal_spec",
+    "create_skill_repair_proposal_spec",
 ]

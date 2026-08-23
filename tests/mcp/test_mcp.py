@@ -318,10 +318,10 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(listed["data"]["servers"][0]["id"], "demo")
             self.assertFalse(listed["data"]["servers"][0]["enabled"])
-            self.assertEqual(tested["code"], "MCP_SERVER_READY_TO_ENABLE")
+            self.assertEqual(tested["code"], "MCP_SERVER_AVAILABLE")
             self.assertEqual(
-                tested["data"]["next_action"],
-                "propose_mcp_recovery",
+                set(tested["data"]),
+                {"server_id", "enabled", "revision", "runtime"},
             )
 
     async def test_test_and_enable_only_enables_available_server(self):

@@ -18,6 +18,7 @@ from helperme.skills.package import LocalSkillPackageReader, write_skill_bundle
 from helperme.skills.errors import (
     SkillCandidateNotFoundError,
     SkillInputError,
+    SkillPreconditionError,
 )
 
 
@@ -64,7 +65,7 @@ class SkillCandidateStore:
         bundle: SkillBundle,
     ) -> SkillUpdateCandidate:
         if bundle.name != current.name:
-            raise ValueError(
+            raise SkillPreconditionError(
                 f"同源 update 不允许改变 Skill 身份: "
                 f"{current.name} -> {bundle.name}"
             )

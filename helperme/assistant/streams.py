@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from helperme.assistant.completion.judgment import JudgmentPolicy
+from helperme.assistant.control import (
+    AssistantControlPlane,
+    ControlApprovalView,
+)
 from helperme.assistant.runner import (
     StreamNotFoundError,
     drive_until_idle,
@@ -10,6 +14,7 @@ from helperme.assistant.runner import (
     resume_stream,
 )
 from helperme.assistant.toolsets import ToolSurface
+from helperme.assistant.management import ManagementSurface
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState
 
@@ -21,9 +26,16 @@ class StreamView:
     pending_authorization_ids: tuple[str, ...]
     terminal: bool
     should_drive: bool
+    control_approval: ControlApprovalView | None = None
+    control_message: str | None = None
 
 
-def stream_view(state: CanonicalState) -> StreamView:
+def stream_view(
+    state: CanonicalState,
+    *,
+    control_approval: ControlApprovalView | None = None,
+    control_message: str | None = None,
+) -> StreamView:
     terminal = state.status in {
         RuntimeStatus.COMPLETED,
         RuntimeStatus.TERMINATED,
@@ -40,6 +52,8 @@ def stream_view(state: CanonicalState) -> StreamView:
                 or bool(state.waiting_command_ids)
             )
         ),
+        control_approval=control_approval,
+        control_message=control_message,
     )
 
 
@@ -52,10 +66,30 @@ class AssistantStreams:
         surface: ToolSurface,
         *,
         policy: JudgmentPolicy | None = None,
+        control: AssistantControlPlane | None = None,
+        management: ManagementSurface | None = None,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
         self._policy = policy
+        self._control = control
+        self._management = management
+
+    def _view(
+        self,
+        state: CanonicalState,
+        *,
+        control_message: str | None = None,
+    ) -> StreamView:
+        return stream_view(
+            state,
+            control_approval=(
+                None
+                if self._control is None
+                else self._control.pending_view(state.stream_id)
+            ),
+            control_message=control_message,
+        )
 
     async def create(self, stream_id: str) -> StreamView:
         created = await self._runtime.create_stream(stream_id)
@@ -64,11 +98,26 @@ class AssistantStreams:
         return await self.view(stream_id)
 
     async def resume(self, stream_id: str) -> StreamView:
-        state = await resume_stream(self._runtime, self._surface, stream_id)
-        return stream_view(state)
+        state = await resume_stream(
+            self._runtime,
+            self._surface,
+            stream_id,
+            self._management,
+        )
+        return self._view(state)
 
     async def view(self, stream_id: str) -> StreamView:
-        return stream_view(await self._runtime.state(stream_id))
+        return self._view(await self._runtime.state(stream_id))
+
+    async def resolve_control(
+        self,
+        stream_id: str,
+        *,
+        approved: bool,
+    ) -> str:
+        if self._control is None:
+            raise ValueError("Assistant 未装配对话控制面")
+        return await self._control.resolve(stream_id, approved=approved)
 
     async def receive_user_message(
         self,
@@ -140,5 +189,9 @@ class AssistantStreams:
             self._runtime,
             stream_id,
             policy=self._policy if evaluate_completion else None,
+            control=self._control,
         )
-        return stream_view(result.state)
+        return self._view(
+            result.state,
+            control_message=result.control_message,
+        )

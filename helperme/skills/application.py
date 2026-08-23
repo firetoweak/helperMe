@@ -142,6 +142,62 @@ class SkillApplicationService:
                 resolved_ref=resolved_ref,
             ))
 
+    async def prepare_repair(
+        self,
+        skill_id: str,
+    ) -> tuple[SkillRecord, SkillInstallCandidate]:
+        try:
+            validate_skill_id(skill_id)
+        except ValueError as exc:
+            raise SkillInputError(str(exc)) from exc
+        async with self._management_lock:
+            record = await self.registry.get(skill_id)
+            if record is None:
+                raise SkillNotFoundError(f"Skill 未安装: {skill_id}")
+            bundle = await self.source_router.fetch(record.source)
+            if bundle.name != record.name:
+                raise SkillPreconditionError(
+                    f"Skill repair source 身份已变化: "
+                    f"{record.name} -> {bundle.name}"
+                )
+            if bundle.content_hash != record.content_hash:
+                raise SkillPreconditionError(
+                    "Skill repair source 内容已变化；应由模型判断是否走更新"
+                )
+            return record, self.install_candidates.freeze(bundle)
+
+    async def repair_frozen(
+        self,
+        skill_id: str,
+        candidate_hash: str,
+        source: SkillSourceRef,
+        resolved_ref: str,
+        *,
+        expected_revision: int,
+        expected_content_hash: str,
+    ) -> SkillRecord:
+        bundle = replace(
+            self.install_candidates.load_bundle(skill_id, candidate_hash),
+            source=source,
+            resolved_ref=resolved_ref,
+        )
+        async with self._management_lock:
+            current = await self.registry.get(skill_id)
+            if current is None:
+                raise SkillPreconditionError(f"Skill 未安装: {skill_id}")
+            if (
+                current.revision != expected_revision
+                or current.content_hash != expected_content_hash
+            ):
+                raise SkillPreconditionError(
+                    "Skill 已在 repair 提案后变化，候选过期"
+                )
+            if bundle.content_hash != current.content_hash:
+                raise SkillPreconditionError(
+                    "Skill repair 候选不是当前登记内容"
+                )
+            return await self._repair_with_candidate(current, bundle)
+
     async def inspect(self, skill_id: str) -> SkillInspection:
         record, bundle = await self._validated_bundle(skill_id)
         return SkillInspection(
@@ -311,6 +367,60 @@ class SkillApplicationService:
                     cleanup_temporary = False
                     raise BaseExceptionGroup(
                         f"Skill Registry 更新失败且包回滚失败；备份保留在 {backup}",
+                        [registry_error, rollback_error],
+                    )
+                raise
+        finally:
+            if cleanup_temporary and temporary.exists():
+                shutil.rmtree(temporary)
+
+    async def _repair_with_candidate(
+        self,
+        current: SkillRecord,
+        bundle: SkillBundle,
+    ) -> SkillRecord:
+        target = self._package_directory(current.name)
+        self.installer.staging_root.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(
+            prefix=f"repair-{current.name}-",
+            dir=self.installer.staging_root,
+        ))
+        replacement = temporary / "replacement" / current.name
+        backup = temporary / "backup" / current.name
+        backup.parent.mkdir(parents=True)
+        cleanup_temporary = True
+        had_target = target.exists()
+        try:
+            write_skill_bundle(replacement, bundle)
+            self.package_reader.read(replacement)
+            if had_target:
+                target.replace(backup)
+            replacement.replace(target)
+            proposed = SkillRecord(
+                name=current.name,
+                description=bundle.description,
+                source=bundle.source,
+                resolved_ref=bundle.resolved_ref,
+                content_hash=bundle.content_hash,
+                enabled=current.enabled,
+                revision=current.revision,
+                created_at=current.created_at,
+            )
+            try:
+                return await self.registry.replace(proposed)
+            except BaseException as registry_error:
+                try:
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    elif target.exists():
+                        target.unlink()
+                    if had_target:
+                        backup.replace(target)
+                except BaseException as rollback_error:
+                    cleanup_temporary = False
+                    raise BaseExceptionGroup(
+                        f"Skill Registry repair 失败且包回滚失败；"
+                        f"备份保留在 {backup}",
                         [registry_error, rollback_error],
                     )
                 raise

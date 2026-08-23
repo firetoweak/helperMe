@@ -66,6 +66,8 @@ async def bootstrap_assistant(
             surface=assembly.surface,
             skill_tools=assembly.skill_tools,
             projector=assembly.projector,
+            control=assembly.control,
+            management=assembly.management,
         ),
         assembly.bindings,
     )
@@ -74,6 +76,8 @@ async def bootstrap_assistant(
         runtime,
         assembly.surface,
         policy=policy,
+        control=assembly.control,
+        management=assembly.management,
     )
     async with effective_config.llm, assembly.mcp.client_manager:
         yield BootstrappedAssistant(

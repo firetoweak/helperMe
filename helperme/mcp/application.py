@@ -109,6 +109,38 @@ class McpApplicationService:
                 enabled=enabled,
             )
 
+    async def update_server(
+        self,
+        *,
+        server_id: str,
+        expected_revision: int,
+        display_name: str,
+        description: str,
+        transport: str,
+        transport_config: Mapping[str, Any],
+    ) -> McpServerRecord:
+        async with self._management_lock:
+            current = await self.registry.get(server_id)
+            if current is None:
+                raise McpRecoveryPreconditionError(
+                    f"MCP Server 不存在: {server_id}"
+                )
+            if current.revision != expected_revision:
+                raise McpRecoveryPreconditionError(
+                    f"MCP Server `{server_id}` 配置已变化："
+                    f"expected revision {expected_revision}, "
+                    f"current revision {current.revision}"
+                )
+            return await self._upsert_server_locked(
+                server_id=server_id,
+                display_name=display_name,
+                description=description,
+                transport=transport,
+                transport_config=transport_config,
+                secrets=None,
+                enabled=False,
+            )
+
     async def _upsert_server_locked(
         self,
         *,
@@ -283,7 +315,7 @@ class McpApplicationService:
             env = transport_config.get("env", {})
             if type(command) is not str:
                 raise TypeError("stdio command 必须是 string")
-            if not isinstance(args, list) or any(
+            if type(args) not in (list, tuple) or any(
                 type(argument) is not str for argument in args
             ):
                 raise TypeError("stdio args 必须是 string array")

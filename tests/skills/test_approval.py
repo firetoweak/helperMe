@@ -10,13 +10,82 @@ from helperme.skills.approval import (
     SkillEnableProposalInput,
     SkillInstallApprovalHandler,
     SkillInstallProposalInput,
+    SkillRepairApprovalHandler,
+    SkillRepairProposalInput,
+    SkillUpdateApprovalHandler,
+    SkillUpdateProposalInput,
     create_skill_enable_proposal_spec,
     create_skill_install_proposal_spec,
+    create_skill_repair_proposal_spec,
+    create_skill_update_proposal_spec,
 )
 from tests.skills.test_package import write_skill
 
 
 class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
+    async def test_update_proposal_and_approval_use_frozen_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = HelperMeHome(root / ".helperme")
+            workspace.initialize()
+            source = root / "source"
+            write_skill(source, name="demo", body="v1\n")
+            service = SkillApplicationService(workspace)
+            await service.install_local(source)
+            write_skill(source, name="demo", body="v2\n")
+
+            request = await create_skill_update_proposal_spec(service).handler(
+                SkillUpdateProposalInput(skill_id="demo")
+            )
+            execution = await SkillUpdateApprovalHandler(service).execute(
+                request.payload
+            )
+
+            self.assertTrue(execution.succeeded)
+            installed = workspace.skills_root / "packages" / "demo" / "SKILL.md"
+            self.assertIn("v2", installed.read_text(encoding="utf-8"))
+
+    async def test_repair_proposal_restores_corrupted_registered_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = HelperMeHome(root / ".helperme")
+            workspace.initialize()
+            source = root / "source"
+            write_skill(source, name="demo", body="original\n")
+            service = SkillApplicationService(workspace)
+            await service.install_local(source)
+            installed = workspace.skills_root / "packages" / "demo" / "SKILL.md"
+            installed.write_text("broken", encoding="utf-8")
+
+            request = await create_skill_repair_proposal_spec(service).handler(
+                SkillRepairProposalInput(skill_id="demo")
+            )
+            execution = await SkillRepairApprovalHandler(service).execute(
+                request.payload
+            )
+
+            self.assertTrue(execution.succeeded)
+            self.assertIn("original", installed.read_text(encoding="utf-8"))
+
+    async def test_already_installed_is_a_deterministic_proposal_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = HelperMeHome(root / ".helperme")
+            workspace.initialize()
+            source = root / "source"
+            write_skill(source, name="demo")
+            service = SkillApplicationService(workspace)
+            await service.install_local(source)
+
+            result = await create_skill_install_proposal_spec(service).handler(
+                SkillInstallProposalInput(
+                    source_kind="local",
+                    locator=str(source),
+                )
+            )
+
+            self.assertEqual(result["code"], "SKILL_ALREADY_INSTALLED")
+
     async def test_same_content_from_new_source_keeps_current_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -30,11 +30,6 @@ def create_mcp_management_specs(
                 "enabled": record.enabled,
                 "revision": record.revision,
                 "runtime": runtime.to_dict() if runtime is not None else None,
-                "recovery": (
-                    None
-                    if record.enabled
-                    else "调用 test_mcp_server 诊断；可用时调用 propose_mcp_recovery。"
-                ),
             })
         return {
             "ok": True,
@@ -56,15 +51,11 @@ def create_mcp_management_specs(
             }
         runtime = await service.test_server(record.id)
         available = runtime.status is RuntimeAvailability.AVAILABLE
-        if available and not record.enabled:
-            code = "MCP_SERVER_READY_TO_ENABLE"
-            hint = "Server 已安装且连接可用；需要恢复时调用 propose_mcp_recovery。"
-        elif available:
-            code = "MCP_SERVER_AVAILABLE"
-            hint = "Server 已启用；若 Toolset 不可见，请检查 Session 能力快照。"
-        else:
-            code = "MCP_SERVER_UNAVAILABLE"
-            hint = "依据 runtime.last_error_summary 修正配置后重试；不要重新安装同名 Server。"
+        code = (
+            "MCP_SERVER_AVAILABLE"
+            if available
+            else "MCP_SERVER_UNAVAILABLE"
+        )
         return {
             "ok": available,
             "code": code,
@@ -73,15 +64,9 @@ def create_mcp_management_specs(
                 "enabled": record.enabled,
                 "revision": record.revision,
                 "runtime": runtime.to_dict(),
-                "recoverable": not record.enabled,
-                "next_action": (
-                    "propose_mcp_recovery"
-                    if available and not record.enabled
-                    else None
-                ),
             },
             "error": None if available else runtime.last_error_summary,
-            "hint": hint,
+            "hint": None,
         }
 
     return (
@@ -100,7 +85,7 @@ def create_mcp_management_specs(
             description=(
                 "按 Registry 中冻结的配置真实测试一个 MCP Server，disabled 项也可测试。"
                 "失败只证明本次连接不可用，不代表 Server 未安装；"
-                "应依据 code、hint 和 next_action 继续纠正。"
+                "工具只返回登记状态与连接事实，由模型判断下一步。"
             ),
             parameters=PydanticParameters(McpServerInput),
             handler=test_server,

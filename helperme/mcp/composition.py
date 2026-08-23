@@ -11,8 +11,10 @@ from helperme.mcp.secrets import McpSecretStore
 from helperme.mcp.approval import (
     McpInstallApprovalHandler,
     McpRecoveryApprovalHandler,
+    McpUpdateApprovalHandler,
     create_mcp_install_proposal_spec,
     create_mcp_recovery_proposal_spec,
+    create_mcp_update_proposal_spec,
 )
 from helperme.mcp.management_tools import create_mcp_management_specs
 from helperme.tools.spec import ToolSpec
@@ -27,6 +29,8 @@ class McpAssembly:
     management_specs: tuple[ToolSpec, ...]
     recovery_proposal_spec: ToolSpec
     recovery_approval_handler: McpRecoveryApprovalHandler
+    update_proposal_spec: ToolSpec
+    update_approval_handler: McpUpdateApprovalHandler
 
     @property
     def toolset_provider(self):
@@ -58,9 +62,11 @@ def build_mcp(
     return McpAssembly(
         service=service,
         client_manager=manager,
-        install_proposal_spec=create_mcp_install_proposal_spec(),
+        install_proposal_spec=create_mcp_install_proposal_spec(service),
         install_approval_handler=McpInstallApprovalHandler(service),
         management_specs=create_mcp_management_specs(service),
         recovery_proposal_spec=create_mcp_recovery_proposal_spec(service),
         recovery_approval_handler=McpRecoveryApprovalHandler(service),
+        update_proposal_spec=create_mcp_update_proposal_spec(service),
+        update_approval_handler=McpUpdateApprovalHandler(service),
     )
