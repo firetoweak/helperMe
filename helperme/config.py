@@ -24,7 +24,6 @@ class WorkspaceConfig:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
-    max_steps: int
     model_context_limit: int
     input_budget_ratio: float
 
@@ -41,7 +40,6 @@ class AssistantConfig:
     model_name: str
     workspace_root: Path
     full_access: bool
-    max_steps: int
     model_context_limit: int
     input_budget_ratio: float
     llm: LLMApi
@@ -100,17 +98,13 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     if not isinstance(runtime, dict):
         raise ValueError("配置必须包含 runtime 映射")
     if set(runtime) != {
-        "max_steps",
         "model_context_limit",
         "input_budget_ratio",
     }:
         raise ValueError(
-            "runtime 配置字段必须是 max_steps/model_context_limit/"
+            "runtime 配置字段必须是 model_context_limit/"
             "input_budget_ratio"
         )
-    max_steps = runtime["max_steps"]
-    if type(max_steps) is not int or max_steps < 1:
-        raise ValueError("配置 runtime.max_steps 必须是大于 0 的整数")
     model_context_limit = runtime["model_context_limit"]
     if type(model_context_limit) is not int or model_context_limit < 1:
         raise ValueError(
@@ -132,7 +126,6 @@ def load_app_config(path: Path | None = None) -> AppConfig:
             full_access=full_access,
         ),
         runtime=RuntimeConfig(
-            max_steps=max_steps,
             model_context_limit=model_context_limit,
             input_budget_ratio=float(input_budget_ratio),
         ),
@@ -144,7 +137,6 @@ def assistant_config_from_app(app: AppConfig, llm: LLMApi) -> AssistantConfig:
         model_name=app.model.name,
         workspace_root=app.workspace.root,
         full_access=app.workspace.full_access,
-        max_steps=app.runtime.max_steps,
         model_context_limit=app.runtime.model_context_limit,
         input_budget_ratio=app.runtime.input_budget_ratio,
         llm=llm,

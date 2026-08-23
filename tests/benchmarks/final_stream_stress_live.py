@@ -91,10 +91,9 @@ async def main() -> None:
                 task,
                 delivery_id=f"stress-user-{index}",
             )
-            result = await drive_until_idle(
-                runtime,
-                stream_id,
-                max_steps=30,
+            result = await asyncio.wait_for(
+                drive_until_idle(runtime, stream_id),
+                timeout=300,
             )
             if result.state.status is not RuntimeStatus.WAITING:
                 raise AssertionError(

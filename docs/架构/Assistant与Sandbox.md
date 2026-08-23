@@ -54,4 +54,4 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 配置
 
-`model_config.yaml`：模型、workspace.root、full_access、max_steps、model_context_limit、input_budget_ratio。不再读取 Goal Turn 上限。
+`model_config.yaml`：模型、workspace.root、full_access、model_context_limit、input_budget_ratio。不读取 Turn / Step 次数预算。Assistant 持续推进到语义 idle、授权等待、终态或显式中断；未来后台公平调度属于 Automation Scheduler，不进入 Runtime 配置。

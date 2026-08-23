@@ -17,7 +17,6 @@ workspace:
   root: .
   full_access: false
 runtime:
-  max_steps: 10
   model_context_limit: 1000
   input_budget_ratio: {ratio}
 """.strip(),
@@ -27,7 +26,6 @@ runtime:
     def test_load_app_config_from_repo_yaml(self):
         config = load_app_config()
         self.assertTrue(config.model.name)
-        self.assertGreater(config.runtime.max_steps, 0)
         self.assertTrue(0 < config.runtime.input_budget_ratio < 1)
         self.assertIsInstance(config.workspace.root, Path)
 
@@ -44,8 +42,29 @@ workspace:
   root: .
   full_access: false
 runtime:
-  max_steps: 10
   max_goal_turns: 8
+  model_context_limit: 1000
+  input_budget_ratio: 0.8
+""".strip(),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                load_app_config(path)
+
+    def test_rejects_removed_max_steps_field(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(
+                """
+model:
+  name: model
+  base_url: https://example.test/v1
+  api_key: key
+workspace:
+  root: .
+  full_access: false
+runtime:
+  max_steps: 10
   model_context_limit: 1000
   input_budget_ratio: 0.8
 """.strip(),

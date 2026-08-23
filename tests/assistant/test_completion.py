@@ -143,7 +143,6 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
             policy=policy,
         )
         events = await runtime.snapshot(self.STREAM_ID)
@@ -197,7 +196,6 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=4,
             policy=policy,
         )
         events = await runtime.snapshot(self.STREAM_ID)
@@ -265,7 +263,6 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
             policy=policy,
         )
         events = await runtime.snapshot(self.STREAM_ID)
@@ -330,7 +327,6 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
             policy=policy,
         )
         self.assertEqual(result.state.status, RuntimeStatus.WAITING)
@@ -372,7 +368,6 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
         await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
             policy=policy,
         )
         await runtime.receive_user_message(

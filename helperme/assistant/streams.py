@@ -51,12 +51,10 @@ class AssistantStreams:
         runtime: AgentRuntime,
         surface: ToolSurface,
         *,
-        max_steps: int,
         policy: JudgmentPolicy | None = None,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
-        self._max_steps = max_steps
         self._policy = policy
 
     async def create(self, stream_id: str) -> StreamView:
@@ -141,7 +139,6 @@ class AssistantStreams:
         result = await drive_until_idle(
             self._runtime,
             stream_id,
-            max_steps=self._max_steps,
             policy=self._policy if evaluate_completion else None,
         )
         return stream_view(result.state)

@@ -115,7 +115,6 @@ async def run_runtime_console() -> None:
         print(f"新栈 Agent Runtime 已启动。model={config.model_name}")
         print(f"事实骨架：Event Journal（{app.journal_path}）")
         print(f"文件工具访问：{access}")
-        print(f"单次推进最大 Step 数：{config.max_steps}")
         print("推进单元是 Step，不是 Turn。Turn 只是人类交互投影。")
         print("MCP：目录里只有 load_toolset；加载后下一 Step 才出现 mcp__server__tool。")
         print("Skill：load_skill / read_skill_resource 是普通工具；目录在 load_skill 描述里。")

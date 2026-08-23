@@ -8,6 +8,5 @@ workspace:
   full_access: true
 
 runtime:
-  max_steps: 500
   model_context_limit: 200000
   input_budget_ratio: 0.9

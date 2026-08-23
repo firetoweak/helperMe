@@ -50,14 +50,10 @@ async def drive_until_idle(
     runtime: AgentRuntime,
     stream_id: str,
     *,
-    max_steps: int,
     policy: JudgmentPolicy | None = None,
 ) -> DriveResult:
-    steps = 0
     while True:
-        step = await runtime.advance(stream_id)
-        if step is not None:
-            steps += 1
+        await runtime.advance(stream_id)
         await runtime.dispatcher.wait_all()
         if policy is not None:
             await policy.sync(runtime, stream_id)
@@ -75,8 +71,6 @@ async def drive_until_idle(
                 return DriveResult(state)
             if state.waiting_for == ("user_message",):
                 return DriveResult(state)
-        if steps >= max_steps:
-            return DriveResult(state)
         if state.status is RuntimeStatus.RUNNABLE or state.waiting_command_ids:
             continue
         return DriveResult(state)

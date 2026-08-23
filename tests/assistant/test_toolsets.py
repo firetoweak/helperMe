@@ -137,7 +137,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             "load echo",
             delivery_id="load-1",
         )
-        await drive_until_idle(runtime, self.STREAM_ID, max_steps=4)
+        await drive_until_idle(runtime, self.STREAM_ID)
         return await runtime.snapshot(self.STREAM_ID)
 
     def test_catalog_does_not_expose_loaded_tools_before_load(self):
@@ -216,7 +216,6 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         events = await runtime.snapshot(self.STREAM_ID)
         names: dict[str, str] = {}

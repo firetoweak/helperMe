@@ -150,7 +150,6 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         events = await runtime.snapshot(self.STREAM_ID)
         loaded = _outcomes_named(events, LOAD_SKILL)
@@ -199,7 +198,7 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             "read guide",
             delivery_id="ask-1",
         )
-        await drive_until_idle(runtime, self.STREAM_ID, max_steps=8)
+        await drive_until_idle(runtime, self.STREAM_ID)
         events = await runtime.snapshot(self.STREAM_ID)
         reads = _outcomes_named(events, READ_SKILL_RESOURCE)
         self.assertEqual(reads[0]["data"]["content"], "cdef")

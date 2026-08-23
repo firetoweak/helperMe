@@ -261,7 +261,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         events = await runtime._journal.snapshot(self.STREAM_ID)
         messages = project_chat_messages(
@@ -279,6 +278,49 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(messages[2]["content"], "hello")
         self.assertNotIn("tool_calls", messages[2])
+
+    async def test_drive_continues_until_semantic_idle(self):
+        tool_steps = 12
+        decisions = tuple(
+            lambda _frame: ModelDecision(
+                content="working",
+                command_requests=(InvokeTool("ping"),),
+            )
+            for _ in range(tool_steps)
+        ) + (
+            lambda _frame: ModelDecision(
+                content="done",
+                command_requests=(
+                    InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),
+                ),
+            ),
+        )
+
+        async def ping(_context, _arguments):
+            return {"ok": True}
+
+        delivered: list[str] = []
+        model = ScriptedDecisionMaker(decisions)
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            model,
+            {
+                "ping": ToolBinding(ping),
+                **deliver_binding(delivered.append),
+            },
+            SequentialIds(),
+        )
+        await runtime.receive_user_message(
+            self.STREAM_ID,
+            "keep going",
+            delivery_id="continuous-1",
+        )
+
+        result = await drive_until_idle(runtime, self.STREAM_ID)
+
+        self.assertEqual(len(model.frames), tool_steps + 1)
+        self.assertEqual(delivered, ["done"])
+        self.assertEqual(result.state.waiting_for, ("user_message",))
 
     async def test_resume_stream_uses_explicit_existing_identity(self):
         surface = ToolSurface()
@@ -344,7 +386,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         surface.attach(runtime)
-        streams = AssistantStreams(runtime, surface, max_steps=4)
+        streams = AssistantStreams(runtime, surface)
 
         created = await streams.create(self.STREAM_ID)
         await streams.receive_user_message(
@@ -382,7 +424,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "internal bug"):
-            await drive_until_idle(runtime, self.STREAM_ID, max_steps=4)
+            await drive_until_idle(runtime, self.STREAM_ID)
 
         state = await runtime.state(self.STREAM_ID)
         events = await runtime.snapshot(self.STREAM_ID)
@@ -416,7 +458,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         self.assertEqual(delivered, ["finished"])
         self.assertEqual(result.state.status, RuntimeStatus.COMPLETED)
@@ -458,7 +499,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         events = await runtime._journal.snapshot(self.STREAM_ID)
         messages = project_chat_messages(
@@ -521,7 +561,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         result = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         events = await runtime._journal.snapshot(self.STREAM_ID)
         second_frame = model.frames[1]
@@ -573,7 +612,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         streams = AssistantStreams(
             runtime,
             ToolSurface(),
-            max_steps=8,
         )
         input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         drive = asyncio.create_task(drive_with_console_interrupts(
@@ -641,7 +679,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         waiting = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         command_ids = pending_authorization_ids(waiting.state)
 
@@ -654,7 +691,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         finished = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
 
         self.assertEqual(executions, [{}])
@@ -704,7 +740,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         waiting = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
         command_ids = pending_authorization_ids(waiting.state)
         await runtime.receive_user_message(
@@ -715,7 +750,6 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         after = await drive_until_idle(
             runtime,
             self.STREAM_ID,
-            max_steps=8,
         )
 
         self.assertEqual(len(model.frames), 2)

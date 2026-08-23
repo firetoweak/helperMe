@@ -6,6 +6,7 @@
 
 ## Rule 同步区
 
+- 学习交互是讨论，不是连环提问：先给判断和依据，再一起推敲。
 - 保持简单、高内聚、低耦合；只为已经出现的真实需求增加抽象。
 - Runtime 内核是 `helperme/runtime`：Event 持久、State 归约、Step 决策、Command 副作用。LLM 在 `helperme/llm`，执行环境边界在 `helperme/sandbox/`，工具契约在 `helperme/tools/`；它们都不进 Runtime。
 - 内部相信契约：内部契约违规与未预期异常必须原样暴露；只在 CLI、LLM、MCP、文件系统等外部输入边界捕获已知、预期且能够处理的错误。禁止用宽泛异常捕获把 bug 降级成业务失败、能力不可用或继续运行。

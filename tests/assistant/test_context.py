@@ -134,7 +134,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
                 text,
                 delivery_id=f"ask-{index}",
             )
-            await drive_until_idle(runtime, self.STREAM, max_steps=8)
+            await drive_until_idle(runtime, self.STREAM)
         events = await runtime._journal.snapshot(self.STREAM)
         return events, delivered
 
@@ -332,13 +332,15 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             "first",
             delivery_id="ask-1",
         )
-        await drive_until_idle(runtime, self.STREAM, max_steps=1)
+        await runtime.advance(self.STREAM)
+        await runtime.dispatcher.wait_all()
+        await runtime.finalize(self.STREAM)
         await runtime.receive_user_message(
             self.STREAM,
             "second",
             delivery_id="ask-2",
         )
-        await drive_until_idle(runtime, self.STREAM, max_steps=8)
+        await drive_until_idle(runtime, self.STREAM)
         events = await runtime._journal.snapshot(self.STREAM)
         prepared = self._projector().prepare(
             events,

@@ -73,7 +73,6 @@ async def bootstrap_assistant(
     streams = AssistantStreams(
         runtime,
         assembly.surface,
-        max_steps=effective_config.max_steps,
         policy=policy,
     )
     async with effective_config.llm, assembly.mcp.client_manager:
