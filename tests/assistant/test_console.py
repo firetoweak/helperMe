@@ -1,28 +1,30 @@
 from __future__ import annotations
 
-import sys
+import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, call, patch
 
-from helperme.channels.cli.console import _poll_line
+from helperme.channels.cli.console import read_console_input
 
 
-@unittest.skipUnless(sys.platform == "win32", "Windows console input only")
-class WindowsConsoleInputTests(unittest.TestCase):
-    def test_partial_line_survives_poll_timeout(self):
-        buffer: list[str] = []
+class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reader_continuously_collects_complete_lines(self):
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        session = AsyncMock()
+        session.prompt_async.side_effect = (
+            "第一个任务",
+            "运行时打断",
+            EOFError,
+        )
 
-        with (
-            patch(
-                "helperme.channels.cli.console.time.monotonic",
-                side_effect=(0.0, 0.0, 2.0, 0.0, 0.0),
-            ),
-            patch("msvcrt.kbhit", side_effect=(True, True)),
-            patch("msvcrt.getwch", side_effect=("慢", "\r")),
-            patch("builtins.print"),
-        ):
-            self.assertIsNone(_poll_line(1.0, buffer))
-            self.assertEqual(buffer, ["慢"])
-            self.assertEqual(_poll_line(1.0, buffer), "慢")
+        with patch("helperme.channels.cli.console.patch_stdout") as patched:
+            await read_console_input(queue, session)
 
-        self.assertEqual(buffer, [])
+        patched.assert_called_once_with()
+        self.assertEqual(
+            session.prompt_async.await_args_list,
+            [call("你："), call("你："), call("你：")],
+        )
+        self.assertEqual(await queue.get(), "第一个任务")
+        self.assertEqual(await queue.get(), "运行时打断")
+        self.assertIsNone(await queue.get())
