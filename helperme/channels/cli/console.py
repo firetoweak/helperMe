@@ -38,13 +38,12 @@ class _InputPrompt:
         self._ready.clear()
 
 
-def _poll_line(timeout: float) -> str | None:
+def _poll_line(timeout: float, buffer: list[str]) -> str | None:
     """Read a line without printing 你：. None means timeout."""
 
     if sys.platform == "win32":
         import msvcrt
 
-        buf: list[str] = []
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not msvcrt.kbhit():
@@ -58,13 +57,15 @@ def _poll_line(timeout: float) -> str | None:
                 raise KeyboardInterrupt
             if char in {"\r", "\n"}:
                 print(flush=True)
-                return "".join(buf).strip()
+                text = "".join(buffer).strip()
+                buffer.clear()
+                return text
             if char == "\x08":
-                if buf:
-                    buf.pop()
+                if buffer:
+                    buffer.pop()
                     print("\b \b", end="", flush=True)
                 continue
-            buf.append(char)
+            buffer.append(char)
             print(char, end="", flush=True)
         return None
 
@@ -86,12 +87,17 @@ async def _running_input(
     poll_keyboard: bool,
 ) -> str | None:
     incoming = asyncio.create_task(input_queue.get())
+    keyboard_buffer: list[str] = []
     try:
         while not drive.done():
             watchers: set[asyncio.Task[object]] = {drive, incoming}
             poll: asyncio.Task[str | None] | None = None
             if poll_keyboard:
-                poll = asyncio.create_task(asyncio.to_thread(_poll_line, 0.15))
+                poll = asyncio.create_task(asyncio.to_thread(
+                    _poll_line,
+                    0.15,
+                    keyboard_buffer,
+                ))
                 watchers.add(poll)
             done, _ = await asyncio.wait(
                 watchers,

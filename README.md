@@ -1,37 +1,45 @@
 # helperMe
 
-`helperMe` 是我为自己构建的个人通用助手。
+**A personal AI assistant whose behavior stays understandable as its capabilities grow.**
 
-我使用过其他 Agent 助手，但当我想把它们改造成自己希望的样子时，经常一处修改牵动全身；修改没有生效，也很难判断问题发生在哪里。功能属于它们，我却没有真正掌握它们。
+`helperMe` began with a recurring frustration: existing Agent assistants could do impressive work, but adapting them often meant changing one thing and disturbing several others. When a change did not take effect, it was difficult to tell whether the problem was in the prompt, the model, a tool, or the runtime. I could use those systems, but I did not truly own them.
 
-因此，我开始构建 helperMe。
+This project explores a different goal: build an assistant for one person that can be understood, changed, verified, and continually shaped by that person. It is not a general-purpose Agent framework for unknown users.
 
-我希望它不仅能完成任务，也始终能被个人理解、修改、验证并持续塑造。学习是构建它的方式，成为一个长期可用的个人助手才是最终结果。
+> Capabilities may keep growing, but the system should remain small enough for one person to understand and control.
 
-## 我相信什么
+> [!WARNING]
+> This repository is under active development. Future updates may introduce destructive changes to APIs, configuration, storage formats, or persisted data without a backward-compatible migration path. Back up any data you need before updating.
 
-真正属于个人的助手，应当把三种权力交还给个人：
+## What It Feels Like to Use
 
-- 理解它为什么这样运行。
-- 控制能力、状态和行动如何生效。
-- 按自己的需要持续改变它，并验证改变的结果。
+Start the console and give the assistant a task. It can inspect and modify files, run commands, and load external capabilities while keeping every important action in a durable execution history.
 
-helperMe 不以成为通用 Agent Framework 为目标，也不为未知用户预建任意组合能力。它只为已经发生或明确规划的个人需求建立扩展边界。
+- Type a new instruction while it is working; the instruction becomes a durable Interrupt instead of being lost or starting an unrelated turn.
+- Exit and later resume a Stream from its Journal-backed state.
+- Connect MCP Servers without placing every external tool in the model context up front.
+- Install and enable Skills, then let the model read their instructions only when needed.
+- Keep workspace access, permissions, model decisions, and external side effects behind separate boundaries.
 
-我仍然重视高内聚、低耦合和优雅抽象，但这些不是形式上的高级感：
+The result is less like a disposable chat session and more like a task that can be inspected, interrupted, resumed, and extended without hiding how it advances.
 
-- 高内聚意味着同一种变化集中在一处。
-- 低耦合意味着一次需求变化只影响局部。
-- 可扩展意味着助手能沿着真实需要持续生长。
-- 好抽象应让系统更容易理解和验证，而不是增加无法追踪的因果链。
+## Why helperMe Is Different
 
-> 功能可以持续生长，但复杂度仍应由一个人掌控。
+### Traceable by construction
 
-更完整的设计立场见[项目架构方向](docs/项目架构方向.md)，当前架构见[架构总览](docs/架构/总览.md)，行动依据见[自主 Agent 学习计划](docs/自主Agent学习计划.md)。
+User messages, model decisions, tool outcomes, Interrupts, and termination requests are recorded as Events. Runtime State is deterministically rebuilt from those facts, so important behavior has an observable origin.
 
-## 如何使用
+### Long-running work is not a conversation trick
 
-项目使用 Python 和 PowerShell，并调用 OpenAI 兼容的 Chat Completions 接口。
+A Turn is only the human-facing projection of an interaction. The durable unit is a Stream, which can continue across multiple model Steps and be resumed after the process exits.
+
+### Capabilities enter context only when needed
+
+MCP Toolsets and Skills are progressively loaded. The model begins with small catalogs and loading entry points; a concrete capability becomes available only after its loading result has been committed. This keeps context growth explicit and recoverable.
+
+## Quick Start
+
+helperMe currently targets **Python 3.10+** and is developed and tested primarily on **Windows with PowerShell**.
 
 ```powershell
 python -m venv .venv
@@ -40,7 +48,7 @@ pip install -r requirements.txt
 Copy-Item model_config.example.yaml model_config.yaml
 ```
 
-编辑 `model_config.yaml`，填写模型与工作区配置：
+Edit `model_config.yaml` with an OpenAI-compatible Chat Completions endpoint and the workspace the assistant may access:
 
 ```yaml
 model:
@@ -50,32 +58,92 @@ model:
 
 workspace:
   root: "D:\\work\\agent"
+  full_access: true
 ```
 
-启动助手：
+Then start the console:
 
 ```powershell
 python console_chat.py
 ```
 
-进入对话后：
+The main console commands are:
 
-- 直接输入内容。系统按 Step 推进，不是按旧 Turn 循环。
-- 使用 `/mcp` 管理 MCP Server；模型通过 `load_toolset` 按需加载工具。
-- 使用 `/skill` 管理 Skill；模型通过 `load_skill` / `read_skill_resource` 读取指令。
-- `/new` 开新 Stream；`/resume <stream_id>` 恢复明确指定的历史 Stream；`/stop` 结束当前 Stream。
-- Agent 运行期间直接输入新内容，会作为持久 `UserInterruptReceived` 在当前模型 Step 提交后优先处理。
-- `Ctrl+C` 完全退出程序，不表示 Agent Interrupt；`Ctrl+D` 同样退出。
+| Command | Purpose |
+|---|---|
+| `/new` | Create a new Stream |
+| `/resume <stream_id>` | Resume a Stream from the Journal |
+| `/stop` | Terminate the current Stream |
+| `/mcp` | Inspect and manage MCP Servers |
+| `/skill` | Inspect and manage Skills |
 
-Skill 安装后默认为 disabled。使用 `/skill inspect|test|enable` 检查并启用，下一 Step 可见。`check-update` 只冻结候选，`update` 必须显式提交 candidate hash。
+Typing normal text while the Agent is running creates an Interrupt in the current Stream. `Ctrl+C` or `Ctrl+D` exits the program; neither represents an Agent Interrupt.
 
-## Web 与浏览器能力
+## Current Status
 
-helperMe 不单独实现 Web 搜索、网页解析或浏览器自动化。这些能力默认通过 MCP 按需接入，避免在项目内重复维护搜索索引、浏览器驱动和站点兼容逻辑。
+helperMe is a personal learning project under active development. Its architecture is deliberate, but its interfaces and storage formats should not yet be treated as stable public APIs.
 
-当前推荐：
+Implemented today:
 
-- [Tavily MCP](https://github.com/tavily-ai/tavily-mcp)：提供 Web 搜索与网页内容提取。
-- [Playwright MCP](https://github.com/microsoft/playwright-mcp)：提供页面导航、登录、点击、填表和其他浏览器自动化能力。
+- Event / State / Step / Command Runtime with deterministic reduction.
+- SQLite-backed Journal and recoverable Streams.
+- OpenAI-compatible Chat Completions model interface.
+- File, command, Workspace, and permission boundaries.
+- MCP discovery, management, resources, prompts, and on-demand Toolset loading.
+- Skill installation, inspection, enabling, updating, and on-demand reading.
+- Completion judgment and a Finalization Barrier for terminal states.
 
-它们是推荐实现，不是 helperMe 的硬依赖。也可以接入其他提供 Web 或浏览器自动化能力的 MCP Server；只要现有 MCP 能完成真实任务，helperMe 就不为该能力建设专属实现。
+Planned, not yet implemented:
+
+- SubAgent collaboration.
+- Automation and scheduled execution.
+- Long-term Memory.
+
+The implementation order and current learning goals are tracked in the [Implementation Plan](docs/计划.md) and [Autonomous Agent Learning Plan](docs/自主Agent学习计划.md).
+
+## Architecture in One Loop
+
+```mermaid
+flowchart LR
+    Event["Event<br/>durable fact"] -->|reduce| State["State<br/>current truth"]
+    State --> Step["Step<br/>one model decision"]
+    Step --> Commit["Decision + Commands<br/>atomic commit"]
+    Commit --> Event
+    Commit --> Command["Command<br/>external side effect"]
+    Command --> Dispatcher["Dispatcher"]
+    Dispatcher --> Outcome["Outcome"]
+    Outcome --> Event
+    Event -. project .-> Views["Turn / Context / Trace"]
+```
+
+The Journal is the sole durable execution truth. Runtime reduces facts, schedules Commands, enforces invariants, and finalizes terminal states. The model, an explicit Judge, or the user makes semantic decisions; those decisions return to the Journal as traceable facts.
+
+```text
+Event → State → Step → Command → Outcome → Event
+```
+
+Runtime does not know about MCP, Skills, plugins, or other product capabilities. Each kind of change enters through a narrow boundary aligned with its own reason to change. Architectural tests enforce those dependency boundaries rather than leaving them as conventions.
+
+For the complete model, see the [Architecture Overview](docs/架构/总览.md) and [Runtime State Advancement Model](docs/架构/Runtime状态推进模型.md).
+
+## Web and Browser Capabilities
+
+helperMe does not maintain its own web search implementation or browser driver. These capabilities can be connected through MCP and loaded on demand. Current recommendations are [Tavily MCP](https://github.com/tavily-ai/tavily-mcp) for search and content extraction, and [Playwright MCP](https://github.com/microsoft/playwright-mcp) for browser interaction. Neither is a hard dependency.
+
+## Tests
+
+Run the architecture boundary tests with:
+
+```powershell
+python -m unittest tests.architecture.test_import_boundaries tests.architecture.test_runtime_boundaries
+```
+
+The repository also contains unit, integration, benchmark, and live tests grouped by subsystem. Tests under `tests/live` call the model endpoint configured in `model_config.yaml` and may incur provider charges; run them deliberately rather than through broad test discovery.
+
+## Further Reading
+
+- [Documentation Index](docs/README.md)
+- [Architecture Direction](docs/项目架构方向.md)
+- [Architecture Overview](docs/架构/总览.md)
+- [Runtime State Advancement Model](docs/架构/Runtime状态推进模型.md)
+- [Implementation Plan](docs/计划.md)
