@@ -391,6 +391,101 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         chunk = gateway.for_stream(self.STREAM).read(artifact_id, 0, 3000)
         self.assertIn(blob, chunk.content)
 
+    async def test_oversized_failure_keeps_status_in_externalized_projection(self):
+        failure_body = "remote-failure-" + "X" * 200
+
+        async def boom(_context, _arguments):
+            return ToolTerminal(
+                CommandOutcome(
+                    OutcomeStatus.FAILED,
+                    error_type="RemoteError",
+                    error_message=failure_body,
+                ),
+            )
+
+        gateway = MemoryArtifactGateway()
+        events, _delivered = await self._history(
+            (
+                lambda _frame: ModelDecision(
+                    content="checking",
+                    command_requests=(InvokeTool("boom"),),
+                ),
+                lambda _frame: _deliver("done"),
+            ),
+            {"boom": ToolBinding(boom)},
+            ("go",),
+        )
+
+        prepared = self._projector(
+            gateway=gateway,
+            size_externalize_chars=80,
+        ).prepare(
+            events,
+            tuple(event.event_id for event in events),
+            self.STREAM,
+            "sys",
+        )
+
+        tool = self._tool_messages(prepared.messages)[0]
+        payload = json.loads(tool["content"])
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error_type"], "RemoteError")
+        self.assertNotIn(failure_body, tool["content"])
+        artifact_id = payload["externalized"]["artifact_id"]
+        chunk = gateway.for_stream(self.STREAM).read(artifact_id, 0, 3000)
+        full_outcome = json.loads(chunk.content)
+        self.assertEqual(full_outcome["status"], "failed")
+        self.assertEqual(full_outcome["error_message"], failure_body)
+
+    async def test_old_oversized_success_drops_preview_without_new_artifact(self):
+        blob = "old-large-result-" + "Y" * 200
+
+        async def ping(_context, _arguments):
+            return blob
+
+        gateway = MemoryArtifactGateway()
+        events, _delivered = await self._history(
+            (
+                lambda _frame: ModelDecision(
+                    content="checking",
+                    command_requests=(InvokeTool("ping"),),
+                ),
+                lambda _frame: _deliver("first-done"),
+                lambda _frame: _deliver("second-done"),
+            ),
+            {"ping": ToolBinding(ping)},
+            ("first", "second"),
+        )
+
+        prepared = self._projector(
+            gateway=gateway,
+            size_externalize_chars=80,
+        ).prepare(
+            events,
+            tuple(event.event_id for event in events),
+            self.STREAM,
+            "sys",
+        )
+
+        tool = self._tool_messages(prepared.messages)[0]
+        payload = json.loads(tool["content"])
+        artifact_id = payload["externalized"]["artifact_id"]
+        self.assertEqual(payload["status"], "succeeded")
+        self.assertEqual(payload["externalized"]["preview"], "")
+        self.assertIn(
+            tool["tool_call_id"],
+            prepared.size_externalized_command_ids,
+        )
+        self.assertIn(
+            tool["tool_call_id"],
+            prepared.age_dehydrated_command_ids,
+        )
+        store = gateway.for_stream(self.STREAM)
+        self.assertEqual(tuple(store.contents), (artifact_id,))
+        full_outcome = json.loads(store.read(artifact_id, 0, 3000).content)
+        self.assertEqual(full_outcome["status"], "succeeded")
+        self.assertEqual(full_outcome["value"], blob)
+
     async def test_token_window_can_keep_older_consumed_result(self):
         async def ping(_context, _arguments):
             return "keep-me"
@@ -468,7 +563,57 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["externalized"], True)
         chunk = gateway.for_stream("s1").read(result["artifact_id"], 0, 3000)
-        self.assertIn("Z" * 80, chunk.content)
+        full_outcome = json.loads(chunk.content)
+        self.assertEqual(full_outcome["status"], "succeeded")
+        self.assertEqual(
+            full_outcome["value"],
+            {"ok": True, "code": "OK", "data": "Z" * 80},
+        )
+
+    async def test_execute_time_externalized_result_uses_canonical_projection(self):
+        gateway = MemoryArtifactGateway()
+        settings = ModelContextSettings(
+            size_externalize_chars=40,
+            preview_chars=8,
+        )
+
+        class _Runner:
+            def names(self):
+                return ("blob",)
+
+            def requires_authorization(self, _name):
+                return False
+
+            async def execute(self, _name, _arguments):
+                return {"ok": True, "code": "OK", "data": "Z" * 80}
+
+        events, _delivered = await self._history(
+            (
+                lambda _frame: ModelDecision(
+                    content="checking",
+                    command_requests=(InvokeTool("blob"),),
+                ),
+                lambda _frame: _deliver("done"),
+            ),
+            bind_executor_tools(_Runner(), gateway, settings),
+            ("go",),
+        )
+        prepared = ModelContextProjector(
+            gateway=gateway,
+            settings=settings,
+            estimator=CharacterEstimator(),
+        ).prepare(
+            events,
+            tuple(event.event_id for event in events),
+            self.STREAM,
+            "sys",
+        )
+
+        tool = self._tool_messages(prepared.messages)[0]
+        payload = json.loads(tool["content"])
+        self.assertEqual(payload["status"], "succeeded")
+        self.assertIsNone(payload["value"])
+        self.assertIn("artifact_id", payload["externalized"])
 
     async def test_read_artifact_binding_pages_stream_store(self):
         gateway = MemoryArtifactGateway()

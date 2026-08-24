@@ -258,18 +258,49 @@ def _canonicalize_tool_result_runs(
     return items
 
 
-def parse_tool_result_meta(content: object) -> tuple[bool, str | None]:
+def _externalized_meta(content: object) -> dict[str, object] | None:
     payload: object = json.loads(content) if isinstance(content, str) else content
     if not isinstance(payload, dict):
-        return False, None
+        return None
+    externalized = payload.get("externalized")
+    if isinstance(externalized, dict):
+        artifact_id = externalized.get("artifact_id")
+        if is_valid_artifact_id(artifact_id):
+            return externalized
+
+    # 只读兼容旧 Journal 中已经提交的执行时外置结果。
     data = payload.get("data")
-    if not isinstance(data, dict):
+    if isinstance(data, dict):
+        artifact_id = data.get("artifact_id")
+        if (
+            data.get("externalized") is True
+            and is_valid_artifact_id(artifact_id)
+        ):
+            return data
+    value = payload.get("value")
+    if isinstance(value, dict):
+        artifact_id = value.get("artifact_id")
+        if (
+            value.get("externalized") is True
+            and is_valid_artifact_id(artifact_id)
+        ):
+            return value
+        nested_data = value.get("data")
+        if isinstance(nested_data, dict):
+            artifact_id = nested_data.get("artifact_id")
+            if (
+                nested_data.get("externalized") is True
+                and is_valid_artifact_id(artifact_id)
+            ):
+                return nested_data
+    return None
+
+
+def parse_tool_result_meta(content: object) -> tuple[bool, str | None]:
+    meta = _externalized_meta(content)
+    if meta is None:
         return False, None
-    artifact_id = data.get("artifact_id")
-    externalized = data.get("externalized") is True
-    if externalized and is_valid_artifact_id(artifact_id):
-        return True, artifact_id
-    return False, None
+    return True, meta["artifact_id"]
 
 
 def _content_char_length(content: object) -> int:
@@ -278,39 +309,21 @@ def _content_char_length(content: object) -> int:
     return len(json.dumps(jsonable(content), ensure_ascii=False))
 
 
-def _artifact_id_from_content(content: object) -> str | None:
-    _, artifact_id = parse_tool_result_meta(content)
-    if artifact_id is not None:
-        return artifact_id
-    payload: object = (
-        json.loads(content) if isinstance(content, str) else content
-    )
-    if not isinstance(payload, dict):
-        return None
-    value = payload.get("value")
-    if isinstance(value, dict):
-        nested = value.get("artifact_id")
-        if value.get("externalized") is True and is_valid_artifact_id(nested):
-            return nested
-        _, nested_id = parse_tool_result_meta(value)
-        if nested_id is not None:
-            return nested_id
-    direct = payload.get("artifact_id")
-    if payload.get("externalized") is True and is_valid_artifact_id(direct):
-        return direct
-    return None
-
-
 def _stub_content(
+    outcome_content: str,
     size_chars: int,
     artifact_id: str,
     preview: str = "",
 ) -> str:
+    outcome = json.loads(outcome_content)
+    if not isinstance(outcome, dict):
+        raise TypeError("projected tool content must be a JSON object")
     stub = {
-        "ok": True,
-        "code": "OK",
-        "data": {
-            "externalized": True,
+        "status": outcome["status"],
+        "value": None,
+        "error_type": outcome.get("error_type"),
+        "error_message": None,
+        "externalized": {
             "artifact_id": artifact_id,
             "size_chars": size_chars,
             "preview": preview,
@@ -332,13 +345,19 @@ def externalize_payload(
     encoded = json.dumps(jsonable(payload), ensure_ascii=False)
     if len(encoded) <= max_chars:
         return payload, None
-    artifact = store.save(encoded)
+    complete_outcome = outcome_text(
+        CommandOutcome(
+            OutcomeStatus.SUCCEEDED,
+            value=payload,
+        )
+    )
+    artifact = store.save(complete_outcome)
     return (
         {
             "externalized": True,
             "artifact_id": artifact.artifact_id,
             "size_chars": artifact.size_chars,
-            "preview": encoded[:preview_chars],
+            "preview": complete_outcome[:preview_chars],
         },
         artifact.artifact_id,
     )
@@ -439,7 +458,22 @@ class ModelContextProjector:
             if item.command_id is None:
                 raise ValueError("projected tool message lacks command id")
             content = item.message["content"]
-            if _artifact_id_from_content(content) is not None:
+            meta = _externalized_meta(content)
+            if meta is not None:
+                payload = (
+                    json.loads(content)
+                    if isinstance(content, str)
+                    else content
+                )
+                if not isinstance(payload, dict):
+                    raise TypeError("projected tool content must be a JSON object")
+                if not isinstance(payload.get("externalized"), dict):
+                    item.message["content"] = _stub_content(
+                        json.dumps(payload, ensure_ascii=False),
+                        meta["size_chars"],
+                        meta["artifact_id"],
+                        meta.get("preview", ""),
+                    )
                 continue
             if _content_char_length(content) <= self._settings.size_externalize_chars:
                 continue
@@ -454,6 +488,7 @@ class ModelContextProjector:
                 store,
             )
             item.message["content"] = _stub_content(
+                original,
                 len(original),
                 artifact_id,
                 original[: self._settings.preview_chars],
@@ -515,7 +550,17 @@ class ModelContextProjector:
                         raise ValueError(
                             "projected tool message lacks command id"
                         )
-                    if _artifact_id_from_content(item.message["content"]):
+                    meta = _externalized_meta(item.message["content"])
+                    if meta is not None:
+                        if meta.get("preview"):
+                            payload = json.loads(item.message["content"])
+                            payload["externalized"]["preview"] = ""
+                            item.message["content"] = json.dumps(
+                                payload,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+                            changed.append(item.command_id)
                         continue
                     original = item.message["content"]
                     if not isinstance(original, str):
@@ -530,6 +575,7 @@ class ModelContextProjector:
                         store,
                     )
                     item.message["content"] = _stub_content(
+                        original,
                         len(original),
                         artifact_id,
                     )
