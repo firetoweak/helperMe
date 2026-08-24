@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import AbstractSet, Protocol
 
@@ -153,6 +153,7 @@ class JournalBackedLlmDecisionMaker:
         skill_tools: SkillToolAdapter | None = None,
         control: AssistantControlPlane | None = None,
         management: ManagementSurface | None = None,
+        context_usage_sink: Callable[[str, int, int], None] | None = None,
     ) -> None:
         self._journal = journal
         self._llm = llm
@@ -166,6 +167,7 @@ class JournalBackedLlmDecisionMaker:
         self._skill_tools = skill_tools
         self._control = control
         self._management = management
+        self._context_usage_sink = context_usage_sink
 
     def _schemas(
         self,
@@ -294,12 +296,28 @@ class JournalBackedLlmDecisionMaker:
             prompt,
             schemas,
         )
+        if self._context_usage_sink is not None:
+            estimated = self._projector.budget.assess(
+                prepared.messages,
+                schemas,
+            ).estimated_input_tokens
+            self._context_usage_sink(
+                frame.state.stream_id,
+                estimated,
+                self._projector.settings.context_limit,
+            )
         result = await self._llm.chat(
             prepared.messages,
             self._model,
             tools=schemas or None,
         )
         usage = result.usage
+        if self._context_usage_sink is not None:
+            self._context_usage_sink(
+                frame.state.stream_id,
+                usage.input_tokens,
+                self._projector.settings.context_limit,
+            )
         if usage.input_tokens > 0:
             self._projector.budget.observe_actual_usage(
                 prepared.messages,

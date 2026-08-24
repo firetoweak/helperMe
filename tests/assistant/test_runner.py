@@ -163,6 +163,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         llm = RecordingLlm()
         gateway = MemoryArtifactGateway()
         projector = ModelContextProjector(gateway=gateway)
+        context_usage: list[tuple[str, int, int]] = []
         schemas = [{
             "type": "function",
             "function": {
@@ -180,6 +181,9 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
                 tool_schemas=schemas,
                 system_prompt="frozen prompt",
                 projector=projector,
+                context_usage_sink=lambda stream_id, used, limit: (
+                    context_usage.append((stream_id, used, limit))
+                ),
             ),
             deliver_binding(lambda _text: None),
             SequentialIds(),
@@ -222,6 +226,11 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(llm.messages[0]["content"], "frozen prompt")
+        self.assertGreater(context_usage[0][1], 0)
+        self.assertEqual(
+            context_usage[-1],
+            (self.STREAM_ID, 1, 200_000),
+        )
         self.assertNotIn("late objective", llm.messages[0]["content"])
         self.assertEqual(
             llm.tools[0]["function"]["name"],

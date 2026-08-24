@@ -36,6 +36,7 @@ async def bootstrap_assistant(
     sink: Callable[[str], None],
     *,
     config: AssistantConfig | None = None,
+    context_usage_sink: Callable[[str, int, int], None] | None = None,
 ) -> AsyncIterator[BootstrappedAssistant]:
     if config is None:
         app_config = load_app_config()
@@ -68,6 +69,7 @@ async def bootstrap_assistant(
             projector=assembly.projector,
             control=assembly.control,
             management=assembly.management,
+            context_usage_sink=context_usage_sink,
         ),
         assembly.bindings,
     )

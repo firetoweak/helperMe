@@ -27,6 +27,38 @@ class _ConsoleInputClosed(Exception):
     pass
 
 
+def _compact_tokens(tokens: int) -> str:
+    if tokens < 1_000:
+        return str(tokens)
+    if tokens % 1_000 == 0:
+        return f"{tokens // 1_000}k"
+    return f"{tokens / 1_000:.1f}k"
+
+
+class _ContextMeter:
+    def __init__(self) -> None:
+        self._stream_id = ""
+        self._used = 0
+        self._limit = 0
+
+    def select(self, stream_id: str, limit: int) -> None:
+        self._stream_id = stream_id
+        self._used = 0
+        self._limit = limit
+
+    def update(self, stream_id: str, used: int, limit: int) -> None:
+        if stream_id != self._stream_id:
+            return
+        self._used = used
+        self._limit = limit
+
+    def render(self) -> str:
+        return (
+            f"上下文 {_compact_tokens(self._used)}/"
+            f"{_compact_tokens(self._limit)}"
+        )
+
+
 async def _running_input(
     drive: asyncio.Task[StreamView],
     input_queue: asyncio.Queue[str | None],
@@ -107,7 +139,10 @@ async def read_console_input(
     with patch_stdout():
         while True:
             try:
-                text = await session.prompt_async("你：")
+                text = await session.prompt_async(
+                    "你：",
+                    refresh_interval=0.25,
+                )
             except (EOFError, KeyboardInterrupt):
                 await queue.put(None)
                 return
@@ -138,13 +173,21 @@ async def run_runtime_console() -> None:
     def sink(text: str) -> None:
         print(f"\n助手：{text}")
 
-    async with bootstrap_assistant(sink) as app:
+    context_meter = _ContextMeter()
+    session: PromptSession[str] = PromptSession(
+        bottom_toolbar=context_meter.render,
+    )
+    async with bootstrap_assistant(
+        sink,
+        context_usage_sink=context_meter.update,
+    ) as app:
         config = app.config
         streams = app.streams
         mcp_console = McpConsoleAdapter(app.mcp_service)
         skill_console = SkillConsoleAdapter(app.skill_service)
         stream_id = f"stream-{uuid4().hex}"
         await streams.create(stream_id)
+        context_meter.select(stream_id, config.model_context_limit)
         input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         access = "整台电脑" if config.full_access else "配置的 Workspace"
         print(f"HelperMe 已启动。model={config.model_name}")
@@ -155,7 +198,6 @@ async def run_runtime_console() -> None:
         print("直接输入任务。运行中再输入会打断当前任务。")
         print("Ctrl+C 或 Ctrl+D 退出。")
 
-        session: PromptSession[str] = PromptSession()
         reader = asyncio.create_task(read_console_input(input_queue, session))
         try:
             separate_turns = False
@@ -173,6 +215,7 @@ async def run_runtime_console() -> None:
                 if user_message == "/new":
                     stream_id = f"stream-{uuid4().hex}"
                     await streams.create(stream_id)
+                    context_meter.select(stream_id, config.model_context_limit)
                     print(f"\n新 stream 已创建：{stream_id}")
                     continue
                 if user_message == "/resume" or user_message.startswith(
@@ -194,6 +237,7 @@ async def run_runtime_console() -> None:
                         )
                         continue
                     stream_id = target_stream_id
+                    context_meter.select(stream_id, config.model_context_limit)
                     print(f"\n已恢复 stream：{stream_id}")
                     if view.should_drive:
                         try:
