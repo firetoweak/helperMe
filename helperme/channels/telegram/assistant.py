@@ -10,7 +10,6 @@ from helperme.assistant.streams import AssistantStreams
 from helperme.config import InitialConfigCreated, load_app_config
 
 
-_STREAM_PREFIX = "telegram-chat-v2-"
 _YES = {"yes", "y"}
 _NO = {"no", "n"}
 
@@ -43,11 +42,16 @@ class TelegramChannel:
         streams: AssistantStreams,
         bot: Bot,
         chat_id: int,
+        stream_id: str,
+        bot_id: int,
     ) -> None:
         self._streams = streams
         self._bot = bot
         self._chat_id = chat_id
+        self._stream_id = stream_id
+        self._delivery_prefix = f"telegram-bot-{bot_id}-update-"
         self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._driving = False
 
     async def send(self, text: str) -> None:
         await self._bot.send_message(chat_id=self._chat_id, text=text)
@@ -59,26 +63,31 @@ class TelegramChannel:
             await self.send("HelperMe 已连接。直接发送任务即可。")
             return
 
-        stream_id = f"{_STREAM_PREFIX}{self._chat_id}"
-        try:
-            view = await self._streams.resume(stream_id)
-        except StreamNotFoundError:
-            view = await self._streams.create(stream_id)
+        if self._driving:
+            await self._streams.receive_interrupt(
+                self._stream_id,
+                message.text,
+                delivery_id=f"{self._delivery_prefix}{update_id}",
+                source="telegram",
+            )
+            return
 
+        view = await self._streams.view(self._stream_id)
         answer = message.text.strip().lower()
         if view.pending_authorization_ids and answer in _YES | _NO:
             await self._streams.resolve_authorizations(
-                stream_id,
+                self._stream_id,
                 approved=answer in _YES,
             )
         else:
             await self._streams.receive_user_message(
-                stream_id,
+                self._stream_id,
                 message.text,
-                delivery_id=f"telegram-update-{update_id}",
+                delivery_id=f"{self._delivery_prefix}{update_id}",
                 source="telegram",
             )
-        await self._queue.put(stream_id)
+        self._driving = True
+        await self._queue.put(self._stream_id)
 
     async def run_worker(self) -> None:
         while True:
@@ -91,7 +100,22 @@ class TelegramChannel:
         except MODEL_DECISION_ERRORS as exc:
             await self.send(f"模型调用失败：{exc}")
         finally:
+            self._driving = False
             self._queue.task_done()
+
+
+async def _open_chat_channel(
+    streams: AssistantStreams,
+    bot: Bot,
+    bot_id: int,
+    chat_id: int,
+) -> TelegramChannel:
+    stream_id = f"telegram-bot-{bot_id}-chat-{chat_id}"
+    try:
+        await streams.resume(stream_id)
+    except StreamNotFoundError:
+        await streams.create(stream_id)
+    return TelegramChannel(streams, bot, chat_id, stream_id, bot_id)
 
 
 async def run_telegram_assistant() -> None:
@@ -130,7 +154,12 @@ async def run_telegram_assistant() -> None:
             await channel.send(text)
 
         async with bootstrap_assistant(send, app_config=app_config) as app:
-            channel = TelegramChannel(app.streams, bot, chat_id)
+            channel = await _open_chat_channel(
+                app.streams,
+                bot,
+                bot.id,
+                chat_id,
+            )
             dispatcher = Dispatcher()
 
             @dispatcher.message(F.text)

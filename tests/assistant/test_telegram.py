@@ -1,15 +1,52 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from helperme.assistant.runner import StreamNotFoundError
 from helperme.assistant.streams import StreamView
-from helperme.channels.telegram.assistant import TelegramChannel, TelegramPairing
+from helperme.assistant.runner import StreamNotFoundError
+from helperme.channels.telegram.assistant import (
+    TelegramChannel,
+    TelegramPairing,
+    _open_chat_channel,
+)
 
 
 class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_resumes_stream_for_same_bot_and_chat(self) -> None:
+        streams = AsyncMock()
+        streams.view.return_value = _stream_view()
+        bot = AsyncMock()
+
+        channel = await _open_chat_channel(streams, bot, 101, 7)
+
+        streams.resume.assert_awaited_once_with(
+            "telegram-bot-101-chat-7"
+        )
+        streams.create.assert_not_awaited()
+        await channel.accept(10, _message(7, "新任务"))
+        streams.receive_user_message.assert_awaited_once_with(
+            "telegram-bot-101-chat-7",
+            "新任务",
+            delivery_id="telegram-bot-101-update-10",
+            source="telegram",
+        )
+
+    async def test_new_bot_creates_its_own_stream(self) -> None:
+        streams = AsyncMock()
+        streams.resume.side_effect = StreamNotFoundError("missing")
+
+        await _open_chat_channel(streams, AsyncMock(), 202, 7)
+
+        streams.resume.assert_awaited_once_with(
+            "telegram-bot-202-chat-7"
+        )
+        streams.create.assert_awaited_once_with(
+            "telegram-bot-202-chat-7"
+        )
+
     async def test_unpaired_start_reports_chat_id_without_touching_runtime(
         self,
     ) -> None:
@@ -34,7 +71,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
     async def test_start_replies_without_touching_runtime(self) -> None:
         bot = AsyncMock()
         streams = AsyncMock()
-        channel = TelegramChannel(streams, bot, 7)
+        channel = TelegramChannel(streams, bot, 7, "stream-current", 101)
 
         await channel.accept(10, _message(7, "/start"))
 
@@ -47,43 +84,82 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
     async def test_message_is_persisted_before_worker_drives(self) -> None:
         bot = AsyncMock()
         streams = AsyncMock()
-        streams.resume.side_effect = StreamNotFoundError("missing")
-        streams.create.return_value = _stream_view()
-        channel = TelegramChannel(streams, bot, 7)
+        streams.view.return_value = _stream_view()
+        channel = TelegramChannel(streams, bot, 7, "stream-current", 101)
 
         await channel.accept(11, _message(7, "帮我看看"))
 
         streams.receive_user_message.assert_awaited_once_with(
-            "telegram-chat-v2-7",
+            "stream-current",
             "帮我看看",
-            delivery_id="telegram-update-11",
+            delivery_id="telegram-bot-101-update-11",
             source="telegram",
         )
         streams.drive.assert_not_awaited()
 
         await channel.drive_next()
-        streams.drive.assert_awaited_once_with("telegram-chat-v2-7")
+        streams.drive.assert_awaited_once_with("stream-current")
+        streams.resume.assert_not_awaited()
+
+    async def test_message_during_drive_becomes_interrupt(self) -> None:
+        streams = AsyncMock()
+        streams.view.return_value = _stream_view()
+        drive_started = asyncio.Event()
+        release_drive = asyncio.Event()
+
+        async def drive(_stream_id: str) -> None:
+            drive_started.set()
+            await release_drive.wait()
+
+        streams.drive.side_effect = drive
+        channel = TelegramChannel(
+            streams,
+            AsyncMock(),
+            7,
+            "stream-current",
+            101,
+        )
+
+        await channel.accept(11, _message(7, "先检查项目"))
+        running = asyncio.create_task(channel.drive_next())
+        await drive_started.wait()
+        await channel.accept(12, _message(7, "停一下，先别执行"))
+
+        streams.receive_interrupt.assert_awaited_once_with(
+            "stream-current",
+            "停一下，先别执行",
+            delivery_id="telegram-bot-101-update-12",
+            source="telegram",
+        )
+        release_drive.set()
+        await running
 
     async def test_authorization_reply_resumes_stream(self) -> None:
         streams = AsyncMock()
-        streams.resume.return_value = _stream_view(
+        streams.view.return_value = _stream_view(
             pending_authorization_ids=("command-1",)
         )
-        channel = TelegramChannel(streams, AsyncMock(), 7)
+        channel = TelegramChannel(
+            streams,
+            AsyncMock(),
+            7,
+            "stream-current",
+            101,
+        )
 
         await channel.accept(12, _message(7, "yes"))
 
         streams.resolve_authorizations.assert_awaited_once_with(
-            "telegram-chat-v2-7",
+            "stream-current",
             approved=True,
         )
         await channel.drive_next()
-        streams.drive.assert_awaited_once_with("telegram-chat-v2-7")
+        streams.drive.assert_awaited_once_with("stream-current")
 
     async def test_other_chat_is_ignored(self) -> None:
         streams = AsyncMock()
         bot = AsyncMock()
-        channel = TelegramChannel(streams, bot, 7)
+        channel = TelegramChannel(streams, bot, 7, "stream-current", 101)
 
         await channel.accept(13, _message(8, "hello"))
 

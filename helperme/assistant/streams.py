@@ -146,11 +146,13 @@ class AssistantStreams:
         reason: str,
         *,
         delivery_id: str,
+        source: str = "user",
     ) -> None:
         await self._runtime.receive_interrupt(
             stream_id,
             reason,
             delivery_id=delivery_id,
+            source=source,
         )
         await self._runtime.advance(stream_id)
 

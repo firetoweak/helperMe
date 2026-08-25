@@ -22,3 +22,4 @@
 | [上下文](架构/上下文.md) | Journal 投影、保护窗、Artifact、预算 |
 | [工具与能力](架构/工具与能力.md) | 环境工具、MCP Toolset、Skill |
 | [入口与授权](架构/入口与授权.md) | 控制台、yes/no、控制面 |
+| [Channel 接入契约](架构/Channel接入契约.md) | 会话 identity、投递幂等、Interrupt、输出路由 |
