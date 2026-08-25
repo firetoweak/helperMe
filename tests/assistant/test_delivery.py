@@ -105,13 +105,17 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_content_becomes_delivered_command_then_waits_for_user(self):
         delivered: list[str] = []
+
+        async def deliver(text: str) -> None:
+            delivered.append(text)
+
         model = ScriptedDecisionMaker((
             lambda _frame: ModelDecision(content="hello there"),
         ))
         runtime = AgentRuntime(
             MemoryJournal(),
             DeliveringDecisionMaker(model),
-            deliver_binding(delivered.append),
+            deliver_binding(deliver),
             SequentialIds(),
         )
         await runtime.receive_user_message(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -292,7 +292,7 @@ def _read_artifact(store, arguments: Mapping[str, object]) -> object:
 @dataclass(frozen=True, slots=True)
 class JudgmentPolicy:
     judge: JudgeFn
-    notify: Callable[[str], None] | None = None
+    notify: Callable[[str], Awaitable[None] | None] | None = None
 
     async def on_user_message(
         self,
@@ -349,17 +349,22 @@ class JudgmentPolicy:
                 summary=summary,
             )
             await runtime.record_fact(stream_id, judgment_fact(existing))
-            self._notify(existing)
+            await self._notify(existing)
         if existing.verdict is JudgmentVerdict.PAUSE:
             return CompletionGate.PAUSE
         return CompletionGate.FINALIZE
 
-    def _notify(self, judgment: JudgmentCommitted) -> None:
+    async def _notify(
+        self,
+        judgment: JudgmentCommitted,
+    ) -> None:
         if self.notify is None:
             return
-        self.notify(
+        notified = self.notify(
             f"[judge {judgment.verdict.value}] {judgment.summary}"
         )
+        if isinstance(notified, Awaitable):
+            await notified
 
 
 def judge_tool_schemas(

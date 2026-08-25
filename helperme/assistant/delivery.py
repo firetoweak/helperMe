@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
+from inspect import isawaitable
 
 from helperme.runtime.dispatcher import AttemptContext, ToolBinding
 from helperme.runtime.model import (
@@ -15,6 +16,9 @@ from helperme.runtime.step import DecisionMaker
 
 
 DELIVER_TOOL_NAME = "deliver"
+
+
+DeliverySink = Callable[[str], Awaitable[None] | None]
 
 
 def ensure_deliver(decision: ModelDecision) -> ModelDecision:
@@ -48,7 +52,13 @@ class DeliveringDecisionMaker:
         return ensure_deliver(await self._inner.decide(frame))
 
 
-def deliver_binding(sink: Callable[[str], None]) -> dict[str, ToolBinding]:
+async def emit_delivery(sink: DeliverySink, text: str) -> None:
+    emitted = sink(text)
+    if isawaitable(emitted):
+        await emitted
+
+
+def deliver_binding(sink: DeliverySink) -> dict[str, ToolBinding]:
     async def handler(
         _context: AttemptContext,
         arguments: Mapping[str, object],
@@ -56,7 +66,7 @@ def deliver_binding(sink: Callable[[str], None]) -> dict[str, ToolBinding]:
         text = arguments.get("text")
         if type(text) is not str or not text:
             raise ValueError("deliver text must be a non-empty str")
-        sink(text)
+        await emit_delivery(sink, text)
         return text
 
     return {

@@ -125,11 +125,13 @@ class AssistantStreams:
         content: str,
         *,
         delivery_id: str,
+        source: str = "user",
     ) -> None:
         await self._runtime.receive_user_message(
             stream_id,
             content,
             delivery_id=delivery_id,
+            source=source,
         )
         if self._policy is not None:
             await self._policy.on_user_message(
