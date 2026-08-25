@@ -30,7 +30,7 @@ INITIAL_CONFIG = {
     "channels": {
         "telegram": {
             "bot_token": "your-bot-token",
-            "allowed_chat_id": 123456789,
+            "allowed_chat_id": None,
         }
     },
 }
@@ -57,7 +57,7 @@ class RuntimeConfig:
 @dataclass(frozen=True, slots=True)
 class TelegramConfig:
     bot_token: str
-    allowed_chat_id: int
+    allowed_chat_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,9 +192,9 @@ def load_app_config(path: Path | None = None) -> AppConfig:
                 "配置 channels.telegram.bot_token 不能为空"
             )
         allowed_chat_id = telegram["allowed_chat_id"]
-        if type(allowed_chat_id) is not int:
+        if allowed_chat_id is not None and type(allowed_chat_id) is not int:
             raise ValueError(
-                "配置 channels.telegram.allowed_chat_id 必须是整数"
+                "配置 channels.telegram.allowed_chat_id 必须是整数或 null"
             )
         telegram_config = TelegramConfig(
             bot_token=bot_token.strip(),

@@ -2,14 +2,35 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from helperme.assistant.runner import StreamNotFoundError
 from helperme.assistant.streams import StreamView
-from helperme.channels.telegram.assistant import TelegramChannel
+from helperme.channels.telegram.assistant import TelegramChannel, TelegramPairing
 
 
 class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unpaired_start_reports_chat_id_without_touching_runtime(
+        self,
+    ) -> None:
+        bot = AsyncMock()
+        pairing = TelegramPairing(bot)
+
+        with patch("builtins.print"):
+            await pairing.accept(_message(17, "/start"))
+
+        bot.send_message.assert_awaited_once()
+        self.assertEqual(bot.send_message.await_args.kwargs["chat_id"], 17)
+        self.assertIn("17", bot.send_message.await_args.kwargs["text"])
+
+    async def test_unpaired_message_cannot_create_stream(self) -> None:
+        bot = AsyncMock()
+        pairing = TelegramPairing(bot)
+
+        await pairing.accept(_message(17, "hello"))
+
+        self.assertEqual(bot.method_calls, [])
+
     async def test_start_replies_without_touching_runtime(self) -> None:
         bot = AsyncMock()
         streams = AsyncMock()

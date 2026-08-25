@@ -68,7 +68,7 @@ On the first launch, helperMe creates `~/.helperme/config.json` and asks you to 
 }
 ```
 
-Set `HELPERME_CONFIG` only when the complete configuration file should live at a non-default path. To use Telegram, copy the `channels.telegram` section from `config.example.json`, fill in the bot token and allowed chat ID, then run `python telegram_chat.py`.
+Set `HELPERME_CONFIG` only when the complete configuration file should live at a non-default path. To use Telegram, fill in the bot token and leave `allowed_chat_id` as `null`, then run `python telegram_chat.py` and send `/start` to the bot. It reports the chat ID without accepting tasks; write that ID into the configuration and restart to enable the assistant.
 
 Then start the console:
 

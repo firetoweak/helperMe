@@ -15,6 +15,28 @@ _YES = {"yes", "y"}
 _NO = {"no", "n"}
 
 
+class TelegramPairing:
+    def __init__(self, bot: Bot) -> None:
+        self._bot = bot
+
+    async def accept(self, message: Message) -> None:
+        if message.text is None or message.text.strip() != "/start":
+            return
+        chat_id = message.chat.id
+        print(
+            f"Telegram 配对请求：chat_id={chat_id}；"
+            "请写入 ~/.helperme/config.json 后重启。"
+        )
+        await self._bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"当前 chat_id：{chat_id}\n"
+                "请将它填入 config.json 的 "
+                "channels.telegram.allowed_chat_id，然后重启 HelperMe。"
+            ),
+        )
+
+
 class TelegramChannel:
     def __init__(
         self,
@@ -81,6 +103,26 @@ async def run_telegram_assistant() -> None:
         raise RuntimeError("请在 config.json 中配置 channels.telegram")
     chat_id = telegram.allowed_chat_id
     async with Bot(token=telegram.bot_token) as bot:
+        if chat_id is None:
+            pairing = TelegramPairing(bot)
+            dispatcher = Dispatcher()
+
+            @dispatcher.message(F.text)
+            async def receive_pairing(message: Message) -> None:
+                await pairing.accept(message)
+
+            print(
+                "Telegram 配对模式已启动；"
+                "请向机器人发送 /start 获取 chat_id。"
+            )
+            await dispatcher.start_polling(
+                bot,
+                allowed_updates=["message"],
+                handle_as_tasks=False,
+                close_bot_session=False,
+            )
+            return
+
         channel: TelegramChannel | None = None
 
         async def send(text: str) -> None:
@@ -105,7 +147,10 @@ async def run_telegram_assistant() -> None:
                 handle_as_tasks=False,
                 close_bot_session=False,
             ))
-            print(f"Telegram Assistant 已启动，chat_id={chat_id}；按 Ctrl+C 退出。")
+            print(
+                f"Telegram Assistant 已启动，chat_id={chat_id}；"
+                "按 Ctrl+C 退出。"
+            )
             try:
                 done, _ = await asyncio.wait(
                     (worker, polling),

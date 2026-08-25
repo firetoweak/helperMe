@@ -4,10 +4,34 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, call, patch
 
-from helperme.channels.cli.console import _ContextMeter, read_console_input
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.layout import HSplit, Window
+from prompt_toolkit.output import DummyOutput
+
+from helperme.channels.cli.console import (
+    _BottomAnchoredPromptSession,
+    _ContextMeter,
+    read_console_input,
+)
 
 
 class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
+    def test_prompt_is_anchored_above_the_bottom_toolbar(self):
+        with create_pipe_input() as console_input:
+            session = _BottomAnchoredPromptSession(
+                bottom_toolbar=lambda: "上下文 0/200k",
+                input=console_input,
+                output=DummyOutput(),
+            )
+
+            root = session.layout.container
+            self.assertIsInstance(root, HSplit)
+            self.assertIsInstance(root.children[0], Window)
+            prompt = root.children[1]
+            self.assertIsInstance(prompt, HSplit)
+            self.assertEqual(prompt.preferred_height(80, 24).min, 2)
+            self.assertEqual(prompt.preferred_height(80, 24).max, 2)
+
     def test_context_meter_tracks_only_the_selected_stream(self):
         meter = _ContextMeter()
         meter.select("stream-1", 200_000)

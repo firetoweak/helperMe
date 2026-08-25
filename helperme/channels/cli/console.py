@@ -4,6 +4,8 @@ import asyncio
 from uuid import uuid4
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from helperme.assistant.streams import (
@@ -25,6 +27,19 @@ _TURN_RULE = "─" * 72
 
 class _ConsoleInputClosed(Exception):
     pass
+
+
+class _BottomAnchoredPromptSession(PromptSession[str]):
+    def _create_layout(self) -> Layout:
+        prompt_layout = super()._create_layout()
+        prompt = HSplit(
+            [prompt_layout.container],
+            height=Dimension.exact(2),
+        )
+        return Layout(
+            HSplit([Window(), prompt]),
+            focused_element=prompt_layout.current_control,
+        )
 
 
 def _compact_tokens(tokens: int) -> str:
@@ -174,7 +189,7 @@ async def run_runtime_console() -> None:
         print(f"\n助手：{text}")
 
     context_meter = _ContextMeter()
-    session: PromptSession[str] = PromptSession(
+    session: PromptSession[str] = _BottomAnchoredPromptSession(
         bottom_toolbar=context_meter.render,
     )
     async with bootstrap_assistant(

@@ -89,6 +89,23 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(telegram.bot_token, "token")
         self.assertEqual(telegram.allowed_chat_id, -7)
 
+    def test_allows_unpaired_telegram_config(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            data = self._data()
+            data["channels"] = {
+                "telegram": {
+                    "bot_token": "token",
+                    "allowed_chat_id": None,
+                }
+            }
+            self._write_config(path, data)
+
+            telegram = load_app_config(path).channels.telegram
+
+        self.assertIsNotNone(telegram)
+        self.assertIsNone(telegram.allowed_chat_id)
+
     def test_explicit_path_takes_priority_over_environment(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
