@@ -1,34 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, Update
 
 from helperme.assistant.runner import MODEL_DECISION_ERRORS, StreamNotFoundError
 from helperme.assistant.streams import AssistantStreams
+from helperme.config import InitialConfigCreated, load_app_config
 
 
-TOKEN_ENV = "HELPER_TELEGRAM_BOT_TOKEN"
-ALLOWED_CHAT_ENV = "HELPER_TELEGRAM_ALLOWED_CHAT_ID"
 _STREAM_PREFIX = "telegram-chat-v2-"
 _YES = {"yes", "y"}
 _NO = {"no", "n"}
-
-
-def _required_env(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise RuntimeError(f"请设置环境变量 {name}")
-    return value
-
-
-def _allowed_chat_id() -> int:
-    try:
-        return int(_required_env(ALLOWED_CHAT_ENV))
-    except ValueError as exc:
-        raise RuntimeError(f"环境变量 {ALLOWED_CHAT_ENV} 必须是整数") from exc
 
 
 class TelegramChannel:
@@ -91,15 +75,19 @@ class TelegramChannel:
 async def run_telegram_assistant() -> None:
     from helperme.bootstrap import bootstrap_assistant
 
-    chat_id = _allowed_chat_id()
-    async with Bot(token=_required_env(TOKEN_ENV)) as bot:
+    app_config = load_app_config()
+    telegram = app_config.channels.telegram
+    if telegram is None:
+        raise RuntimeError("请在 config.json 中配置 channels.telegram")
+    chat_id = telegram.allowed_chat_id
+    async with Bot(token=telegram.bot_token) as bot:
         channel: TelegramChannel | None = None
 
         async def send(text: str) -> None:
             assert channel is not None
             await channel.send(text)
 
-        async with bootstrap_assistant(send) as app:
+        async with bootstrap_assistant(send, app_config=app_config) as app:
             channel = TelegramChannel(app.streams, bot, chat_id)
             dispatcher = Dispatcher()
 
@@ -133,5 +121,7 @@ async def run_telegram_assistant() -> None:
 def main() -> None:
     try:
         asyncio.run(run_telegram_assistant())
+    except InitialConfigCreated as exc:
+        print(exc)
     except KeyboardInterrupt:
         print("\nTelegram Assistant 已退出。")

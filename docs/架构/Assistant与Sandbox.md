@@ -56,4 +56,4 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 配置
 
-`model_config.yaml`：模型、workspace.root、full_access、model_context_limit、input_budget_ratio。不读取 Turn / Step 次数预算。Assistant 持续推进到语义 idle、授权等待、终态或显式中断；未来后台公平调度属于 Automation Scheduler，不进入 Runtime 配置。
+`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置只包含 model_context_limit 与 input_budget_ratio，不读取 Turn / Step 次数预算。Assistant 持续推进到语义 idle、授权等待、终态或显式中断；未来后台公平调度属于 Automation Scheduler，不进入 Runtime 配置。

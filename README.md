@@ -45,21 +45,30 @@ helperMe currently targets **Python 3.10+** and is developed and tested primaril
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-Copy-Item model_config.example.yaml model_config.yaml
 ```
 
-Edit `model_config.yaml` with an OpenAI-compatible Chat Completions endpoint and the workspace the assistant may access:
+On the first launch, helperMe creates `~/.helperme/config.json` and asks you to edit it before restarting. No configuration setup command is required. Fill in the OpenAI-compatible Chat Completions endpoint, the workspace the assistant may access, and any enabled Channels:
 
-```yaml
-model:
-  name: "your-model-name"
-  base_url: "https://your-model-endpoint.example/v1"
-  api_key: "your-api-key"
-
-workspace:
-  root: "D:\\work\\agent"
-  full_access: true
+```json
+{
+  "model": {
+    "name": "your-model-name",
+    "base_url": "https://your-model-endpoint.example/v1",
+    "api_key": "your-api-key"
+  },
+  "workspace": {
+    "root": "D:/work/agent",
+    "full_access": true
+  },
+  "runtime": {
+    "model_context_limit": 200000,
+    "input_budget_ratio": 0.9
+  },
+  "channels": {}
+}
 ```
+
+Set `HELPERME_CONFIG` only when the complete configuration file should live at a non-default path. To use Telegram, copy the `channels.telegram` section from `config.example.json`, fill in the bot token and allowed chat ID, then run `python telegram_chat.py`.
 
 Then start the console:
 
@@ -138,7 +147,7 @@ Run the architecture boundary tests with:
 python -m unittest tests.architecture.test_import_boundaries tests.architecture.test_runtime_boundaries
 ```
 
-The repository also contains unit, integration, benchmark, and live tests grouped by subsystem. Tests under `tests/live` call the model endpoint configured in `model_config.yaml` and may incur provider charges; run them deliberately rather than through broad test discovery.
+The repository also contains unit, integration, benchmark, and live tests grouped by subsystem. Tests under `tests/live` call the model endpoint configured in `~/.helperme/config.json` and may incur provider charges; run them deliberately rather than through broad test discovery.
 
 ## Further Reading
 

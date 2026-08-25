@@ -53,7 +53,7 @@ async def main() -> None:
     ).resolve()
     if workspace != expected_workspace:
         raise AssertionError(
-            f"model_config workspace mismatch: {workspace}"
+            f"config workspace mismatch: {workspace}"
         )
 
     config = assistant_config_from_app(

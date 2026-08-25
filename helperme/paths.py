@@ -22,6 +22,10 @@ class HelperMeHome:
         return self.root / "sessions"
 
     @property
+    def config_path(self) -> Path:
+        return self.root / "config.json"
+
+    @property
     def mcp_root(self) -> Path:
         return self.root / "mcp"
 
