@@ -18,5 +18,6 @@
 - 实现中发现设计与原则冲突时停止实现，保留原始冲突并交给人决定；Agent 不得通过修改原则或静默改写设计继续推进。
 - Draft PR 前审查必须由独立于编码 Session 的审查 Agent 执行。审查先确认 `design_revision..HEAD` 未触碰原则文档，再逐条检查当前代码是否符合冻结原则，然后检查是否符合设计提交。
 - 审查 Agent 在看 diff 前，先仅从冻结原则和设计提取设计义务；随后检查生产代码是否实现每项义务，最后独立检查测试断言是否验证设计而非复述当前实现。测试通过不能作为设计正确的证据。
-- 实现和测试完成后，编码 Agent 自行提交允许修改的文件、确认工作树干净，并自动运行 `python tools/review_draft.py <design_revision>`，不要求用户手动触发审查。
-- Draft PR 前审查不自动修复，不以重复执行单测为中心。结果为 `aligned` 时编码 Agent 才报告可以创建 Draft PR；发现 `drift`、`ambiguous` 或原则文件越界时立即停止，原样转交审查反馈，由人决定下一步。
+- 实现和测试完成后，编码 Agent 自行提交允许修改的文件、确认工作树干净，并自动运行 `python tools/review_draft.py <design_revision>`。该脚本只校验前置条件并在 stdout 打印冻结审查 prompt，不拉起任何审查模型。编码 Agent 必须用当前环境的原生能力另开一条独立审查 Session，把脚本输出的 prompt 原样交给该 Session；不得在编码 Session 内自行审查；不得把编码对话、推理过程、工具记录或任何未写入该 prompt 的上下文一并传入。若无法另开独立 Session，则失败并交给人，不得降级为自审。
+- 审查 Session 的只读不改是软约束：仓库不提供沙箱级写保护。审查 Agent 仍被明确要求不得修改任何文件、不得提出自动修复；编码 Agent 发现审查改动了工作树时必须视为审查无效。
+- Draft PR 前审查不以重复执行单测为中心。结果为 `aligned` 时编码 Agent 才报告可以创建 Draft PR；发现 `drift`、`ambiguous` 或原则文件越界时立即停止，原样转交审查反馈，由人决定下一步。编码 Agent 不得改写审查结论。

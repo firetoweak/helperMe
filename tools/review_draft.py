@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import shutil
 import subprocess
 import sys
-from typing import Callable, Sequence
+from typing import Sequence
 
 
 PRINCIPLE_PATH = "docs/原则.md"
@@ -142,28 +141,10 @@ def build_prompt(template: str, evidence: ReviewEvidence) -> str:
     ) + "\n"
 
 
-def run_review(
-    evidence: ReviewEvidence,
-    prompt: str,
-    *,
-    codex_command: str,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> int:
-    result = runner(
-        [
-            codex_command,
-            "exec",
-            "--ephemeral",
-            "--sandbox",
-            "read-only",
-            "--cd",
-            str(evidence.repository),
-            "-",
-        ],
-        cwd=evidence.repository,
-        input=prompt.encode("utf-8"),
-    )
-    return result.returncode
+def render_review_prompt(repository: Path, revision: str) -> str:
+    evidence = collect_evidence(repository, revision)
+    template = PROMPT_PATH.read_text(encoding="utf-8")
+    return build_prompt(template, evidence)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -174,21 +155,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         repository = find_repository(Path.cwd())
-        evidence = collect_evidence(repository, args[0])
-        codex_command = shutil.which("codex")
-        if codex_command is None:
-            raise ReviewInputError("codex executable was not found on PATH")
+        prompt = render_review_prompt(repository, args[0])
     except ReviewInputError as error:
         print(error, file=sys.stderr)
         return 2
 
-    template = PROMPT_PATH.read_text(encoding="utf-8")
-    prompt = build_prompt(template, evidence)
-    return run_review(
-        evidence,
-        prompt,
-        codex_command=codex_command,
-    )
+    print(prompt, end="")
+    return 0
 
 
 if __name__ == "__main__":

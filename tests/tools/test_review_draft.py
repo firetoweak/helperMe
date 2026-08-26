@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
+import io
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -159,45 +162,52 @@ class ReviewDraftTest(unittest.TestCase):
         self.assertIn("测试通过不能作为设计正确的证据", template)
         self.assertIn("implementation_evidence", template)
         self.assertIn("test_evidence", template)
+        self.assertIn("你没有编码 Session 的上下文", template)
+        self.assertIn("即使运行环境向你展示了先前对话", template)
+        self.assertIn("只读不改是软约束", template)
+        self.assertIn("没有机制阻止你改文件", template)
 
-    def test_run_review_passes_prompt_to_codex_and_returns_raw_exit_code(self):
+    def test_agents_require_independent_session_without_coding_context(self):
+        agents = (
+            Path(__file__).resolve().parents[2] / "AGENTS.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("不拉起任何审查模型", agents)
+        self.assertIn("另开一条独立审查 Session", agents)
+        self.assertIn("把脚本输出的 prompt 原样交给该 Session", agents)
+        self.assertIn("不得在编码 Session 内自行审查", agents)
+        self.assertIn("不得把编码对话、推理过程、工具记录", agents)
+        self.assertIn("不得降级为自审", agents)
+        self.assertIn("只读不改是软约束", agents)
+        self.assertIn("发现审查改动了工作树时必须视为审查无效", agents)
+        self.assertIn("不得改写审查结论", agents)
+
+    def test_script_does_not_launch_a_reviewer(self):
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+        self.assertNotIn("codex", source)
+        self.assertNotIn("shutil", source)
+        self.assertFalse(hasattr(review_draft, "run_review"))
+
+    def test_main_prints_frozen_prompt_without_launching_a_reviewer(self):
         self.commit_implementation()
-        evidence = review_draft.collect_evidence(
-            self.repository,
-            self.design_revision,
-        )
-        call: dict[str, object] = {}
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(self.repository)
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = review_draft.main([self.design_revision])
+        finally:
+            os.chdir(original_cwd)
 
-        def runner(args, **kwargs):
-            call["args"] = args
-            call["kwargs"] = kwargs
-            return subprocess.CompletedProcess(args, 7)
-
-        exit_code = review_draft.run_review(
-            evidence,
-            "frozen prompt",
-            codex_command="codex-test",
-            runner=runner,
-        )
-
-        self.assertEqual(exit_code, 7)
-        self.assertEqual(
-            call["args"],
-            [
-                "codex-test",
-                "exec",
-                "--ephemeral",
-                "--sandbox",
-                "read-only",
-                "--cd",
-                str(self.repository),
-                "-",
-            ],
-        )
-        kwargs = call["kwargs"]
-        self.assertEqual(kwargs["cwd"], self.repository)
-        self.assertEqual(kwargs["input"], b"frozen prompt")
-        self.assertNotIn("text", kwargs)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        prompt = stdout.getvalue()
+        self.assertIn(self.design_revision, prompt)
+        self.assertIn("冻结输入", prompt)
+        self.assertIn("只读不改是软约束", prompt)
+        self.assertIn("design: narrow review", prompt)
 
 
 if __name__ == "__main__":
