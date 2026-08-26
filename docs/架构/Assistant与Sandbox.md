@@ -50,6 +50,8 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 `JournalBackedLlmDecisionMaker` 位于 `helperme/assistant/decision.py`。它从 Journal 快照投影消息，带上当前 Step 可见的 tools，调用 `helperme.llm`，把结果译成 `ModelDecision`。content-only 由 Assistant 补 `deliver`。
 
+当 Step 由 `UserInterruptReceived` 触发且仍有会唤醒模型的未完成 Command 时，DecisionMaker 临时提供 `resolve_interrupt`。模型必须为每个 Command 显式选择 `keep / abandon / cancel`，并可在同一响应中发出新的普通工具调用。Assistant 在模型响应边界严格校验完整覆盖：`abandon` 写入 `ModelDecision.abandon_command_ids`；`cancel` 同时写入 abandon 并生成 `CancelTool`，避免取消竞态中的旧 Outcome 再次唤醒决策。该能力不扩张 Runtime 语义，非 Interrupt Step 不暴露此 Schema。
+
 ## 环境
 
 任务文件在配置的 workspace root。`full_access` 时再挂上 Host 根。命令走 `sandbox/local/powershell.py`。路径契约在 `sandbox/workspace.py`：Agent 不拥有工作目录，Environment 描述在哪里执行。`HelperMeHome` 只表示产品自身数据目录，不能充当任务 Workspace 或 Sandbox。

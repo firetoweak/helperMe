@@ -18,6 +18,7 @@ from helperme.assistant.context.projection import (
 )
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.decision import (
+    INTERRUPT_RESOLUTION_TOOL_NAME,
     JournalBackedLlmDecisionMaker,
     decision_from_llm,
 )
@@ -31,6 +32,7 @@ from helperme.assistant.streams import AssistantStreams
 from helperme.channels.cli.console import drive_with_console_interrupts
 from helperme.runtime import (
     AgentRuntime,
+    CancelTool,
     CommandPhase,
     CommandRecoveryRequired,
     InvokeTool,
@@ -107,6 +109,21 @@ class RecordingLlm:
         self.tools = tools or []
         return LLMCallResult(
             LLMResponse(content="done"),
+            LLMUsage(input_tokens=1, output_tokens=1),
+        )
+
+
+class QueuedLlm:
+    def __init__(self, responses: list[LLMResponse]) -> None:
+        self.responses = responses
+        self.messages: list[list[dict[str, object]]] = []
+        self.tools: list[list[dict[str, object]]] = []
+
+    async def chat(self, messages, _model, *, tools=None):
+        self.messages.append(messages)
+        self.tools.append(tools or [])
+        return LLMCallResult(
+            self.responses.pop(0),
             LLMUsage(input_tokens=1, output_tokens=1),
         )
 
@@ -644,6 +661,266 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         result = await drive
         self.assertEqual(result.status, RuntimeStatus.WAITING.value)
         self.assertEqual(len(model.frames), 3)
+
+    async def test_llm_interrupt_abandon_suppresses_old_outcome_followup(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(_context, _arguments):
+            started.set()
+            await release.wait()
+            return "old-result"
+
+        llm = QueuedLlm([
+            LLMResponse(calls=(ToolCall("call-1", "slow", "{}"),)),
+        ])
+        journal = MemoryJournal()
+        runtime = AgentRuntime(
+            journal,
+            JournalBackedLlmDecisionMaker(
+                journal,
+                llm,
+                "test-model",
+                tool_schemas=[{
+                    "type": "function",
+                    "function": {
+                        "name": "slow",
+                        "description": "slow",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    },
+                }],
+            ),
+            {
+                "slow": ToolBinding(slow),
+                **deliver_binding(lambda _text: None),
+            },
+            SequentialIds(),
+        )
+        await runtime.receive_user_message(
+            self.STREAM_ID,
+            "start",
+            delivery_id="interrupt-abandon-start",
+        )
+        first = await runtime.advance(self.STREAM_ID)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        old_command_id = first.commands[0].command_id
+        llm.responses.append(LLMResponse(
+            content="停止旧任务",
+            calls=(ToolCall(
+                "call-2",
+                INTERRUPT_RESOLUTION_TOOL_NAME,
+                json.dumps({
+                    "commands": [{
+                        "command_id": old_command_id,
+                        "action": "abandon",
+                    }],
+                }),
+            ),),
+        ))
+        await runtime.receive_interrupt(
+            self.STREAM_ID,
+            "换个任务",
+            delivery_id="interrupt-abandon",
+        )
+
+        interrupted = await runtime.advance(self.STREAM_ID)
+        release.set()
+        await runtime.dispatcher.wait_all()
+        state = await runtime.state(self.STREAM_ID)
+
+        self.assertEqual(
+            interrupted.decision.abandon_command_ids,
+            (old_command_id,),
+        )
+        self.assertEqual(len(llm.messages), 2)
+        self.assertEqual(state.status, RuntimeStatus.WAITING)
+        self.assertEqual(state.waiting_for, ("user_message",))
+        resolution_schema = next(
+            schema
+            for schema in llm.tools[1]
+            if schema["function"]["name"]
+            == INTERRUPT_RESOLUTION_TOOL_NAME
+        )
+        command_schema = resolution_schema["function"]["parameters"][
+            "properties"
+        ]["commands"]["items"]["properties"]["command_id"]
+        action_schema = resolution_schema["function"]["parameters"][
+            "properties"
+        ]["commands"]["items"]["properties"]["action"]
+        self.assertEqual(command_schema["enum"], [old_command_id])
+        self.assertEqual(
+            action_schema["enum"],
+            ["abandon", "cancel", "keep"],
+        )
+
+    async def test_llm_interrupt_cancel_can_coexist_with_new_tool(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(_context, _arguments):
+            started.set()
+            await release.wait()
+            return "old-result"
+
+        async def replacement(_context, _arguments):
+            return "new-result"
+
+        schemas = [
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": name,
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+            for name in ("slow", "replacement")
+        ]
+        llm = QueuedLlm([
+            LLMResponse(calls=(ToolCall("call-1", "slow", "{}"),)),
+        ])
+        journal = MemoryJournal()
+        runtime = AgentRuntime(
+            journal,
+            JournalBackedLlmDecisionMaker(
+                journal,
+                llm,
+                "test-model",
+                tool_schemas=schemas,
+            ),
+            {
+                "slow": ToolBinding(slow),
+                "replacement": ToolBinding(
+                    replacement,
+                    decision_on_outcome=False,
+                ),
+                **deliver_binding(lambda _text: None),
+            },
+            SequentialIds(),
+        )
+        await runtime.receive_user_message(
+            self.STREAM_ID,
+            "start",
+            delivery_id="interrupt-cancel-start",
+        )
+        first = await runtime.advance(self.STREAM_ID)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        old_command_id = first.commands[0].command_id
+        llm.responses.append(LLMResponse(
+            content="改做新任务",
+            calls=(
+                ToolCall(
+                    "call-2",
+                    INTERRUPT_RESOLUTION_TOOL_NAME,
+                    json.dumps({
+                        "commands": [{
+                            "command_id": old_command_id,
+                            "action": "cancel",
+                        }],
+                    }),
+                ),
+                ToolCall("call-3", "replacement", "{}"),
+            ),
+        ))
+        await runtime.receive_interrupt(
+            self.STREAM_ID,
+            "换个任务",
+            delivery_id="interrupt-cancel",
+        )
+
+        interrupted = await runtime.advance(self.STREAM_ID)
+        release.set()
+        await runtime.dispatcher.wait_all()
+
+        effects = interrupted.decision.command_requests
+        self.assertEqual(
+            interrupted.decision.abandon_command_ids,
+            (old_command_id,),
+        )
+        self.assertIn(InvokeTool("replacement"), effects)
+        self.assertIn(CancelTool(old_command_id), effects)
+
+    async def test_llm_interrupt_requires_every_unfinished_command(self):
+        all_started = asyncio.Event()
+        release = asyncio.Event()
+        started = 0
+
+        async def slow(_context, _arguments):
+            nonlocal started
+            started += 1
+            if started == 2:
+                all_started.set()
+            await release.wait()
+            return "old-result"
+
+        llm = QueuedLlm([LLMResponse(calls=(
+            ToolCall("call-1", "slow", '{"name": "a"}'),
+            ToolCall("call-2", "slow", '{"name": "b"}'),
+        ))])
+        journal = MemoryJournal()
+        runtime = AgentRuntime(
+            journal,
+            JournalBackedLlmDecisionMaker(
+                journal,
+                llm,
+                "test-model",
+                tool_schemas=[{
+                    "type": "function",
+                    "function": {
+                        "name": "slow",
+                        "description": "slow",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                            },
+                        },
+                    },
+                }],
+            ),
+            {"slow": ToolBinding(slow)},
+            SequentialIds(),
+        )
+        await runtime.receive_user_message(
+            self.STREAM_ID,
+            "start",
+            delivery_id="interrupt-incomplete-start",
+        )
+        first = await runtime.advance(self.STREAM_ID)
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        command_ids = tuple(
+            command.command_id for command in first.commands
+        )
+        llm.responses.append(LLMResponse(
+            content="只处理一个",
+            calls=(ToolCall(
+                "call-3",
+                INTERRUPT_RESOLUTION_TOOL_NAME,
+                json.dumps({
+                    "commands": [{
+                        "command_id": command_ids[0],
+                        "action": "abandon",
+                    }],
+                }),
+            ),),
+        ))
+        await runtime.receive_interrupt(
+            self.STREAM_ID,
+            "停止",
+            delivery_id="interrupt-incomplete",
+        )
+
+        with self.assertRaisesRegex(
+            InvalidLLMResponse,
+            "every unfinished command once",
+        ):
+            await runtime.advance(self.STREAM_ID)
+
+        release.set()
+        await runtime.dispatcher.wait_all()
 
     async def test_drive_yields_for_authorization_then_resumes_on_grant(self):
         executions: list[object] = []

@@ -2,7 +2,24 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from helperme.llm.types import InvalidLLMResponse, LLMCallResult, LLMResponse
+from helperme.llm.types import (
+    InvalidLLMResponse,
+    LLMCallResult,
+    LLMResponse,
+    ToolCall,
+)
+
+
+__all__ = [
+    "InvalidLLMResponse",
+    "LLMApi",
+    "LLMCallResult",
+    "LLMContextLengthError",
+    "LLMProviderError",
+    "LLMResponse",
+    "LLMTransientError",
+    "ToolCall",
+]
 
 
 class LLMTransientError(RuntimeError):
