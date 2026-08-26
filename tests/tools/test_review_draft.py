@@ -144,6 +144,22 @@ class ReviewDraftTest(unittest.TestCase):
         self.assertIn("Runtime 不做语义判断", prompt)
         self.assertIn("design: narrow review", prompt)
 
+    def test_project_prompt_requires_design_code_test_traceability(self):
+        template = (
+            Path(__file__).resolve().parents[2]
+            / "tools"
+            / "review_prompt.md"
+        ).read_text(encoding="utf-8")
+
+        design = template.index("提取 `design_obligations`")
+        implementation = template.index("读取生产代码变化")
+        tests = template.index("单独读取测试变化")
+        self.assertLess(design, implementation)
+        self.assertLess(implementation, tests)
+        self.assertIn("测试通过不能作为设计正确的证据", template)
+        self.assertIn("implementation_evidence", template)
+        self.assertIn("test_evidence", template)
+
     def test_run_review_passes_prompt_to_codex_and_returns_raw_exit_code(self):
         self.commit_implementation()
         evidence = review_draft.collect_evidence(
