@@ -152,9 +152,12 @@ def run_review(
     result = runner(
         [
             codex_command,
-            "review",
-            "--base",
-            evidence.design_revision,
+            "exec",
+            "--ephemeral",
+            "--sandbox",
+            "read-only",
+            "--cd",
+            str(evidence.repository),
             "-",
         ],
         cwd=evidence.repository,

@@ -169,9 +169,12 @@ class ReviewDraftTest(unittest.TestCase):
             call["args"],
             [
                 "codex-test",
-                "review",
-                "--base",
-                self.design_revision,
+                "exec",
+                "--ephemeral",
+                "--sandbox",
+                "read-only",
+                "--cd",
+                str(self.repository),
                 "-",
             ],
         )
