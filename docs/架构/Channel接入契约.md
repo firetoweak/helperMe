@@ -33,7 +33,7 @@ token、secret、access key 是可轮换凭证，不是 identity。轮换同一�
 
 - Delivery identity 至少包含外部协议真实的去重命名空间。若消息号只在某个服务账号内唯一，就必须同时带上该账号 identity。
 - 入站接收与 Agent drive 并行。Channel 不能因为正在执行工具或调用模型就停止接收新消息。
-- Stream 空闲时，普通文本写成 `UserMessageReceived`；Stream 正在 drive 时，新文本写成 `UserInterruptReceived`，不能仅排到单 worker 队尾当作下一个普通任务。
+- Stream 空闲时，普通文本写成 `UserMessageReceived`。Stream 正在 drive 时，Channel 只把同一次外部 delivery 接纳为 `UserInterruptReceived`，并随 Event 持久保存正文与确定性的 `follow_up_message_id`；不能只排到旧 worker 队尾。该 Event 提交后已经具备完整恢复信息，Channel 可以确认投递。旧执行收口后，由 Runtime 按因果顺序派生新的 `UserMessageReceived` 并启动 Step；Channel 不进行第二次外部接纳。
 - 授权回复、终止命令等确定性控制输入先由 Channel 按当前状态映射；其余文本含义仍交给模型判断。
 - 协议重投必须落到同一个 Delivery identity；不同服务账号中相同的消息号不得互相去重。
 
@@ -49,8 +49,7 @@ token、secret、access key 是可轮换凭证，不是 identity。轮换同一�
 2. 同一账号轮换凭证不改变 Stream identity。
 3. 不同服务账号面对相同外部会话 ID 时使用不同 Stream。
 4. 同一投递的协议重试只写入一次；不同账号的相同消息号互不冲突。
-5. drive 期间的新文本立即成为 Interrupt，入站接收不会等待旧任务结束。
+5. drive 期间的新文本立即中断旧执行，入站接收不会等待旧任务结束；Interrupt 本身不触发模型 Step，按确定性 ID 派生的 UserMessage 在收口后恰好触发一个新 Step，进程在任一阶段失败都不会丢失或重复该消息。
 6. 未授权来源不会创建 Stream、写 Journal 或触发输出。
 7. 配对/绑定模式不装配任务执行面，也不接受普通任务。
 8. 多会话并发时，输出始终回到产生它的 Reply route。
-

@@ -50,9 +50,7 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 `JournalBackedLlmDecisionMaker` 位于 `helperme/assistant/decision.py`。它从 Journal 快照投影消息，带上当前 Step 可见的 tools，调用 `helperme.llm`，把结果译成 `ModelDecision`。content-only 由 Assistant 补 `deliver`。
 
-当 Step 由 `UserInterruptReceived` 触发且仍有未完成的用户工作 Command 时，DecisionMaker 临时提供 `resolve_interrupt`。用户工作按 Command effect 的产品归属识别，不能用 `decision_on_outcome` 过滤；后者只表示 Outcome 是否唤醒模型，不能证明旧动作已经符合用户的新意图。`deliver`、`resolve_interrupt` 及派生的 `CancelTool` 属于 Assistant 自有控制基础设施，不进入处置集合。
-
-模型必须为集合中的每个 Command 显式选择 `keep / abandon / cancel`，并可在同一响应中发出新的普通工具调用。`resolve_interrupt` 本身作为不唤醒模型的 Assistant Command 随 Step 提交，因此纯 `keep` 也有明确、可重放的决策记录；`abandon` 另写入 `ModelDecision.abandon_command_ids`；`cancel` 同时写入 abandon 并生成 `CancelTool`，避免取消竞态中的旧 Outcome 再次唤醒决策。Assistant 在模型响应边界严格校验完整覆盖。该能力不扩张 Runtime 语义，非 Interrupt Step 不暴露此 Schema。
+`UserInterruptReceived` 不会到达 DecisionMaker。Assistant 不把它投影成模型消息，不提供模型中断裁决工具，也不要求模型逐条裁决未完成 Command。Runtime 根据 Step 与 Command 的机械阶段执行提交围栏和取消；收口后，DecisionMaker 只处理 Runtime 从 `follow_up_message_id` 幂等物化的全新 `UserMessageReceived`，不会恢复旧 Step。
 
 ## 环境
 

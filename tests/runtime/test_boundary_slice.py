@@ -22,7 +22,6 @@ from helperme.runtime import (
     RuntimeStatus,
     SqliteJournal,
     ToolBinding,
-    UserInterruptReceived,
     UserMessageReceived,
     diagnose_artifacts,
     replay,
@@ -193,61 +192,6 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             CommandRejected,
         )
         self.assertFalse(tool.started.is_set())
-
-    async def test_interrupt_is_not_skipped_or_swallowed_by_older_step(self):
-        tool = RecordingTool("A")
-        entered = asyncio.Event()
-        release_model = asyncio.Event()
-
-        async def decide_first(_frame: DecisionFrame) -> ModelDecision:
-            entered.set()
-            await release_model.wait()
-            return ModelDecision(
-                content="keep going",
-                command_requests=(InvokeTool("A"),),
-            )
-
-        model = ScriptedDecisionMaker((
-            decide_first,
-            lambda _frame: ModelDecision(content="interrupt handled"),
-        ))
-        runtime = runtime_for(tool, model)
-        user_message = await runtime.receive_user_message(
-            self.STREAM_ID,
-            "start",
-            delivery_id="start-1",
-        )
-        step_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
-        await asyncio.wait_for(entered.wait(), timeout=1)
-        interrupt = await runtime.receive_interrupt(
-            self.STREAM_ID,
-            "stop",
-            delivery_id="interrupt-1",
-        )
-        release_model.set()
-        step = await step_task
-
-        self.assertEqual(step.trigger_event_id, user_message.event_id)
-        self.assertNotIn(interrupt.event_id, model.frames[0].state.visible_event_ids)
-        state = await runtime.state(self.STREAM_ID)
-        self.assertEqual(state.status, RuntimeStatus.RUNNABLE)
-        self.assertEqual(state.next_trigger_event_id, interrupt.event_id)
-        consumed = model.frames[0].state.consumed_trigger_event_ids
-        self.assertNotIn(interrupt.event_id, consumed)
-
-        follow_up = await runtime.advance(self.STREAM_ID)
-        self.assertEqual(follow_up.trigger_event_id, interrupt.event_id)
-        self.assertIsInstance(
-            model.frames[1].trigger_event.payload,
-            UserInterruptReceived,
-        )
-        self.assertIn(interrupt.event_id, model.frames[1].state.visible_event_ids)
-        self.assertIn(
-            step.step_id,
-            {item.step_id for item in model.frames[1].state.prior_steps},
-        )
-        tool.release.set()
-        await runtime.dispatcher.wait(step.commands[0].command_id)
 
     async def test_decision_content_is_not_delivered_user_message(self):
         tool = RecordingTool("deliver")

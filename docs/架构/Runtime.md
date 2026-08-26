@@ -37,17 +37,17 @@ Decision Context 在 Step 开始时冻结模型所见的 Event、Criteria、Prom
 
 Runtime 不替模型做语义判断。它只接收 `ModelDecision`，并确定性检查该 Decision 能否提交、Command 能否派发。Assistant 决策边界把本次精确请求、模型配置、Projector 版本和原始响应保存为 Replay Manifest；Core 只随 `StepCommitted` 保存不透明 `artifact_refs`，不解析 Prompt、Schema 或模型协议。
 
-同 Step、`decision_on_outcome=True` 的并行 Command 构成无序集合。调用、开始、完成和 Outcome 写入顺序都没有决策语义；全部终态后才形成下一次决策（sibling join）。`UserInterruptReceived` 不受该屏障约束。
+同 Step、`decision_on_outcome=True` 的并行 Command 构成无序集合。调用、开始、完成和 Outcome 写入顺序都没有决策语义；全部终态后才形成下一次决策（sibling join）。
 
 `decision_on_outcome` 是 Command 签发时冻结的机械调度事实，默认 `True`。该值由 Core 外的 Tool Binding 提供；Core 只读取，不根据工具身份、Command 类型或 Outcome 内容推断。目前唯一显式例外是 `deliver=False`。
 
 Journal 仍按真实接纳顺序记录每个 Outcome，用于审计和并发裁决，但 Runtime 不为并行结果顺序建立额外语义，也不因单个结果到达触发模型。
 
-Assistant 向模型序列化同一段相邻并行结果时，按 Command 签发顺序做稳定展示，避免完成竞速改变模型输入；这只是投影规范化，不改写 Journal，也不赋予该顺序业务含义。Interrupt 形成的上下文分段不被跨越重排。
+Assistant 向模型序列化同一段相邻并行结果时，按 Command 签发顺序做稳定展示，避免完成竞速改变模型输入；这只是投影规范化，不改写 Journal，也不赋予该顺序业务含义。
 
-Runtime 不推断后来的普通 `UserMessageReceived` 会使既有决策输入失效。闭合的 Command 结果组与后续 UserMessage 按各自顺序分别触发 Step；只有显式 `UserInterruptReceived` 使用中断优先规则。
+Runtime 不推断后来的普通 `UserMessageReceived` 会使既有决策输入失效。闭合的 Command 结果组与后续 UserMessage 按各自顺序分别触发 Step。
 
-CLI 的并发输入由 Channel 映射为 Interrupt，并通过 `AssistantStreams` 写成 `UserInterruptReceived`；`Ctrl+C` 只退出 CLI 进程，不进入 Runtime。
+`UserInterruptReceived` 是纯 Runtime 控制事实，不是决策输入。Channel 对运行中用户输入只接纳一次外部 delivery；Interrupt 持久保存正文与确定性的 `follow_up_message_id`，使当前未提交 Step 失去提交资格，取消未派发 Command，并按 Tool Contract 向运行中 Command 传播 cancellation；已终态结果保持不变。Interrupt 本身不进入 Model Context，也不提供任何模型中断裁决工具。旧执行收口并写入 `ExecutionInterrupted` 后，Runtime 以确定性 ID 幂等派生新的 `UserMessageReceived`，由它开启新的决策 Event 和 Step；旧 Step 永不恢复。该顺序不需要原子 Event batch，任一崩溃点都从 Journal 继续。没有后继消息的显式纯中断才进入 `WAITING(user_message)`。`Ctrl+C` 只退出 CLI 进程，不进入 Runtime。
 
 ## Domain Fact
 

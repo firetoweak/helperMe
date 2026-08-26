@@ -93,6 +93,7 @@ Event 不可变，只能追加。它记录事实，不解释事实，也不决�
 ```text
 UserMessageReceived
 UserInterruptReceived
+ExecutionInterrupted
 StepCommitted
 CommandDispatchStarted
 ExternalOperationAccepted
@@ -236,9 +237,9 @@ Runtime 每次选择最早尚未处理的决策输入。这里的顺序严格指
 
 `decision_on_outcome: bool = True` 是签发时冻结在 Command 上的最小机械属性。普通 Binding 无需配置；Core 不按工具名、effect 类型或结果正文推断。只有不应唤醒模型的投递 Command `deliver` 由 Assistant 显式声明为 `False`，不建设更复杂的结果策略系统。
 
-普通 `UserMessageReceived` 不是覆盖或合并前序决策输入的信号。若闭合的 Command 结果组先被 Journal 接纳，随后又接纳 UserMessage，它们分别触发两个 Step；Runtime 不能替模型判断后一句话已经让结果“不重要”。只有明确的 `UserInterruptReceived` 可以绕过并行组等待并取得中断优先语义。
+普通 `UserMessageReceived` 不是覆盖或合并前序决策输入的信号。若闭合的 Command 结果组先被 Journal 接纳，随后又接纳 UserMessage，它们分别触发两个 Step；Runtime 不能替模型判断后一句话已经让结果“不重要”。
 
-`UserInterruptReceived` 是独立决策输入，不等待并行集合闭合。它可以使 Agent 根据当前已知结果选择继续等待、Abandon 或 Cancel。
+`UserInterruptReceived` 不是决策输入，而是 Runtime 控制事实。Channel 对运行中用户输入只做一次外部 delivery 接纳；该 Event 持久保存输入正文和确定性的 `follow_up_message_id`，使尚未提交的 Step 失去提交资格，取消尚未开始的 Command，并向正在执行的 Command 传播取消。Interrupt 本身不进入 Model Context，也不由模型选择 keep、Abandon 或 Cancel。旧执行收口后，Runtime 再按因果顺序幂等派生 `UserMessageReceived`，只有后者作为新的决策 Event 触发全新 Step。
 
 `ToolStarted`、心跳或进度等 Event 可以只更新 State，不创建 Step。串行工具 Outcome、被拒绝的 Command、恢复裁决和用户输入是否形成决策，由具体领域契约决定，不以事件名称硬编码在通用 Journal 中。
 
@@ -281,14 +282,16 @@ decision_cursor    Agent 已经按顺序决策消费到哪里
 推进 decision_cursor，再处理后续输入
 ```
 
-Step Commit 即使在物理 Journal 中排在后来到达的 Event 之后，也通过 `trigger_event_id` 被逻辑地归入对应决策 Event 的因果切片。这样处理 A 的 Step 可以看到此前处理 B 的决策，又不会提前看到排在 A 后面的 Interrupt。Projection 必须按这套确定性规则重建，不得把 Journal 尾部直接当成模型可见状态。
+Step Commit 即使在物理 Journal 中排在后来到达的普通 Event 之后，也通过 `trigger_event_id` 被逻辑地归入对应决策 Event 的因果切片。Projection 必须按这套确定性规则重建，不得把 Journal 尾部直接当成模型可见状态。Interrupt 是提交资格失效事实，不适用这项普通排队规则。
 
-当 Event 在模型调用期间到达时：
+当普通 Event 在模型调用期间到达时：
 
 - Event 可以立即持久化；
 - 当前 Step 继续使用已经冻结的 Decision State；
 - 新 Event 不改变当前模型输入；
 - 当前 Step 提交后，新 Event 按决策消费顺序继续推进。
+
+当 `UserInterruptReceived` 在模型调用期间到达时，Runtime 立即撤销当前 Step claim 或使其 Commit Guard 必然失败。模型调用即使稍后正常返回，其 Decision 与 Commands 也不得提交。`follow_up_message_id` 指向的后继 UserMessage 必须等待中断边界收口后才可物化，不能被旧 Step 提前观察或消费。
 
 因此 Journal 的追加尾部与 Step 的决策消费水位是两个明确概念，不能用“读取最新 State”隐式混合。
 
@@ -322,7 +325,8 @@ Claim 不是进程内布尔值。它至少具有稳定 claim token、持有者�
 
 - claim token 仍然有效；
 - `trigger_event_id` 尚未被其他 Step 消费；
-- 当前 Commit 与冻结的 `basis_state_version` 对应。
+- 当前 Commit 与冻结的 `basis_state_version` 对应；
+- 冻结边界之后没有已接纳的 `UserInterruptReceived` 使本执行链失效。
 
 同一决策 Event 最多只能成功 Commit 一个 Step。Worker 失联后可以通过显式 lease-expired/reclaim 事实接管；旧 Worker 即使稍后返回模型结果，也会因 token 失效而无法 Commit。具体存储可以使用条件追加、唯一约束或 compare-and-swap，但不能只靠单进程锁表达该不变量。
 
@@ -359,6 +363,38 @@ Step 2 sees unordered {A, B, C} outcomes
 ```
 
 `Abandon` 表示后续结果不再影响 Agent 决策，是随 Step Commit 的内部决策事实；`Cancel` 表示尽力停止外部执行，是交给 Dispatcher 的外部 Command。两者不能混为一个动作。被 Abandon 的 Command 后续 Outcome 仍写入 Journal，但默认不再触发 LLM Step。
+
+### 6.1 Interrupt 边界
+
+Interrupt 是 Runtime 边界操作，不是 Agent 行动。接纳 `UserInterruptReceived` 后，Runtime 按 Command 的真实阶段确定性处理：
+
+```text
+模型仍在生成 / Step 尚未 Commit → 撤销提交资格，丢弃模型结果
+Command 尚未派发              → 记录取消终态，不再派发
+Command 正在执行              → 按 Tool Cancel Contract 请求取消并记录真实结果
+Command 已终态                → 保留原结果，不回滚
+```
+
+取消与自然完成并发时，只允许一个终态提交成功；Runtime 不伪造取消成功，也不覆盖已经确认的外部结果。不支持取消或无法确认外部效果时，保留 `running` / `unknown` 及其恢复事实，但不得因此唤醒模型处理本次 Interrupt。
+
+运行中输入按以下顺序持久推进，不要求原子 Event batch：
+
+```text
+外部 delivery
+  → UserInterruptReceived(content, follow_up_message_id)
+  → 旧 Step / Commands 机械收口
+  → ExecutionInterrupted(interrupt_event_id)
+  → UserMessageReceived(
+        event_id = follow_up_message_id,
+        content = interrupt.content,
+        causation_id = interrupt.event_id
+    )
+  → 新决策 Event / 新 Step
+```
+
+`UserInterruptReceived` 一旦提交，Channel 即可确认这次外部 delivery，因为恢复后所需的正文与后继身份已经进入 Journal。若进程在中断收口或 UserMessage 物化前崩溃，重放会继续未完成阶段；若 UserMessage 已经物化，确定性的 `follow_up_message_id` 使条件追加拒绝重复。派生的 `ExecutionInterrupted` 和 `UserMessageReceived` 是内部因果 Event，不是同一外部 delivery 的第二次接纳。
+
+当前前台执行完成机械收口并写入 `ExecutionInterrupted` 后，本轮决策 Event 结束，旧 Step 不得恢复。存在 `follow_up_message_id` 时，Runtime 随后物化新 UserMessage，Stream 转为 `RUNNABLE`；没有后继消息的显式纯中断才进入 `WAITING(user_message)`。Interrupt 不等于 `/stop` 或 `TerminationRequested`，也不终止整个 Stream。
 
 ## 7. Command 副作用闭环
 
@@ -469,7 +505,7 @@ Runtime Status 是 State 的确定性派生结果，不是另一个状态所有�
 
 `WAITING` 必须能够说明在等待什么，例如 Command Outcome、Timer、Watcher、用户输入或人工审批。没有等待来源、没有可执行 Step、也没有终态，是非法或需要诊断的 Runtime State，不能静默归类。
 
-权限拒绝、工具失败或取消请求不天然等于 `TERMINATED`。它们首先是事实，是否终止由显式生命周期规则或后续 Step 决定。
+权限拒绝、工具失败或普通 Command 取消请求不天然等于 `TERMINATED`。`UserInterruptReceived` 确定性结束当前执行链；之后由是否存在待物化的 `follow_up_message_id` 决定派生 UserMessage 并进入 `RUNNABLE`，或进入 `WAITING(user_message)`。只有显式生命周期规则才能终止整个 Stream。
 
 Completion/Termination Decision 不能越过已经接纳但尚未消费的决策 Event。Step 只能提交 `CompletionDeclared` 或等价终态意图；`advance()` 到这里即结束，不能自行宣布终态。Host 完成 Judge / Policy 后显式请求 finalization，Runtime 再通过确定性 Finalization Barrier 原子验证“没有待消费决策输入、没有必要依赖、生命周期版本未变化”，成功后才追加真正的 `RuntimeCompleted` / `RuntimeTerminated` 事实。
 
@@ -478,13 +514,17 @@ Finalization Barrier 只回答“这份显式声明现在是否仍可安全提�
 ```text
 Interrupt accepted
         ↓
-older Step commits CompletionDeclared
+older Step Commit Guard fails
         ↓
-Finalization CAS 因 pending Interrupt 失败
+未派发 Command 取消；运行中 Command 接收 cancellation
         ↓
-Interrupt 优先触发下一 Step
+当前执行链机械收口
         ↓
-重新声明完成 / 恢复运行 / 终止
+ExecutionInterrupted：当前决策 Event 结束
+        ↓
+按 follow_up_message_id 幂等派生 UserMessageReceived
+        ↓
+UserMessageReceived 开启新决策 Event
 ```
 
 这样终态不是对排队 Event 的覆盖。终态事实成功 Commit 后到达的新用户意图必须进入新的 Stream/interaction epoch，或先追加显式 `RuntimeResumed` 事实；普通 Event 不能隐式复活终态。
@@ -608,12 +648,12 @@ Journal 不是通用领域事件总线。Core 只拥有顺序、身份、因果�
 ## 12. 必须保持的不变量
 
 1. 一个 Stream 内的 Event 具有稳定身份和权威追加顺序。
-2. 外部 delivery 在接入边界具有稳定身份，同一 delivery 最多形成一个 Event。
+2. 外部 delivery 在接入边界具有稳定身份，同一 delivery 最多被接纳一次并形成一个外部输入 Event；由它确定性派生的内部因果 Event 不算第二次 delivery 接纳。
 3. Event 一旦 Commit 不修改；纠错通过追加新事实表达。
 4. State 和 Projection 可以删除后从 Journal、有效 Artifact 与受支持的版本化规则重建。
 5. 同一 Stream 同一时刻最多存在一个有效 Step claim，同一决策 Event 最多成功 Commit 一个 Step。
-6. Step 使用冻结的 Decision State，不观察调用期间到达的新 Event。
-7. 独立决策 Event 按 Journal 接纳顺序消费；同 Step 的并行 Command Outcome 作为无序集合在全部终态后共同参与一次决策，只有 UserInterrupt 可以越过该闭合屏障。
+6. Step 使用冻结的 Decision State，不观察调用期间到达的新普通 Event；Interrupt 会使该 Step 失去提交资格。
+7. 独立决策 Event 按 Journal 接纳顺序消费；同 Step 的并行 Command Outcome 作为无序集合在全部终态后共同参与一次决策。
 8. Decision 与其全部 Commands 原子 Commit；未 Commit 的 Decision 不产生副作用。
 9. Dispatcher 只执行已 Commit 且已授权的 Command，并通过原子 claim 在外部调用前 Commit Attempt。
 10. 外部结果只通过 Event 影响 State，Tool 不直接修改 Runtime State。
@@ -623,6 +663,7 @@ Journal 不是通用领域事件总线。Core 只拥有顺序、身份、因果�
 14. Historical Replay 不调用模型、工具或其他外部系统。
 15. Runtime Status 由 State 确定性推导；需要语义判断时显式创建 Step。
 16. Turn、Conversation、Context、Trace 和 Checkpoint 都不是第二事实源。
+17. UserInterrupt 是 Runtime 控制事实：终止当前执行链，不进入 Model Context，也不由模型裁决；它持久保存后继消息的恢复信息，收口后由 Runtime 幂等派生 UserMessage 触发新 Step。
 
 ## 13. 明确不做
 
@@ -657,15 +698,16 @@ UserMessage
 
 - 建立最小 Journal、Reducer、Step Commit 和内存 Dispatcher；
 - 跑通 A/B/C 并行、任意顺序返回、全部终态后只决策一次；
-- 证明 UserInterrupt 可以越过尚未闭合的并行集合；
+- 证明 UserInterrupt 使未提交的旧 Step 无法 Commit；Interrupt 本身不触发 Step，按确定性 ID 派生的后继 UserMessage 在收口后只触发一个新 Step；
 - 证明当前 Step 看不到冻结之后到达的 Event；
-- 证明 Abandon 与 Cancel 的事实和行为不同；
+- 证明未派发、运行中、已终态 Command 在 Interrupt 下分别得到确定处理；
 - 删除 State 后重放得到相同 State、Turn 和 Trace；
 - 重放不重新调用模型和工具。
 
 ### 14.2 Durable 切片
 
 - 重复 delivery 不产生第二个决策 Event；
+- 在 Interrupt 已提交、收口事实未写和 UserMessage 未物化处分别模拟崩溃，恢复后后继 UserMessage 不丢失也不重复；
 - 两个 Worker 竞争同一决策 Event 时只有一个 Step 能 Commit；
 - Command 不会在 Step Commit 前执行；
 - 并行结果逐个持久化，但不按返回顺序产生决策语义；
@@ -678,6 +720,7 @@ UserMessage
 
 - 未授权 Command 不会被 Dispatcher 认领；
 - Step 决策期间到达的 Interrupt 不会被旧 Step 跨越或吞掉；
+- Interrupt 收口后不会调用模型处理 Interrupt；存在关联 UserMessage 时以新事件推进，否则进入 `WAITING(user_message)`；
 - 已 Commit 的用户输出通过 Command 投递，临时流式预览不进入 Journal；
 - Artifact 缺失时重放明确降级，不使用当前内容静默替换；
 - Turn 和 Trace 可以只依赖 Journal、Artifact 与 Projection 代码重建。
