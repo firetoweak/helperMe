@@ -21,6 +21,7 @@ from helperme.assistant.decision import (
     INTERRUPT_RESOLUTION_TOOL_NAME,
     JournalBackedLlmDecisionMaker,
     decision_from_llm,
+    interrupt_resolution_binding,
 )
 from helperme.assistant.runner import (
     StreamNotFoundError,
@@ -696,6 +697,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             {
                 "slow": ToolBinding(slow),
                 **deliver_binding(lambda _text: None),
+                **interrupt_resolution_binding(),
             },
             SequentialIds(),
         )
@@ -798,6 +800,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
                     decision_on_outcome=False,
                 ),
                 **deliver_binding(lambda _text: None),
+                **interrupt_resolution_binding(),
             },
             SequentialIds(),
         )
@@ -881,7 +884,10 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
                     },
                 }],
             ),
-            {"slow": ToolBinding(slow)},
+            {
+                "slow": ToolBinding(slow, decision_on_outcome=False),
+                **interrupt_resolution_binding(),
+            },
             SequentialIds(),
         )
         await runtime.receive_user_message(
@@ -919,6 +925,24 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         ):
             await runtime.advance(self.STREAM_ID)
 
+        llm.responses.append(LLMResponse(calls=(ToolCall(
+            "call-4",
+            INTERRUPT_RESOLUTION_TOOL_NAME,
+            json.dumps({
+                "commands": [
+                    {"command_id": command_id, "action": "keep"}
+                    for command_id in command_ids
+                ],
+            }),
+        ),)))
+        kept = await runtime.advance(self.STREAM_ID)
+
+        self.assertEqual(kept.decision.abandon_command_ids, ())
+        self.assertEqual(len(kept.decision.command_requests), 1)
+        self.assertEqual(
+            kept.decision.command_requests[0].name,
+            INTERRUPT_RESOLUTION_TOOL_NAME,
+        )
         release.set()
         await runtime.dispatcher.wait_all()
 

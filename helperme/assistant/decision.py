@@ -116,7 +116,11 @@ def _interrupt_command_ids(frame: DecisionFrame) -> tuple[str, ...]:
         if state.phase is not CommandPhase.TERMINAL
         and not state.abandoned
         and state.authorization_rejected_by_event_id is None
-        and state.command.decision_on_outcome
+        and isinstance(state.command.effect, InvokeTool)
+        and state.command.effect.name not in {
+            DELIVER_TOOL_NAME,
+            INTERRUPT_RESOLUTION_TOOL_NAME,
+        }
     )
 
 
@@ -215,6 +219,21 @@ def _parse_interrupt_resolution(
             "resolve_interrupt must resolve every unfinished command once",
         )
     return tuple(choices)
+
+
+def interrupt_resolution_binding() -> dict[str, ToolBinding]:
+    async def handler(
+        _context: AttemptContext,
+        _arguments: Mapping[str, object],
+    ) -> str:
+        return "resolved"
+
+    return {
+        INTERRUPT_RESOLUTION_TOOL_NAME: ToolBinding(
+            handler,
+            decision_on_outcome=False,
+        ),
+    }
 
 
 def _tool_names(
@@ -420,6 +439,17 @@ class JournalBackedLlmDecisionMaker:
             ordinary_calls,
             allowed_tool_names - {INTERRUPT_RESOLUTION_TOOL_NAME},
         ))
+        if choices:
+            requests.append(InvokeTool(
+                INTERRUPT_RESOLUTION_TOOL_NAME,
+                (("commands", tuple(
+                    {
+                        "command_id": command_id,
+                        "action": action,
+                    }
+                    for command_id, action in choices
+                )),),
+            ))
         abandoned = tuple(
             command_id
             for command_id, action in choices
@@ -430,12 +460,6 @@ class JournalBackedLlmDecisionMaker:
             for command_id, action in choices
             if action == "cancel"
         )
-        if not response.content.strip() and not requests and not abandoned:
-            raise InvalidLLMResponse(
-                "empty_interrupt_resolution",
-                "keeping unfinished commands requires response content or "
-                "another action",
-            )
         return ModelDecision(
             content=response.content,
             command_requests=tuple(requests),
