@@ -161,8 +161,7 @@ def run_review(
             "-",
         ],
         cwd=evidence.repository,
-        input=prompt,
-        text=True,
+        input=prompt.encode("utf-8"),
     )
     return result.returncode
 

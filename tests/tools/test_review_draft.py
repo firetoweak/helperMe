@@ -180,8 +180,8 @@ class ReviewDraftTest(unittest.TestCase):
         )
         kwargs = call["kwargs"]
         self.assertEqual(kwargs["cwd"], self.repository)
-        self.assertEqual(kwargs["input"], "frozen prompt")
-        self.assertTrue(kwargs["text"])
+        self.assertEqual(kwargs["input"], b"frozen prompt")
+        self.assertNotIn("text", kwargs)
 
 
 if __name__ == "__main__":
