@@ -34,6 +34,7 @@ class ReviewDraftTest(unittest.TestCase):
         principle.write_text("# 原则\n\n1. Runtime 不做语义判断。\n", encoding="utf-8")
         self.git("add", "docs/原则.md")
         self.git("commit", "-m", "principles")
+        self.git("switch", "-c", "codex/review-test")
         self.git("commit", "--allow-empty", "-m", "design: narrow review")
         self.design_revision = self.git("rev-parse", "HEAD").stdout.strip()
 
@@ -77,6 +78,18 @@ class ReviewDraftTest(unittest.TestCase):
             "invalid design_revision",
         ):
             review_draft.collect_evidence(self.repository, "missing")
+
+    def test_rejects_candidate_implementation_on_main(self):
+        self.git("switch", "main")
+
+        with self.assertRaisesRegex(
+            review_draft.ReviewInputError,
+            "draft_review_branch_violation",
+        ):
+            review_draft.collect_evidence(
+                self.repository,
+                self.design_revision,
+            )
 
     def test_rejects_dirty_working_tree(self):
         (self.repository / "dirty.txt").write_text("dirty\n", encoding="utf-8")
@@ -166,6 +179,8 @@ class ReviewDraftTest(unittest.TestCase):
         self.assertIn("即使运行环境向你展示了先前对话", template)
         self.assertIn("只读不改是软约束", template)
         self.assertIn("没有机制阻止你改文件", template)
+        self.assertIn("确认当前分支不是 `main`", template)
+        self.assertIn("若当前分支是 `main`，审查无效", template)
 
     def test_agents_require_independent_session_without_coding_context(self):
         agents = (
@@ -181,6 +196,11 @@ class ReviewDraftTest(unittest.TestCase):
         self.assertIn("只读不改是软约束", agents)
         self.assertIn("发现审查改动了工作树时必须视为审查无效", agents)
         self.assertIn("不得改写审查结论", agents)
+        self.assertIn("没有独立于 `main` 的功能分支，Draft PR 审查没有意义", agents)
+        self.assertIn("任何设计或实现提交前", agents)
+        self.assertIn("不得在 `main` 上创建 `design:` 提交", agents)
+        self.assertIn("候选实现位于 `main`", agents)
+        self.assertIn("不得推送、创建 PR 或合并", agents)
 
     def test_script_does_not_launch_a_reviewer(self):
         source = SCRIPT_PATH.read_text(encoding="utf-8")

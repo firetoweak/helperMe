@@ -8,7 +8,7 @@
 
 只读不改是软约束，不是沙箱：没有机制阻止你改文件。你仍然不得修改任何文件，不得提出自动修复，不得把审查变成继续实现。
 
-只审查 `design_revision..head_revision` 这一固定范围。开始时确认仓库当前 HEAD 仍等于 `head_revision`，然后直接读取该范围的 diff；不把范围之外的工作树状态或历史改动纳入结论。
+只审查 `design_revision..head_revision` 这一固定范围。开始时确认当前分支不是 `main`，且仓库当前 HEAD 仍等于 `head_revision`，然后直接读取该范围的 diff；不把范围之外的工作树状态或历史改动纳入结论。若当前分支是 `main`，审查无效，不得给出 `aligned`。
 
 按以下顺序审查：
 

@@ -9,6 +9,7 @@ from typing import Sequence
 
 PRINCIPLE_PATH = "docs/原则.md"
 PROMPT_PATH = Path(__file__).with_name("review_prompt.md")
+DEFAULT_BRANCH = "main"
 
 
 class ReviewInputError(ValueError):
@@ -45,6 +46,12 @@ def find_repository(start: Path) -> Path:
 
 
 def collect_evidence(repository: Path, revision: str) -> ReviewEvidence:
+    branch = _git(repository, "branch", "--show-current").stdout.strip()
+    if branch == DEFAULT_BRANCH:
+        raise ReviewInputError(
+            f"draft_review_branch_violation: candidate implementation is on {DEFAULT_BRANCH}"
+        )
+
     resolved = _git(
         repository,
         "rev-parse",
