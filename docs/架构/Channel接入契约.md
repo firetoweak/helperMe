@@ -22,7 +22,7 @@ Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 
 → wake(session_id)
 ```
 
-Channel 不区分 running/idle 输入，不创建 Interrupt，不抢占当前 Step，也不等待一次用户消息对应的“Run”完成。当前 Step 使用冻结视图；新消息按 Journal 顺序成为后续 Step 的 trigger。
+Channel 不区分 running/idle 输入，不创建 Interrupt 类型，不抢占当前 Step，也不等待一次用户消息对应的“Run”完成。接纳即时；当前 Step 使用冻结视图。后到消息是否已是可执行决策、旧 Outcome 组还要不要自己续跑，由 Runtime 归约，见 [Runtime 状态推进模型](Runtime状态推进模型.md) 第 6 节。
 
 明确的授权 `yes/no` 由 Host 映射为 `CommandAuthorized` / `CommandRejected`。其他文本一律保留为用户消息，Runtime 不猜语义。
 

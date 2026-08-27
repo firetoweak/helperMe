@@ -316,35 +316,70 @@ class StateProjector:
         for event in events:
             if isinstance(event.payload, StepCommitted):
                 continue
+            if event.event_id in decision.visible_event_ids:
+                continue
             decision.apply_regular(event)
+            step_event = step_events.get(event.event_id)
+            if step_event is not None:
+                step = step_event.payload.step
+                if isinstance(event.payload, UserMessageReceived):
+                    self._include_waited_follow_up_events(
+                        decision,
+                        events,
+                        event,
+                        operational,
+                        event_sequences,
+                        until_sequence=step.observed_journal_position,
+                    )
+                expected_cursor = len(consumed) + 1
+                if step.decision_cursor != expected_cursor:
+                    raise ValueError(f"step decision cursor mismatch: {step.step_id}")
+                minimum_observed_position = max(
+                    event_sequences[event_id]
+                    for event_id in decision.visible_event_ids
+                )
+                if not (
+                    minimum_observed_position
+                    <= step.observed_journal_position
+                    < step_event.sequence
+                ):
+                    raise ValueError(
+                        f"step observed position mismatch: {step.step_id}"
+                    )
+                decision.apply_step(
+                    step_event,
+                    expected_basis_state_version=decision.version(),
+                )
+                consumed.append(event.event_id)
+                applied_step_event_ids.add(step_event.event_id)
+                continue
             if not self._requires_decision(
                 event,
                 decision,
+                events,
+                event_sequences,
+                step_events,
             ):
                 continue
-            step_event = step_events.get(event.event_id)
-            if step_event is None:
-                next_trigger = event
-                break
-            step = step_event.payload.step
-            expected_cursor = len(consumed) + 1
-            if step.decision_cursor != expected_cursor:
-                raise ValueError(f"step decision cursor mismatch: {step.step_id}")
-            minimum_observed_position = max(
-                event_sequences[event_id] for event_id in decision.visible_event_ids
-            )
-            if not (
-                minimum_observed_position
-                <= step.observed_journal_position
-                < step_event.sequence
+            if isinstance(event.payload, UserMessageReceived) and (
+                self._user_message_blocked_by_in_flight(
+                    event,
+                    operational,
+                    event_sequences,
+                )
             ):
-                raise ValueError(f"step observed position mismatch: {step.step_id}")
-            decision.apply_step(
-                step_event,
-                expected_basis_state_version=decision.version(),
-            )
-            consumed.append(event.event_id)
-            applied_step_event_ids.add(step_event.event_id)
+                break
+            next_trigger = event
+            if isinstance(event.payload, UserMessageReceived):
+                self._include_waited_follow_up_events(
+                    decision,
+                    events,
+                    event,
+                    operational,
+                    event_sequences,
+                    until_sequence=events[-1].sequence,
+                )
+            break
 
         unapplied = {
             event.event_id for event in step_events.values()
@@ -466,6 +501,9 @@ class StateProjector:
     def _requires_decision(
         event: Event,
         state: _StateBuilder,
+        events: tuple[Event, ...],
+        event_sequences: dict[str, int],
+        step_events: dict[str, Event],
     ) -> bool:
         payload = event.payload
         if isinstance(payload, UserMessageReceived):
@@ -483,8 +521,74 @@ class StateProjector:
                 and _parallel_decision_group_closed(state, command_state)
             ):
                 return False
+            issued_sequence = event_sequences[command_state.issued_by_event_id]
+            if any(
+                isinstance(item.payload, UserMessageReceived)
+                and item.sequence > issued_sequence
+                and item.event_id not in step_events
+                for item in events
+            ):
+                return False
             return True
         return False
+
+    @staticmethod
+    def _user_message_blocked_by_in_flight(
+        message: Event,
+        operational: _StateBuilder,
+        event_sequences: dict[str, int],
+    ) -> bool:
+        for command_state in operational.commands.values():
+            if command_state.abandoned:
+                continue
+            if event_sequences[command_state.issued_by_event_id] >= message.sequence:
+                continue
+            if not command_state.attempts:
+                continue
+            if command_state.phase is CommandPhase.TERMINAL:
+                continue
+            return True
+        return False
+
+    @staticmethod
+    def _include_waited_follow_up_events(
+        decision: _StateBuilder,
+        events: tuple[Event, ...],
+        trigger: Event,
+        operational: _StateBuilder,
+        event_sequences: dict[str, int],
+        until_sequence: int,
+    ) -> None:
+        past_trigger = False
+        for event in events:
+            if event.event_id == trigger.event_id:
+                past_trigger = True
+                continue
+            if not past_trigger:
+                continue
+            if event.sequence > until_sequence:
+                return
+            if not _is_waited_follow_up(
+                event,
+                trigger.sequence,
+                operational,
+                event_sequences,
+            ):
+                return
+            decision.apply_regular(event)
+
+
+def _is_waited_follow_up(
+    event: Event,
+    trigger_sequence: int,
+    operational: _StateBuilder,
+    event_sequences: dict[str, int],
+) -> bool:
+    payload = event.payload
+    if isinstance(payload, (DispatchAttemptStarted, CommandOutcomeReceived)):
+        command_state = operational.commands[payload.command_id]
+        return event_sequences[command_state.issued_by_event_id] < trigger_sequence
+    return False
 
 
 def _parallel_decision_group_closed(

@@ -216,7 +216,6 @@ class Step:
 class OutcomeStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
-    CANCELLED = "cancelled"
     NOT_APPLICABLE = "not_applicable"
 
 

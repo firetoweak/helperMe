@@ -50,7 +50,7 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 `JournalBackedLlmDecisionMaker` 位于 `helperme/assistant/decision.py`。它从 Journal 快照投影消息，带上当前 Step 可见的 tools，调用 `helperme.llm`，把结果译成 `ModelDecision`。content-only 由 Assistant 补 `deliver`。
 
-每条 `UserMessageReceived` 都可以成为后续 DecisionMaker 的 trigger。模型调用期间到达的新消息不进入当前冻结 Context，也不取消当前 Step；Scheduler 按 Journal 顺序继续推进。
+每条 `UserMessageReceived` 都可以成为后续 DecisionMaker 的 trigger。模型调用期间到达的新消息不进入当前冻结 Context，也不取消当前 Step。已派发 Attempt 终态前，后到消息还不是可执行决策；旧 Outcome 组不再单独要 Step。Scheduler 按归约后的 Journal 顺序继续推进，见 [Runtime 状态推进模型](Runtime状态推进模型.md) 第 6 节。
 
 ## 环境
 
