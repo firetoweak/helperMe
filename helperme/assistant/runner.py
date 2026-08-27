@@ -60,9 +60,7 @@ class SessionScheduler:
         self._notify = notify
         self._tasks: dict[str, asyncio.Task[bool]] = {}
         self._pending_wakes: set[str] = set()
-        self._changed = asyncio.Event()
         self._failure: BaseException | None = None
-        self._failure_event = asyncio.Event()
         runtime.dispatcher.connect(self.wake, self._record_failure)
 
     async def wake(self, session_id: str) -> None:
@@ -83,7 +81,6 @@ class SessionScheduler:
         task.add_done_callback(
             lambda done, current=session_id: self._task_done(current, done)
         )
-        self._changed.set()
 
     async def _advance_once(self, session_id: str) -> bool:
         step = await self._runtime.advance(session_id)
@@ -105,44 +102,16 @@ class SessionScheduler:
         pending_wake = session_id in self._pending_wakes
         self._pending_wakes.discard(session_id)
         if task.cancelled():
-            self._changed.set()
             return
         error = task.exception()
         if error is not None:
             self._record_failure(error)
         elif self._failure is None and (task.result() or pending_wake):
             self._start(session_id)
-        self._changed.set()
 
     def _record_failure(self, error: BaseException) -> None:
         if self._failure is None:
             self._failure = error
-            self._failure_event.set()
-
-    async def join(self) -> None:
-        """Wait for active Sessions and Commands; primarily an observation aid."""
-
-        while True:
-            self._changed.clear()
-            if self._failure is not None:
-                raise self._failure
-            if not self._tasks and self._runtime.dispatcher.active_count == 0:
-                await asyncio.sleep(0)
-                if not self._tasks and self._runtime.dispatcher.active_count == 0:
-                    break
-                continue
-            changed = asyncio.create_task(self._changed.wait())
-            failed = asyncio.create_task(self._failure_event.wait())
-            done, pending = await asyncio.wait(
-                (changed, failed),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-            if failed in done and self._failure is not None:
-                raise self._failure
-        if self._failure is not None:
-            raise self._failure
 
     async def close(self) -> None:
         await self._runtime.dispatcher.close()

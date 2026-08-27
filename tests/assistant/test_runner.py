@@ -5,7 +5,6 @@ import unittest
 from collections.abc import Awaitable, Callable
 
 from helperme.assistant.decision import decision_from_llm
-from helperme.assistant.runner import SessionScheduler
 from helperme.llm.types import LLMResponse, ToolCall
 from helperme.runtime import (
     AgentRuntime,
@@ -16,6 +15,7 @@ from helperme.runtime import (
     UserMessageReceived,
 )
 from helperme.runtime.state import DecisionFrame
+from tests.session_scheduler import SettlingScheduler
 
 
 DecisionScript = Callable[
@@ -68,7 +68,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
     async def test_user_event_wakes_one_step_and_session_remains_open(self):
         model = ScriptedDecisionMaker((lambda _frame: ModelDecision(content="done"),))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
 
         try:
@@ -102,7 +102,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
 
         try:
@@ -151,7 +151,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session-a")
         await runtime.create_session("session-b")
         await runtime.receive_user_message(
