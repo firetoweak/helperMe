@@ -108,12 +108,32 @@ def jsonable(value: object) -> object:
 
 
 def outcome_text(outcome: CommandOutcome) -> str:
+    return _outcome_json(
+        status=outcome.status.value,
+        value=outcome.value,
+        error_type=outcome.error_type,
+        error_message=outcome.error_message,
+    )
+
+
+def _outcome_json(
+    *,
+    status: str,
+    value: object,
+    error_type: str | None,
+    error_message: str | None,
+) -> str:
+    """Serialize an outcome-shaped document without constructing CommandOutcome.
+
+    Artifact 完整正文可以超过 Runtime freeze 预算；Journal 里的
+    CommandOutcome.value 仍必须能冻住。
+    """
     return json.dumps(
         {
-            "status": outcome.status.value,
-            "value": jsonable(outcome.value),
-            "error_type": outcome.error_type,
-            "error_message": outcome.error_message,
+            "status": status,
+            "value": jsonable(value),
+            "error_type": error_type,
+            "error_message": error_message,
         },
         ensure_ascii=False,
     )
@@ -337,11 +357,11 @@ def externalize_payload(
     encoded = json.dumps(jsonable(payload), ensure_ascii=False)
     if len(encoded) <= max_chars:
         return payload, None
-    complete_outcome = outcome_text(
-        CommandOutcome(
-            OutcomeStatus.SUCCEEDED,
-            value=payload,
-        )
+    complete_outcome = _outcome_json(
+        status=OutcomeStatus.SUCCEEDED.value,
+        value=payload,
+        error_type=None,
+        error_message=None,
     )
     artifact = store.save(complete_outcome)
     return (

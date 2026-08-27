@@ -35,6 +35,7 @@ from helperme.runtime import (
     ToolBinding,
 )
 from helperme.runtime.dispatcher import AttemptContext, ToolTerminal
+from helperme.runtime.model import MAX_JSON_VALUE_BYTES
 from tests.assistant.test_runner import ScriptedDecisionMaker, SequentialIds
 
 
@@ -639,3 +640,42 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(payload, {"ok": True})
         self.assertIsNone(artifact_id)
+
+    def test_externalize_payload_above_threshold_saves_outcome_shaped_artifact(self):
+        gateway = MemoryArtifactGateway()
+        blob = "oversized-tool-result-" + "Y" * 80
+        stub, artifact_id = externalize_payload(
+            blob,
+            gateway.for_session("s1"),
+            max_chars=40,
+            preview_chars=12,
+        )
+        self.assertIsNotNone(artifact_id)
+        self.assertEqual(stub["externalized"], True)
+        self.assertEqual(stub["artifact_id"], artifact_id)
+        self.assertTrue(stub["preview"].startswith('{"status":'))
+        journaled = CommandOutcome(OutcomeStatus.SUCCEEDED, value=stub)
+        self.assertEqual(journaled.value["artifact_id"], artifact_id)
+        stored = json.loads(gateway.for_session("s1").read(artifact_id, 0, 4000).content)
+        self.assertEqual(stored["status"], "succeeded")
+        self.assertEqual(stored["value"], blob)
+        self.assertIsNone(stored["error_type"])
+        self.assertIsNone(stored["error_message"])
+
+    def test_externalize_payload_larger_than_runtime_freeze_budget(self):
+        gateway = MemoryArtifactGateway()
+        blob = "x" * (MAX_JSON_VALUE_BYTES + 1)
+        stub, artifact_id = externalize_payload(
+            {"tree": blob},
+            gateway.for_session("s1"),
+            max_chars=16_000,
+            preview_chars=1_200,
+        )
+        self.assertIsNotNone(artifact_id)
+        CommandOutcome(OutcomeStatus.SUCCEEDED, value=stub)
+        store = gateway.for_session("s1")
+        head = store.read(artifact_id, 0, 80)
+        self.assertGreater(head.total_chars, MAX_JSON_VALUE_BYTES)
+        stored = json.loads(store.read(artifact_id, 0, head.total_chars).content)
+        self.assertEqual(stored["status"], "succeeded")
+        self.assertEqual(stored["value"]["tree"], blob)
