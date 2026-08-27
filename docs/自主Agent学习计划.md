@@ -28,7 +28,7 @@
 python console_chat.py
   → helperme.channels.cli.console
   → helperme.assistant.runner
-  → SessionScheduler.wake()    每次激活至多一个 Step
+  → SessionScheduler.wake()    每次激活至多一个 Step；不同 Session 独立并行
   → Dispatcher                 Command
   → SqliteJournal              Event
 ```

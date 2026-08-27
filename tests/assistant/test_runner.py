@@ -131,3 +131,50 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(messages, ["one", "two"])
         finally:
             await scheduler.close()
+
+    async def test_independent_sessions_advance_concurrently(self):
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        second_finished = asyncio.Event()
+
+        async def decide(frame):
+            if frame.state.session_id == "session-a":
+                first_started.set()
+                await release_first.wait()
+            else:
+                second_finished.set()
+            return ModelDecision(content=frame.state.session_id)
+
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker((decide, decide)),
+            {},
+            SequentialIds(),
+        )
+        scheduler = SessionScheduler(runtime)
+        await runtime.create_session("session-a")
+        await runtime.create_session("session-b")
+        await runtime.receive_user_message(
+            "session-a",
+            "one",
+            delivery_id="user-a",
+        )
+        await runtime.receive_user_message(
+            "session-b",
+            "two",
+            delivery_id="user-b",
+        )
+
+        try:
+            await scheduler.wake("session-a")
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            await scheduler.wake("session-b")
+            await asyncio.wait_for(second_finished.wait(), timeout=1)
+            release_first.set()
+            await asyncio.wait_for(scheduler.join(), timeout=1)
+
+            self.assertEqual(len((await runtime.state("session-a")).steps), 1)
+            self.assertEqual(len((await runtime.state("session-b")).steps), 1)
+        finally:
+            release_first.set()
+            await scheduler.close()

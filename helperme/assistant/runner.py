@@ -46,7 +46,7 @@ async def resume_session(
 
 
 class SessionScheduler:
-    """Wake Sessions from committed facts; execute at most one Step per wake."""
+    """Activate independent Sessions concurrently from committed facts."""
 
     def __init__(
         self,
@@ -58,60 +58,61 @@ class SessionScheduler:
         self._runtime = runtime
         self._control = control
         self._notify = notify
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
-        self._queued: set[str] = set()
-        self._processing = 0
-        self._worker: asyncio.Task[None] | None = None
+        self._tasks: dict[str, asyncio.Task[bool]] = {}
+        self._pending_wakes: set[str] = set()
+        self._changed = asyncio.Event()
         self._failure: BaseException | None = None
         self._failure_event = asyncio.Event()
         runtime.dispatcher.connect(self.wake, self._record_failure)
 
-    def start(self) -> None:
-        if self._worker is None:
-            self._worker = asyncio.create_task(
-                self._run(),
-                name="agent-session-scheduler",
-            )
-            self._worker.add_done_callback(self._worker_done)
+    async def wake(self, session_id: str) -> None:
+        if self._failure is not None:
+            raise self._failure
+        task = self._tasks.get(session_id)
+        if task is not None and not task.done():
+            self._pending_wakes.add(session_id)
+            return
+        self._start(session_id)
 
-    def _worker_done(self, task: asyncio.Task[None]) -> None:
+    def _start(self, session_id: str) -> None:
+        task = asyncio.create_task(
+            self._advance_once(session_id),
+            name=f"agent-session:{session_id}",
+        )
+        self._tasks[session_id] = task
+        task.add_done_callback(
+            lambda done, current=session_id: self._task_done(current, done)
+        )
+        self._changed.set()
+
+    async def _advance_once(self, session_id: str) -> bool:
+        step = await self._runtime.advance(session_id)
+        if step is not None and self._control is not None:
+            result = await self._control.after_committed_step(
+                session_id,
+                step,
+            )
+            if result is not None and self._notify is not None:
+                notified = self._notify(result.message)
+                if isinstance(notified, Awaitable):
+                    await notified
+        return (await self._runtime.state(session_id)).status is RuntimeStatus.RUNNABLE
+
+    def _task_done(self, session_id: str, task: asyncio.Task[bool]) -> None:
+        if self._tasks.get(session_id) is not task:
+            return
+        self._tasks.pop(session_id)
+        pending_wake = session_id in self._pending_wakes
+        self._pending_wakes.discard(session_id)
         if task.cancelled():
+            self._changed.set()
             return
         error = task.exception()
         if error is not None:
             self._record_failure(error)
-
-    async def wake(self, session_id: str) -> None:
-        if self._failure is not None:
-            raise self._failure
-        self.start()
-        if session_id in self._queued:
-            return
-        self._queued.add(session_id)
-        await self._queue.put(session_id)
-
-    async def _run(self) -> None:
-        while True:
-            session_id = await self._queue.get()
-            self._queued.discard(session_id)
-            self._processing += 1
-            try:
-                step = await self._runtime.advance(session_id)
-                if step is not None and self._control is not None:
-                    result = await self._control.after_committed_step(
-                        session_id,
-                        step,
-                    )
-                    if result is not None and self._notify is not None:
-                        notified = self._notify(result.message)
-                        if isinstance(notified, Awaitable):
-                            await notified
-                state = await self._runtime.state(session_id)
-                if state.status is RuntimeStatus.RUNNABLE:
-                    await self.wake(session_id)
-            finally:
-                self._processing -= 1
-                self._queue.task_done()
+        elif self._failure is None and (task.result() or pending_wake):
+            self._start(session_id)
+        self._changed.set()
 
     def _record_failure(self, error: BaseException) -> None:
         if self._failure is None:
@@ -119,38 +120,37 @@ class SessionScheduler:
             self._failure_event.set()
 
     async def join(self) -> None:
-        """Wait for queued Step activations; primarily a test/CLI observation aid."""
+        """Wait for active Sessions and Commands; primarily an observation aid."""
 
         while True:
-            queue_idle = asyncio.create_task(self._queue.join())
+            self._changed.clear()
+            if self._failure is not None:
+                raise self._failure
+            if not self._tasks and self._runtime.dispatcher.active_count == 0:
+                await asyncio.sleep(0)
+                if not self._tasks and self._runtime.dispatcher.active_count == 0:
+                    break
+                continue
+            changed = asyncio.create_task(self._changed.wait())
             failed = asyncio.create_task(self._failure_event.wait())
             done, pending = await asyncio.wait(
-                (queue_idle, failed),
+                (changed, failed),
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
             if failed in done and self._failure is not None:
                 raise self._failure
-            await asyncio.sleep(0)
-            if (
-                self._processing == 0
-                and self._queue.empty()
-                and self._runtime.dispatcher.active_count == 0
-            ):
-                break
         if self._failure is not None:
             raise self._failure
 
     async def close(self) -> None:
         await self._runtime.dispatcher.close()
-        if self._worker is None:
-            return
-        self._worker.cancel()
-        try:
-            await self._worker
-        except asyncio.CancelledError:
-            pass
+        tasks = tuple(self._tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def pending_authorization_ids(state: CanonicalState) -> tuple[str, ...]:

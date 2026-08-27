@@ -1,6 +1,6 @@
 # Runtime 状态推进模型
 
-> **Session 是一条持续存在的 Event 流；State 是 Event 的确定性归约；一次决策闭环是一个 Step；Scheduler 每次唤醒最多执行一个 Step；Dispatcher 独立执行 Command，并以 Outcome Event 再次唤醒 Session。**
+> **Session 是一条持续存在的 Event 流；State 是 Event 的确定性归约；一次决策闭环是一个 Step；每次激活最多执行一个 Step，不同 Session 独立并行；Dispatcher 独立执行 Command，并以 Outcome Event 再次激活 Session。**
 
 ## 1. 四个核心对象
 
@@ -58,8 +58,8 @@ Step 不是工具执行循环。一个 Session 包含任意多个 Step；一次�
 Session 变为 RUNNABLE
         │ wake(session_id)
         ▼
-SessionScheduler
-        │ 最多执行一个 Step
+SessionScheduler 激活对应 Session
+        │ 每个 Session 最多执行一个 Step
         ▼
 StepCommitted ───────────────┐
         │                    │
@@ -70,7 +70,7 @@ Dispatcher 启动 Commands     │
 CommandOutcomeReceived ──────┘ wake(session_id)
 ```
 
-Scheduler 是跨 Session 的调度器，不是某个用户消息的 Run 循环。每个队列激活只调用一次 `AgentRuntime.advance(session_id)`。如果提交后的 State 仍为 `RUNNABLE`，Scheduler 重新排队；它不会在一次调用栈里用 `while` 把 Session 跑到 idle。
+SessionScheduler 是 Event 到异步 Session 推进任务之间的激活器，不拥有跨 Session 的执行顺序。每次激活只调用一次 `AgentRuntime.advance(session_id)`；提交后的 State 仍为 `RUNNABLE` 时再次激活。不同 Session 各自拥有推进任务并默认并行，同一 Session 的重复 wake 合并，且同时最多存在一个推进任务。
 
 这带来三个边界：
 
@@ -78,7 +78,7 @@ Scheduler 是跨 Session 的调度器，不是某个用户消息的 Run 循环�
 2. Dispatcher 不属于 Step；它独立执行已经提交的 Command。
 3. Outcome 是新的 Event；只有它被归约后，才可能产生后续 Step。
 
-同一 Session 的 Step 通过 claim 和本地串行锁避免并发提交；不同 Session 可由调度策略公平推进。
+同一 Session 的 Step 通过激活 single-flight、claim 和本地串行锁避免并发提交；不同 Session 之间不建立 happens-before 关系。模型 Provider、Sandbox 或外部服务可以在各自边界实施资源限制，但不能由 SessionScheduler 预先串行化独立 Session。
 
 ## 3. 决策 Event 与冻结视图
 
@@ -184,8 +184,8 @@ Runtime 不承诺外部副作用 exactly-once。它承诺所有已知事实可�
 | State reducer | `helperme/runtime/state.py` |
 | Step claim/commit | `helperme/runtime/step.py`、`runtime.py` |
 | Command dispatcher | `helperme/runtime/dispatcher.py` |
-| Session scheduler | `helperme/assistant/runner.py` |
+| Session activator | `helperme/assistant/runner.py` |
 | Session application service | `helperme/assistant/sessions.py` |
 | Channel | `helperme/channels/` |
 
-验收重点不是“一个调用是否跑到 idle”，而是：每个 Event 是否可靠唤醒、每次激活是否只提交一个 Step、Outcome 是否再次驱动 Session、进程重启后是否只从 Journal 重建事实，以及未知 Attempt 是否保持未知。
+验收重点不是“一个调用是否跑到 idle”，而是：每个 Event 是否可靠唤醒、每次激活是否只提交一个 Step、不同 Session 是否能独立并行、Outcome 是否再次驱动 Session、进程重启后是否只从 Journal 重建事实，以及未知 Attempt 是否保持未知。
