@@ -108,15 +108,15 @@ class BlockingSnapshotSqliteJournal(SqliteJournal):
         self.release_snapshot = threading.Event()
         super().__init__(path, clock=clock)
 
-    def _snapshot_sync(self, stream_id):
+    def _snapshot_sync(self, session_id):
         self.snapshot_started.set()
         if not self.release_snapshot.wait(timeout=2):
             raise TimeoutError("test did not release snapshot")
-        return super()._snapshot_sync(stream_id)
+        return super()._snapshot_sync(session_id)
 
 
 class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "durable-stream"
+    SESSION_ID = "durable-session"
 
     def setUp(self) -> None:
         self._temporary_directory = tempfile.TemporaryDirectory()
@@ -131,18 +131,18 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
     def journal(self) -> SqliteJournal:
         return SqliteJournal(self.database_path, clock=self.clock)
 
-    async def test_empty_stream_identity_is_idempotent_and_durable(self):
+    async def test_empty_session_identity_is_idempotent_and_durable(self):
         journal = self.journal()
 
-        self.assertTrue(await journal.create_stream(self.STREAM_ID))
-        self.assertFalse(await journal.create_stream(self.STREAM_ID))
-        self.assertTrue(await journal.stream_exists(self.STREAM_ID))
-        self.assertFalse(await journal.stream_exists("missing-stream"))
-        self.assertEqual(await journal.snapshot(self.STREAM_ID), ())
+        self.assertTrue(await journal.create_session(self.SESSION_ID))
+        self.assertFalse(await journal.create_session(self.SESSION_ID))
+        self.assertTrue(await journal.session_exists(self.SESSION_ID))
+        self.assertFalse(await journal.session_exists("missing-session"))
+        self.assertEqual(await journal.snapshot(self.SESSION_ID), ())
 
         reopened = self.journal()
-        self.assertTrue(await reopened.stream_exists(self.STREAM_ID))
-        self.assertEqual(await reopened.snapshot(self.STREAM_ID), ())
+        self.assertTrue(await reopened.session_exists(self.SESSION_ID))
+        self.assertEqual(await reopened.snapshot(self.SESSION_ID), ())
 
     async def test_delivery_deduplicates_across_workers_and_restart(self):
         journal_a = self.journal()
@@ -150,14 +150,14 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         delivery = DeliveryIdentity("user", "delivery-1")
         draft_a = EventDraft(
             event_id="message-a",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=UserMessageReceived("hello"),
             occurred_at=NOW,
             delivery=delivery,
         )
         draft_b = EventDraft(
             event_id="message-b",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=UserMessageReceived("hello"),
             occurred_at=NOW + timedelta(seconds=1),
             delivery=delivery,
@@ -170,19 +170,19 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual({left.inserted, right.inserted}, {True, False})
         self.assertEqual(left.event, right.event)
-        self.assertEqual(len(await journal_a.snapshot(self.STREAM_ID)), 1)
+        self.assertEqual(len(await journal_a.snapshot(self.SESSION_ID)), 1)
 
         with self.assertRaises(DeliveryConflictError):
             await journal_b.accept_delivery(EventDraft(
                 event_id="message-conflict",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 payload=UserMessageReceived("different"),
                 occurred_at=NOW,
                 delivery=delivery,
             ))
 
         reopened = self.journal()
-        replayed = await reopened.snapshot(self.STREAM_ID)
+        replayed = await reopened.snapshot(self.SESSION_ID)
         self.assertEqual(replayed, (left.event,))
         duplicate = await reopened.accept_delivery(draft_b)
         self.assertFalse(duplicate.inserted)
@@ -193,12 +193,12 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         journal_b = self.journal()
         await self._accept_message(journal_a)
         frame = StateProjector().project(
-            self.STREAM_ID,
-            await journal_a.snapshot(self.STREAM_ID),
+            self.SESSION_ID,
+            await journal_a.snapshot(self.SESSION_ID),
         ).next_decision
         self.assertIsNotNone(frame)
         request = StepClaimRequest(
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             trigger_event_id=frame.trigger_event.event_id,
             decision_cursor=frame.decision_cursor,
             basis_state_version=frame.basis_state_version,
@@ -246,7 +246,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(retried, committed)
         step_events = [
             event
-            for event in await journal_a.snapshot(self.STREAM_ID)
+            for event in await journal_a.snapshot(self.SESSION_ID)
             if isinstance(event.payload, StepCommitted)
         ]
         self.assertEqual(step_events, [committed])
@@ -259,10 +259,10 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(journal=name):
                 requests = []
                 for suffix in ("a", "b"):
-                    stream_id = f"claim-stream-{suffix}"
+                    session_id = f"claim-session-{suffix}"
                     await journal.accept_delivery(EventDraft(
                         event_id=f"claim-message-{suffix}",
-                        stream_id=stream_id,
+                        session_id=session_id,
                         payload=UserMessageReceived("claim"),
                         occurred_at=NOW,
                         delivery=DeliveryIdentity(
@@ -271,11 +271,11 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                         ),
                     ))
                     frame = StateProjector().project(
-                        stream_id,
-                        await journal.snapshot(stream_id),
+                        session_id,
+                        await journal.snapshot(session_id),
                     ).next_decision
                     requests.append(StepClaimRequest(
-                        stream_id=stream_id,
+                        session_id=session_id,
                         trigger_event_id=frame.trigger_event.event_id,
                         decision_cursor=frame.decision_cursor,
                         basis_state_version=frame.basis_state_version,
@@ -320,8 +320,8 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         started_a, started_b = await asyncio.gather(
-            runtime_a.dispatcher.start_pending(self.STREAM_ID),
-            runtime_b.dispatcher.start_pending(self.STREAM_ID),
+            runtime_a.dispatcher.start_pending(self.SESSION_ID),
+            runtime_b.dispatcher.start_pending(self.SESSION_ID),
         )
         await asyncio.gather(
             runtime_a.dispatcher.wait_all(),
@@ -333,7 +333,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             sorted((started_a, started_b), key=len),
             [(), (command.command_id,)],
         )
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         self.assertEqual(
             sum(isinstance(event.payload, DispatchAttemptStarted)
                 for event in events),
@@ -344,7 +344,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                 for event in events),
             1,
         )
-        state = StateProjector().project(self.STREAM_ID, events).state
+        state = StateProjector().project(self.SESSION_ID, events).state
         self.assertIs(
             state.command(command.command_id).phase,
             CommandPhase.TERMINAL,
@@ -372,7 +372,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(sum(event is not None for event in (left, right)), 1)
-        events = await seed.snapshot(self.STREAM_ID)
+        events = await seed.snapshot(self.SESSION_ID)
         self.assertEqual(
             sum(isinstance(event.payload, DispatchAttemptStarted)
                 for event in events),
@@ -400,18 +400,18 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ToolBinding(handler),
             namespace="recovery",
         )
-        await runtime.recover_once(self.STREAM_ID)
-        active_events = await self.journal().snapshot(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
+        active_events = await self.journal().snapshot(self.SESSION_ID)
         self.assertFalse(any(
             isinstance(event.payload, CommandRecoveryRequired)
             for event in active_events
         ))
 
         self.clock.advance(31)
-        await runtime.recover_once(self.STREAM_ID)
-        await runtime.recover_once(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
+        await runtime.recover_once(self.SESSION_ID)
 
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         requirements = [
             event.payload
             for event in events
@@ -423,7 +423,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             requirements[0].allowed_actions,
             ("abandon", "request_user"),
         )
-        state = StateProjector().project(self.STREAM_ID, events).state
+        state = StateProjector().project(self.SESSION_ID, events).state
         self.assertIs(
             state.command(command.command_id).phase,
             CommandPhase.UNKNOWN,
@@ -458,9 +458,9 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ),
             namespace="indeterminate",
         )
-        await runtime.recover_once(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
 
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         requirements = [
             event.payload
             for event in events
@@ -485,7 +485,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         await journal.record_attempt_fact(EventDraft(
             event_id="accepted-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=ExternalOperationAccepted(
                 command_id=command.command_id,
                 attempt_id=dispatch.payload.attempt_id,
@@ -518,17 +518,17 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ),
             namespace="query",
         )
-        await runtime.recover_once(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
 
         self.assertEqual(handler_calls, 0)
         self.assertEqual(queried, ["remote-42"])
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         self.assertEqual(
             sum(isinstance(event.payload, CommandReconcileStarted)
                 for event in events),
             1,
         )
-        state = StateProjector().project(self.STREAM_ID, events).state
+        state = StateProjector().project(self.SESSION_ID, events).state
         self.assertIs(
             state.command(command.command_id).phase,
             CommandPhase.TERMINAL,
@@ -550,7 +550,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         await journal.record_attempt_fact(EventDraft(
             event_id="accepted-race",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=ExternalOperationAccepted(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -592,17 +592,17 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             namespace="query-b",
         )
         worker_a = asyncio.create_task(
-            runtime_a.recover_once(self.STREAM_ID)
+            runtime_a.recover_once(self.SESSION_ID)
         )
         await asyncio.wait_for(query_started.wait(), timeout=1)
-        worker_b_result = await runtime_b.recover_once(self.STREAM_ID)
+        worker_b_result = await runtime_b.recover_once(self.SESSION_ID)
 
         self.assertEqual(queries, ["attempt-running-race"])
         self.assertEqual(worker_b_result, ())
         release_query.set()
         await worker_a
 
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         self.assertEqual(
             sum(isinstance(event.payload, CommandReconcileStarted)
                 for event in events),
@@ -615,7 +615,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(
             StateProjector().project(
-                self.STREAM_ID,
+                self.SESSION_ID,
                 events,
             ).state.command(command.command_id).phase,
             CommandPhase.TERMINAL,
@@ -636,7 +636,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(31)
         reconcile_1 = await journal.start_reconcile(EventDraft(
             event_id="reconcile-event-1",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandReconcileStarted(
                 "reconcile-1",
                 1,
@@ -650,7 +650,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(2)
         reconcile_2 = await journal.start_reconcile(EventDraft(
             event_id="reconcile-event-2",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandReconcileStarted(
                 "reconcile-2",
                 2,
@@ -664,7 +664,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
 
         stale = await journal.confirm_no_effect(EventDraft(
             event_id="stale-no-effect",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=DispatchAttemptConfirmedNoEffect(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -674,7 +674,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         current = await journal.confirm_no_effect(EventDraft(
             event_id="current-no-effect",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=DispatchAttemptConfirmedNoEffect(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -685,7 +685,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(stale)
         self.assertIsNotNone(current)
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         no_effects = [
             event
             for event in events
@@ -697,7 +697,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(no_effects, [current])
         self.assertIs(
             StateProjector().project(
-                self.STREAM_ID,
+                self.SESSION_ID,
                 events,
             ).state.command(command.command_id).phase,
             CommandPhase.PENDING,
@@ -736,10 +736,10 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ),
             namespace="no-effect",
         )
-        await runtime.recover_once(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
         await runtime.dispatcher.wait_all()
 
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         attempts = [
             event.payload
             for event in events
@@ -758,7 +758,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(
             StateProjector().project(
-                self.STREAM_ID,
+                self.SESSION_ID,
                 events,
             ).state.command(command.command_id).phase,
             CommandPhase.TERMINAL,
@@ -807,8 +807,8 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             NamespacedIds("model-retry"),
             worker_id="worker-model-retry",
         )
-        await runtime.recover_once(self.STREAM_ID)
-        recovery_events = await self.journal().snapshot(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
+        recovery_events = await self.journal().snapshot(self.SESSION_ID)
         requirement = next(
             event.payload
             for event in recovery_events
@@ -818,7 +818,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             requirement.allowed_actions,
             ("retry", "abandon", "request_user"),
         )
-        retry_step = await runtime.advance(self.STREAM_ID)
+        retry_step = await runtime.advance(self.SESSION_ID)
         await runtime.dispatcher.wait_all()
 
         self.assertIsNotNone(retry_step)
@@ -828,7 +828,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(model.calls, 1)
         self.assertEqual(len(invoked), 1)
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         attempts = [
             event.payload
             for event in events
@@ -836,7 +836,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual([attempt.attempt_number for attempt in attempts], [1, 2])
         command_state = StateProjector().project(
-            self.STREAM_ID,
+            self.SESSION_ID,
             events,
         ).state.command(command.command_id)
         self.assertIs(command_state.phase, CommandPhase.TERMINAL)
@@ -863,7 +863,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             journal,
             ToolBinding(handler, recovery=recovery),
             namespace="requirement",
-        ).recover_once(self.STREAM_ID)
+        ).recover_once(self.SESSION_ID)
         model_started = asyncio.Event()
         release_model = asyncio.Event()
 
@@ -888,11 +888,11 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             NamespacedIds("receipt-race"),
             worker_id="worker-receipt-race",
         )
-        advance = asyncio.create_task(runtime.advance(self.STREAM_ID))
+        advance = asyncio.create_task(runtime.advance(self.SESSION_ID))
         await asyncio.wait_for(model_started.wait(), timeout=1)
         await self.journal().record_attempt_fact(EventDraft(
             event_id="late-accepted",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=ExternalOperationAccepted(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -908,27 +908,27 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             retry_step.retry_attempts,
             ((command.command_id, "attempt-receipt-race"),),
         )
-        events = await self.journal().snapshot(self.STREAM_ID)
+        events = await self.journal().snapshot(self.SESSION_ID)
         self.assertEqual(
             sum(isinstance(event.payload, DispatchAttemptStarted)
                 for event in events),
             1,
         )
-        state = StateProjector().project(self.STREAM_ID, events).state
+        state = StateProjector().project(self.SESSION_ID, events).state
         self.assertIs(
             state.command(command.command_id).phase,
             CommandPhase.RUNNING,
         )
         await self.journal().accept_delivery(EventDraft(
             event_id="post-race-message",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=UserMessageReceived("status?"),
             occurred_at=NOW,
             delivery=DeliveryIdentity("user", "post-race-message"),
         ))
         projection = StateProjector().project(
-            self.STREAM_ID,
-            await self.journal().snapshot(self.STREAM_ID),
+            self.SESSION_ID,
+            await self.journal().snapshot(self.SESSION_ID),
         )
         self.assertIsNotNone(projection.next_decision)
         self.assertIs(
@@ -948,7 +948,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         await journal.record_attempt_fact(EventDraft(
             event_id="outcome-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 command_id=command.command_id,
                 attempt_id=dispatch.payload.attempt_id,
@@ -965,15 +965,15 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ToolBinding(self._handler_must_not_run),
             namespace="checkpoint-a",
         )
-        before_state = await runtime.state(self.STREAM_ID)
-        before_turn = await runtime.turn(self.STREAM_ID)
-        before_trace = await runtime.trace(self.STREAM_ID)
+        before_state = await runtime.state(self.SESSION_ID)
+        before_turn = await runtime.turn(self.SESSION_ID)
+        before_trace = await runtime.trace(self.SESSION_ID)
         self.assertEqual(self._checkpoint_count(), 1)
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         fingerprint = AgentRuntime._event_fingerprint(events)
         self.assertEqual(
             await journal.load_checkpoint(
-                self.STREAM_ID,
+                self.SESSION_ID,
                 before_state.journal_position,
                 fingerprint,
             ),
@@ -986,11 +986,11 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ToolBinding(self._handler_must_not_run),
             namespace="checkpoint-b",
         )
-        self.assertEqual(await reopened.state(self.STREAM_ID), before_state)
-        await reopened_journal.delete_checkpoint(self.STREAM_ID)
+        self.assertEqual(await reopened.state(self.SESSION_ID), before_state)
+        await reopened_journal.delete_checkpoint(self.SESSION_ID)
         self.assertEqual(self._checkpoint_count(), 0)
         self.assertIsNone(await reopened_journal.load_checkpoint(
-            self.STREAM_ID,
+            self.SESSION_ID,
             before_state.journal_position,
             fingerprint,
         ))
@@ -1000,9 +1000,9 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ToolBinding(self._handler_must_not_run),
             namespace="checkpoint-c",
         )
-        self.assertEqual(await replayed.state(self.STREAM_ID), before_state)
-        self.assertEqual(await replayed.turn(self.STREAM_ID), before_turn)
-        self.assertEqual(await replayed.trace(self.STREAM_ID), before_trace)
+        self.assertEqual(await replayed.state(self.SESSION_ID), before_state)
+        self.assertEqual(await replayed.turn(self.SESSION_ID), before_turn)
+        self.assertEqual(await replayed.trace(self.SESSION_ID), before_trace)
 
     async def test_delivery_and_schema_cannot_bypass_store_contracts(self):
         step = Step(
@@ -1016,7 +1016,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         conditional = EventDraft(
             event_id="forged-step-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=StepCommitted(step),
             occurred_at=NOW,
             delivery=DeliveryIdentity("attacker", "delivery-1"),
@@ -1028,14 +1028,14 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError, "conditional event"):
                     await journal.append(EventDraft(
                         event_id="message-without-delivery",
-                        stream_id=self.STREAM_ID,
+                        session_id=self.SESSION_ID,
                         payload=UserMessageReceived("hello"),
                         occurred_at=NOW,
                     ))
                 with self.assertRaisesRegex(ValueError, "schema version"):
                     await journal.accept_delivery(EventDraft(
                         event_id="future-event",
-                        stream_id=self.STREAM_ID,
+                        session_id=self.SESSION_ID,
                         payload=UserMessageReceived("future"),
                         occurred_at=NOW,
                         schema_version=EVENT_SCHEMA_VERSION + 1,
@@ -1044,7 +1044,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError, "attempt fact"):
                     await journal.append(EventDraft(
                         event_id="forged-attempt-fact",
-                        stream_id=self.STREAM_ID,
+                        session_id=self.SESSION_ID,
                         payload=ExternalOperationAccepted(
                             "command",
                             "attempt",
@@ -1059,7 +1059,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                 ):
                     await journal.append(EventDraft(
                         event_id="forged-pending-cancel",
-                        stream_id=self.STREAM_ID,
+                        session_id=self.SESSION_ID,
                         payload=CommandOutcomeReceived(
                             "command",
                             None,
@@ -1069,7 +1069,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                         causation_id="dispatch",
                     ))
                 self.assertEqual(
-                    await journal.snapshot(self.STREAM_ID),
+                    await journal.snapshot(self.SESSION_ID),
                     (),
                 )
 
@@ -1077,11 +1077,11 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         seed = self.journal()
         await self._accept_message(seed)
         frame = StateProjector().project(
-            self.STREAM_ID,
-            await seed.snapshot(self.STREAM_ID),
+            self.SESSION_ID,
+            await seed.snapshot(self.SESSION_ID),
         ).next_decision
         request = StepClaimRequest(
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             trigger_event_id=frame.trigger_event.event_id,
             decision_cursor=frame.decision_cursor,
             basis_state_version=frame.basis_state_version,
@@ -1144,12 +1144,12 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                     step_lease_seconds=0.6,
                 )
                 await runtime.receive_user_message(
-                    self.STREAM_ID,
+                    self.SESSION_ID,
                     "slow",
                     delivery_id="slow-step-delivery",
                 )
                 advancing = asyncio.create_task(
-                    runtime.advance(self.STREAM_ID)
+                    runtime.advance(self.SESSION_ID)
                 )
                 await asyncio.wait_for(decision.started.wait(), timeout=1)
                 self.clock.advance(0.35)
@@ -1184,7 +1184,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             NamespacedIds("attempt-heartbeat"),
             attempt_lease_seconds=0.6,
         )
-        await runtime.dispatcher.start_pending(self.STREAM_ID)
+        await runtime.dispatcher.start_pending(self.SESSION_ID)
         await asyncio.wait_for(started.wait(), timeout=1)
         self.clock.advance(0.35)
         await asyncio.sleep(0.3)
@@ -1199,7 +1199,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             attempt_lease_seconds=0.6,
         )
         try:
-            self.assertEqual(await takeover.recover_once(self.STREAM_ID), ())
+            self.assertEqual(await takeover.recover_once(self.SESSION_ID), ())
         finally:
             release.set()
             await asyncio.gather(
@@ -1207,7 +1207,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                 return_exceptions=True,
             )
 
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         self.assertEqual(calls, 1)
         self.assertEqual(sum(
             isinstance(event.payload, DispatchAttemptStarted)
@@ -1260,7 +1260,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             reconcile_lease_seconds=0.6,
         )
         recovering = asyncio.create_task(
-            runtime_a.recover_once(self.STREAM_ID)
+            runtime_a.recover_once(self.SESSION_ID)
         )
         await asyncio.wait_for(reconcile_started.wait(), timeout=1)
         self.clock.advance(0.35)
@@ -1279,12 +1279,12 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             reconcile_lease_seconds=0.6,
         )
         try:
-            self.assertEqual(await runtime_b.recover_once(self.STREAM_ID), ())
+            self.assertEqual(await runtime_b.recover_once(self.SESSION_ID), ())
         finally:
             release_reconcile.set()
             await asyncio.gather(recovering, return_exceptions=True)
 
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         self.assertEqual(calls, 1)
         self.assertEqual(sum(
             isinstance(event.payload, CommandReconcileStarted)
@@ -1292,7 +1292,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ), 1)
         self.assertIs(
             StateProjector().project(
-                self.STREAM_ID,
+                self.SESSION_ID,
                 events,
             ).state.command(command.command_id).outcome.status,
             OutcomeStatus.SUCCEEDED,
@@ -1303,7 +1303,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             self.database_path,
             clock=self.clock,
         )
-        snapshot = asyncio.create_task(journal.snapshot(self.STREAM_ID))
+        snapshot = asyncio.create_task(journal.snapshot(self.SESSION_ID))
         started = await asyncio.to_thread(
             journal.snapshot_started.wait,
             1,
@@ -1333,7 +1333,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         accepted = await journal.record_attempt_fact(EventDraft(
             event_id="accepted-fenced-fact",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=ExternalOperationAccepted(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -1344,7 +1344,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         first = await journal.start_reconcile(EventDraft(
             event_id="reconcile-event-1",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandReconcileStarted(
                 "reconcile-1",
                 1,
@@ -1358,7 +1358,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(2)
         second = await journal.start_reconcile(EventDraft(
             event_id="reconcile-event-2",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandReconcileStarted(
                 "reconcile-2",
                 2,
@@ -1372,7 +1372,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
 
         stale = await journal.record_attempt_fact(EventDraft(
             event_id="stale-terminal",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -1383,7 +1383,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         current = await journal.record_attempt_fact(EventDraft(
             event_id="current-terminal",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -1395,7 +1395,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(stale)
         self.assertIsNotNone(current)
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         outcomes = [
             event for event in events
             if isinstance(event.payload, CommandOutcomeReceived)
@@ -1403,7 +1403,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcomes, [current])
         self.assertIs(
             StateProjector().project(
-                self.STREAM_ID,
+                self.SESSION_ID,
                 events,
             ).state.command(command.command_id).outcome.status,
             OutcomeStatus.SUCCEEDED,
@@ -1420,7 +1420,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(31)
         reconcile = await journal.start_reconcile(EventDraft(
             event_id="late-receipt-reconcile-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandReconcileStarted(
                 "late-receipt-reconcile",
                 1,
@@ -1433,7 +1433,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ), lease_seconds=10)
         no_effect = await journal.confirm_no_effect(EventDraft(
             event_id="late-receipt-no-effect",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=DispatchAttemptConfirmedNoEffect(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -1443,7 +1443,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         accepted = await journal.record_attempt_fact(EventDraft(
             event_id="late-receipt-accepted",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=ExternalOperationAccepted(
                 command.command_id,
                 dispatch.payload.attempt_id,
@@ -1454,15 +1454,15 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
 
         state = StateProjector().project(
-            self.STREAM_ID,
-            await journal.snapshot(self.STREAM_ID),
+            self.SESSION_ID,
+            await journal.snapshot(self.SESSION_ID),
         ).state.command(command.command_id)
         self.assertIs(state.phase, CommandPhase.RUNNING)
         self.assertIs(state.current_attempt.phase, AttemptPhase.RUNNING)
         self.assertIsNone(state.dispatch_eligible_by_event_id)
         blocked = await journal.start_attempt(EventDraft(
             event_id="attempt-after-late-receipt-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=DispatchAttemptStarted(
                 "attempt-after-late-receipt",
                 command.command_id,
@@ -1506,7 +1506,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         for journal, command, dispatch in seeded:
             await journal.record_attempt_fact(EventDraft(
                 event_id="terminal-before-recovery",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 payload=CommandOutcomeReceived(
                     command.command_id,
                     dispatch.payload.attempt_id,
@@ -1517,7 +1517,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             ))
             result = await journal.ensure_recovery_required(EventDraft(
                 event_id="stale-recovery-requirement",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 payload=CommandRecoveryRequired(
                     command.command_id,
                     dispatch.payload.attempt_id,
@@ -1530,7 +1530,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result)
             self.assertFalse(any(
                 isinstance(event.payload, CommandRecoveryRequired)
-                for event in await journal.snapshot(self.STREAM_ID)
+                for event in await journal.snapshot(self.SESSION_ID)
             ))
 
     async def test_conditional_internal_event_cannot_claim_delivery(self):
@@ -1545,7 +1545,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                 )
                 draft = EventDraft(
                     event_id=draft.event_id,
-                    stream_id=draft.stream_id,
+                    session_id=draft.session_id,
                     payload=draft.payload,
                     occurred_at=draft.occurred_at,
                     causation_id=draft.causation_id,
@@ -1558,7 +1558,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                     await journal.start_attempt(draft)
                 accepted = await journal.accept_delivery(EventDraft(
                     event_id="external-shared-delivery",
-                    stream_id=self.STREAM_ID,
+                    session_id=self.SESSION_ID,
                     payload=UserInterruptReceived("external"),
                     occurred_at=NOW,
                     delivery=delivery,
@@ -1575,7 +1575,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         target_draft = EventDraft(
             event_id="target-cancel-schema",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 target.command_id,
                 None,
@@ -1586,7 +1586,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         cancel_draft = EventDraft(
             event_id="cancel-terminal-schema",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 cancel.command_id,
                 dispatch.payload.attempt_id,
@@ -1596,13 +1596,13 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             causation_id=dispatch.event_id,
             schema_version=EVENT_SCHEMA_VERSION + 1,
         )
-        before = await journal.snapshot(self.STREAM_ID)
+        before = await journal.snapshot(self.SESSION_ID)
         with self.assertRaisesRegex(ValueError, "schema version"):
             await journal.commit_pending_cancellation(
                 target_draft,
                 cancel_draft,
             )
-        self.assertEqual(await journal.snapshot(self.STREAM_ID), before)
+        self.assertEqual(await journal.snapshot(self.SESSION_ID), before)
 
     async def test_cancel_attempt_recovers_before_pending_target_dispatch(self):
         journal = self.journal()
@@ -1619,10 +1619,10 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             namespace="cancel-recovery",
         )
 
-        await runtime.recover_once(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
 
-        events = await journal.snapshot(self.STREAM_ID)
-        state = StateProjector().project(self.STREAM_ID, events).state
+        events = await journal.snapshot(self.SESSION_ID)
+        state = StateProjector().project(self.SESSION_ID, events).state
         self.assertIs(
             state.command(target.command_id).outcome.status,
             OutcomeStatus.CANCELLED,
@@ -1664,7 +1664,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         await journal.record_attempt_fact(EventDraft(
             event_id="target-cancelled-after-request",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 target.command_id,
                 target_dispatch.payload.attempt_id,
@@ -1680,9 +1680,9 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             namespace="cancel-crash-window",
         )
 
-        await runtime.recover_once(self.STREAM_ID)
+        await runtime.recover_once(self.SESSION_ID)
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         cancel_state = state.command(cancel.command_id)
         self.assertIs(cancel_state.outcome.status, OutcomeStatus.SUCCEEDED)
         self.assertEqual(cancel_state.outcome.value, "cancelled")
@@ -1702,7 +1702,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(31)
         reconcile = await journal.start_reconcile(EventDraft(
             event_id="target-no-effect-reconcile-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandReconcileStarted(
                 "target-no-effect-reconcile",
                 1,
@@ -1715,7 +1715,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         ), lease_seconds=10)
         await journal.confirm_no_effect(EventDraft(
             event_id="target-no-effect",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=DispatchAttemptConfirmedNoEffect(
                 target.command_id,
                 dispatch.payload.attempt_id,
@@ -1730,11 +1730,11 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             namespace="cancel-no-effect",
         )
 
-        started = await runtime.dispatcher.start_pending(self.STREAM_ID)
+        started = await runtime.dispatcher.start_pending(self.SESSION_ID)
         await runtime.dispatcher.wait(cancel.command_id)
 
         self.assertEqual(started, (cancel.command_id,))
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertIs(
             state.command(target.command_id).outcome.status,
             OutcomeStatus.CANCELLED,
@@ -1752,7 +1752,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         cause = cancel_dispatch.event_id
         target_cancel = EventDraft(
             event_id="target-race-cancel",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 target.command_id,
                 None,
@@ -1763,7 +1763,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         cancel_terminal = EventDraft(
             event_id="cancel-race-terminal",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandOutcomeReceived(
                 cancel.command_id,
                 cancel_dispatch.payload.attempt_id,
@@ -1788,8 +1788,8 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotEqual(cancellation is None, started is None)
         state = StateProjector().project(
-            self.STREAM_ID,
-            await journal.snapshot(self.STREAM_ID),
+            self.SESSION_ID,
+            await journal.snapshot(self.SESSION_ID),
         ).state
         if cancellation is not None:
             self.assertIs(
@@ -1816,8 +1816,8 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             namespace="changed-contract",
         )
         with self.assertRaisesRegex(ValueError, "contract changed"):
-            await runtime.dispatcher.start_pending(self.STREAM_ID)
-        events = await journal.snapshot(self.STREAM_ID)
+            await runtime.dispatcher.start_pending(self.SESSION_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         self.assertFalse(any(
             isinstance(event.payload, DispatchAttemptStarted)
             for event in events
@@ -1862,7 +1862,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
     async def _accept_message(self, journal: SqliteJournal) -> None:
         await journal.accept_delivery(EventDraft(
             event_id="message-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=UserMessageReceived("run tool"),
             occurred_at=NOW,
             delivery=DeliveryIdentity("user", "message-delivery"),
@@ -1876,8 +1876,8 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
     ) -> tuple[Command, object]:
         await self._accept_message(journal)
         frame = StateProjector().project(
-            self.STREAM_ID,
-            await journal.snapshot(self.STREAM_ID),
+            self.SESSION_ID,
+            await journal.snapshot(self.SESSION_ID),
         ).next_decision
         effect = InvokeTool("tool", (("city", "成都"),))
         decision = ModelDecision(
@@ -1905,7 +1905,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             commands=(command,),
         )
         request = StepClaimRequest(
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             trigger_event_id=frame.trigger_event.event_id,
             decision_cursor=frame.decision_cursor,
             basis_state_version=frame.basis_state_version,
@@ -1919,7 +1919,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         event = await journal.commit_step(lease, EventDraft(
             event_id="step-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=StepCommitted(step),
             occurred_at=NOW,
             causation_id=frame.trigger_event.event_id,
@@ -1934,13 +1934,13 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         abandon_target: bool = False,
     ) -> tuple[Command, object]:
         projection = StateProjector().project(
-            self.STREAM_ID,
-            await journal.snapshot(self.STREAM_ID),
+            self.SESSION_ID,
+            await journal.snapshot(self.SESSION_ID),
         )
         if projection.next_decision is None:
             await journal.accept_delivery(EventDraft(
                 event_id="cancel-request-event",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 payload=UserInterruptReceived("cancel target"),
                 occurred_at=NOW,
                 delivery=DeliveryIdentity(
@@ -1949,8 +1949,8 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
                 ),
             ))
             projection = StateProjector().project(
-                self.STREAM_ID,
-                await journal.snapshot(self.STREAM_ID),
+                self.SESSION_ID,
+                await journal.snapshot(self.SESSION_ID),
             )
         frame = projection.next_decision
         effect = CancelTool(target.command_id)
@@ -1972,7 +1972,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             commands=(command,),
         )
         request = StepClaimRequest(
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             trigger_event_id=frame.trigger_event.event_id,
             decision_cursor=frame.decision_cursor,
             basis_state_version=frame.basis_state_version,
@@ -1986,7 +1986,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         event = await journal.commit_step(lease, EventDraft(
             event_id="cancel-step-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=StepCommitted(step),
             occurred_at=NOW,
             causation_id=frame.trigger_event.event_id,
@@ -2016,7 +2016,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
     ) -> EventDraft:
         return EventDraft(
             event_id=f"{attempt_id}-event",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=DispatchAttemptStarted(
                 attempt_id=attempt_id,
                 command_id=command.command_id,
@@ -2046,7 +2046,7 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         return EventDraft(
             event_id=event_id,
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=StepCommitted(step),
             occurred_at=NOW,
             causation_id=frame.trigger_event.event_id,
@@ -2094,7 +2094,7 @@ class DurableCodecContractTest(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "artifact refs"):
             EventDraft(
                 event_id="mutable-artifacts",
-                stream_id="stream-1",
+                session_id="session-1",
                 payload=UserMessageReceived("hello"),
                 occurred_at=NOW,
                 artifact_refs=["artifact-1"],
@@ -2102,7 +2102,7 @@ class DurableCodecContractTest(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "payload type"):
             EventDraft(
                 event_id="extended-payload",
-                stream_id="stream-1",
+                session_id="session-1",
                 payload=ExtendedMessage("hello", [1]),
                 occurred_at=NOW,
             )
@@ -2125,7 +2125,7 @@ class DurableCodecContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "UTC"):
             EventDraft(
                 event_id="event-offset",
-                stream_id="stream-1",
+                session_id="session-1",
                 payload=UserMessageReceived("hello"),
                 occurred_at=datetime(
                     2026,
@@ -2241,7 +2241,7 @@ class DurableCodecContractTest(unittest.TestCase):
     def test_delivery_fingerprint_has_versioned_golden_value(self):
         draft = EventDraft(
             event_id="ignored-event-id",
-            stream_id="stream-1",
+            session_id="session-1",
             payload=UserMessageReceived("你好"),
             occurred_at=NOW,
             causation_id="cause-1",
@@ -2252,5 +2252,5 @@ class DurableCodecContractTest(unittest.TestCase):
 
         self.assertEqual(
             delivery_fingerprint(draft),
-            "v1:86309430b017562b818f72ffb2d344b42ce2aadda078222ff23d3bbe547be884",
+            "v1:c3e891834f59557fd79778d2ef23b259a858c1cb30235792800df855ca616332",
         )

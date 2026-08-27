@@ -171,7 +171,7 @@ class StepRunner:
         )
         return await self._journal.commit_step(lease, EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=frame.trigger_event.stream_id,
+            session_id=frame.trigger_event.session_id,
             payload=StepCommitted(step),
             occurred_at=datetime.now(timezone.utc),
             causation_id=frame.trigger_event.event_id,

@@ -32,14 +32,14 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(prompt.preferred_height(80, 24).min, 2)
             self.assertEqual(prompt.preferred_height(80, 24).max, 2)
 
-    def test_context_meter_tracks_only_the_selected_stream(self):
+    def test_context_meter_tracks_only_the_selected_session(self):
         meter = _ContextMeter()
-        meter.select("stream-1", 200_000)
+        meter.select("session-1", 200_000)
 
-        meter.update("another-stream", 90_000, 200_000)
+        meter.update("another-session", 90_000, 200_000)
         self.assertEqual(meter.render(), "上下文 0/200k")
 
-        meter.update("stream-1", 12_345, 200_000)
+        meter.update("session-1", 12_345, 200_000)
         self.assertEqual(meter.render(), "上下文 12.3k/200k")
 
     async def test_reader_continuously_collects_complete_lines(self):

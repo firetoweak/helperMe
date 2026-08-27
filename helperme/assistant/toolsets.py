@@ -31,7 +31,7 @@ LOAD_TOOLSET_SCHEMA: dict[str, object] = {
     "function": {
         "name": LOAD_TOOLSET,
         "description": (
-            "为当前 Stream 加载一个 Toolset，并返回本次发现的工具名称与描述。"
+            "为当前 Session 加载一个 Toolset，并返回本次发现的工具名称与描述。"
             "其中的工具从下一个 Step 开始可用。未加载前不能调用其中的工具。"
         ),
         "parameters": {
@@ -207,7 +207,7 @@ def project_toolset_activations(
 
 
 class ToolSurface:
-    """每个 Stream 独立记住已加载 Toolset；模型可见 Schema 按 Stream 投影。"""
+    """每个 Session 独立记住已加载 Toolset；模型可见 Schema 按 Session 投影。"""
 
     def __init__(
         self,
@@ -232,8 +232,8 @@ class ToolSurface:
     def attach(self, runtime: AgentRuntime) -> None:
         self._runtime = runtime
 
-    def reset(self, stream_id: str) -> None:
-        self._loaded.pop(stream_id, None)
+    def reset(self, session_id: str) -> None:
+        self._loaded.pop(session_id, None)
 
     def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
         items: list[ToolsetDescriptor] = []
@@ -248,26 +248,26 @@ class ToolSurface:
 
     def schemas(
         self,
-        stream_id: str,
+        session_id: str,
         decision_state: DecisionState | None = None,
     ) -> list[dict[str, object]]:
-        self._drop_unavailable(stream_id)
+        self._drop_unavailable(session_id)
         schemas = list(self._base_schemas)
         if self.descriptors():
             schemas.append(LOAD_TOOLSET_SCHEMA)
-        for loaded in self._visible_loaded(stream_id, decision_state).values():
+        for loaded in self._visible_loaded(session_id, decision_state).values():
             schemas.extend(tool.schema() for tool in loaded.tools)
         return schemas
 
     def catalog_instruction(
         self,
-        stream_id: str,
+        session_id: str,
         decision_state: DecisionState | None = None,
     ) -> str:
         descriptors = self.descriptors()
         if not descriptors:
             return "当前没有可加载的外部 Toolset。"
-        loaded = self._visible_loaded(stream_id, decision_state)
+        loaded = self._visible_loaded(session_id, decision_state)
         lines = [
             "可按需加载以下 Toolset。需要其中能力时，调用 load_toolset；"
             "加载后的工具从下一个 Step 开始可用。"
@@ -280,7 +280,7 @@ class ToolSurface:
 
     async def load(
         self,
-        stream_id: str,
+        session_id: str,
         toolset_id: str,
         *,
         activation_command_id: str | None = None,
@@ -302,7 +302,7 @@ class ToolSurface:
                 "hint": "请从可选 Toolset 目录中选择有效 ID。",
             }
         current = available[toolset_id]
-        existing = self._loaded.get(stream_id, {}).get(toolset_id)
+        existing = self._loaded.get(session_id, {}).get(toolset_id)
         if existing is not None and existing.revision == current.revision:
             return _loaded_payload(toolset_id, current.revision, existing.tools)
         provider = self._provider_for(toolset_id)
@@ -326,7 +326,7 @@ class ToolSurface:
                 "hint": "请更换 Server ID 或工具名后重试。",
             }
         self._bind_loaded(
-            stream_id,
+            session_id,
             toolset_id,
             current.revision,
             tools,
@@ -336,7 +336,7 @@ class ToolSurface:
 
     async def rehydrate(
         self,
-        stream_id: str,
+        session_id: str,
         events: Sequence[Event],
     ) -> tuple[ToolsetActivation, ...]:
         """用 Journal 投影恢复可丢弃缓存，不向 Runtime 写入领域状态。"""
@@ -382,9 +382,9 @@ class ToolSurface:
                 activation.command_id,
             )
         if restored:
-            self._loaded[stream_id] = restored
+            self._loaded[session_id] = restored
         else:
-            self._loaded.pop(stream_id, None)
+            self._loaded.pop(session_id, None)
         return activations
 
     def _conflicting_names(
@@ -427,14 +427,14 @@ class ToolSurface:
 
     def _bind_loaded(
         self,
-        stream_id: str,
+        session_id: str,
         toolset_id: str,
         revision: int,
         tools: tuple[LoadedTool, ...],
         activation_command_id: str | None,
     ) -> None:
         self._bind_tools(toolset_id, tools)
-        self._loaded.setdefault(stream_id, {})[toolset_id] = _LoadedSet(
+        self._loaded.setdefault(session_id, {})[toolset_id] = _LoadedSet(
             revision,
             tools,
             activation_command_id,
@@ -451,9 +451,9 @@ class ToolSurface:
             data={"toolset_id": toolset_id},
         )
 
-    def _drop_unavailable(self, stream_id: str) -> None:
+    def _drop_unavailable(self, session_id: str) -> None:
         available = {item.id for item in self.descriptors()}
-        loaded = self._loaded.get(stream_id)
+        loaded = self._loaded.get(session_id)
         if loaded is None:
             return
         for toolset_id in tuple(loaded):
@@ -462,10 +462,10 @@ class ToolSurface:
 
     def _visible_loaded(
         self,
-        stream_id: str,
+        session_id: str,
         decision_state: DecisionState | None,
     ) -> dict[str, _LoadedSet]:
-        loaded = self._loaded.get(stream_id, {})
+        loaded = self._loaded.get(session_id, {})
         if decision_state is None:
             return loaded
         visible: dict[str, _LoadedSet] = {}
@@ -488,7 +488,7 @@ def load_toolset_binding(surface: ToolSurface) -> dict[str, ToolBinding]:
         arguments: Mapping[str, object],
     ) -> object:
         return await surface.load(
-            context.stream_id,
+            context.session_id,
             arguments.get("toolset_id"),
             activation_command_id=context.command_id,
         )
@@ -529,7 +529,7 @@ def _loaded_handler(
             return result
         payload, _artifact_id = externalize_payload(
             result,
-            gateway.for_stream(context.stream_id),
+            gateway.for_session(context.session_id),
             max_chars=settings.size_externalize_chars,
             preview_chars=settings.preview_chars,
         )

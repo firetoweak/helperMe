@@ -66,7 +66,7 @@ class SkillToolAdapter:
             result = runtime_tool_result(await spec.handler(payload))
             body, _artifact_id = externalize_payload(
                 result,
-                self._gateway.for_stream(context.stream_id),
+                self._gateway.for_session(context.session_id),
                 max_chars=self._settings.size_externalize_chars,
                 preview_chars=self._settings.preview_chars,
             )

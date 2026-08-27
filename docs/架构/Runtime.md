@@ -1,12 +1,12 @@
 # Runtime
 
-内核在 `helperme/runtime/`。它不认识 MCP、Skill、Goal、Todo、会话产品词。
+内核在 `helperme/runtime/`。它不认识 MCP、Skill、Goal、Todo、Conversation 等产品词。
 
-## Stream
+## Session
 
-一条可独立排序、推进、等待、恢复的执行生命线。同一时刻最多一个 Step 在为该 Stream 做模型决策。
+一条可独立排序、推进、等待、恢复的执行生命线。同一时刻最多一个 Step 在为该 Session 做模型决策。
 
-Runtime Core 不负责选择 Stream。Channel 或 Automation 生成或选择 Stream identity；identity 给定后，`AssistantStreams` 调用幂等的 `create_stream(identity)`，Core 持久化这条空执行生命线，并负责后续 Event 持久执行、State 重建、历史重放以及按 Command Contract 进行机械恢复。Stream 的存在不以“已经有 Event”为条件；创建本身不是 Event，也不触发模型或 Step。Core 不理解它对应 Session、Conversation、任务、后台工作还是 SubAgent。
+Runtime Core 不负责选择 Session。Channel 或 Automation 生成或选择 Session identity；identity 给定后，`AssistantSessions` 调用幂等的 `create_session(identity)`，Core 持久化这条空执行生命线，并负责后续 Event 持久执行、State 重建、历史重放以及按 Command Contract 进行机械恢复。Session 的存在不以“已经有 Event”为条件；创建本身不是 Event，也不触发模型或 Step。Core 不理解它对应 Conversation、任务、后台工作还是 SubAgent。
 
 ## Event 与 Journal
 
@@ -63,9 +63,9 @@ Runtime 不推断后来的普通 `UserMessageReceived` 会使既有决策输入�
 
 预期内失败必须由 Tool Adapter / handler 转换成确定 Outcome。只有异常逃逸到 Runtime 边界、且没有可靠最终结果时，Attempt 才保守地停在现有 `unknown`；不新增更细异常状态，也不把“抛异常”武断等同于“外部动作失败且无副作用”。
 
-未预期异常必须原样穿透当前调用链，Host 不得为了继续运行而宽泛捕获。异常发生前已持久化的 Attempt 仍保持 `unknown`；下次显式恢复 Stream 时才启动现有 Recovery Contract。Runtime 能查询就记录查询事实；不能确认就追加 `CommandRecoveryRequired`。这只是恢复历史中的不确定执行，不是把程序 bug 改写成业务错误。
+未预期异常必须原样穿透当前调用链，Host 不得为了继续运行而宽泛捕获。异常发生前已持久化的 Attempt 仍保持 `unknown`；下次显式恢复 Session 时才启动现有 Recovery Contract。Runtime 能查询就记录查询事实；不能确认就追加 `CommandRecoveryRequired`。这只是恢复历史中的不确定执行，不是把程序 bug 改写成业务错误。
 
-`bind_tool` 允许 Host 在 Stream 进行中补 Binding。Runtime 不解释工具从哪来。
+`bind_tool` 允许 Host 在 Session 进行中补 Binding。Runtime 不解释工具从哪来。
 
 恢复同样遵守“Runtime 不替模型决定”：Dispatcher 可以按 Tool Recovery Contract 查询外部事实；查到终态就记录 Outcome，确认 Attempt 从未产生外部效果则继续派发原 Command。若结果仍是 `unknown`，Runtime 只写 `CommandRecoveryRequired` 及契约允许的选择，不自行 retry、abandon 或 cancel。选择由后续模型 Step 或用户作出。
 

@@ -96,7 +96,7 @@ def runtime_for(
 
 
 class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "boundary-stream"
+    SESSION_ID = "boundary-session"
 
     async def test_unauthorized_command_is_not_claimed_until_granted(self):
         tool = RecordingTool("transfer", requires_authorization=True)
@@ -111,13 +111,13 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "send money",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         command_id = step.commands[0].command_id
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
 
         self.assertTrue(step.commands[0].requires_authorization)
         self.assertIsNone(state.command(command_id).dispatch_eligible_by_event_id)
@@ -125,11 +125,11 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.waiting_for, (f"authorization:{command_id}",))
         self.assertFalse(tool.started.is_set())
 
-        denied = await runtime.dispatcher.start_pending(self.STREAM_ID)
+        denied = await runtime.dispatcher.start_pending(self.SESSION_ID)
         self.assertEqual(denied, ())
         bypass = await runtime.dispatcher._journal.start_attempt(EventDraft(
             event_id="forged-attempt",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=DispatchAttemptStarted(
                 "forged-attempt",
                 command_id,
@@ -142,10 +142,10 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertIsNone(bypass)
 
-        granted = await runtime.grant_command(self.STREAM_ID, command_id)
+        granted = await runtime.grant_command(self.SESSION_ID, command_id)
         self.assertIsInstance(granted.payload, CommandAuthorized)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
-        dispatched = (await runtime.state(self.STREAM_ID)).command(command_id)
+        dispatched = (await runtime.state(self.SESSION_ID)).command(command_id)
         self.assertEqual(dispatched.phase, CommandPhase.UNKNOWN)
         self.assertEqual(len(dispatched.attempts), 1)
         tool.release.set()
@@ -162,21 +162,21 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         runtime = runtime_for(tool, model)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "publish this",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         command_id = step.commands[0].command_id
 
-        rejected = await runtime.reject_command(self.STREAM_ID, command_id)
+        rejected = await runtime.reject_command(self.SESSION_ID, command_id)
         self.assertIsInstance(rejected.payload, CommandRejected)
         self.assertIsNone(
-            await runtime.grant_command(self.STREAM_ID, command_id)
+            await runtime.grant_command(self.SESSION_ID, command_id)
         )
         self.assertFalse(tool.started.is_set())
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.RUNNABLE)
         self.assertEqual(state.next_trigger_event_id, rejected.event_id)
         self.assertEqual(
@@ -185,7 +185,7 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(command_id, state.waiting_command_ids)
 
-        follow_up = await runtime.advance(self.STREAM_ID)
+        follow_up = await runtime.advance(self.SESSION_ID)
         self.assertEqual(follow_up.trigger_event_id, rejected.event_id)
         self.assertIsInstance(
             model.frames[1].trigger_event.payload,
@@ -207,17 +207,17 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         inbound = await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "say hello",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
         tool.release.set()
         await runtime.dispatcher.wait(step.commands[0].command_id)
 
-        turn = await runtime.turn(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        turn = await runtime.turn(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         self.assertEqual(
             [item.event_id for item in turn.user_messages],
             [inbound.event_id],
@@ -238,7 +238,7 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TypeError):
             EventDraft(
                 event_id="preview-1",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 payload="streaming token",
                 occurred_at=NOW,
             )
@@ -246,7 +246,7 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             getattr(item, "__name__", str(item))
             for item in EventPayload.__args__
         }
-        self.assertNotIn("StreamPreviewReceived", payload_names)
+        self.assertNotIn("SessionPreviewReceived", payload_names)
         self.assertIn("StepCommitted", payload_names)
         self.assertIn("CommandAuthorized", payload_names)
 
@@ -255,15 +255,15 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         journal = MemoryJournal()
         await journal.accept_delivery(EventDraft(
             event_id="message-1",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=UserMessageReceived("read this"),
             occurred_at=NOW,
             artifact_refs=(digest,),
             delivery=DeliveryIdentity("user", "ask-1"),
         ))
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         uninspected = diagnose_artifacts(events)
-        rebuilt = replay(self.STREAM_ID, events)
+        rebuilt = replay(self.SESSION_ID, events)
         inspected_empty = diagnose_artifacts(events, available_refs=())
 
         self.assertEqual(uninspected.refs, (digest,))
@@ -298,26 +298,26 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             journal=first,
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "do it",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         command_id = step.commands[0].command_id
-        issued = (await first.snapshot(self.STREAM_ID))[-1]
+        issued = (await first.snapshot(self.SESSION_ID))[-1]
 
         journal_a = SqliteJournal(path)
         journal_b = SqliteJournal(path)
         draft_a = EventDraft(
             event_id="grant-a",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandAuthorized(command_id),
             occurred_at=NOW,
             causation_id=issued.event_id,
         )
         draft_b = EventDraft(
             event_id="grant-b",
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             payload=CommandAuthorized(command_id),
             occurred_at=NOW,
             causation_id=issued.event_id,
@@ -329,15 +329,15 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(event is not None for event in winners), 1)
 
         reopened = SqliteJournal(path)
-        events = await reopened.snapshot(self.STREAM_ID)
-        rebuilt = replay(self.STREAM_ID, events)
+        events = await reopened.snapshot(self.SESSION_ID)
+        rebuilt = replay(self.SESSION_ID, events)
         self.assertIsNotNone(
             rebuilt.state.command(command_id).dispatch_eligible_by_event_id
         )
         self.assertIsNone(
             await reopened.grant_command(EventDraft(
                 event_id="grant-c",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 payload=CommandAuthorized(command_id),
                 occurred_at=NOW,
                 causation_id=issued.event_id,

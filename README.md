@@ -16,12 +16,12 @@ This project explores a different goal: build an assistant for one person that c
 Start the console and give the assistant a task. It can inspect and modify files, run commands, and load external capabilities while keeping every important action in a durable execution history.
 
 - Type a new instruction while it is working; the instruction becomes a durable Interrupt instead of being lost or starting an unrelated turn.
-- Exit and later resume a Stream from its Journal-backed state.
+- Exit and later resume a Session from its Journal-backed state.
 - Connect MCP Servers without placing every external tool in the model context up front.
 - Install and enable Skills, then let the model read their instructions only when needed.
 - Keep workspace access, permissions, model decisions, and external side effects behind separate boundaries.
 
-The result is less like a disposable chat session and more like a task that can be inspected, interrupted, resumed, and extended without hiding how it advances.
+The result is a durable execution Session rather than a disposable chat connection: it can be inspected, interrupted, resumed, and extended without hiding how it advances.
 
 ## Why helperMe Is Different
 
@@ -31,7 +31,7 @@ User messages, model decisions, tool outcomes, Interrupts, and termination reque
 
 ### Long-running work is not a conversation trick
 
-A Turn is only the human-facing projection of an interaction. The durable unit is a Stream, which can continue across multiple model Steps and be resumed after the process exits.
+A Turn is only the human-facing projection of an interaction. The durable unit is a Session, which can continue across multiple model Steps and be resumed after the process exits.
 
 ### Capabilities enter context only when needed
 
@@ -80,13 +80,13 @@ The main console commands are:
 
 | Command | Purpose |
 |---|---|
-| `/new` | Create a new Stream |
-| `/resume <stream_id>` | Resume a Stream from the Journal |
-| `/stop` | Terminate the current Stream |
+| `/new` | Create a new Session |
+| `/resume <session_id>` | Resume a Session from the Journal |
+| `/stop` | Terminate the current Session |
 | `/mcp` | Inspect and manage MCP Servers |
 | `/skill` | Inspect and manage Skills |
 
-Typing normal text while the Agent is running creates an Interrupt in the current Stream. `Ctrl+C` or `Ctrl+D` exits the program; neither represents an Agent Interrupt.
+Typing normal text while the Agent is running creates an Interrupt in the current Session. `Ctrl+C` or `Ctrl+D` exits the program; neither represents an Agent Interrupt.
 
 ## Current Status
 
@@ -95,7 +95,7 @@ helperMe is a personal learning project under active development. Its architectu
 Implemented today:
 
 - Event / State / Step / Command Runtime with deterministic reduction.
-- SQLite-backed Journal and recoverable Streams.
+- SQLite-backed Journal and recoverable Sessions.
 - OpenAI-compatible Chat Completions model interface.
 - File, command, Workspace, and permission boundaries.
 - MCP discovery, management, resources, prompts, and on-demand Toolset loading.

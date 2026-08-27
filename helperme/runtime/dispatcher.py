@@ -36,7 +36,7 @@ from helperme.runtime.step import IdFactory, random_id
 
 @dataclass(frozen=True, slots=True)
 class AttemptContext:
-    stream_id: str
+    session_id: str
     command_id: str
     attempt_id: str
     attempt_number: int
@@ -174,9 +174,9 @@ class Dispatcher:
     def bind(self, name: str, binding: ToolBinding) -> None:
         self._bindings[name] = binding
 
-    async def start_pending(self, stream_id: str) -> tuple[str, ...]:
-        events = await self._journal.snapshot(stream_id)
-        state = self._projector.project(stream_id, events).state
+    async def start_pending(self, session_id: str) -> tuple[str, ...]:
+        events = await self._journal.snapshot(session_id)
+        state = self._projector.project(session_id, events).state
         cancel_targets = {
             command_state.command.effect.target_command_id
             for command_state in state.commands
@@ -205,7 +205,7 @@ class Dispatcher:
             attempt_id = self._id_factory("attempt")
             dispatch_event = await self._journal.start_attempt(EventDraft(
                 event_id=self._id_factory("event"),
-                stream_id=stream_id,
+                session_id=session_id,
                 payload=DispatchAttemptStarted(
                     attempt_id=attempt_id,
                     command_id=command.command_id,
@@ -220,20 +220,20 @@ class Dispatcher:
                 continue
             if isinstance(command.effect, InvokeTool):
                 self._executions[command.command_id] = asyncio.create_task(
-                    self._invoke_tool(stream_id, command, dispatch_event),
+                    self._invoke_tool(session_id, command, dispatch_event),
                     name=f"agent-tool:{attempt_id}",
                 )
             self._tasks[command.command_id] = asyncio.create_task(
-                self._run(stream_id, command, dispatch_event),
+                self._run(session_id, command, dispatch_event),
                 name=f"agent-command:{attempt_id}",
             )
             started.append(command.command_id)
         return tuple(started)
 
-    async def recover_once(self, stream_id: str) -> tuple[str, ...]:
+    async def recover_once(self, session_id: str) -> tuple[str, ...]:
         touched: list[str] = []
-        events = await self._journal.snapshot(stream_id)
-        state = self._projector.project(stream_id, events).state
+        events = await self._journal.snapshot(session_id)
+        state = self._projector.project(session_id, events).state
         events_by_id = {event.event_id: event for event in events}
         for command_state in state.commands:
             command_id = command_state.command.command_id
@@ -253,7 +253,7 @@ class Dispatcher:
                 continue
             attempt = self._current_attempt(command_state)
             event = await self._recover_cancel(
-                stream_id,
+                session_id,
                 command_state,
                 attempt,
                 events_by_id[attempt.started_event_id],
@@ -261,8 +261,8 @@ class Dispatcher:
             if event is not None:
                 touched.append(event.event_id)
 
-        events = await self._journal.snapshot(stream_id)
-        state = self._projector.project(stream_id, events).state
+        events = await self._journal.snapshot(session_id)
+        state = self._projector.project(session_id, events).state
         for command_state in state.commands:
             command_id = command_state.command.command_id
             if (
@@ -275,14 +275,14 @@ class Dispatcher:
             if local_task is not None and not local_task.done():
                 continue
             if command_state.phase is CommandPhase.UNKNOWN:
-                event = await self._recover_unknown(stream_id, command_state)
+                event = await self._recover_unknown(session_id, command_state)
                 if event is not None:
                     touched.append(event.event_id)
             elif command_state.phase is CommandPhase.RUNNING:
-                event = await self._recover_running(stream_id, command_state)
+                event = await self._recover_running(session_id, command_state)
                 if event is not None:
                     touched.append(event.event_id)
-        touched.extend(await self.start_pending(stream_id))
+        touched.extend(await self.start_pending(session_id))
         return tuple(touched)
 
     async def wait(self, command_id: str) -> None:
@@ -312,7 +312,7 @@ class Dispatcher:
 
     async def _run(
         self,
-        stream_id: str,
+        session_id: str,
         command: Command,
         dispatch_event: Event,
     ) -> None:
@@ -325,14 +325,14 @@ class Dispatcher:
         try:
             try:
                 result = await self._await_while_leased(
-                    self._execute(stream_id, command, dispatch_event),
+                    self._execute(session_id, command, dispatch_event),
                     heartbeat,
                 )
             except asyncio.CancelledError:
                 if command.command_id not in self._cancel_requests:
                     raise
                 await self._append_outcome(
-                    stream_id,
+                    session_id,
                     command.command_id,
                     attempt_id,
                     CommandOutcome(OutcomeStatus.CANCELLED),
@@ -343,7 +343,7 @@ class Dispatcher:
 
             if isinstance(result, ToolAccepted):
                 await self._append_accepted(
-                    stream_id,
+                    session_id,
                     command.command_id,
                     attempt_id,
                     result.external_operation_id,
@@ -362,7 +362,7 @@ class Dispatcher:
             else:
                 outcome = CommandOutcome(OutcomeStatus.SUCCEEDED, value=result)
             await self._append_outcome(
-                stream_id,
+                session_id,
                 command.command_id,
                 attempt_id,
                 outcome,
@@ -376,11 +376,11 @@ class Dispatcher:
                 payload.claim_token,
             )
             if isinstance(command.effect, CancelTool):
-                await self.start_pending(stream_id)
+                await self.start_pending(session_id)
 
     async def _execute(
         self,
-        stream_id: str,
+        session_id: str,
         command: Command,
         dispatch_event: Event,
     ) -> object:
@@ -389,7 +389,7 @@ class Dispatcher:
             return await self._executions[command.command_id]
         if isinstance(effect, CancelTool):
             return await self._cancel_target(
-                stream_id,
+                session_id,
                 effect.target_command_id,
                 dispatch_event,
             )
@@ -445,7 +445,7 @@ class Dispatcher:
 
     async def _invoke_tool(
         self,
-        stream_id: str,
+        session_id: str,
         command: Command,
         dispatch_event: Event,
     ) -> object:
@@ -454,13 +454,13 @@ class Dispatcher:
             raise TypeError(type(effect).__name__)
         binding = self._binding_for(command)
         return await binding.handler(
-            self._attempt_context(stream_id, command, dispatch_event),
+            self._attempt_context(session_id, command, dispatch_event),
             effect.argument_dict(),
         )
 
     async def _recover_unknown(
         self,
-        stream_id: str,
+        session_id: str,
         state: CommandState,
     ) -> Event | None:
         command = state.command
@@ -471,14 +471,14 @@ class Dispatcher:
         binding = self._binding_for(command)
         if binding.reconcile_unknown is None:
             return await self._ensure_recovery_required(
-                stream_id,
+                session_id,
                 state,
                 attempt,
                 "reconcile_unavailable",
                 attempt.started_event_id,
             )
         reconcile_event = await self._start_reconcile(
-            stream_id,
+            session_id,
             state,
             attempt,
         )
@@ -493,7 +493,7 @@ class Dispatcher:
             result = await self._await_while_leased(
                 binding.reconcile_unknown(
                     self._attempt_context_from_state(
-                        stream_id,
+                        session_id,
                         state,
                         attempt,
                     ),
@@ -502,7 +502,7 @@ class Dispatcher:
                 heartbeat,
             )
             return await self._apply_recovery_result(
-                stream_id,
+                session_id,
                 state,
                 attempt,
                 result,
@@ -514,7 +514,7 @@ class Dispatcher:
 
     async def _recover_running(
         self,
-        stream_id: str,
+        session_id: str,
         state: CommandState,
     ) -> Event | None:
         command = state.command
@@ -528,7 +528,7 @@ class Dispatcher:
         ):
             return None
         reconcile_event = await self._start_reconcile(
-            stream_id,
+            session_id,
             state,
             attempt,
         )
@@ -543,7 +543,7 @@ class Dispatcher:
             result = await self._await_while_leased(
                 binding.query_running(
                     self._attempt_context_from_state(
-                        stream_id,
+                        session_id,
                         state,
                         attempt,
                     ),
@@ -555,7 +555,7 @@ class Dispatcher:
                 return reconcile_event
             if isinstance(result, ToolTerminal):
                 return await self._append_outcome(
-                    stream_id,
+                    session_id,
                     command.command_id,
                     attempt.attempt_id,
                     result.outcome,
@@ -568,7 +568,7 @@ class Dispatcher:
 
     async def _recover_cancel(
         self,
-        stream_id: str,
+        session_id: str,
         state: CommandState,
         attempt: AttemptState,
         dispatch_event: Event,
@@ -577,7 +577,7 @@ class Dispatcher:
         if not isinstance(effect, CancelTool):
             raise TypeError(type(effect).__name__)
         reconcile_event = await self._start_reconcile(
-            stream_id,
+            session_id,
             state,
             attempt,
         )
@@ -589,9 +589,9 @@ class Dispatcher:
             name=f"agent-reconcile-heartbeat:{reconcile_id}",
         )
         try:
-            events = await self._journal.snapshot(stream_id)
+            events = await self._journal.snapshot(session_id)
             target = self._projector.project(
-                stream_id,
+                session_id,
                 events,
             ).state.command(effect.target_command_id)
             target_task = self._tasks.get(effect.target_command_id)
@@ -600,14 +600,14 @@ class Dispatcher:
                 and (target_task is None or target_task.done())
             ):
                 return await self._ensure_recovery_required(
-                    stream_id,
+                    session_id,
                     state,
                     attempt,
                     "cancel_target_execution_unknown",
                     reconcile_event.event_id,
                 )
             result = await self._cancel_target(
-                stream_id,
+                session_id,
                 effect.target_command_id,
                 dispatch_event,
                 fact_causation_id=reconcile_event.event_id,
@@ -623,7 +623,7 @@ class Dispatcher:
                 else CommandOutcome(OutcomeStatus.SUCCEEDED, value=result)
             )
             return await self._append_outcome(
-                stream_id,
+                session_id,
                 state.command.command_id,
                 attempt.attempt_id,
                 outcome,
@@ -635,7 +635,7 @@ class Dispatcher:
 
     async def _apply_recovery_result(
         self,
-        stream_id: str,
+        session_id: str,
         state: CommandState,
         attempt: AttemptState,
         result: object,
@@ -644,7 +644,7 @@ class Dispatcher:
         command_id = state.command.command_id
         if isinstance(result, ToolTerminal):
             return await self._append_outcome(
-                stream_id,
+                session_id,
                 command_id,
                 attempt.attempt_id,
                 result.outcome,
@@ -652,7 +652,7 @@ class Dispatcher:
             )
         if isinstance(result, ToolAccepted):
             return await self._append_accepted(
-                stream_id,
+                session_id,
                 command_id,
                 attempt.attempt_id,
                 result.external_operation_id,
@@ -661,7 +661,7 @@ class Dispatcher:
         if isinstance(result, RecoveryNoEffect):
             return await self._journal.confirm_no_effect(EventDraft(
                 event_id=self._id_factory("event"),
-                stream_id=stream_id,
+                session_id=session_id,
                 payload=DispatchAttemptConfirmedNoEffect(
                     command_id=command_id,
                     attempt_id=attempt.attempt_id,
@@ -671,7 +671,7 @@ class Dispatcher:
             ))
         if isinstance(result, RecoveryIndeterminate):
             return await self._ensure_recovery_required(
-                stream_id,
+                session_id,
                 state,
                 attempt,
                 result.reason,
@@ -681,7 +681,7 @@ class Dispatcher:
 
     async def _start_reconcile(
         self,
-        stream_id: str,
+        session_id: str,
         state: CommandState,
         attempt: AttemptState,
     ) -> Event | None:
@@ -692,7 +692,7 @@ class Dispatcher:
         )
         return await self._journal.start_reconcile(EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=CommandReconcileStarted(
                 reconcile_id=self._id_factory("reconcile"),
                 reconcile_number=attempt.reconcile_count + 1,
@@ -706,7 +706,7 @@ class Dispatcher:
 
     async def _ensure_recovery_required(
         self,
-        stream_id: str,
+        session_id: str,
         state: CommandState,
         attempt: AttemptState,
         reason: str,
@@ -720,7 +720,7 @@ class Dispatcher:
             actions.insert(0, "retry")
         result = await self._journal.ensure_recovery_required(EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=CommandRecoveryRequired(
                 command_id=state.command.command_id,
                 attempt_id=attempt.attempt_id,
@@ -734,15 +734,15 @@ class Dispatcher:
 
     async def _cancel_target(
         self,
-        stream_id: str,
+        session_id: str,
         target_command_id: str,
         dispatch_event: Event,
         *,
         fact_causation_id: str | None = None,
     ) -> object:
-        events = await self._journal.snapshot(stream_id)
+        events = await self._journal.snapshot(session_id)
         target = self._projector.project(
-            stream_id,
+            session_id,
             events,
         ).state.command(target_command_id)
         if target.phase is CommandPhase.TERMINAL:
@@ -785,7 +785,7 @@ class Dispatcher:
             committed = await self._journal.commit_pending_cancellation(
                 EventDraft(
                     event_id=self._id_factory("event"),
-                    stream_id=stream_id,
+                    session_id=session_id,
                     payload=CommandOutcomeReceived(
                         command_id=target_command_id,
                         attempt_id=None,
@@ -796,7 +796,7 @@ class Dispatcher:
                 ),
                 EventDraft(
                     event_id=self._id_factory("event"),
-                    stream_id=stream_id,
+                    session_id=session_id,
                     payload=CommandOutcomeReceived(
                         command_id=dispatch_event.payload.command_id,
                         attempt_id=dispatch_event.payload.attempt_id,
@@ -811,9 +811,9 @@ class Dispatcher:
             )
             if committed is not None:
                 return _OutcomeCommitted(committed[1])
-            events = await self._journal.snapshot(stream_id)
+            events = await self._journal.snapshot(session_id)
             target = self._projector.project(
-                stream_id,
+                session_id,
                 events,
             ).state.command(target_command_id)
             if target.phase is CommandPhase.PENDING:
@@ -846,9 +846,9 @@ class Dispatcher:
         self._cancel_requests.add(target_command_id)
         execution.cancel()
         await asyncio.shield(task)
-        events = await self._journal.snapshot(stream_id)
+        events = await self._journal.snapshot(session_id)
         target = self._projector.project(
-            stream_id,
+            session_id,
             events,
         ).state.command(target_command_id)
         if target.phase is not CommandPhase.TERMINAL:
@@ -859,7 +859,7 @@ class Dispatcher:
 
     async def _append_accepted(
         self,
-        stream_id: str,
+        session_id: str,
         command_id: str,
         attempt_id: str,
         external_operation_id: str,
@@ -867,7 +867,7 @@ class Dispatcher:
     ) -> Event | None:
         return await self._journal.record_attempt_fact(EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=ExternalOperationAccepted(
                 command_id=command_id,
                 attempt_id=attempt_id,
@@ -879,7 +879,7 @@ class Dispatcher:
 
     async def _append_outcome(
         self,
-        stream_id: str,
+        session_id: str,
         command_id: str,
         attempt_id: str | None,
         outcome: CommandOutcome,
@@ -887,7 +887,7 @@ class Dispatcher:
     ) -> Event | None:
         draft = EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=CommandOutcomeReceived(
                 command_id=command_id,
                 attempt_id=attempt_id,
@@ -911,13 +911,13 @@ class Dispatcher:
 
     @staticmethod
     def _attempt_context(
-        stream_id: str,
+        session_id: str,
         command: Command,
         dispatch_event: Event,
     ) -> AttemptContext:
         payload = dispatch_event.payload
         return AttemptContext(
-            stream_id=stream_id,
+            session_id=session_id,
             command_id=command.command_id,
             attempt_id=payload.attempt_id,
             attempt_number=payload.attempt_number,
@@ -926,12 +926,12 @@ class Dispatcher:
 
     @staticmethod
     def _attempt_context_from_state(
-        stream_id: str,
+        session_id: str,
         state: CommandState,
         attempt: AttemptState,
     ) -> AttemptContext:
         return AttemptContext(
-            stream_id=stream_id,
+            session_id=session_id,
             command_id=state.command.command_id,
             attempt_id=attempt.attempt_id,
             attempt_number=attempt.attempt_number,

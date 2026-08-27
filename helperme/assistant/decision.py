@@ -282,7 +282,7 @@ def _executor_handler(
         result = await runner.execute(name, arguments)
         payload, _artifact_id = externalize_payload(
             result,
-            gateway.for_stream(context.stream_id),
+            gateway.for_session(context.session_id),
             max_chars=settings.size_externalize_chars,
             preview_chars=settings.preview_chars,
         )
@@ -326,7 +326,7 @@ class JournalBackedLlmDecisionMaker:
     ) -> tuple[list[dict[str, object]], frozenset[str]]:
         if self._surface is not None:
             schemas = self._surface.schemas(
-                frame.state.stream_id,
+                frame.state.session_id,
                 frame.state,
             )
         else:
@@ -336,7 +336,7 @@ class JournalBackedLlmDecisionMaker:
         if self._management is not None:
             schemas = [
                 *schemas,
-                *self._management.schemas(frame.state.stream_id, frame.state),
+                *self._management.schemas(frame.state.session_id, frame.state),
             ]
         offered_control_names = frozenset()
         if self._control is not None:
@@ -344,12 +344,12 @@ class JournalBackedLlmDecisionMaker:
                 None
                 if self._management is None
                 else self._management.control_names(
-                    frame.state.stream_id,
+                    frame.state.session_id,
                     frame.state,
                 )
             )
             control_schemas = self._control.schemas(
-                frame.state.stream_id,
+                frame.state.session_id,
                 allowed_control_names,
             )
             offered_control_names = _tool_names(control_schemas)
@@ -472,7 +472,7 @@ class JournalBackedLlmDecisionMaker:
         prompt = self._system_prompt
         catalog = (
             self._surface.catalog_instruction(
-                frame.state.stream_id,
+                frame.state.session_id,
                 frame.state,
             )
             if self._surface is not None
@@ -491,7 +491,7 @@ class JournalBackedLlmDecisionMaker:
                 "调用同时出现。"
             )
         allowed_tool_names = _tool_names(schemas)
-        journal_tail = await self._journal.snapshot(frame.state.stream_id)
+        journal_tail = await self._journal.snapshot(frame.state.session_id)
         events = tuple(
             event
             for event in journal_tail
@@ -508,14 +508,14 @@ class JournalBackedLlmDecisionMaker:
             prompt = f"{prompt}\n\n{catalog}"
         if self._management is not None:
             management_catalog = self._management.catalog_instruction(
-                frame.state.stream_id,
+                frame.state.session_id,
                 frame.state,
             )
             prompt = f"{prompt}\n\n{management_catalog}"
         prepared = self._projector.prepare(
             events,
             frame.state.visible_event_ids,
-            frame.state.stream_id,
+            frame.state.session_id,
             prompt,
             schemas,
         )
@@ -525,7 +525,7 @@ class JournalBackedLlmDecisionMaker:
                 schemas,
             ).estimated_input_tokens
             self._context_usage_sink(
-                frame.state.stream_id,
+                frame.state.session_id,
                 estimated,
                 self._projector.settings.context_limit,
             )
@@ -537,7 +537,7 @@ class JournalBackedLlmDecisionMaker:
         usage = result.usage
         if self._context_usage_sink is not None:
             self._context_usage_sink(
-                frame.state.stream_id,
+                frame.state.session_id,
                 usage.input_tokens,
                 self._projector.settings.context_limit,
             )
@@ -585,7 +585,7 @@ class JournalBackedLlmDecisionMaker:
                 "output_tokens": usage.output_tokens,
             },
         }
-        artifact = self._projector.gateway.for_stream(
-            frame.state.stream_id
+        artifact = self._projector.gateway.for_session(
+            frame.state.session_id
         ).save(json.dumps(manifest, ensure_ascii=False, sort_keys=True))
         return RecordedDecision(decision, (artifact.artifact_id,))

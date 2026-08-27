@@ -8,10 +8,10 @@ from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from helperme.assistant.streams import (
-    AssistantStreams,
-    StreamNotFoundError,
-    StreamView,
+from helperme.assistant.sessions import (
+    AssistantSessions,
+    SessionNotFoundError,
+    SessionView,
 )
 from helperme.assistant.runner import MODEL_DECISION_ERRORS
 from helperme.assistant.toolsets import ToolsetLoadError
@@ -52,17 +52,17 @@ def _compact_tokens(tokens: int) -> str:
 
 class _ContextMeter:
     def __init__(self) -> None:
-        self._stream_id = ""
+        self._session_id = ""
         self._used = 0
         self._limit = 0
 
-    def select(self, stream_id: str, limit: int) -> None:
-        self._stream_id = stream_id
+    def select(self, session_id: str, limit: int) -> None:
+        self._session_id = session_id
         self._used = 0
         self._limit = limit
 
-    def update(self, stream_id: str, used: int, limit: int) -> None:
-        if stream_id != self._stream_id:
+    def update(self, session_id: str, used: int, limit: int) -> None:
+        if session_id != self._session_id:
             return
         self._used = used
         self._limit = limit
@@ -75,7 +75,7 @@ class _ContextMeter:
 
 
 async def _running_input(
-    drive: asyncio.Task[StreamView],
+    drive: asyncio.Task[SessionView],
     input_queue: asyncio.Queue[str | None],
 ) -> str | None:
     incoming = asyncio.create_task(input_queue.get())
@@ -97,17 +97,17 @@ async def _running_input(
 
 
 async def drive_with_console_interrupts(
-    streams: AssistantStreams,
-    stream_id: str,
+    sessions: AssistantSessions,
+    session_id: str,
     input_queue: asyncio.Queue[str | None],
     *,
     evaluate_completion: bool = True,
-) -> StreamView:
-    """Drive one Stream while concurrent CLI text becomes a durable interrupt."""
+) -> SessionView:
+    """Drive one Session while concurrent CLI text becomes a durable interrupt."""
 
     print("\n● 运行中", flush=True)
-    drive = asyncio.create_task(streams.drive(
-        stream_id,
+    drive = asyncio.create_task(sessions.drive(
+        session_id,
         evaluate_completion=evaluate_completion,
     ))
     try:
@@ -125,14 +125,14 @@ async def drive_with_console_interrupts(
             if not text:
                 continue
             if text == "/stop":
-                await streams.request_termination(
-                    stream_id,
+                await sessions.request_termination(
+                    session_id,
                     "console_stop",
                     delivery_id=f"stop-{uuid4().hex}",
                 )
             else:
-                await streams.receive_interrupt(
-                    stream_id,
+                await sessions.receive_interrupt(
+                    session_id,
                     text,
                     delivery_id=f"interrupt-{uuid4().hex}",
                 )
@@ -164,7 +164,7 @@ async def read_console_input(
             await queue.put(text.strip())
 
 
-def _print_runtime_status(view: StreamView) -> None:
+def _print_runtime_status(view: SessionView) -> None:
     if view.control_message is not None:
         print(f"控制面：\n{view.control_message}")
     elif view.control_approval is not None:
@@ -197,17 +197,17 @@ async def run_runtime_console() -> None:
         context_usage_sink=context_meter.update,
     ) as app:
         config = app.config
-        streams = app.streams
+        sessions = app.sessions
         mcp_console = McpConsoleAdapter(app.mcp_service)
         skill_console = SkillConsoleAdapter(app.skill_service)
-        stream_id = f"stream-{uuid4().hex}"
-        await streams.create(stream_id)
-        context_meter.select(stream_id, config.model_context_limit)
+        session_id = f"session-{uuid4().hex}"
+        await sessions.create(session_id)
+        context_meter.select(session_id, config.model_context_limit)
         input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         access = "整台电脑" if config.full_access else "配置的 Workspace"
         print(f"HelperMe 已启动。model={config.model_name}")
         print(f"工作区：{access}")
-        print(f"当前对话：{stream_id}")
+        print(f"当前对话：{session_id}")
         print("/new 新对话    /resume <id> 恢复    /stop 结束")
         print("/mcp  /skill  管理外部能力")
         print("直接输入任务。运行中再输入会打断当前任务。")
@@ -228,37 +228,37 @@ async def run_runtime_console() -> None:
                     continue
                 separate_turns = True
                 if user_message == "/new":
-                    stream_id = f"stream-{uuid4().hex}"
-                    await streams.create(stream_id)
-                    context_meter.select(stream_id, config.model_context_limit)
-                    print(f"\n新 stream 已创建：{stream_id}")
+                    session_id = f"session-{uuid4().hex}"
+                    await sessions.create(session_id)
+                    context_meter.select(session_id, config.model_context_limit)
+                    print(f"\n新 Session 已创建：{session_id}")
                     continue
                 if user_message == "/resume" or user_message.startswith(
                     "/resume "
                 ):
                     parts = user_message.split(maxsplit=1)
                     if len(parts) != 2 or not parts[1].strip():
-                        print("\n用法：/resume <stream_id>")
+                        print("\n用法：/resume <session_id>")
                         continue
-                    target_stream_id = parts[1].strip()
+                    target_session_id = parts[1].strip()
                     try:
-                        view = await streams.resume(target_stream_id)
-                    except StreamNotFoundError:
-                        print(f"\nStream 不存在：{target_stream_id}")
+                        view = await sessions.resume(target_session_id)
+                    except SessionNotFoundError:
+                        print(f"\nSession 不存在：{target_session_id}")
                         continue
                     except ToolsetLoadError as exc:
                         print(
-                            f"\nStream 恢复失败：{exc.code}: {exc.message}"
+                            f"\nSession 恢复失败：{exc.code}: {exc.message}"
                         )
                         continue
-                    stream_id = target_stream_id
-                    context_meter.select(stream_id, config.model_context_limit)
-                    print(f"\n已恢复 stream：{stream_id}")
+                    session_id = target_session_id
+                    context_meter.select(session_id, config.model_context_limit)
+                    print(f"\n已恢复 Session：{session_id}")
                     if view.should_drive:
                         try:
                             view = await drive_with_console_interrupts(
-                                streams,
-                                stream_id,
+                                sessions,
+                                session_id,
                                 input_queue,
                             )
                         except _ConsoleInputClosed:
@@ -287,31 +287,31 @@ async def run_runtime_console() -> None:
                 if skill_reply is not None:
                     print(f"\nSkill：\n{skill_reply}")
                     continue
-                view = await streams.view(stream_id)
+                view = await sessions.view(session_id)
                 if (
                     view.control_approval is not None
                     and user_message.lower() in {"yes", "y", "no", "n"}
                 ):
-                    message = await streams.resolve_control(
-                        stream_id,
+                    message = await sessions.resolve_control(
+                        session_id,
                         approved=user_message.lower() in {"yes", "y"},
                     )
                     print(f"\n控制面：{message}")
-                    _print_runtime_status(await streams.view(stream_id))
+                    _print_runtime_status(await sessions.view(session_id))
                     continue
                 if user_message == "/stop":
                     if view.terminal:
-                        print("当前 stream 已经结束。")
+                        print("当前 Session 已经结束。")
                         continue
-                    await streams.request_termination(
-                        stream_id,
+                    await sessions.request_termination(
+                        session_id,
                         "console_stop",
                         delivery_id=f"stop-{uuid4().hex}",
                     )
                     try:
                         view = await drive_with_console_interrupts(
-                            streams,
-                            stream_id,
+                            sessions,
+                            session_id,
                             input_queue,
                             evaluate_completion=False,
                         )
@@ -327,14 +327,14 @@ async def run_runtime_console() -> None:
                     view.pending_authorization_ids
                     and user_message.lower() in {"yes", "y", "no", "n"}
                 ):
-                    await streams.resolve_authorizations(
-                        stream_id,
+                    await sessions.resolve_authorizations(
+                        session_id,
                         approved=user_message.lower() in {"yes", "y"},
                     )
                     try:
                         view = await drive_with_console_interrupts(
-                            streams,
-                            stream_id,
+                            sessions,
+                            session_id,
                             input_queue,
                         )
                     except _ConsoleInputClosed:
@@ -346,17 +346,17 @@ async def run_runtime_console() -> None:
                     _print_runtime_status(view)
                     continue
                 if view.terminal:
-                    print("当前 stream 已结束，输入 /new。")
+                    print("当前 Session 已结束，输入 /new。")
                     continue
-                await streams.receive_user_message(
-                    stream_id,
+                await sessions.receive_user_message(
+                    session_id,
                     user_message,
                     delivery_id=f"user-{uuid4().hex}",
                 )
                 try:
                     view = await drive_with_console_interrupts(
-                        streams,
-                        stream_id,
+                        sessions,
+                        session_id,
                         input_queue,
                     )
                 except _ConsoleInputClosed:

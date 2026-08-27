@@ -36,7 +36,7 @@ class UserMessageView:
 
 @dataclass(frozen=True, slots=True)
 class TurnView:
-    stream_id: str
+    session_id: str
     user_messages: tuple[UserMessageView, ...]
     interrupts: tuple[InterruptView, ...]
     steps: tuple[Step, ...]
@@ -53,7 +53,7 @@ class TraceEntry:
 
 @dataclass(frozen=True, slots=True)
 class TraceView:
-    stream_id: str
+    session_id: str
     entries: tuple[TraceEntry, ...]
 
 
@@ -95,18 +95,18 @@ def diagnose_artifacts(
 
 
 def project_turn(
-    stream_id: str,
+    session_id: str,
     events: tuple[Event, ...],
     projector: StateProjector | None = None,
 ) -> TurnView:
     state = (
         StateProjector() if projector is None else projector
     ).project(
-        stream_id,
+        session_id,
         events,
     ).state
     return TurnView(
-        stream_id=stream_id,
+        session_id=session_id,
         user_messages=tuple(
             UserMessageView(
                 event_id=event.event_id,
@@ -139,11 +139,11 @@ def project_turn(
 
 
 def project_trace(
-    stream_id: str,
+    session_id: str,
     events: tuple[Event, ...],
 ) -> TraceView:
     return TraceView(
-        stream_id=stream_id,
+        session_id=session_id,
         entries=tuple(
             TraceEntry(
                 sequence=event.sequence,
@@ -157,14 +157,14 @@ def project_trace(
 
 
 def replay(
-    stream_id: str,
+    session_id: str,
     events: tuple[Event, ...],
     available_artifact_refs: Collection[str] | None = None,
 ) -> ReplayView:
     projector = StateProjector()
     return ReplayView(
-        state=projector.project(stream_id, events).state,
-        turn=project_turn(stream_id, events, projector),
-        trace=project_trace(stream_id, events),
+        state=projector.project(session_id, events).state,
+        turn=project_turn(session_id, events, projector),
+        trace=project_trace(session_id, events),
         artifacts=diagnose_artifacts(events, available_artifact_refs),
     )

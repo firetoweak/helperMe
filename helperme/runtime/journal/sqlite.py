@@ -72,14 +72,14 @@ async def _await_task_uninterruptibly(task: asyncio.Task[_T]) -> _T:
 
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS streams (
-    stream_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
     last_sequence INTEGER NOT NULL CHECK (last_sequence >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS events (
     event_id TEXT PRIMARY KEY,
-    stream_id TEXT NOT NULL REFERENCES streams(stream_id),
+    session_id TEXT NOT NULL REFERENCES sessions(session_id),
     sequence INTEGER NOT NULL CHECK (sequence >= 1),
     event_type TEXT NOT NULL,
     schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS events (
     delivery_source TEXT,
     delivery_id TEXT,
     delivery_fingerprint TEXT,
-    UNIQUE (stream_id, sequence),
+    UNIQUE (session_id, sequence),
     CHECK (
         (delivery_source IS NULL
             AND delivery_id IS NULL
@@ -108,7 +108,7 @@ ON events(delivery_source, delivery_id)
 WHERE delivery_source IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS step_claims (
-    stream_id TEXT PRIMARY KEY REFERENCES streams(stream_id),
+    session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
     trigger_event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
     decision_cursor INTEGER NOT NULL,
     basis_state_version TEXT NOT NULL,
@@ -121,14 +121,14 @@ CREATE TABLE IF NOT EXISTS step_claims (
 
 CREATE TABLE IF NOT EXISTS step_consumptions (
     trigger_event_id TEXT PRIMARY KEY REFERENCES events(event_id),
-    stream_id TEXT NOT NULL REFERENCES streams(stream_id),
+    session_id TEXT NOT NULL REFERENCES sessions(session_id),
     step_event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
     step_id TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS commands (
     command_id TEXT PRIMARY KEY,
-    stream_id TEXT NOT NULL REFERENCES streams(stream_id),
+    session_id TEXT NOT NULL REFERENCES sessions(session_id),
     issued_event_id TEXT NOT NULL REFERENCES events(event_id),
     abandoned INTEGER NOT NULL DEFAULT 0 CHECK (abandoned IN (0, 1)),
     dispatch_eligible_event_id TEXT REFERENCES events(event_id),
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS recovery_requirements (
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
-    stream_id TEXT PRIMARY KEY REFERENCES streams(stream_id),
+    session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
     journal_position INTEGER NOT NULL,
     fingerprint TEXT NOT NULL,
     codec_version INTEGER NOT NULL,
@@ -192,8 +192,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     state_json TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS stream_terminals (
-    stream_id TEXT PRIMARY KEY REFERENCES streams(stream_id),
+CREATE TABLE IF NOT EXISTS session_terminals (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
     event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
     kind TEXT NOT NULL CHECK (kind IN ('completed', 'terminated'))
 );
@@ -223,30 +223,30 @@ class SqliteJournal:
     def path(self) -> str:
         return self._path
 
-    async def create_stream(self, stream_id: str) -> bool:
-        self._validate_stream_id(stream_id)
+    async def create_session(self, session_id: str) -> bool:
+        self._validate_session_id(session_id)
 
         def create(connection: sqlite3.Connection) -> bool:
             cursor = connection.execute(
                 """
-                INSERT OR IGNORE INTO streams(stream_id, last_sequence)
+                INSERT OR IGNORE INTO sessions(session_id, last_sequence)
                 VALUES (?, 0)
                 """,
-                (stream_id,),
+                (session_id,),
             )
             return cursor.rowcount == 1
 
         return await self._write(create)
 
-    async def stream_exists(self, stream_id: str) -> bool:
-        self._validate_stream_id(stream_id)
+    async def session_exists(self, session_id: str) -> bool:
+        self._validate_session_id(session_id)
 
         def exists() -> bool:
             connection = self._connect()
             try:
                 row = connection.execute(
-                    "SELECT 1 FROM streams WHERE stream_id = ?",
-                    (stream_id,),
+                    "SELECT 1 FROM sessions WHERE session_id = ?",
+                    (session_id,),
                 ).fetchone()
                 return row is not None
             finally:
@@ -268,15 +268,15 @@ class SqliteJournal:
             lambda connection: self._append_tx(connection, draft)
         )
 
-    async def snapshot(self, stream_id: str) -> tuple[Event, ...]:
-        return await self._read(lambda: self._snapshot_sync(stream_id))
+    async def snapshot(self, session_id: str) -> tuple[Event, ...]:
+        return await self._read(lambda: self._snapshot_sync(session_id))
 
     @staticmethod
-    def _validate_stream_id(stream_id: str) -> None:
-        if type(stream_id) is not str:
-            raise TypeError("stream id must be str")
-        if not stream_id:
-            raise ValueError("stream id must not be empty")
+    def _validate_session_id(session_id: str) -> None:
+        if type(session_id) is not str:
+            raise TypeError("session id must be str")
+        if not session_id:
+            raise ValueError("session id must not be empty")
 
     async def acquire_step(
         self,
@@ -555,13 +555,13 @@ class SqliteJournal:
 
     async def load_checkpoint(
         self,
-        stream_id: str,
+        session_id: str,
         journal_position: int,
         fingerprint: str,
     ) -> CanonicalState | None:
         return await self._read(
             lambda: self._load_checkpoint_sync(
-                stream_id,
+                session_id,
                 journal_position,
                 fingerprint,
             )
@@ -580,17 +580,17 @@ class SqliteJournal:
             state_json,
         ))
 
-    async def delete_checkpoint(self, stream_id: str) -> None:
+    async def delete_checkpoint(self, session_id: str) -> None:
         await self._write(lambda connection: connection.execute(
-            "DELETE FROM checkpoints WHERE stream_id = ?",
-            (stream_id,),
+            "DELETE FROM checkpoints WHERE session_id = ?",
+            (session_id,),
         ))
 
-    async def finalize(self, stream_id: str, event_id: str) -> Event | None:
+    async def finalize(self, session_id: str, event_id: str) -> Event | None:
         return await self._write(
             lambda connection: self._finalize_tx(
                 connection,
-                stream_id,
+                session_id,
                 event_id,
             )
         )
@@ -685,16 +685,16 @@ class SqliteJournal:
         finally:
             connection.close()
 
-    def _snapshot_sync(self, stream_id: str) -> tuple[Event, ...]:
+    def _snapshot_sync(self, session_id: str) -> tuple[Event, ...]:
         connection = self._connect()
         try:
             rows = connection.execute(
                 """
                 SELECT * FROM events
-                WHERE stream_id = ?
+                WHERE session_id = ?
                 ORDER BY sequence
                 """,
-                (stream_id,),
+                (session_id,),
             ).fetchall()
             return tuple(self._event_from_row(row) for row in rows)
         finally:
@@ -703,22 +703,22 @@ class SqliteJournal:
     def _events_tx(
         self,
         connection: sqlite3.Connection,
-        stream_id: str,
+        session_id: str,
     ) -> tuple[Event, ...]:
         rows = connection.execute(
             """
             SELECT * FROM events
-            WHERE stream_id = ?
+            WHERE session_id = ?
             ORDER BY sequence
             """,
-            (stream_id,),
+            (session_id,),
         ).fetchall()
         return tuple(self._event_from_row(row) for row in rows)
 
     def _finalize_tx(
         self,
         connection: sqlite3.Connection,
-        stream_id: str,
+        session_id: str,
         event_id: str,
     ) -> Event | None:
         existing = connection.execute(
@@ -734,12 +734,12 @@ class SqliteJournal:
                 raise ValueError(f"event id conflict: {event_id}")
             return event
         opportunity = finalization_opportunity(
-            stream_id,
-            self._events_tx(connection, stream_id),
+            session_id,
+            self._events_tx(connection, session_id),
         )
         if opportunity is None:
             return None
-        draft = terminal_event_draft(stream_id, event_id, opportunity)
+        draft = terminal_event_draft(session_id, event_id, opportunity)
         return self._append_tx(connection, draft).event
 
     def _accept_termination_tx(
@@ -752,8 +752,8 @@ class SqliteJournal:
         if not result.inserted:
             return result
         opportunity = finalization_opportunity(
-            request_draft.stream_id,
-            self._events_tx(connection, request_draft.stream_id),
+            request_draft.session_id,
+            self._events_tx(connection, request_draft.session_id),
         )
         if (
             opportunity is not None
@@ -762,7 +762,7 @@ class SqliteJournal:
         ):
             self._finalize_tx(
                 connection,
-                request_draft.stream_id,
+                request_draft.session_id,
                 terminal_event_id,
             )
         return result
@@ -827,7 +827,7 @@ class SqliteJournal:
                     )
                 return AppendResult(self._event_from_row(row), False)
 
-        sequence = self._next_sequence(connection, draft.stream_id)
+        sequence = self._next_sequence(connection, draft.session_id)
         kind, payload_json = encode_payload(draft.payload)
         delivery_source = (
             draft.delivery.source if draft.delivery is not None else None
@@ -839,7 +839,7 @@ class SqliteJournal:
             """
             INSERT INTO events(
                 event_id,
-                stream_id,
+                session_id,
                 sequence,
                 event_type,
                 schema_version,
@@ -855,7 +855,7 @@ class SqliteJournal:
             """,
             (
                 draft.event_id,
-                draft.stream_id,
+                draft.session_id,
                 sequence,
                 kind,
                 draft.schema_version,
@@ -871,7 +871,7 @@ class SqliteJournal:
         )
         event = Event(
             event_id=draft.event_id,
-            stream_id=draft.stream_id,
+            session_id=draft.session_id,
             sequence=sequence,
             payload=draft.payload,
             occurred_at=draft.occurred_at,
@@ -892,22 +892,22 @@ class SqliteJournal:
     @staticmethod
     def _next_sequence(
         connection: sqlite3.Connection,
-        stream_id: str,
+        session_id: str,
     ) -> int:
         row = connection.execute(
-            "SELECT last_sequence FROM streams WHERE stream_id = ?",
-            (stream_id,),
+            "SELECT last_sequence FROM sessions WHERE session_id = ?",
+            (session_id,),
         ).fetchone()
         if row is None:
             connection.execute(
-                "INSERT INTO streams(stream_id, last_sequence) VALUES (?, 1)",
-                (stream_id,),
+                "INSERT INTO sessions(session_id, last_sequence) VALUES (?, 1)",
+                (session_id,),
             )
             return 1
         sequence = row["last_sequence"] + 1
         connection.execute(
-            "UPDATE streams SET last_sequence = ? WHERE stream_id = ?",
-            (sequence, stream_id),
+            "UPDATE sessions SET last_sequence = ? WHERE session_id = ?",
+            (sequence, session_id),
         )
         return sequence
 
@@ -921,12 +921,12 @@ class SqliteJournal:
     ) -> StepLease | None:
         trigger = connection.execute(
             """
-            SELECT stream_id FROM events
+            SELECT session_id FROM events
             WHERE event_id = ?
             """,
             (request.trigger_event_id,),
         ).fetchone()
-        if trigger is None or trigger["stream_id"] != request.stream_id:
+        if trigger is None or trigger["session_id"] != request.session_id:
             raise KeyError(request.trigger_event_id)
         if connection.execute(
             """
@@ -937,14 +937,14 @@ class SqliteJournal:
         ).fetchone() is not None:
             return None
         if connection.execute(
-            "SELECT 1 FROM stream_terminals WHERE stream_id = ?",
-            (request.stream_id,),
+            "SELECT 1 FROM session_terminals WHERE session_id = ?",
+            (request.session_id,),
         ).fetchone() is not None:
             return None
 
         current = connection.execute(
-            "SELECT * FROM step_claims WHERE stream_id = ?",
-            (request.stream_id,),
+            "SELECT * FROM step_claims WHERE session_id = ?",
+            (request.session_id,),
         ).fetchone()
         now = self._clock()
         if current is not None and current["expires_at"] > now:
@@ -961,7 +961,7 @@ class SqliteJournal:
             connection.execute(
                 """
                 INSERT INTO step_claims(
-                    stream_id,
+                    session_id,
                     trigger_event_id,
                     decision_cursor,
                     basis_state_version,
@@ -973,7 +973,7 @@ class SqliteJournal:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    request.stream_id,
+                    request.session_id,
                     request.trigger_event_id,
                     request.decision_cursor,
                     request.basis_state_version,
@@ -996,7 +996,7 @@ class SqliteJournal:
                     owner_id = ?,
                     generation = ?,
                     expires_at = ?
-                WHERE stream_id = ?
+                WHERE session_id = ?
                 """,
                 (
                     request.trigger_event_id,
@@ -1007,7 +1007,7 @@ class SqliteJournal:
                     owner_id,
                     generation,
                     expires_at,
-                    request.stream_id,
+                    request.session_id,
                 ),
             )
         return StepLease(
@@ -1026,13 +1026,13 @@ class SqliteJournal:
         connection.execute(
             """
             DELETE FROM step_claims
-            WHERE stream_id = ?
+            WHERE session_id = ?
                 AND token = ?
                 AND owner_id = ?
                 AND generation = ?
             """,
             (
-                lease.request.stream_id,
+                lease.request.session_id,
                 lease.token,
                 lease.owner_id,
                 lease.generation,
@@ -1049,7 +1049,7 @@ class SqliteJournal:
         cursor = connection.execute(
             """
             UPDATE step_claims SET expires_at = ?
-            WHERE stream_id = ?
+            WHERE session_id = ?
                 AND trigger_event_id = ?
                 AND decision_cursor = ?
                 AND basis_state_version = ?
@@ -1061,7 +1061,7 @@ class SqliteJournal:
             """,
             (
                 now + lease_seconds,
-                lease.request.stream_id,
+                lease.request.session_id,
                 lease.request.trigger_event_id,
                 lease.request.decision_cursor,
                 lease.request.basis_state_version,
@@ -1107,8 +1107,8 @@ class SqliteJournal:
             return event
 
         claim = connection.execute(
-            "SELECT * FROM step_claims WHERE stream_id = ?",
-            (lease.request.stream_id,),
+            "SELECT * FROM step_claims WHERE session_id = ?",
+            (lease.request.session_id,),
         ).fetchone()
         if (
             claim is None
@@ -1129,8 +1129,8 @@ class SqliteJournal:
         ).fetchone() is not None:
             raise LeaseLostError(lease.token)
         if connection.execute(
-            "SELECT 1 FROM stream_terminals WHERE stream_id = ?",
-            (lease.request.stream_id,),
+            "SELECT 1 FROM session_terminals WHERE session_id = ?",
+            (lease.request.session_id,),
         ).fetchone() is not None:
             raise LeaseLostError(lease.token)
 
@@ -1138,10 +1138,10 @@ class SqliteJournal:
         connection.execute(
             """
             DELETE FROM step_claims
-            WHERE stream_id = ? AND token = ? AND generation = ?
+            WHERE session_id = ? AND token = ? AND generation = ?
             """,
             (
-                lease.request.stream_id,
+                lease.request.session_id,
                 lease.token,
                 lease.generation,
             ),
@@ -1167,7 +1167,7 @@ class SqliteJournal:
             "SELECT * FROM commands WHERE command_id = ?",
             (payload.command_id,),
         ).fetchone()
-        if command is None or command["stream_id"] != draft.stream_id:
+        if command is None or command["session_id"] != draft.session_id:
             raise KeyError(payload.command_id)
         if command["abandoned"] or command["canonical_outcome_event_id"]:
             return None
@@ -1198,7 +1198,7 @@ class SqliteJournal:
             "SELECT * FROM commands WHERE command_id = ?",
             (command_id,),
         ).fetchone()
-        if command is None or command["stream_id"] != draft.stream_id:
+        if command is None or command["session_id"] != draft.session_id:
             raise KeyError(command_id)
         if draft.causation_id != command["issued_event_id"]:
             return False
@@ -1285,7 +1285,7 @@ class SqliteJournal:
                 attempts.dispatch_event_id,
                 attempts.claim_expires_at,
                 attempts.recovery_claim_expires_at,
-                commands.stream_id,
+                commands.session_id,
                 commands.canonical_outcome_event_id
             FROM attempts
             JOIN commands USING(command_id)
@@ -1297,7 +1297,7 @@ class SqliteJournal:
             raise KeyError(payload.attempt_id)
         if (
             attempt["command_id"] != payload.command_id
-            or attempt["stream_id"] != draft.stream_id
+            or attempt["session_id"] != draft.session_id
         ):
             raise ValueError("reconcile attempt mismatch")
         if attempt["canonical_outcome_event_id"] is not None:
@@ -1547,7 +1547,7 @@ class SqliteJournal:
                 attempts.recovery_claim_token,
                 attempts.recovery_claim_expires_at,
                 attempts.terminal_event_id,
-                commands.stream_id,
+                commands.session_id,
                 commands.issued_event_id,
                 commands.canonical_outcome_event_id,
                 reconciles.reconcile_id
@@ -1565,10 +1565,10 @@ class SqliteJournal:
         if source["command_id"] != cancel_payload.command_id:
             raise ValueError("cancel attempt command mismatch")
         if (
-            source["stream_id"] != cancel_draft.stream_id
-            or target_draft.stream_id != cancel_draft.stream_id
+            source["session_id"] != cancel_draft.session_id
+            or target_draft.session_id != cancel_draft.session_id
         ):
-            raise ValueError("pending cancellation stream mismatch")
+            raise ValueError("pending cancellation session mismatch")
         issued = connection.execute(
             "SELECT * FROM events WHERE event_id = ?",
             (source["issued_event_id"],),
@@ -1606,7 +1606,7 @@ class SqliteJournal:
         target = connection.execute(
             """
             SELECT
-                commands.stream_id,
+                commands.session_id,
                 commands.canonical_outcome_event_id,
                 commands.dispatch_eligible_event_id
             FROM commands
@@ -1616,8 +1616,8 @@ class SqliteJournal:
         ).fetchone()
         if target is None:
             raise KeyError(target_payload.command_id)
-        if target["stream_id"] != target_draft.stream_id:
-            raise ValueError("pending cancellation stream mismatch")
+        if target["session_id"] != target_draft.session_id:
+            raise ValueError("pending cancellation session mismatch")
         if (
             target["canonical_outcome_event_id"] is not None
             or target["dispatch_eligible_event_id"] is None
@@ -1724,12 +1724,12 @@ class SqliteJournal:
             connection.execute(
                 """
                 INSERT INTO step_consumptions(
-                    trigger_event_id, stream_id, step_event_id, step_id
+                    trigger_event_id, session_id, step_event_id, step_id
                 ) VALUES (?, ?, ?, ?)
                 """,
                 (
                     step.trigger_event_id,
-                    event.stream_id,
+                    event.session_id,
                     event.event_id,
                     step.step_id,
                 ),
@@ -1770,14 +1770,14 @@ class SqliteJournal:
                     """
                     INSERT INTO commands(
                         command_id,
-                        stream_id,
+                        session_id,
                         issued_event_id,
                         dispatch_eligible_event_id
                     ) VALUES (?, ?, ?, ?)
                     """,
                     (
                         command.command_id,
-                        event.stream_id,
+                        event.session_id,
                         event.event_id,
                         None if command.requires_authorization else event.event_id,
                     ),
@@ -2007,10 +2007,10 @@ class SqliteJournal:
             )
             connection.execute(
                 """
-                INSERT INTO stream_terminals(stream_id, event_id, kind)
+                INSERT INTO session_terminals(session_id, event_id, kind)
                 VALUES (?, ?, ?)
                 """,
-                (event.stream_id, event.event_id, kind),
+                (event.session_id, event.event_id, kind),
             )
             if isinstance(payload, RuntimeTerminated):
                 for command_id in payload.abandoned_command_ids:
@@ -2024,8 +2024,8 @@ class SqliteJournal:
                         (command_id,),
                     )
             connection.execute(
-                "DELETE FROM step_claims WHERE stream_id = ?",
-                (event.stream_id,),
+                "DELETE FROM step_claims WHERE session_id = ?",
+                (event.session_id,),
             )
 
     @staticmethod
@@ -2046,7 +2046,7 @@ class SqliteJournal:
 
     def _load_checkpoint_sync(
         self,
-        stream_id: str,
+        session_id: str,
         journal_position: int,
         fingerprint: str,
     ) -> CanonicalState | None:
@@ -2055,14 +2055,14 @@ class SqliteJournal:
             row = connection.execute(
                 """
                 SELECT state_json FROM checkpoints
-                WHERE stream_id = ?
+                WHERE session_id = ?
                     AND journal_position = ?
                     AND fingerprint = ?
                     AND codec_version = ?
                     AND projection_version = ?
                 """,
                 (
-                    stream_id,
+                    session_id,
                     journal_position,
                     fingerprint,
                     STATE_CODEC_VERSION,
@@ -2082,22 +2082,22 @@ class SqliteJournal:
     ) -> None:
         connection.execute(
             """
-            INSERT OR IGNORE INTO streams(stream_id, last_sequence)
+            INSERT OR IGNORE INTO sessions(session_id, last_sequence)
             VALUES (?, 0)
             """,
-            (state.stream_id,),
+            (state.session_id,),
         )
         connection.execute(
             """
             INSERT INTO checkpoints(
-                stream_id,
+                session_id,
                 journal_position,
                 fingerprint,
                 codec_version,
                 projection_version,
                 state_json
             ) VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(stream_id) DO UPDATE SET
+            ON CONFLICT(session_id) DO UPDATE SET
                 journal_position = excluded.journal_position,
                 fingerprint = excluded.fingerprint,
                 codec_version = excluded.codec_version,
@@ -2105,7 +2105,7 @@ class SqliteJournal:
                 state_json = excluded.state_json
             """,
             (
-                state.stream_id,
+                state.session_id,
                 state.journal_position,
                 fingerprint,
                 STATE_CODEC_VERSION,
@@ -2122,7 +2122,7 @@ class SqliteJournal:
         payload = draft.payload
         step = payload.step
         if (
-            draft.stream_id != request.stream_id
+            draft.session_id != request.session_id
             or step.trigger_event_id != request.trigger_event_id
             or step.decision_cursor != request.decision_cursor
             or step.basis_state_version != request.basis_state_version
@@ -2135,7 +2135,7 @@ class SqliteJournal:
     @staticmethod
     def _request_from_row(row: sqlite3.Row) -> StepClaimRequest:
         return StepClaimRequest(
-            stream_id=row["stream_id"],
+            session_id=row["session_id"],
             trigger_event_id=row["trigger_event_id"],
             decision_cursor=row["decision_cursor"],
             basis_state_version=row["basis_state_version"],
@@ -2170,7 +2170,7 @@ class SqliteJournal:
             raise ValueError("artifact_refs_json must be a string array")
         return Event(
             event_id=row["event_id"],
-            stream_id=row["stream_id"],
+            session_id=row["session_id"],
             sequence=row["sequence"],
             payload=decode_payload(
                 row["event_type"],
@@ -2188,7 +2188,7 @@ class SqliteJournal:
     @staticmethod
     def _same_delivery(event: Event, draft: EventDraft) -> bool:
         return (
-            event.stream_id == draft.stream_id
+            event.session_id == draft.session_id
             and event.payload == draft.payload
             and event.causation_id == draft.causation_id
             and event.correlation_id == draft.correlation_id

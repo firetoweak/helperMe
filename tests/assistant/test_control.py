@@ -112,7 +112,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         proposal_saw_committed_step: list[bool] = []
 
         async def propose(input_data: ProposalInput):
-            events = await journal.snapshot("control-stream")
+            events = await journal.snapshot("control-session")
             proposal_saw_committed_step.append(any(
                 isinstance(event.payload, StepCommitted)
                 for event in events
@@ -147,14 +147,14 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             deliver_binding(delivered.append),
         )
         await runtime.receive_user_message(
-            "control-stream",
+            "control-session",
             "安装它",
             delivery_id="user-1",
         )
 
         result = await drive_until_idle(
             runtime,
-            "control-stream",
+            "control-session",
             control=control,
         )
 
@@ -162,12 +162,12 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivered, ["我已整理方案。"])
         self.assertIn("输入 yes 确认", result.control_message)
         self.assertEqual(
-            control.pending_view("control-stream").request_id,
+            control.pending_view("control-session").request_id,
             "approval-1",
         )
         steps = [
             event.payload.step
-            for event in await journal.snapshot("control-stream")
+            for event in await journal.snapshot("control-session")
             if isinstance(event.payload, StepCommitted)
         ]
         self.assertEqual(
@@ -175,11 +175,11 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             ["deliver"],
         )
 
-        message = await control.resolve("control-stream", approved=True)
+        message = await control.resolve("control-session", approved=True)
 
         self.assertEqual(message, "安装完成")
         self.assertEqual(dict(handler.payloads[0]), {"value": "frozen"})
-        self.assertIsNone(control.pending_view("control-stream"))
+        self.assertIsNone(control.pending_view("control-session"))
 
 if __name__ == "__main__":
     unittest.main()

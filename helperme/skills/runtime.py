@@ -93,7 +93,7 @@ class SkillToolCatalog:
             if captured is None:
                 return _error_result(SkillRuntimeError(
                     "SKILL_NOT_FOUND",
-                    f"Skill {input_data.skill_id} 不在当前 Stream 目录中",
+                    f"Skill {input_data.skill_id} 不在当前 Session 目录中",
                     hint="从 load_skill 工具描述中的当前目录选择有效 ID。",
                     data={"skill_id": input_data.skill_id},
                 ))
@@ -120,7 +120,7 @@ class SkillToolCatalog:
             if captured is None:
                 return _error_result(SkillRuntimeError(
                     "SKILL_NOT_FOUND",
-                    f"Skill {input_data.skill_id} 不在当前 Stream 目录中",
+                    f"Skill {input_data.skill_id} 不在当前 Session 目录中",
                     hint="从 load_skill 工具描述中的当前目录选择有效 ID。",
                     data={"skill_id": input_data.skill_id},
                 ))
@@ -173,7 +173,7 @@ class SkillToolCatalog:
         ):
             raise SkillRuntimeError(
                 "SKILL_CATALOG_STALE",
-                f"Skill {captured.name} 已在当前 Stream 创建后变化",
+                f"Skill {captured.name} 已在当前 Session 创建后变化",
                 hint="在下一个 Step 使用最新 Skill 目录重新选择。",
                 data={
                     "skill_id": captured.name,

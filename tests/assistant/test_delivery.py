@@ -56,7 +56,7 @@ class ScriptedDecisionMaker:
 
 
 class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "deliver-stream"
+    SESSION_ID = "deliver-session"
 
     def test_command_outcome_decision_defaults_true_without_effect_inference(self):
         self.assertTrue(Command("c1", InvokeTool("A")).decision_on_outcome)
@@ -119,15 +119,15 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "hi",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         await runtime.dispatcher.wait(step.commands[0].command_id)
-        await runtime.advance(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         outcomes = [
             event.payload
             for event in events
@@ -166,15 +166,15 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "wrap up",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         await runtime.dispatcher.wait(step.commands[0].command_id)
-        await runtime.advance(self.STREAM_ID)
-        await runtime.finalize(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        await runtime.finalize(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
 
         self.assertEqual(len(model.frames), 1)
         self.assertEqual(delivered, ["finished"])
@@ -199,19 +199,19 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await runtime.dispatcher.wait(first.commands[0].command_id)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.RUNNABLE)
 
-        second = await runtime.advance(self.STREAM_ID)
+        second = await runtime.advance(self.SESSION_ID)
         await runtime.dispatcher.wait(second.commands[0].command_id)
-        await runtime.advance(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(len(model.frames), 2)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertEqual(state.waiting_for, ("user_message",))

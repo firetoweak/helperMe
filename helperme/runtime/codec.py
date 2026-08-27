@@ -503,7 +503,7 @@ def decode_payload(
 def delivery_fingerprint(draft: EventDraft) -> str:
     kind, payload_json = encode_payload(draft.payload)
     value = {
-        "stream_id": draft.stream_id,
+        "session_id": draft.session_id,
         "event_type": kind,
         "schema_version": draft.schema_version,
         "payload": json.loads(payload_json),
@@ -630,7 +630,7 @@ def encode_state(state: CanonicalState) -> str:
         "codec_version": STATE_CODEC_VERSION,
         "projection_version": STATE_PROJECTION_VERSION,
         "state": {
-            "stream_id": state.stream_id,
+            "session_id": state.session_id,
             "journal_position": state.journal_position,
             "decision_cursor": state.decision_cursor,
             "status": state.status.value,
@@ -658,7 +658,7 @@ def decode_state(state_json: str) -> CanonicalState:
     data = _require_object(
         envelope["state"],
         {
-            "stream_id",
+            "session_id",
             "journal_position",
             "decision_cursor",
             "status",
@@ -671,7 +671,7 @@ def decode_state(state_json: str) -> CanonicalState:
         "canonical state",
     )
     return CanonicalState(
-        stream_id=data["stream_id"],
+        session_id=data["session_id"],
         journal_position=data["journal_position"],
         decision_cursor=data["decision_cursor"],
         status=RuntimeStatus(data["status"]),

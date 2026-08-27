@@ -184,7 +184,7 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
         self.assertIn("pending_authorization_ids", runner)
         self.assertIn("drive_until_idle", runner)
 
-    def test_cli_uses_bootstrap_and_stream_application_service(self):
+    def test_cli_uses_bootstrap_and_session_application_service(self):
         source = (CLI_ROOT / "console.py").read_text(encoding="utf-8")
         self.assertNotIn("class JournalBackedLlmDecisionMaker", source)
         self.assertNotIn("async def drive_until_idle", source)
@@ -192,7 +192,7 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
         self.assertNotIn("SqliteJournal", source)
         self.assertNotIn("CanonicalState", source)
         self.assertIn("bootstrap_assistant", source)
-        self.assertIn("AssistantStreams", source)
+        self.assertIn("AssistantSessions", source)
 
     def test_assistant_driver_and_cli_do_not_swallow_internal_errors(self):
         offenders = {

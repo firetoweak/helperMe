@@ -235,7 +235,7 @@ _CHANGE_MARKERS = (
 
 
 @dataclass(frozen=True, slots=True)
-class StreamFacts:
+class SessionFacts:
     wrote_files: bool
     ran_commands: bool
     last_user_message: str | None
@@ -264,7 +264,7 @@ def command_names(events: tuple[Event, ...]) -> dict[str, str]:
     return names
 
 
-def collect_facts(events: tuple[Event, ...]) -> StreamFacts:
+def collect_facts(events: tuple[Event, ...]) -> SessionFacts:
     names = command_names(events)
     wrote = False
     ran = False
@@ -283,7 +283,7 @@ def collect_facts(events: tuple[Event, ...]) -> StreamFacts:
             wrote = True
         if name in COMMAND_TOOLS:
             ran = True
-    return StreamFacts(wrote, ran, last_user)
+    return SessionFacts(wrote, ran, last_user)
 
 
 def current_criteria(events: tuple[Event, ...]) -> CriteriaCommitted | None:
@@ -338,7 +338,7 @@ def classify_user_intent(
     return UserIntent("proceed")
 
 
-def inferred_from_facts(facts: StreamFacts) -> tuple[InferredCriterion, ...]:
+def inferred_from_facts(facts: SessionFacts) -> tuple[InferredCriterion, ...]:
     items: list[InferredCriterion] = []
     if facts.wrote_files:
         items.append(CRITERION_WORKSPACE)
@@ -412,7 +412,7 @@ def criteria_after_intent(
     current: CriteriaCommitted | None,
     intent: UserIntent,
     text: str,
-    facts: StreamFacts,
+    facts: SessionFacts,
 ) -> CriteriaCommitted | None:
     if intent.kind == "seed" or current is None:
         return CriteriaCommitted(
@@ -495,4 +495,4 @@ def format_facts_for_judge(events: tuple[Event, ...]) -> str:
         name = names[payload.command_id]
         status = payload.outcome.status.value
         lines.append(f"- {name} {payload.command_id}: {status}")
-    return "\n".join(lines) if lines else "（本 Stream 尚无工具结果）"
+    return "\n".join(lines) if lines else "（本 Session 尚无工具结果）"

@@ -28,7 +28,7 @@ class HelperMeHomeTest(unittest.TestCase):
             self.assertEqual(home.mcp_root.parent, home.root)
             self.assertEqual(home.skills_root.parent, home.root)
             self.assertEqual(home.state_root.parent, home.root)
-            self.assertEqual(home.runtime_streams_root.parent, home.root)
+            self.assertEqual(home.runtime_sessions_root.parent, home.root)
 
 
 if __name__ == "__main__":

@@ -73,7 +73,7 @@ def _load_skill_description(schemas: list[dict[str, object]]) -> str:
 
 
 class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "skill-stream"
+    SESSION_ID = "skill-session"
 
     async def asyncSetUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -143,15 +143,15 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "use demo skill",
             delivery_id="ask-1",
         )
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
-        events = await runtime.snapshot(self.STREAM_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         loaded = _outcomes_named(events, LOAD_SKILL)
         self.assertEqual(result.state.status, RuntimeStatus.WAITING)
         self.assertEqual(delivered, ["loaded"])
@@ -194,12 +194,12 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "read guide",
             delivery_id="ask-1",
         )
-        await drive_until_idle(runtime, self.STREAM_ID)
-        events = await runtime.snapshot(self.STREAM_ID)
+        await drive_until_idle(runtime, self.SESSION_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         reads = _outcomes_named(events, READ_SKILL_RESOURCE)
         self.assertEqual(reads[0]["data"]["content"], "cdef")
 

@@ -48,10 +48,10 @@ class ScriptedDecisionMaker:
         self.control_seen: list[frozenset[str]] = []
 
     async def decide(self, frame: DecisionFrame) -> ModelDecision:
-        stream_id = frame.state.stream_id
-        self.seen.append(_names(self.management.schemas(stream_id, frame.state)))
+        session_id = frame.state.session_id
+        self.seen.append(_names(self.management.schemas(session_id, frame.state)))
         self.control_seen.append(
-            self.management.control_names(stream_id, frame.state)
+            self.management.control_names(session_id, frame.state)
         )
         if len(self.seen) == 1:
             return ModelDecision(
@@ -109,13 +109,13 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 },
             )
             await runtime.receive_user_message(
-                "management-stream",
+                "management-session",
                 "repair mcp",
                 delivery_id="user-1",
             )
 
-            await drive_until_idle(runtime, "management-stream")
-            events = await runtime.snapshot("management-stream")
+            await drive_until_idle(runtime, "management-session")
+            events = await runtime.snapshot("management-session")
 
             self.assertEqual(decisions.seen[0], {LOAD_MANAGEMENT_TOOLS})
             self.assertEqual(
@@ -135,17 +135,17 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 ModelContextSettings(),
             )
             activations = await restored.rehydrate(
-                "management-stream",
+                "management-session",
                 events,
             )
 
             self.assertEqual(len(activations), 2)
             self.assertEqual(
-                _names(restored.schemas("management-stream")),
+                _names(restored.schemas("management-session")),
                 {LOAD_MANAGEMENT_TOOLS, "diagnose_mcp"},
             )
             self.assertEqual(
-                restored.control_names("management-stream"),
+                restored.control_names("management-session"),
                 frozenset({"propose_mcp_repair"}),
             )
 

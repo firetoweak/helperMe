@@ -34,18 +34,18 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
             assembly.bindings,
         )
         assembly.surface.attach(runtime)
-        stream_id = "live-stream"
+        session_id = "live-session"
         async with config.llm, assembly.mcp.client_manager:
             await runtime.receive_user_message(
-                stream_id,
+                session_id,
                 "只用一句话回答：1+1 等于几。不要调用工具。",
                 delivery_id="live-1",
             )
             result = await asyncio.wait_for(
-                drive_until_idle(runtime, stream_id),
+                drive_until_idle(runtime, session_id),
                 timeout=180,
             )
-        events = await journal.snapshot(stream_id)
+        events = await journal.snapshot(session_id)
         kinds = [event.payload.__class__.__name__ for event in events]
         self.assertIn("UserMessageReceived", kinds)
         self.assertIn("StepCommitted", kinds)

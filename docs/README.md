@@ -15,7 +15,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [Runtime](架构/Runtime.md) | Stream、Journal、Step、Command、终态 |
+| [Runtime](架构/Runtime.md) | Session、Journal、Step、Command、终态 |
 | [Runtime 状态推进模型](架构/Runtime状态推进模型.md) | 完整架构决策 |
 | [Assistant 与 Sandbox](架构/Assistant与Sandbox.md) | 产品装配、执行环境与工具边界 |
 | [判定](架构/判定.md) | 人负责目标；独立 Judge；continue 特权 |

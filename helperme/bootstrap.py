@@ -11,7 +11,7 @@ from helperme.assistant.completion.judgment import (
     make_isolated_judge,
 )
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
-from helperme.assistant.streams import AssistantStreams
+from helperme.assistant.sessions import AssistantSessions
 from helperme.config import (
     AppConfig,
     AssistantConfig,
@@ -26,7 +26,7 @@ from helperme.runtime import AgentRuntime, SqliteJournal
 @dataclass(frozen=True, slots=True)
 class BootstrappedAssistant:
     config: AssistantConfig
-    streams: AssistantStreams
+    sessions: AssistantSessions
     journal_path: Path
     mcp_service: object
     skill_service: object
@@ -77,7 +77,7 @@ async def bootstrap_assistant(
         assembly.bindings,
     )
     assembly.surface.attach(runtime)
-    streams = AssistantStreams(
+    sessions = AssistantSessions(
         runtime,
         assembly.surface,
         policy=policy,
@@ -87,7 +87,7 @@ async def bootstrap_assistant(
     async with effective_config.llm, assembly.mcp.client_manager:
         yield BootstrappedAssistant(
             config=effective_config,
-            streams=streams,
+            sessions=sessions,
             journal_path=journal_path,
             mcp_service=assembly.mcp.service,
             skill_service=assembly.skills.service,

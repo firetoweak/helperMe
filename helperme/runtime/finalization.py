@@ -55,13 +55,13 @@ def terminal_event(events: tuple[Event, ...]) -> Event | None:
 
 
 def finalization_opportunity(
-    stream_id: str,
+    session_id: str,
     events: tuple[Event, ...],
 ) -> FinalizationOpportunity | None:
     if terminal_status(events) is not None:
         return None
     request = _live_termination_request(events)
-    projection = StateProjector().project(stream_id, events)
+    projection = StateProjector().project(session_id, events)
     if request is not None:
         abandoned = tuple(
             state.command.command_id
@@ -116,7 +116,7 @@ def runtime_terminated_payload(
 
 
 def terminal_event_draft(
-    stream_id: str,
+    session_id: str,
     event_id: str,
     opportunity: FinalizationOpportunity,
 ) -> EventDraft:
@@ -127,7 +127,7 @@ def terminal_event_draft(
     )
     return EventDraft(
         event_id=event_id,
-        stream_id=stream_id,
+        session_id=session_id,
         payload=payload,
         occurred_at=datetime.now(timezone.utc),
         causation_id=opportunity.declared_by_event_id,

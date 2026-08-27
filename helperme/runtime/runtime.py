@@ -114,23 +114,23 @@ class AgentRuntime:
             requires_authorization=binding.requires_authorization,
         )
 
-    async def create_stream(self, stream_id: str) -> bool:
-        """Persist a Host-selected Stream identity without creating an Event."""
+    async def create_session(self, session_id: str) -> bool:
+        """Persist a Host-selected Session identity without creating an Event."""
 
-        return await self._journal.create_stream(stream_id)
+        return await self._journal.create_session(session_id)
 
-    async def stream_exists(self, stream_id: str) -> bool:
-        return await self._journal.stream_exists(stream_id)
+    async def session_exists(self, session_id: str) -> bool:
+        return await self._journal.session_exists(session_id)
 
     async def _append_external(
         self,
-        stream_id: str,
+        session_id: str,
         payload: UserMessageReceived | UserInterruptReceived,
         delivery: DeliveryIdentity,
     ) -> Event:
         result = await self._journal.accept_delivery(EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=payload,
             occurred_at=datetime.now(timezone.utc),
             delivery=delivery,
@@ -139,53 +139,53 @@ class AgentRuntime:
 
     async def record_fact(
         self,
-        stream_id: str,
+        session_id: str,
         payload: EventPayload,
         *,
         causation_id: str | None = None,
     ) -> Event:
         return await self._journal.append(EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=payload,
             occurred_at=datetime.now(timezone.utc),
             causation_id=causation_id,
         ))
 
-    async def snapshot(self, stream_id: str) -> tuple[Event, ...]:
-        return await self._journal.snapshot(stream_id)
+    async def snapshot(self, session_id: str) -> tuple[Event, ...]:
+        return await self._journal.snapshot(session_id)
 
     async def receive_user_message(
         self,
-        stream_id: str,
+        session_id: str,
         content: str,
         *,
         delivery_id: str,
         source: str = "user",
     ) -> Event:
         return await self._append_external(
-            stream_id,
+            session_id,
             UserMessageReceived(content),
             DeliveryIdentity(source, delivery_id),
         )
 
     async def receive_interrupt(
         self,
-        stream_id: str,
+        session_id: str,
         reason: str | None = None,
         *,
         delivery_id: str,
         source: str = "user",
     ) -> Event:
         return await self._append_external(
-            stream_id,
+            session_id,
             UserInterruptReceived(reason),
             DeliveryIdentity(source, delivery_id),
         )
 
     async def receive_termination(
         self,
-        stream_id: str,
+        session_id: str,
         reason: str | None = None,
         *,
         delivery_id: str,
@@ -194,7 +194,7 @@ class AgentRuntime:
         result = await self._journal.accept_termination(
             EventDraft(
                 event_id=self._id_factory("event"),
-                stream_id=stream_id,
+                session_id=session_id,
                 payload=TerminationRequested(reason),
                 occurred_at=datetime.now(timezone.utc),
                 delivery=DeliveryIdentity(source, delivery_id),
@@ -203,64 +203,64 @@ class AgentRuntime:
         )
         return result.event
 
-    async def finalize(self, stream_id: str) -> Event | None:
+    async def finalize(self, session_id: str) -> Event | None:
         return await self._journal.finalize(
-            stream_id,
+            session_id,
             self._id_factory("event"),
         )
 
     async def grant_command(
         self,
-        stream_id: str,
+        session_id: str,
         command_id: str,
     ) -> Event | None:
-        events = await self._journal.snapshot(stream_id)
+        events = await self._journal.snapshot(session_id)
         command_state = self.projector.project(
-            stream_id,
+            session_id,
             events,
         ).state.command(command_id)
         event = await self._journal.grant_command(EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=CommandAuthorized(command_id),
             occurred_at=datetime.now(timezone.utc),
             causation_id=command_state.issued_by_event_id,
         ))
         if event is not None:
-            await self.dispatcher.start_pending(stream_id)
+            await self.dispatcher.start_pending(session_id)
         return event
 
     async def reject_command(
         self,
-        stream_id: str,
+        session_id: str,
         command_id: str,
     ) -> Event | None:
-        events = await self._journal.snapshot(stream_id)
+        events = await self._journal.snapshot(session_id)
         command_state = self.projector.project(
-            stream_id,
+            session_id,
             events,
         ).state.command(command_id)
         return await self._journal.reject_command(EventDraft(
             event_id=self._id_factory("event"),
-            stream_id=stream_id,
+            session_id=session_id,
             payload=CommandRejected(command_id),
             occurred_at=datetime.now(timezone.utc),
             causation_id=command_state.issued_by_event_id,
         ))
 
-    async def advance(self, stream_id: str) -> Step | None:
-        lock = self._step_locks.setdefault(stream_id, asyncio.Lock())
+    async def advance(self, session_id: str) -> Step | None:
+        lock = self._step_locks.setdefault(session_id, asyncio.Lock())
         async with lock:
-            events = await self._journal.snapshot(stream_id)
+            events = await self._journal.snapshot(session_id)
             frame = self.projector.project(
-                stream_id,
+                session_id,
                 events,
             ).next_decision
             if frame is None:
-                await self.dispatcher.start_pending(stream_id)
+                await self.dispatcher.start_pending(session_id)
                 return None
             request = StepClaimRequest(
-                stream_id=stream_id,
+                session_id=session_id,
                 trigger_event_id=frame.trigger_event.event_id,
                 decision_cursor=frame.decision_cursor,
                 basis_state_version=frame.basis_state_version,
@@ -305,7 +305,7 @@ class AgentRuntime:
                     await _cancel_task(operation)
                 await _stop_heartbeat(heartbeat)
             step = step_event.payload.step
-            await self.dispatcher.start_pending(stream_id)
+            await self.dispatcher.start_pending(session_id)
             return step
 
     async def _step_heartbeat(self, lease) -> None:
@@ -319,38 +319,38 @@ class AgentRuntime:
             if not renewed:
                 raise LeaseLostError(lease.token)
 
-    async def state(self, stream_id: str) -> CanonicalState:
-        events = await self._journal.snapshot(stream_id)
+    async def state(self, session_id: str) -> CanonicalState:
+        events = await self._journal.snapshot(session_id)
         fingerprint = self._event_fingerprint(events)
         journal_position = events[-1].sequence if events else 0
         checkpoint = await self._journal.load_checkpoint(
-            stream_id,
+            session_id,
             journal_position,
             fingerprint,
         )
         if checkpoint is not None:
             return checkpoint
-        state = self.projector.project(stream_id, events).state
+        state = self.projector.project(session_id, events).state
         await self._journal.save_checkpoint(state, fingerprint)
         return state
 
-    async def recover_once(self, stream_id: str) -> tuple[str, ...]:
-        return await self.dispatcher.recover_once(stream_id)
+    async def recover_once(self, session_id: str) -> tuple[str, ...]:
+        return await self.dispatcher.recover_once(session_id)
 
-    async def status(self, stream_id: str) -> RuntimeStatus:
-        return (await self.state(stream_id)).status
+    async def status(self, session_id: str) -> RuntimeStatus:
+        return (await self.state(session_id)).status
 
-    async def turn(self, stream_id: str) -> TurnView:
-        events = await self._journal.snapshot(stream_id)
-        return project_turn(stream_id, events, self.projector)
+    async def turn(self, session_id: str) -> TurnView:
+        events = await self._journal.snapshot(session_id)
+        return project_turn(session_id, events, self.projector)
 
-    async def trace(self, stream_id: str) -> TraceView:
-        events = await self._journal.snapshot(stream_id)
-        return project_trace(stream_id, events)
+    async def trace(self, session_id: str) -> TraceView:
+        events = await self._journal.snapshot(session_id)
+        return project_trace(session_id, events)
 
-    async def replay(self, stream_id: str) -> ReplayView:
-        events = await self._journal.snapshot(stream_id)
-        return replay(stream_id, events)
+    async def replay(self, session_id: str) -> ReplayView:
+        events = await self._journal.snapshot(session_id)
+        return replay(session_id, events)
 
     @staticmethod
     def _event_fingerprint(events: tuple[Event, ...]) -> str:

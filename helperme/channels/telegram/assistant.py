@@ -5,8 +5,8 @@ import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, Update
 
-from helperme.assistant.runner import MODEL_DECISION_ERRORS, StreamNotFoundError
-from helperme.assistant.streams import AssistantStreams
+from helperme.assistant.runner import MODEL_DECISION_ERRORS, SessionNotFoundError
+from helperme.assistant.sessions import AssistantSessions
 from helperme.config import InitialConfigCreated, load_app_config
 
 
@@ -39,16 +39,16 @@ class TelegramPairing:
 class TelegramChannel:
     def __init__(
         self,
-        streams: AssistantStreams,
+        sessions: AssistantSessions,
         bot: Bot,
         chat_id: int,
-        stream_id: str,
+        session_id: str,
         bot_id: int,
     ) -> None:
-        self._streams = streams
+        self._sessions = sessions
         self._bot = bot
         self._chat_id = chat_id
-        self._stream_id = stream_id
+        self._session_id = session_id
         self._delivery_prefix = f"telegram-bot-{bot_id}-update-"
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._driving = False
@@ -64,39 +64,39 @@ class TelegramChannel:
             return
 
         if self._driving:
-            await self._streams.receive_interrupt(
-                self._stream_id,
+            await self._sessions.receive_interrupt(
+                self._session_id,
                 message.text,
                 delivery_id=f"{self._delivery_prefix}{update_id}",
                 source="telegram",
             )
             return
 
-        view = await self._streams.view(self._stream_id)
+        view = await self._sessions.view(self._session_id)
         answer = message.text.strip().lower()
         if view.pending_authorization_ids and answer in _YES | _NO:
-            await self._streams.resolve_authorizations(
-                self._stream_id,
+            await self._sessions.resolve_authorizations(
+                self._session_id,
                 approved=answer in _YES,
             )
         else:
-            await self._streams.receive_user_message(
-                self._stream_id,
+            await self._sessions.receive_user_message(
+                self._session_id,
                 message.text,
                 delivery_id=f"{self._delivery_prefix}{update_id}",
                 source="telegram",
             )
         self._driving = True
-        await self._queue.put(self._stream_id)
+        await self._queue.put(self._session_id)
 
     async def run_worker(self) -> None:
         while True:
             await self.drive_next()
 
     async def drive_next(self) -> None:
-        stream_id = await self._queue.get()
+        session_id = await self._queue.get()
         try:
-            await self._streams.drive(stream_id)
+            await self._sessions.drive(session_id)
         except MODEL_DECISION_ERRORS as exc:
             await self.send(f"模型调用失败：{exc}")
         finally:
@@ -105,17 +105,17 @@ class TelegramChannel:
 
 
 async def _open_chat_channel(
-    streams: AssistantStreams,
+    sessions: AssistantSessions,
     bot: Bot,
     bot_id: int,
     chat_id: int,
 ) -> TelegramChannel:
-    stream_id = f"telegram-bot-{bot_id}-chat-{chat_id}"
+    session_id = f"telegram-bot-{bot_id}-chat-{chat_id}"
     try:
-        await streams.resume(stream_id)
-    except StreamNotFoundError:
-        await streams.create(stream_id)
-    return TelegramChannel(streams, bot, chat_id, stream_id, bot_id)
+        await sessions.resume(session_id)
+    except SessionNotFoundError:
+        await sessions.create(session_id)
+    return TelegramChannel(sessions, bot, chat_id, session_id, bot_id)
 
 
 async def run_telegram_assistant() -> None:
@@ -155,7 +155,7 @@ async def run_telegram_assistant() -> None:
 
         async with bootstrap_assistant(send, app_config=app_config) as app:
             channel = await _open_chat_channel(
-                app.streams,
+                app.sessions,
                 bot,
                 bot.id,
                 chat_id,

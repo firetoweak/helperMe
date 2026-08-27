@@ -409,7 +409,7 @@ class ModelContextProjector:
         self,
         events: tuple[Event, ...],
         visible_event_ids: tuple[str, ...],
-        stream_id: str,
+        session_id: str,
         system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
         tools: list[dict[str, object]] | None = None,
     ) -> PreparedModelContext:
@@ -421,12 +421,12 @@ class ModelContextProjector:
                 system_prompt,
             )
         ]
-        store = self._gateway.for_stream(stream_id)
-        size_ids = self._externalize_oversized(items, stream_id, store)
+        store = self._gateway.for_session(session_id)
+        size_ids = self._externalize_oversized(items, session_id, store)
         protection_start = self._protection_start(items)
         age_ids = self._dehydrate_eligible(
             items,
-            stream_id,
+            session_id,
             store,
             protection_start,
         )
@@ -448,7 +448,7 @@ class ModelContextProjector:
     def _externalize_oversized(
         self,
         items: list[_Projected],
-        stream_id: str,
+        session_id: str,
         store: ArtifactStore,
     ) -> list[str]:
         changed: list[str] = []
@@ -482,7 +482,7 @@ class ModelContextProjector:
                 ensure_ascii=False,
             )
             artifact_id = self._save(
-                stream_id,
+                session_id,
                 item.command_id,
                 original,
                 store,
@@ -499,7 +499,7 @@ class ModelContextProjector:
     def _dehydrate_eligible(
         self,
         items: list[_Projected],
-        stream_id: str,
+        session_id: str,
         store: ArtifactStore,
         protection_start: int,
     ) -> list[str]:
@@ -569,7 +569,7 @@ class ModelContextProjector:
                             ensure_ascii=False,
                         )
                     artifact_id = self._save(
-                        stream_id,
+                        session_id,
                         item.command_id,
                         original,
                         store,
@@ -599,12 +599,12 @@ class ModelContextProjector:
 
     def _save(
         self,
-        stream_id: str,
+        session_id: str,
         command_id: str,
         content: str,
         store: ArtifactStore,
     ) -> str:
-        key = (stream_id, command_id)
+        key = (session_id, command_id)
         existing = self._index.get(key)
         if existing is not None:
             return existing

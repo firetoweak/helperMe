@@ -53,8 +53,8 @@ class RuntimeProjection:
 
 
 class _StateBuilder:
-    def __init__(self, stream_id: str) -> None:
-        self.stream_id = stream_id
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
         self.user_messages: list[str] = []
         self.interrupts: list[str | None] = []
         self.commands: dict[str, CommandState] = {}
@@ -72,7 +72,7 @@ class _StateBuilder:
 
     def version(self) -> str:
         content = json.dumps(
-            [self.stream_id, *self.visible_event_ids],
+            [self.session_id, *self.visible_event_ids],
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -83,7 +83,7 @@ class _StateBuilder:
         consumed_trigger_event_ids: tuple[str, ...],
     ) -> DecisionState:
         return DecisionState(
-            stream_id=self.stream_id,
+            session_id=self.session_id,
             version=self.version(),
             user_messages=tuple(self.user_messages),
             interrupts=tuple(self.interrupts),
@@ -562,23 +562,23 @@ class _StateBuilder:
 class StateProjector:
     def project(
         self,
-        stream_id: str,
+        session_id: str,
         events: tuple[Event, ...],
     ) -> RuntimeProjection:
-        self._validate_stream(stream_id, events)
+        self._validate_session(session_id, events)
         step_events = self._index_step_events(events)
         event_sequences = {
             event.event_id: event.sequence for event in events
         }
 
-        operational = _StateBuilder(stream_id)
+        operational = _StateBuilder(session_id)
         for event in events:
             if isinstance(event.payload, StepCommitted):
                 operational.apply_step(event)
             else:
                 operational.apply_regular(event)
 
-        decision = _StateBuilder(stream_id)
+        decision = _StateBuilder(session_id)
         consumed: list[str] = []
         applied_step_event_ids: set[str] = set()
         next_trigger: Event | None = None
@@ -683,7 +683,7 @@ class StateProjector:
             next_trigger = None
             waiting_for = ()
         state = CanonicalState(
-            stream_id=stream_id,
+            session_id=session_id,
             journal_position=journal_position,
             decision_cursor=len(consumed),
             status=(
@@ -706,12 +706,12 @@ class StateProjector:
         return RuntimeProjection(state=state, next_decision=next_frame)
 
     @staticmethod
-    def _validate_stream(stream_id: str, events: tuple[Event, ...]) -> None:
+    def _validate_session(session_id: str, events: tuple[Event, ...]) -> None:
         event_ids: set[str] = set()
         for expected_sequence, event in enumerate(events, start=1):
-            if event.stream_id != stream_id:
+            if event.session_id != session_id:
                 raise ValueError(
-                    f"event belongs to another stream: {event.event_id}"
+                    f"event belongs to another session: {event.event_id}"
                 )
             if event.sequence != expected_sequence:
                 raise ValueError(

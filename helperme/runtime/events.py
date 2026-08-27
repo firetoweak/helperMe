@@ -86,12 +86,12 @@ def _validate_payload_size(payload: object) -> None:
 
 def _validate_envelope(
     event_id: str,
-    stream_id: str,
+    session_id: str,
     occurred_at: datetime,
     schema_version: int,
 ) -> None:
     _require_str(event_id, "event id")
-    _require_str(stream_id, "stream id")
+    _require_str(session_id, "session id")
     if type(occurred_at) is not datetime:
         raise TypeError("occurred_at must be datetime")
     if occurred_at.tzinfo is not timezone.utc:
@@ -338,7 +338,7 @@ _EVENT_PAYLOAD_TYPES = (
 @dataclass(frozen=True, slots=True)
 class EventDraft:
     event_id: str
-    stream_id: str
+    session_id: str
     payload: EventPayload
     occurred_at: datetime
     causation_id: str | None = None
@@ -350,7 +350,7 @@ class EventDraft:
     def __post_init__(self) -> None:
         _validate_envelope(
             self.event_id,
-            self.stream_id,
+            self.session_id,
             self.occurred_at,
             self.schema_version,
         )
@@ -368,7 +368,7 @@ class EventDraft:
 @dataclass(frozen=True, slots=True)
 class Event:
     event_id: str
-    stream_id: str
+    session_id: str
     sequence: int
     payload: EventPayload
     occurred_at: datetime
@@ -386,7 +386,7 @@ class Event:
             raise ValueError("event sequence must be positive")
         _validate_envelope(
             self.event_id,
-            self.stream_id,
+            self.session_id,
             self.occurred_at,
             self.schema_version,
         )

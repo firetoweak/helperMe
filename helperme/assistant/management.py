@@ -154,7 +154,7 @@ class ManagementToolAdapter:
                 raise TypeError("管理诊断工具返回值不符合契约")
             payload, _artifact_id = externalize_payload(
                 result,
-                self._gateway.for_stream(context.stream_id),
+                self._gateway.for_session(context.session_id),
                 max_chars=self._settings.size_externalize_chars,
                 preview_chars=self._settings.preview_chars,
             )
@@ -164,7 +164,7 @@ class ManagementToolAdapter:
 
 
 class ManagementSurface:
-    """常驻管理目录；具体诊断与控制 schema 按 Stream 激活。"""
+    """常驻管理目录；具体诊断与控制 schema 按 Session 激活。"""
 
     def __init__(
         self,
@@ -193,11 +193,11 @@ class ManagementSurface:
 
     def schemas(
         self,
-        stream_id: str,
+        session_id: str,
         decision_state: DecisionState | None = None,
     ) -> list[dict[str, object]]:
         schemas = [self._loader_schema()]
-        for domain_id in self._visible_domains(stream_id, decision_state):
+        for domain_id in self._visible_domains(session_id, decision_state):
             schemas.extend(
                 self._adapter.schema(spec.name)
                 for spec in self._domains[domain_id].diagnostic_specs
@@ -206,21 +206,21 @@ class ManagementSurface:
 
     def control_names(
         self,
-        stream_id: str,
+        session_id: str,
         decision_state: DecisionState | None = None,
     ) -> frozenset[str]:
         return frozenset(
             name
-            for domain_id in self._visible_domains(stream_id, decision_state)
+            for domain_id in self._visible_domains(session_id, decision_state)
             for name in self._domains[domain_id].control_names
         )
 
     def catalog_instruction(
         self,
-        stream_id: str,
+        session_id: str,
         decision_state: DecisionState | None = None,
     ) -> str:
-        visible = self._visible_domains(stream_id, decision_state)
+        visible = self._visible_domains(session_id, decision_state)
         lines = [
             "管理能力按需加载。需要诊断、安装、更新或修复时，先调用 "
             "load_management_tools；具体工具从下一个 Step 开始可用："
@@ -232,7 +232,7 @@ class ManagementSurface:
 
     async def load(
         self,
-        stream_id: str,
+        session_id: str,
         domain_id: object,
         *,
         activation_command_id: str,
@@ -253,14 +253,14 @@ class ManagementSurface:
                 "error": f"Management domain {domain_id} not found",
                 "hint": "请从管理能力目录中选择有效 domain。",
             }
-        self._loaded.setdefault(stream_id, {}).setdefault(domain_id, set()).add(
+        self._loaded.setdefault(session_id, {}).setdefault(domain_id, set()).add(
             activation_command_id
         )
         return self._loaded_payload(domain)
 
     async def rehydrate(
         self,
-        stream_id: str,
+        session_id: str,
         events: Sequence[Event],
     ) -> tuple[ManagementActivation, ...]:
         activations = project_management_activations(events)
@@ -270,13 +270,13 @@ class ManagementSurface:
                 raise ValueError(f"Management domain {activation.domain} is unavailable")
             restored.setdefault(activation.domain, set()).add(activation.command_id)
         if restored:
-            self._loaded[stream_id] = restored
+            self._loaded[session_id] = restored
         else:
-            self._loaded.pop(stream_id, None)
+            self._loaded.pop(session_id, None)
         return activations
 
-    def reset(self, stream_id: str) -> None:
-        self._loaded.pop(stream_id, None)
+    def reset(self, session_id: str) -> None:
+        self._loaded.pop(session_id, None)
 
     async def _load_handler(
         self,
@@ -284,7 +284,7 @@ class ManagementSurface:
         arguments: Mapping[str, object],
     ) -> object:
         return await self.load(
-            context.stream_id,
+            context.session_id,
             arguments.get("domain"),
             activation_command_id=context.command_id,
         )
@@ -312,10 +312,10 @@ class ManagementSurface:
 
     def _visible_domains(
         self,
-        stream_id: str,
+        session_id: str,
         decision_state: DecisionState | None,
     ) -> frozenset[str]:
-        loaded = self._loaded.get(stream_id, {})
+        loaded = self._loaded.get(session_id, {})
         if decision_state is None:
             return frozenset(loaded)
         visible: set[str] = set()

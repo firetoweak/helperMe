@@ -62,7 +62,7 @@ class AppendResult:
 
 @dataclass(frozen=True, slots=True)
 class StepClaimRequest:
-    stream_id: str
+    session_id: str
     trigger_event_id: str
     decision_cursor: int
     basis_state_version: str
@@ -70,7 +70,7 @@ class StepClaimRequest:
 
     def __post_init__(self) -> None:
         for label, value in (
-            ("stream id", self.stream_id),
+            ("session id", self.session_id),
             ("trigger event id", self.trigger_event_id),
             ("basis state version", self.basis_state_version),
         ):
@@ -109,10 +109,10 @@ class StepLease:
 
 
 class Journal(Protocol):
-    async def create_stream(self, stream_id: str) -> bool:
+    async def create_session(self, session_id: str) -> bool:
         ...
 
-    async def stream_exists(self, stream_id: str) -> bool:
+    async def session_exists(self, session_id: str) -> bool:
         ...
 
     async def append(self, draft: EventDraft) -> Event:
@@ -121,7 +121,7 @@ class Journal(Protocol):
     async def accept_delivery(self, draft: EventDraft) -> AppendResult:
         ...
 
-    async def snapshot(self, stream_id: str) -> tuple[Event, ...]:
+    async def snapshot(self, session_id: str) -> tuple[Event, ...]:
         ...
 
     async def acquire_step(
@@ -228,7 +228,7 @@ class Journal(Protocol):
 
     async def load_checkpoint(
         self,
-        stream_id: str,
+        session_id: str,
         journal_position: int,
         fingerprint: str,
     ) -> CanonicalState | None:
@@ -241,10 +241,10 @@ class Journal(Protocol):
     ) -> None:
         ...
 
-    async def delete_checkpoint(self, stream_id: str) -> None:
+    async def delete_checkpoint(self, session_id: str) -> None:
         ...
 
-    async def finalize(self, stream_id: str, event_id: str) -> Event | None:
+    async def finalize(self, session_id: str, event_id: str) -> Event | None:
         ...
 
     async def accept_termination(
@@ -297,18 +297,18 @@ class MemoryJournal:
         for event in events:
             self._restore(event)
 
-    async def create_stream(self, stream_id: str) -> bool:
-        self._validate_stream_id(stream_id)
+    async def create_session(self, session_id: str) -> bool:
+        self._validate_session_id(session_id)
         async with self._lock:
-            if stream_id in self._events:
+            if session_id in self._events:
                 return False
-            self._events[stream_id] = []
+            self._events[session_id] = []
             return True
 
-    async def stream_exists(self, stream_id: str) -> bool:
-        self._validate_stream_id(stream_id)
+    async def session_exists(self, session_id: str) -> bool:
+        self._validate_session_id(session_id)
         async with self._lock:
-            return stream_id in self._events
+            return session_id in self._events
 
     def _restore(self, event: Event) -> None:
         if type(event) is not Event:
@@ -329,11 +329,11 @@ class MemoryJournal:
             raise ValueError("restored event delivery boundary is invalid")
         if event.event_id in self._event_ids:
             raise ValueError(f"duplicate event id: {event.event_id}")
-        stream_events = self._events.setdefault(event.stream_id, [])
-        expected = len(stream_events) + 1
+        session_events = self._events.setdefault(event.session_id, [])
+        expected = len(session_events) + 1
         if event.sequence != expected:
             raise ValueError(
-                f"invalid sequence for {event.stream_id}: "
+                f"invalid sequence for {event.session_id}: "
                 f"expected {expected}, got {event.sequence}"
             )
         if event.delivery is not None:
@@ -341,7 +341,7 @@ class MemoryJournal:
             if existing is not None:
                 raise ValueError(f"duplicate delivery: {event.delivery}")
         self._prevalidate_index(event)
-        stream_events.append(event)
+        session_events.append(event)
         self._event_ids[event.event_id] = event
         self._index_event(event)
         if event.delivery is not None:
@@ -375,16 +375,16 @@ class MemoryJournal:
             )
             return result
 
-    async def snapshot(self, stream_id: str) -> tuple[Event, ...]:
+    async def snapshot(self, session_id: str) -> tuple[Event, ...]:
         async with self._lock:
-            return tuple(self._events.get(stream_id, ()))
+            return tuple(self._events.get(session_id, ()))
 
     @staticmethod
-    def _validate_stream_id(stream_id: str) -> None:
-        if type(stream_id) is not str:
-            raise TypeError("stream id must be str")
-        if not stream_id:
-            raise ValueError("stream id must not be empty")
+    def _validate_session_id(session_id: str) -> None:
+        if type(session_id) is not str:
+            raise TypeError("session id must be str")
+        if not session_id:
+            raise ValueError("session id must not be empty")
 
     async def acquire_step(
         self,
@@ -400,25 +400,25 @@ class MemoryJournal:
             raise ValueError("step lease duration must be positive")
         async with self._lock:
             trigger = self._event_ids.get(request.trigger_event_id)
-            if trigger is None or trigger.stream_id != request.stream_id:
+            if trigger is None or trigger.session_id != request.session_id:
                 raise KeyError(request.trigger_event_id)
             if request.trigger_event_id in self._step_consumptions:
                 return None
-            if request.stream_id in self._terminals:
+            if request.session_id in self._terminals:
                 return None
-            current = self._step_claims.get(request.stream_id)
+            current = self._step_claims.get(request.session_id)
             now = self._clock()
             if current is not None and current.expires_at > now:
                 if current.token == token and current.request == request:
                     return current
                 return None
-            token_stream = self._step_claim_tokens.get(token)
-            if token_stream is not None and token_stream != request.stream_id:
+            token_session_id = self._step_claim_tokens.get(token)
+            if token_session_id is not None and token_session_id != request.session_id:
                 raise ValueError(f"duplicate step claim token: {token}")
             if current is not None:
                 if self._step_claim_tokens.get(
                     current.token
-                ) == request.stream_id:
+                ) == request.session_id:
                     self._step_claim_tokens.pop(current.token, None)
             generation = current.generation + 1 if current is not None else 1
             lease = StepLease(
@@ -428,18 +428,18 @@ class MemoryJournal:
                 generation=generation,
                 expires_at=now + lease_seconds,
             )
-            self._step_claims[request.stream_id] = lease
-            self._step_claim_tokens[token] = request.stream_id
+            self._step_claims[request.session_id] = lease
+            self._step_claim_tokens[token] = request.session_id
             return lease
 
     async def release_step(self, lease: StepLease) -> None:
         async with self._lock:
-            current = self._step_claims.get(lease.request.stream_id)
+            current = self._step_claims.get(lease.request.session_id)
             if self._same_step_lease_identity(current, lease):
-                del self._step_claims[lease.request.stream_id]
+                del self._step_claims[lease.request.session_id]
                 if self._step_claim_tokens.get(
                     lease.token
-                ) == lease.request.stream_id:
+                ) == lease.request.session_id:
                     self._step_claim_tokens.pop(lease.token, None)
 
     async def renew_step(
@@ -451,14 +451,14 @@ class MemoryJournal:
         if lease_seconds <= 0:
             raise ValueError("step lease duration must be positive")
         async with self._lock:
-            current = self._step_claims.get(lease.request.stream_id)
+            current = self._step_claims.get(lease.request.session_id)
             now = self._clock()
             if (
                 not self._same_step_lease_identity(current, lease)
                 or current.expires_at <= now
             ):
                 return False
-            self._step_claims[lease.request.stream_id] = replace(
+            self._step_claims[lease.request.session_id] = replace(
                 current,
                 expires_at=now + lease_seconds,
             )
@@ -481,13 +481,13 @@ class MemoryJournal:
                     raise LeaseLostError(lease.token)
                 return existing
             self._validate_step_lease(lease, draft)
-            if draft.stream_id in self._terminals:
+            if draft.session_id in self._terminals:
                 raise LeaseLostError(lease.token)
             event = self._append_locked(draft).event
-            del self._step_claims[lease.request.stream_id]
+            del self._step_claims[lease.request.session_id]
             if self._step_claim_tokens.get(
                 lease.token
-            ) == lease.request.stream_id:
+            ) == lease.request.session_id:
                 self._step_claim_tokens.pop(lease.token, None)
             return event
 
@@ -524,7 +524,7 @@ class MemoryJournal:
                     f"duplicate attempt claim token: {payload.claim_token}"
                 )
             command = self._commands.get(payload.command_id)
-            if command is None or command[0] != draft.stream_id:
+            if command is None or command[0] != draft.session_id:
                 raise KeyError(payload.command_id)
             if payload.command_id in self._abandoned_commands:
                 return None
@@ -569,7 +569,7 @@ class MemoryJournal:
         command_id: str,
     ) -> bool:
         command = self._commands.get(command_id)
-        if command is None or command[0] != draft.stream_id:
+        if command is None or command[0] != draft.session_id:
             raise KeyError(command_id)
         issued_event_id = command[1]
         if draft.causation_id != issued_event_id:
@@ -876,13 +876,13 @@ class MemoryJournal:
             ):
                 raise ValueError("cancel command target mismatch")
             if (
-                target_draft.stream_id != cancel_draft.stream_id
+                target_draft.session_id != cancel_draft.session_id
                 or self._commands[target_payload.command_id][0]
-                != target_draft.stream_id
+                != target_draft.session_id
                 or self._commands[cancel_payload.command_id][0]
-                != cancel_draft.stream_id
+                != cancel_draft.session_id
             ):
-                raise ValueError("pending cancellation stream mismatch")
+                raise ValueError("pending cancellation session mismatch")
             if (
                 cancel_payload.command_id in self._terminal_commands
                 or attempt_id in self._attempt_terminal_events
@@ -976,12 +976,12 @@ class MemoryJournal:
 
     async def load_checkpoint(
         self,
-        stream_id: str,
+        session_id: str,
         journal_position: int,
         fingerprint: str,
     ) -> CanonicalState | None:
         async with self._lock:
-            checkpoint = self._checkpoints.get(stream_id)
+            checkpoint = self._checkpoints.get(session_id)
             if checkpoint is None:
                 return None
             position, stored_fingerprint, state = checkpoint
@@ -995,19 +995,19 @@ class MemoryJournal:
         fingerprint: str,
     ) -> None:
         async with self._lock:
-            self._checkpoints[state.stream_id] = (
+            self._checkpoints[state.session_id] = (
                 state.journal_position,
                 fingerprint,
                 state,
             )
 
-    async def delete_checkpoint(self, stream_id: str) -> None:
+    async def delete_checkpoint(self, session_id: str) -> None:
         async with self._lock:
-            self._checkpoints.pop(stream_id, None)
+            self._checkpoints.pop(session_id, None)
 
-    async def finalize(self, stream_id: str, event_id: str) -> Event | None:
+    async def finalize(self, session_id: str, event_id: str) -> Event | None:
         async with self._lock:
-            return self._finalize_locked(stream_id, event_id)
+            return self._finalize_locked(session_id, event_id)
 
     async def accept_termination(
         self,
@@ -1033,8 +1033,8 @@ class MemoryJournal:
                 delivery_fingerprint(request_draft),
             )
             opportunity = finalization_opportunity(
-                request_draft.stream_id,
-                tuple(self._events.get(request_draft.stream_id, ())),
+                request_draft.session_id,
+                tuple(self._events.get(request_draft.session_id, ())),
             )
             if (
                 opportunity is not None
@@ -1042,12 +1042,12 @@ class MemoryJournal:
                 and opportunity.declared_by_event_id == result.event.event_id
             ):
                 self._finalize_locked(
-                    request_draft.stream_id,
+                    request_draft.session_id,
                     terminal_event_id,
                 )
             return result
 
-    def _finalize_locked(self, stream_id: str, event_id: str) -> Event | None:
+    def _finalize_locked(self, session_id: str, event_id: str) -> Event | None:
         existing = self._event_ids.get(event_id)
         if existing is not None:
             if not isinstance(
@@ -1056,11 +1056,11 @@ class MemoryJournal:
             ):
                 raise ValueError(f"event id conflict: {event_id}")
             return existing
-        events = tuple(self._events.get(stream_id, ()))
-        opportunity = finalization_opportunity(stream_id, events)
+        events = tuple(self._events.get(session_id, ()))
+        opportunity = finalization_opportunity(session_id, events)
         if opportunity is None:
             return None
-        draft = terminal_event_draft(stream_id, event_id, opportunity)
+        draft = terminal_event_draft(session_id, event_id, opportunity)
         return self._append_locked(draft).event
 
     def _append_locked(
@@ -1091,11 +1091,11 @@ class MemoryJournal:
                         f"attempt terminal conflict: {payload.attempt_id}"
                     )
                 return AppendResult(terminal, False)
-        stream_events = self._events.setdefault(draft.stream_id, [])
+        session_events = self._events.setdefault(draft.session_id, [])
         event = Event(
             event_id=draft.event_id,
-            stream_id=draft.stream_id,
-            sequence=len(stream_events) + 1,
+            session_id=draft.session_id,
+            sequence=len(session_events) + 1,
             payload=draft.payload,
             occurred_at=draft.occurred_at,
             causation_id=draft.causation_id,
@@ -1105,7 +1105,7 @@ class MemoryJournal:
             delivery=draft.delivery,
         )
         self._prevalidate_index(event)
-        stream_events.append(event)
+        session_events.append(event)
         self._event_ids[event.event_id] = event
         self._index_event(
             event,
@@ -1148,7 +1148,7 @@ class MemoryJournal:
                     self._dispatch_eligibility[command_id] = event.event_id
             for command in step.commands:
                 self._commands[command.command_id] = (
-                    event.stream_id,
+                    event.session_id,
                     event.event_id,
                 )
                 self._command_definitions[command.command_id] = command
@@ -1233,12 +1233,12 @@ class MemoryJournal:
             self._terminal_commands.add(payload.command_id)
             self._dispatch_eligibility.pop(payload.command_id, None)
         elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
-            self._terminals[event.stream_id] = event
+            self._terminals[event.session_id] = event
             if isinstance(payload, RuntimeTerminated):
                 for command_id in payload.abandoned_command_ids:
                     self._abandoned_commands.add(command_id)
                     self._dispatch_eligibility.pop(command_id, None)
-            self._clear_stream_step_claim(event.stream_id)
+            self._clear_session_step_claim(event.session_id)
 
     def _clear_attempt_claims(self, attempt_id: str) -> None:
         self._attempt_leases.pop(attempt_id, None)
@@ -1308,10 +1308,10 @@ class MemoryJournal:
                     f"attempt already terminal: {payload.attempt_id}"
                 )
         elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
-            if event.stream_id in self._terminals:
+            if event.session_id in self._terminals:
                 raise ValueError("runtime already terminal")
             declared = self._event_ids.get(payload.declared_by_event_id)
-            if declared is None or declared.stream_id != event.stream_id:
+            if declared is None or declared.session_id != event.session_id:
                 raise KeyError(payload.declared_by_event_id)
             if isinstance(payload, RuntimeCompleted):
                 if not isinstance(declared.payload, StepCommitted):
@@ -1330,11 +1330,11 @@ class MemoryJournal:
                 if missing is not None:
                     raise KeyError(missing)
 
-    def _clear_stream_step_claim(self, stream_id: str) -> None:
-        current = self._step_claims.pop(stream_id, None)
+    def _clear_session_step_claim(self, session_id: str) -> None:
+        current = self._step_claims.pop(session_id, None)
         if current is None:
             return
-        if self._step_claim_tokens.get(current.token) == stream_id:
+        if self._step_claim_tokens.get(current.token) == session_id:
             self._step_claim_tokens.pop(current.token, None)
 
     @staticmethod
@@ -1347,7 +1347,7 @@ class MemoryJournal:
         lease: StepLease,
         draft: EventDraft,
     ) -> None:
-        current = self._step_claims.get(lease.request.stream_id)
+        current = self._step_claims.get(lease.request.session_id)
         if (
             not self._same_step_lease_identity(current, lease)
             or current.expires_at <= self._clock()
@@ -1359,7 +1359,7 @@ class MemoryJournal:
         step = payload.step
         request = lease.request
         if (
-            draft.stream_id != request.stream_id
+            draft.session_id != request.session_id
             or step.trigger_event_id != request.trigger_event_id
             or step.decision_cursor != request.decision_cursor
             or step.basis_state_version != request.basis_state_version
@@ -1390,7 +1390,7 @@ class MemoryJournal:
     @staticmethod
     def _same_delivery(event: Event, draft: EventDraft) -> bool:
         return (
-            event.stream_id == draft.stream_id
+            event.session_id == draft.session_id
             and event.payload == draft.payload
             and event.causation_id == draft.causation_id
             and event.correlation_id == draft.correlation_id
@@ -1409,7 +1409,7 @@ class MemoryJournal:
     def _event_delivery_fingerprint(event: Event) -> str:
         return delivery_fingerprint(EventDraft(
             event_id=event.event_id,
-            stream_id=event.stream_id,
+            session_id=event.session_id,
             payload=event.payload,
             occurred_at=event.occurred_at,
             causation_id=event.causation_id,

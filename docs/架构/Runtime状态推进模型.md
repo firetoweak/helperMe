@@ -67,20 +67,20 @@ Execution Journal 最初只用于可观测历史与无副作用重放，但进�
 
 ## 3. 核心概念与权威边界
 
-### 3.1 Stream
+### 3.1 Session
 
-Stream 是能够独立排序、推进、等待和恢复的一条执行生命线。
+Session 是能够独立排序、推进、等待和恢复的一条执行生命线。
 
-Host 负责生成或选择 Stream identity，Runtime Core 不负责判断“当前应该使用哪个 Stream”。identity 一旦传入，Host 通过幂等 `create_stream(identity)` 要求 Core 持久化对应的空执行生命线；Core 再承担其事件追加、状态重建、历史重放与机械恢复。空 Stream 即使尚无 Event 也真实存在；创建不是 Event，不启动模型或 Step。这里的创建是建立给定 identity 的执行容器，不是 Core 自行生成产品会话身份。
+Host 负责生成或选择 Session identity，Runtime Core 不负责判断“当前应该使用哪个 Session”。identity 一旦传入，Host 通过幂等 `create_session(identity)` 要求 Core 持久化对应的空执行生命线；Core 再承担其事件追加、状态重建、历史重放与机械恢复。空 Session 即使尚无 Event 也真实存在；创建不是 Event，不启动模型或 Step。这里的创建是建立给定 identity 的执行容器，不是 Core 自行生成产品会话身份。
 
 第一版只要求：
 
-- 一个 Stream 内拥有权威事件顺序；
-- 同一时刻最多有一个 Step 正在为该 Stream 做模型决策；
-- 不同 Stream 可以并行推进；
+- 一个 Session 内拥有权威事件顺序；
+- 同一时刻最多有一个 Step 正在为该 Session 做模型决策；
+- 不同 Session 可以并行推进；
 - 父子执行未来通过显式因果引用关联，不共享隐式可变状态。
 
-Stream 与 Session、Goal、后台任务或 SubAgent 的具体映射属于 Host 产品策略，不在 Core 中冻结。SubAgent 若使用独立 Stream，也只复用同一创建原语；Core 不增加 `parent_stream_id`、`agent_type` 等父子领域字段，委派及结果回传由 Core 外的显式事实表达。
+Session 与 Conversation、Goal、后台任务或 SubAgent 的具体映射属于 Host 产品策略，不在 Core 中冻结。SubAgent 若使用独立 Session，也只复用同一创建原语；Core 不增加 `parent_session_id`、`agent_type` 等父子领域字段，委派及结果回传由 Core 外的显式事实表达。
 
 ### 3.2 Event
 
@@ -109,7 +109,7 @@ Journal 是系统内部已确认执行事实的唯一语义权威与顺序索引
 
 ```text
 event_id
-stream_id
+session_id
 sequence
 event_type
 causation_id?
@@ -394,7 +394,7 @@ Command 已终态                → 保留原结果，不回滚
 
 `UserInterruptReceived` 一旦提交，Channel 即可确认这次外部 delivery，因为恢复后所需的正文与后继身份已经进入 Journal。若进程在中断收口或 UserMessage 物化前崩溃，重放会继续未完成阶段；若 UserMessage 已经物化，确定性的 `follow_up_message_id` 使条件追加拒绝重复。派生的 `ExecutionInterrupted` 和 `UserMessageReceived` 是内部因果 Event，不是同一外部 delivery 的第二次接纳。
 
-当前前台执行完成机械收口并写入 `ExecutionInterrupted` 后，本轮决策 Event 结束，旧 Step 不得恢复。存在 `follow_up_message_id` 时，Runtime 随后物化新 UserMessage，Stream 转为 `RUNNABLE`；没有后继消息的显式纯中断才进入 `WAITING(user_message)`。Interrupt 不等于 `/stop` 或 `TerminationRequested`，也不终止整个 Stream。
+当前前台执行完成机械收口并写入 `ExecutionInterrupted` 后，本轮决策 Event 结束，旧 Step 不得恢复。存在 `follow_up_message_id` 时，Runtime 随后物化新 UserMessage，Session 转为 `RUNNABLE`；没有后继消息的显式纯中断才进入 `WAITING(user_message)`。Interrupt 不等于 `/stop` 或 `TerminationRequested`，也不终止整个 Session。
 
 ## 7. Command 副作用闭环
 
@@ -505,7 +505,7 @@ Runtime Status 是 State 的确定性派生结果，不是另一个状态所有�
 
 `WAITING` 必须能够说明在等待什么，例如 Command Outcome、Timer、Watcher、用户输入或人工审批。没有等待来源、没有可执行 Step、也没有终态，是非法或需要诊断的 Runtime State，不能静默归类。
 
-权限拒绝、工具失败或普通 Command 取消请求不天然等于 `TERMINATED`。`UserInterruptReceived` 确定性结束当前执行链；之后由是否存在待物化的 `follow_up_message_id` 决定派生 UserMessage 并进入 `RUNNABLE`，或进入 `WAITING(user_message)`。只有显式生命周期规则才能终止整个 Stream。
+权限拒绝、工具失败或普通 Command 取消请求不天然等于 `TERMINATED`。`UserInterruptReceived` 确定性结束当前执行链；之后由是否存在待物化的 `follow_up_message_id` 决定派生 UserMessage 并进入 `RUNNABLE`，或进入 `WAITING(user_message)`。只有显式生命周期规则才能终止整个 Session。
 
 Completion/Termination Decision 不能越过已经接纳但尚未消费的决策 Event。Step 只能提交 `CompletionDeclared` 或等价终态意图；`advance()` 到这里即结束，不能自行宣布终态。Host 完成 Judge / Policy 后显式请求 finalization，Runtime 再通过确定性 Finalization Barrier 原子验证“没有待消费决策输入、没有必要依赖、生命周期版本未变化”，成功后才追加真正的 `RuntimeCompleted` / `RuntimeTerminated` 事实。
 
@@ -527,11 +527,11 @@ ExecutionInterrupted：当前决策 Event 结束
 UserMessageReceived 开启新决策 Event
 ```
 
-这样终态不是对排队 Event 的覆盖。终态事实成功 Commit 后到达的新用户意图必须进入新的 Stream/interaction epoch，或先追加显式 `RuntimeResumed` 事实；普通 Event 不能隐式复活终态。
+这样终态不是对排队 Event 的覆盖。终态事实成功 Commit 后到达的新用户意图必须进入新的 Session/interaction epoch，或先追加显式 `RuntimeResumed` 事实；普通 Event 不能隐式复活终态。
 
 Step 的执行 claim、Dispatcher worker lease 等属于并发控制事实，不需要为此把领域状态扩张成另一个含混的 `RUNNING`。它们必须可恢复和可观测，但与 Runtime 是否具有下一步是不同问题。
 
-`COMPLETED` 或 `TERMINATED` 只停止新的 Agent 决策，不拒绝迟到的外部事实。已经派发的 Command 仍可能产生 Outcome，Runtime 必须继续记录并完成资源清理，但这些 Event 不得在没有显式恢复事实时重新开启终态 Stream。
+`COMPLETED` 或 `TERMINATED` 只停止新的 Agent 决策，不拒绝迟到的外部事实。已经派发的 Command 仍可能产生 Outcome，Runtime 必须继续记录并完成资源清理，但这些 Event 不得在没有显式恢复事实时重新开启终态 Session。
 
 ## 9. Projection
 
@@ -634,10 +634,10 @@ Watcher
 → 根据监听策略追加 ExternalChangeDetected Event
 
 Background Task
-→ 没有前台 Channel 时仍推进同一个 Stream
+→ 没有前台 Channel 时仍推进同一个 Session
 
 SubAgent
-→ 创建独立子 Stream，以因果 Event 委派和回收结果
+→ 创建独立子 Session，以因果 Event 委派和回收结果
 
 Long Memory
 → 从 Journal 派生知识并保留来源引用
@@ -647,11 +647,11 @@ Journal 不是通用领域事件总线。Core 只拥有顺序、身份、因果�
 
 ## 12. 必须保持的不变量
 
-1. 一个 Stream 内的 Event 具有稳定身份和权威追加顺序。
+1. 一个 Session 内的 Event 具有稳定身份和权威追加顺序。
 2. 外部 delivery 在接入边界具有稳定身份，同一 delivery 最多被接纳一次并形成一个外部输入 Event；由它确定性派生的内部因果 Event 不算第二次 delivery 接纳。
 3. Event 一旦 Commit 不修改；纠错通过追加新事实表达。
 4. State 和 Projection 可以删除后从 Journal、有效 Artifact 与受支持的版本化规则重建。
-5. 同一 Stream 同一时刻最多存在一个有效 Step claim，同一决策 Event 最多成功 Commit 一个 Step。
+5. 同一 Session 同一时刻最多存在一个有效 Step claim，同一决策 Event 最多成功 Commit 一个 Step。
 6. Step 使用冻结的 Decision State，不观察调用期间到达的新普通 Event；Interrupt 会使该 Step 失去提交资格。
 7. 独立决策 Event 按 Journal 接纳顺序消费；同 Step 的并行 Command Outcome 作为无序集合在全部终态后共同参与一次决策。
 8. Decision 与其全部 Commands 原子 Commit；未 Commit 的 Decision 不产生副作用。
@@ -725,7 +725,7 @@ UserMessage
 - Artifact 缺失时重放明确降级，不使用当前内容静默替换；
 - Turn 和 Trace 可以只依赖 Journal、Artifact 与 Projection 代码重建。
 
-完成语义切片后即可重新评估接口形状，不必等待三次切片全部完成才获得反馈。完成三次验收后，再决定 Checkpoint 频率、Stream 与产品领域对象的映射，以及旧 HelperMe 的迁移顺序。
+完成语义切片后即可重新评估接口形状，不必等待三次切片全部完成才获得反馈。完成三次验收后，再决定 Checkpoint 频率、Session 与产品领域对象的映射，以及旧 HelperMe 的迁移顺序。
 
 ## 15. 最终边界
 

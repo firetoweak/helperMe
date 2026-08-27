@@ -164,7 +164,7 @@ class AbandonScenario:
 
 
 class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "stream-1"
+    SESSION_ID = "session-1"
 
     async def test_parallel_tool_group_is_unordered_and_waits_until_terminal(self):
         tools = ControlledTools(("A", "B", "C"))
@@ -181,11 +181,11 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "collect",
             delivery_id="collect-1",
         )
-        step_1 = await runtime.advance(self.STREAM_ID)
+        step_1 = await runtime.advance(self.SESSION_ID)
         self.assertIsNotNone(step_1)
         command_ids = tool_command_ids(step_1)
 
@@ -194,9 +194,9 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         tools.release["B"].set()
         await runtime.dispatcher.wait(command_ids["B"])
-        self.assertIsNone(await runtime.advance(self.STREAM_ID))
+        self.assertIsNone(await runtime.advance(self.SESSION_ID))
         self.assertEqual(len(model.frames), 1)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertEqual(
             set(state.waiting_command_ids),
@@ -205,12 +205,12 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         tools.release["A"].set()
         await runtime.dispatcher.wait(command_ids["A"])
-        self.assertIsNone(await runtime.advance(self.STREAM_ID))
+        self.assertIsNone(await runtime.advance(self.SESSION_ID))
         self.assertEqual(len(model.frames), 1)
 
         tools.release["C"].set()
         await runtime.dispatcher.wait(command_ids["C"])
-        step_2 = await runtime.advance(self.STREAM_ID)
+        step_2 = await runtime.advance(self.SESSION_ID)
         self.assertIsNotNone(step_2)
         frame = model.frames[1]
         self.assertEqual(len(model.frames), 2)
@@ -246,26 +246,26 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "collect",
             delivery_id="collect-1",
         )
-        step_1 = await runtime.advance(self.STREAM_ID)
+        step_1 = await runtime.advance(self.SESSION_ID)
         command_ids = tool_command_ids(step_1)
         await asyncio.wait_for(tools.all_started.wait(), timeout=1)
         for name in tools.names:
             tools.release[name].set()
             await runtime.dispatcher.wait(command_ids[name])
 
-        before = await runtime.state(self.STREAM_ID)
+        before = await runtime.state(self.SESSION_ID)
         self.assertEqual(before.status, RuntimeStatus.RUNNABLE)
 
         follow_up = await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "stop, summarize what you already read",
             delivery_id="collect-2",
         )
-        step_2 = await runtime.advance(self.STREAM_ID)
+        step_2 = await runtime.advance(self.SESSION_ID)
         self.assertIsNotNone(step_2)
         outcome_frame = model.frames[1]
 
@@ -284,7 +284,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
                 CommandPhase.TERMINAL,
             )
 
-        step_3 = await runtime.advance(self.STREAM_ID)
+        step_3 = await runtime.advance(self.SESSION_ID)
         self.assertIsNotNone(step_3)
         user_frame = model.frames[2]
         self.assertEqual(len(model.frames), 3)
@@ -298,7 +298,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             user_frame.trigger_event.payload.content,
             "stop, summarize what you already read",
         )
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         outcome_ids = {
             event.event_id for event in outcome_events(events)
         }
@@ -332,14 +332,14 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "try domain action",
             delivery_id="domain-1",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await runtime.dispatcher.wait(first.commands[0].command_id)
-        second = await runtime.advance(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
+        second = await runtime.advance(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
 
         self.assertIsNotNone(second)
         self.assertEqual(observed[0][0], OutcomeStatus.SUCCEEDED)
@@ -361,7 +361,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         step_2 = scenario.step_2
         frame = scenario.decision_maker.frames[1]
 
-        events = await scenario.journal.snapshot(self.STREAM_ID)
+        events = await scenario.journal.snapshot(self.SESSION_ID)
         a_outcome = next(
             event
             for event in outcome_events(events)
@@ -390,7 +390,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             command_ids["C"],
         })
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertTrue(state.command(command_ids["A"]).abandoned)
         self.assertTrue(state.command(command_ids["C"]).abandoned)
         self.assertEqual(
@@ -415,14 +415,14 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(state.status, RuntimeStatus.RUNNABLE)
         self.assertEqual(len(scenario.decision_maker.frames), 2)
-        cancel_outcome_step = await runtime.advance(self.STREAM_ID)
+        cancel_outcome_step = await runtime.advance(self.SESSION_ID)
         self.assertIsNotNone(cancel_outcome_step)
         self.assertEqual(len(scenario.decision_maker.frames), 3)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertEqual(state.waiting_for, ("user_message",))
         self.assertTrue(scenario.tools.cancelled["C"].is_set())
-        events = await scenario.journal.snapshot(self.STREAM_ID)
+        events = await scenario.journal.snapshot(self.SESSION_ID)
         c_outcome = next(
             event
             for event in outcome_events(events)
@@ -466,11 +466,11 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "collect",
             delivery_id="collect-1",
         )
-        step_1 = await runtime.advance(self.STREAM_ID)
+        step_1 = await runtime.advance(self.SESSION_ID)
         command_ids = tool_command_ids(step_1)
         await asyncio.wait_for(tools.all_started.wait(), timeout=1)
 
@@ -481,16 +481,16 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         tools.release["C"].set()
         await runtime.dispatcher.wait(command_ids["C"])
 
-        joined_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
+        joined_task = asyncio.create_task(runtime.advance(self.SESSION_ID))
         await asyncio.wait_for(joined_entered.wait(), timeout=1)
         interrupt = await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "change intent",
             delivery_id="interrupt-1",
         )
         release_joined.set()
         step_joined = await joined_task
-        step_interrupt = await runtime.advance(self.STREAM_ID)
+        step_interrupt = await runtime.advance(self.SESSION_ID)
 
         frames = model.frames
         self.assertIsInstance(
@@ -509,7 +509,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
                 CommandPhase.TERMINAL,
             )
 
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         last_outcome = next(
             event
             for event in outcome_events(events)
@@ -529,30 +529,30 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(step_interrupt.trigger_event_id, interrupt.event_id)
         self.assertEqual(len(model.frames), 3)
 
-        turn = await runtime.turn(self.STREAM_ID)
+        turn = await runtime.turn(self.SESSION_ID)
         self.assertEqual(len(turn.interrupts), 1)
         self.assertEqual(turn.interrupts[0].event_id, interrupt.event_id)
         self.assertEqual(turn.interrupts[0].reason, "change intent")
 
     async def test_replay_rebuilds_views_without_model_or_tool_calls(self):
         scenario = await self._run_abandon_scenario()
-        events = await scenario.journal.snapshot(self.STREAM_ID)
-        live_state = await scenario.runtime.state(self.STREAM_ID)
-        live_turn = await scenario.runtime.turn(self.STREAM_ID)
-        live_trace = await scenario.runtime.trace(self.STREAM_ID)
+        events = await scenario.journal.snapshot(self.SESSION_ID)
+        live_state = await scenario.runtime.state(self.SESSION_ID)
+        live_turn = await scenario.runtime.turn(self.SESSION_ID)
+        live_trace = await scenario.runtime.trace(self.SESSION_ID)
         model_calls = len(scenario.decision_maker.frames)
         tool_calls = tuple(scenario.tools.executions)
 
         restored_journal = MemoryJournal(events)
-        restored_events = await restored_journal.snapshot(self.STREAM_ID)
-        restored = replay(self.STREAM_ID, restored_events)
+        restored_events = await restored_journal.snapshot(self.SESSION_ID)
+        restored = replay(self.SESSION_ID, restored_events)
 
         self.assertEqual(restored.state, live_state)
         self.assertEqual(restored.turn, live_turn)
         self.assertEqual(restored.trace, live_trace)
         self.assertEqual(restored_events, events)
         self.assertEqual(
-            await scenario.journal.snapshot(self.STREAM_ID),
+            await scenario.journal.snapshot(self.SESSION_ID),
             events,
         )
         self.assertEqual(len(scenario.decision_maker.frames), model_calls)
@@ -618,23 +618,23 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="start-1",
         )
-        first_step = await runtime.advance(self.STREAM_ID)
+        first_step = await runtime.advance(self.SESSION_ID)
         target_id = first_step.commands[0].command_id
         await asyncio.wait_for(started.wait(), timeout=1)
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "stop A",
             delivery_id="interrupt-1",
         )
-        cancel_step = await runtime.advance(self.STREAM_ID)
+        cancel_step = await runtime.advance(self.SESSION_ID)
         cancel_id = cancel_step.commands[0].command_id
         await runtime.dispatcher.wait(cancel_id)
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(target_id).outcome.status,
             OutcomeStatus.SUCCEEDED,
@@ -689,27 +689,27 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="start-1",
         )
-        first_step = await runtime.advance(self.STREAM_ID)
+        first_step = await runtime.advance(self.SESSION_ID)
         target_id = first_step.commands[0].command_id
         await asyncio.wait_for(
             journal.outcome_append_started.wait(),
             timeout=1,
         )
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "stop A",
             delivery_id="interrupt-1",
         )
-        cancel_step = await runtime.advance(self.STREAM_ID)
+        cancel_step = await runtime.advance(self.SESSION_ID)
         cancel_id = cancel_step.commands[0].command_id
         journal.release_outcome_append.set()
         await runtime.dispatcher.wait(cancel_id)
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(target_id).outcome.status,
             OutcomeStatus.SUCCEEDED,
@@ -747,11 +747,11 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="start-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         command_id = step.commands[0].command_id
 
         with self.assertRaises(TimeoutError):
@@ -759,7 +759,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
                 runtime.dispatcher.wait(command_id),
                 timeout=0.01,
             )
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(command_id).phase,
             CommandPhase.UNKNOWN,
@@ -767,7 +767,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         release.set()
         await runtime.dispatcher.wait(command_id)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(command_id).outcome.status,
             OutcomeStatus.SUCCEEDED,
@@ -809,22 +809,22 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "transfer",
             delivery_id="transfer-1",
         )
-        first_step = await runtime.advance(self.STREAM_ID)
+        first_step = await runtime.advance(self.SESSION_ID)
         target_id = first_step.commands[0].command_id
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "stop",
             delivery_id="interrupt-1",
         )
-        cancel_step = await runtime.advance(self.STREAM_ID)
+        cancel_step = await runtime.advance(self.SESSION_ID)
         cancel_id = cancel_step.commands[0].command_id
         await runtime.dispatcher.wait(cancel_id)
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(external_effects, ["money-moved"])
         self.assertEqual(
             state.command(target_id).phase,
@@ -841,7 +841,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         release.set()
         await runtime.dispatcher.wait(target_id)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(target_id).outcome.status,
             OutcomeStatus.SUCCEEDED,
@@ -878,17 +878,17 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "plan",
             delivery_id="plan-1",
         )
-        initial_events = await journal.snapshot(self.STREAM_ID)
+        initial_events = await journal.snapshot(self.SESSION_ID)
         initial_frame = runtime.projector.project(
-            self.STREAM_ID,
+            self.SESSION_ID,
             initial_events,
         ).next_decision
         request = StepClaimRequest(
-            stream_id=self.STREAM_ID,
+            session_id=self.SESSION_ID,
             trigger_event_id=initial_frame.trigger_event.event_id,
             decision_cursor=initial_frame.decision_cursor,
             basis_state_version=initial_frame.basis_state_version,
@@ -906,15 +906,15 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         target_id = first_step_event.payload.step.commands[0].command_id
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "stop",
             delivery_id="interrupt-1",
         )
-        cancel_step = await runtime.advance(self.STREAM_ID)
+        cancel_step = await runtime.advance(self.SESSION_ID)
         cancel_id = cancel_step.commands[0].command_id
         await runtime.dispatcher.wait(cancel_id)
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(target_id).outcome.status,
             OutcomeStatus.CANCELLED,
@@ -935,11 +935,11 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "maximum size"):
             await runtime.receive_user_message(
-                self.STREAM_ID,
+                self.SESSION_ID,
                 "x" * (300 * 1024),
                 delivery_id="oversized-1",
             )
-        self.assertEqual(await journal.snapshot(self.STREAM_ID), ())
+        self.assertEqual(await journal.snapshot(self.SESSION_ID), ())
 
     def test_step_commands_must_match_decision_requests(self):
         decision = ModelDecision(
@@ -961,7 +961,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "UTC"):
             Event(
                 event_id="event-1",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 sequence=1,
                 payload=UserMessageReceived("hello"),
                 occurred_at=datetime.now(),
@@ -973,7 +973,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_replay_rejects_false_command_causation(self):
         scenario = await self._run_abandon_scenario()
-        events = await scenario.journal.snapshot(self.STREAM_ID)
+        events = await scenario.journal.snapshot(self.SESSION_ID)
         dispatch_index = next(
             index
             for index, event in enumerate(events)
@@ -985,7 +985,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             causation_id="bogus",
         )
         with self.assertRaisesRegex(ValueError, "dispatch causation"):
-            replay(self.STREAM_ID, tuple(false_dispatch))
+            replay(self.SESSION_ID, tuple(false_dispatch))
 
         outcome_index = next(
             index
@@ -1001,11 +1001,11 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             causation_id="bogus",
         )
         with self.assertRaisesRegex(ValueError, "causation mismatch"):
-            replay(self.STREAM_ID, tuple(false_outcome))
+            replay(self.SESSION_ID, tuple(false_outcome))
 
     async def test_replay_rejects_false_observed_position_and_schema(self):
         scenario = await self._run_abandon_scenario()
-        events = await scenario.journal.snapshot(self.STREAM_ID)
+        events = await scenario.journal.snapshot(self.SESSION_ID)
         step_index = next(
             index
             for index, event in enumerate(events)
@@ -1021,7 +1021,7 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         with self.assertRaisesRegex(ValueError, "observed position"):
-            replay(self.STREAM_ID, tuple(false_position))
+            replay(self.SESSION_ID, tuple(false_position))
 
         step_events = [
             event
@@ -1038,13 +1038,13 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         with self.assertRaisesRegex(ValueError, "duplicate step id"):
-            replay(self.STREAM_ID, tuple(duplicate_step_id))
+            replay(self.SESSION_ID, tuple(duplicate_step_id))
 
         journal = MemoryJournal()
         with self.assertRaisesRegex(ValueError, "schema version"):
             await journal.accept_delivery(EventDraft(
                 event_id="future-event",
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 payload=UserMessageReceived("hello"),
                 occurred_at=datetime.now(timezone.utc),
                 schema_version=EVENT_SCHEMA_VERSION + 1,
@@ -1073,16 +1073,16 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="start-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         command_id = step.commands[0].command_id
         with self.assertRaisesRegex(ValueError, "maximum size"):
             await runtime.dispatcher.wait(command_id)
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(command_id).phase,
             CommandPhase.UNKNOWN,
@@ -1113,17 +1113,17 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="start-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         command_id = step.commands[0].command_id
         with self.assertRaises(RuntimeError) as caught:
             await runtime.dispatcher.wait(command_id)
         self.assertEqual(str(caught.exception), message)
 
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(
             state.command(command_id).phase,
             CommandPhase.UNKNOWN,
@@ -1166,22 +1166,22 @@ class AgentRuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "collect",
             delivery_id="collect-1",
         )
-        step_1 = await runtime.advance(self.STREAM_ID)
+        step_1 = await runtime.advance(self.SESSION_ID)
         command_ids = tool_command_ids(step_1)
         await asyncio.wait_for(tools.all_started.wait(), timeout=1)
 
         tools.release["B"].set()
         await runtime.dispatcher.wait(command_ids["B"])
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "keep B only",
             delivery_id="interrupt-1",
         )
-        step_2_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
+        step_2_task = asyncio.create_task(runtime.advance(self.SESSION_ID))
         await asyncio.wait_for(step_2_entered.wait(), timeout=1)
 
         tools.release["A"].set()

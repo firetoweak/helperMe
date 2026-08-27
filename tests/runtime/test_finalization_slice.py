@@ -88,7 +88,7 @@ def terminal_payloads(events):
 
 
 class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "finalization-stream"
+    SESSION_ID = "finalization-session"
 
     async def test_content_only_waits_for_user_message(self):
         tool = RecordingTool("unused")
@@ -99,13 +99,13 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "hello",
             delivery_id="ask-1",
         )
-        await runtime.advance(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
 
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertEqual(state.waiting_for, ("user_message",))
@@ -123,19 +123,19 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "wrap up",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
-        declared_state = await runtime.state(self.STREAM_ID)
-        declared_events = await runtime._journal.snapshot(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
+        declared_state = await runtime.state(self.SESSION_ID)
+        declared_events = await runtime._journal.snapshot(self.SESSION_ID)
         self.assertEqual(declared_state.status, RuntimeStatus.WAITING)
         self.assertEqual(terminal_payloads(declared_events), [])
 
-        await runtime.finalize(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        await runtime.finalize(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         completed = terminal_payloads(events)
 
         self.assertEqual(state.status, RuntimeStatus.COMPLETED)
@@ -146,7 +146,7 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             completed[0].declared_by_event_id,
             events[-2].event_id,
         )
-        rebuilt = await runtime.replay(self.STREAM_ID)
+        rebuilt = await runtime.replay(self.SESSION_ID)
         self.assertEqual(rebuilt.state.status, RuntimeStatus.COMPLETED)
         self.assertEqual(step.decision.lifecycle_intent, LifecycleIntent.COMPLETE)
 
@@ -163,14 +163,14 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        step = await runtime.advance(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
 
         self.assertEqual(step.decision.lifecycle_intent, LifecycleIntent.COMPLETE)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
@@ -179,8 +179,8 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
 
         tool.release.set()
         await runtime.dispatcher.wait(step.commands[0].command_id)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.RUNNABLE)
         self.assertEqual(terminal_payloads(events), [])
 
@@ -200,20 +200,20 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "check",
             delivery_id="interrupt-1",
         )
-        await runtime.advance(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertIn(first.commands[0].command_id, state.waiting_command_ids)
         self.assertEqual(terminal_payloads(events), [])
@@ -237,27 +237,27 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "enough",
             delivery_id="interrupt-1",
         )
-        second = await runtime.advance(self.STREAM_ID)
-        await runtime.finalize(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
+        second = await runtime.advance(self.SESSION_ID)
+        await runtime.finalize(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
 
         self.assertEqual(second.decision.lifecycle_intent, LifecycleIntent.COMPLETE)
         self.assertEqual(state.status, RuntimeStatus.COMPLETED)
         self.assertTrue(state.command(first.commands[0].command_id).abandoned)
         tool.release.set()
         await runtime.dispatcher.wait(first.commands[0].command_id)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.COMPLETED)
 
     async def test_interrupt_stales_completion_declaration(self):
@@ -279,34 +279,34 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
         ))
         runtime = runtime_for(tool, model)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="start-1",
         )
-        step_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
+        step_task = asyncio.create_task(runtime.advance(self.SESSION_ID))
         await asyncio.wait_for(entered.wait(), timeout=1)
         interrupt = await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "wait",
             delivery_id="interrupt-1",
         )
         release_model.set()
         first = await step_task
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
 
         self.assertEqual(first.decision.lifecycle_intent, LifecycleIntent.COMPLETE)
         self.assertEqual(state.status, RuntimeStatus.RUNNABLE)
         self.assertEqual(state.next_trigger_event_id, interrupt.event_id)
         self.assertEqual(terminal_payloads(events), [])
 
-        follow_up = await runtime.advance(self.STREAM_ID)
+        follow_up = await runtime.advance(self.SESSION_ID)
         self.assertEqual(follow_up.trigger_event_id, interrupt.event_id)
         self.assertIsInstance(
             model.frames[1].trigger_event.payload,
             UserInterruptReceived,
         )
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
 
     async def test_unfinalized_complete_can_be_recovered(self):
@@ -320,16 +320,16 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
         journal = MemoryJournal()
         runtime = runtime_for(tool, model, journal)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "wrap up",
             delivery_id="ask-1",
         )
-        events = await journal.snapshot(self.STREAM_ID)
-        frame = runtime.projector.project(self.STREAM_ID, events).next_decision
+        events = await journal.snapshot(self.SESSION_ID)
+        frame = runtime.projector.project(self.SESSION_ID, events).next_decision
         self.assertIsNotNone(frame)
         lease = await journal.acquire_step(
             StepClaimRequest(
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 trigger_event_id=frame.trigger_event.event_id,
                 decision_cursor=frame.decision_cursor,
                 basis_state_version=frame.basis_state_version,
@@ -340,7 +340,7 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             lease_seconds=30,
         )
         await runtime.step_runner.commit(frame, lease)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertEqual(
             state.steps[-1].decision.lifecycle_intent,
@@ -348,15 +348,15 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         recovered = AgentRuntime(journal, ScriptedDecisionMaker(()), tool.binding())
-        recovered_state = await recovered.state(self.STREAM_ID)
+        recovered_state = await recovered.state(self.SESSION_ID)
         self.assertEqual(recovered_state.status, RuntimeStatus.WAITING)
-        await recovered.finalize(self.STREAM_ID)
-        recovered_state = await recovered.state(self.STREAM_ID)
-        events = await journal.snapshot(self.STREAM_ID)
+        await recovered.finalize(self.SESSION_ID)
+        recovered_state = await recovered.state(self.SESSION_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         self.assertEqual(recovered_state.status, RuntimeStatus.COMPLETED)
         self.assertEqual(len(terminal_payloads(events)), 1)
 
-    async def test_later_user_message_does_not_revive_completed_stream(self):
+    async def test_later_user_message_does_not_revive_completed_session(self):
         tool = RecordingTool("unused")
         runtime = runtime_for(
             tool,
@@ -369,19 +369,19 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "wrap up",
             delivery_id="ask-1",
         )
-        await runtime.advance(self.STREAM_ID)
-        await runtime.finalize(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        await runtime.finalize(self.SESSION_ID)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "one more thing",
             delivery_id="ask-2",
         )
-        follow_up = await runtime.advance(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
+        follow_up = await runtime.advance(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertIsNone(follow_up)
         self.assertEqual(state.status, RuntimeStatus.COMPLETED)
 
@@ -401,21 +401,21 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "stop trying",
             delivery_id="interrupt-1",
         )
-        await runtime.advance(self.STREAM_ID)
-        await runtime.finalize(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        await runtime.finalize(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
         self.assertIn(first.commands[0].command_id, state.waiting_command_ids)
         self.assertEqual(terminal_payloads(events), [])
@@ -439,21 +439,21 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "give up",
             delivery_id="interrupt-1",
         )
-        await runtime.advance(self.STREAM_ID)
-        await runtime.finalize(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
+        await runtime.finalize(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.TERMINATED)
         self.assertIsInstance(terminal_payloads(events)[0], RuntimeTerminated)
         self.assertTrue(state.command(first.commands[0].command_id).abandoned)
@@ -478,22 +478,22 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             ScriptedDecisionMaker((decide_first,)),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="start-1",
         )
-        step_task = asyncio.create_task(runtime.advance(self.STREAM_ID))
+        step_task = asyncio.create_task(runtime.advance(self.SESSION_ID))
         await asyncio.wait_for(entered.wait(), timeout=1)
         stop = await runtime.receive_termination(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "host stop",
             delivery_id="stop-1",
             source="host",
         )
         release_model.set()
         step = await step_task
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
 
         self.assertIsNone(step)
         self.assertIsInstance(stop.payload, TerminationRequested)
@@ -502,7 +502,7 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tool.started.is_set())
 
         again = await runtime.receive_termination(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "host stop",
             delivery_id="stop-1",
             source="host",
@@ -521,25 +521,25 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             )),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(tool.started.wait(), timeout=1)
         await runtime.receive_termination(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "stop",
             delivery_id="stop-1",
         )
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.TERMINATED)
         self.assertTrue(state.command(first.commands[0].command_id).abandoned)
         tool.release.set()
         await runtime.dispatcher.wait(first.commands[0].command_id)
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.TERMINATED)
-        follow_up = await runtime.advance(self.STREAM_ID)
+        follow_up = await runtime.advance(self.SESSION_ID)
         self.assertIsNone(follow_up)
 
     async def test_sqlite_competing_finalizers_commit_once(self):
@@ -559,15 +559,15 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             journal,
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "wrap up",
             delivery_id="ask-1",
         )
-        events = await journal.snapshot(self.STREAM_ID)
-        frame = runtime.projector.project(self.STREAM_ID, events).next_decision
+        events = await journal.snapshot(self.SESSION_ID)
+        frame = runtime.projector.project(self.SESSION_ID, events).next_decision
         lease = await journal.acquire_step(
             StepClaimRequest(
-                stream_id=self.STREAM_ID,
+                session_id=self.SESSION_ID,
                 trigger_event_id=frame.trigger_event.event_id,
                 decision_cursor=frame.decision_cursor,
                 basis_state_version=frame.basis_state_version,
@@ -580,10 +580,10 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
         await runtime.step_runner.commit(frame, lease)
 
         first, second = await asyncio.gather(
-            journal.finalize(self.STREAM_ID, "terminal-1"),
-            journal.finalize(self.STREAM_ID, "terminal-2"),
+            journal.finalize(self.SESSION_ID, "terminal-1"),
+            journal.finalize(self.SESSION_ID, "terminal-2"),
         )
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         terminals = [
             event
             for event in events
@@ -596,5 +596,5 @@ class AgentRuntimeFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
 
         restarted = SqliteJournal(path)
         rebuilt = runtime_for(tool, ScriptedDecisionMaker(()), restarted)
-        state = await rebuilt.state(self.STREAM_ID)
+        state = await rebuilt.state(self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.COMPLETED)

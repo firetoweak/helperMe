@@ -453,7 +453,7 @@ class CommandState:
 
 @dataclass(frozen=True, slots=True)
 class DecisionState:
-    stream_id: str
+    session_id: str
     version: str
     user_messages: tuple[str, ...]
     interrupts: tuple[str | None, ...]
@@ -463,7 +463,7 @@ class DecisionState:
     consumed_trigger_event_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        _require_str(self.stream_id, "decision stream id")
+        _require_str(self.session_id, "decision session id")
         _require_str(self.version, "decision state version")
         _require_str_tuple(self.user_messages, "decision user messages")
         if type(self.interrupts) is not tuple or any(
@@ -501,7 +501,7 @@ class RuntimeStatus(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class CanonicalState:
-    stream_id: str
+    session_id: str
     journal_position: int
     decision_cursor: int
     status: RuntimeStatus
@@ -512,7 +512,7 @@ class CanonicalState:
     waiting_for: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        _require_str(self.stream_id, "canonical stream id")
+        _require_str(self.session_id, "canonical session id")
         _require_nonnegative_int(self.journal_position, "journal position")
         _require_nonnegative_int(self.decision_cursor, "decision cursor")
         if type(self.status) is not RuntimeStatus:

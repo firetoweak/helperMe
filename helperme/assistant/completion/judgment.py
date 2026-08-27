@@ -201,7 +201,7 @@ class IsolatedJudge:
 class HostJudgeRunner:
     executor: ToolRunner
     gateway: ArtifactGateway
-    stream_id: str
+    session_id: str
 
     async def execute(
         self,
@@ -210,7 +210,7 @@ class HostJudgeRunner:
     ) -> object:
         if name == "read_artifact":
             return _read_artifact(
-                self.gateway.for_stream(self.stream_id),
+                self.gateway.for_session(self.session_id),
                 arguments,
             )
         return await self.executor.execute(name, arguments)
@@ -232,7 +232,7 @@ def make_isolated_judge(
             llm,
             model,
             tool_schemas,
-            HostJudgeRunner(executor, gateway, events[0].stream_id),
+            HostJudgeRunner(executor, gateway, events[0].session_id),
         )
         return await inner(events, criteria, step_id)
 
@@ -297,10 +297,10 @@ class JudgmentPolicy:
     async def on_user_message(
         self,
         runtime: AgentRuntime,
-        stream_id: str,
+        session_id: str,
         text: str,
     ) -> None:
-        events = await runtime.snapshot(stream_id)
+        events = await runtime.snapshot(session_id)
         current = current_criteria(events)
         intent = classify_user_intent(current, text)
         proposed = criteria_after_intent(
@@ -311,21 +311,21 @@ class JudgmentPolicy:
         )
         if proposed is None:
             return
-        await runtime.record_fact(stream_id, criteria_fact(proposed))
+        await runtime.record_fact(session_id, criteria_fact(proposed))
 
-    async def sync(self, runtime: AgentRuntime, stream_id: str) -> None:
-        events = await runtime.snapshot(stream_id)
+    async def sync(self, runtime: AgentRuntime, session_id: str) -> None:
+        events = await runtime.snapshot(session_id)
         proposed = next_criteria_from_facts(events)
         if proposed is None:
             return
-        await runtime.record_fact(stream_id, criteria_fact(proposed))
+        await runtime.record_fact(session_id, criteria_fact(proposed))
 
     async def gate(
         self,
         runtime: AgentRuntime,
-        stream_id: str,
+        session_id: str,
     ) -> CompletionGate:
-        events = await runtime.snapshot(stream_id)
+        events = await runtime.snapshot(session_id)
         criteria = current_criteria(events)
         step_id = latest_complete_step_id(events)
         if (
@@ -334,7 +334,7 @@ class JudgmentPolicy:
             or step_id is None
         ):
             return CompletionGate.FINALIZE
-        state = await runtime.state(stream_id)
+        state = await runtime.state(session_id)
         if not state.steps or state.steps[-1].step_id != step_id:
             return CompletionGate.FINALIZE
         if state.steps[-1].decision.lifecycle_intent is not LifecycleIntent.COMPLETE:
@@ -348,7 +348,7 @@ class JudgmentPolicy:
                 verdict=verdict,
                 summary=summary,
             )
-            await runtime.record_fact(stream_id, judgment_fact(existing))
+            await runtime.record_fact(session_id, judgment_fact(existing))
             await self._notify(existing)
         if existing.verdict is JudgmentVerdict.PAUSE:
             return CompletionGate.PAUSE
@@ -400,7 +400,7 @@ def _judge_user_prompt(events: tuple, criteria: CriteriaCommitted, step_id: str)
         f"criteria_version：{criteria.version}\n"
         f"strict_completion：true\n"
         f"inferred：\n{inferred}\n"
-        f"本 Stream 已记录的工具结果：\n{format_facts_for_judge(events)}"
+        f"本 Session 已记录的工具结果：\n{format_facts_for_judge(events)}"
     )
 
 

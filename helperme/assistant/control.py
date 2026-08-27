@@ -45,7 +45,7 @@ class ControlTurnResult:
 
 @dataclass(frozen=True, slots=True)
 class _DecisionKey:
-    stream_id: str
+    session_id: str
     trigger_event_id: str
     decision_cursor: int
     basis_state_version: str
@@ -77,17 +77,17 @@ class AssistantControlPlane:
             raise ValueError("控制审批 action 重复")
         self._staged: dict[_DecisionKey, _StagedCall] = {}
         self._pending: dict[str, ControlApprovalRequest] = {}
-        self._active_streams: set[str] = set()
+        self._active_sessions: set[str] = set()
 
     def schemas(
         self,
-        stream_id: str,
+        session_id: str,
         allowed_names: frozenset[str] | None = None,
     ) -> list[dict[str, object]]:
         if (
-            stream_id in self._active_streams
-            or stream_id in self._pending
-            or any(key.stream_id == stream_id for key in self._staged)
+            session_id in self._active_sessions
+            or session_id in self._pending
+            or any(key.session_id == session_id for key in self._staged)
         ):
             return []
         names = self.names() if allowed_names is None else allowed_names
@@ -115,7 +115,7 @@ class AssistantControlPlane:
         except ToolArgumentsError as exc:
             raise ControlArgumentsError(exc.details) from exc
         key = _DecisionKey(
-            frame.state.stream_id,
+            frame.state.session_id,
             frame.trigger_event.event_id,
             frame.decision_cursor,
             frame.basis_state_version,
@@ -124,11 +124,11 @@ class AssistantControlPlane:
 
     async def after_committed_step(
         self,
-        stream_id: str,
+        session_id: str,
         step: Step,
     ) -> ControlTurnResult | None:
         key = _DecisionKey(
-            stream_id,
+            session_id,
             step.trigger_event_id,
             step.decision_cursor,
             step.basis_state_version,
@@ -136,15 +136,15 @@ class AssistantControlPlane:
         staged = self._staged.pop(key, None)
         if staged is None:
             return None
-        self._active_streams.add(stream_id)
+        self._active_sessions.add(session_id)
         try:
             result = await staged.spec.handler(staged.input_data)
         finally:
-            self._active_streams.remove(stream_id)
+            self._active_sessions.remove(session_id)
         if isinstance(result, ControlApprovalRequest):
             if result.action not in self._handlers:
                 raise KeyError(result.action)
-            self._pending[stream_id] = result
+            self._pending[session_id] = result
             return ControlTurnResult(self._approval_message(result))
         if type(result) is not dict:
             raise TypeError("控制工具返回值不符合契约")
@@ -154,8 +154,8 @@ class AssistantControlPlane:
             sort_keys=True,
         ))
 
-    def pending_view(self, stream_id: str) -> ControlApprovalView | None:
-        request = self._pending.get(stream_id)
+    def pending_view(self, session_id: str) -> ControlApprovalView | None:
+        request = self._pending.get(session_id)
         if request is None:
             return None
         return ControlApprovalView(
@@ -164,17 +164,17 @@ class AssistantControlPlane:
             request.risk,
         )
 
-    async def resolve(self, stream_id: str, *, approved: bool) -> str:
-        request = self._pending.get(stream_id)
+    async def resolve(self, session_id: str, *, approved: bool) -> str:
+        request = self._pending.get(session_id)
         if request is None:
-            raise ValueError("当前 Stream 没有待确认的控制操作")
+            raise ValueError("当前 Session 没有待确认的控制操作")
         if not approved:
-            del self._pending[stream_id]
+            del self._pending[session_id]
             return f"已取消控制操作：{request.action}"
         execution = await self._handlers[request.action].execute(
             request.payload,
         )
-        del self._pending[stream_id]
+        del self._pending[session_id]
         return execution.message
 
     @staticmethod

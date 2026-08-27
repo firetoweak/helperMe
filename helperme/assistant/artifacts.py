@@ -68,7 +68,7 @@ class ArtifactStore(Protocol):
 
 
 class ArtifactGateway(Protocol):
-    def for_stream(self, stream_id: str) -> ArtifactStore:
+    def for_session(self, session_id: str) -> ArtifactStore:
         ...
 
 
@@ -103,13 +103,13 @@ class MemoryArtifactStore:
 
 
 class MemoryArtifactGateway:
-    """测试与默认决策器用的进程内抽屉，按 Stream 隔离。"""
+    """测试与默认决策器用的进程内抽屉，按 Session 隔离。"""
 
     def __init__(self) -> None:
         self._stores: dict[str, MemoryArtifactStore] = {}
 
-    def for_stream(self, stream_id: str) -> MemoryArtifactStore:
-        return self._stores.setdefault(stream_id, MemoryArtifactStore())
+    def for_session(self, session_id: str) -> MemoryArtifactStore:
+        return self._stores.setdefault(session_id, MemoryArtifactStore())
 
 
 class FileArtifactStore:
@@ -154,8 +154,8 @@ class FileArtifactGateway:
         self._root = root.resolve()
         self._root.mkdir(parents=True, exist_ok=True)
 
-    def for_stream(self, stream_id: str) -> FileArtifactStore:
-        drawer = sha256(stream_id.encode("utf-8")).hexdigest()
+    def for_session(self, session_id: str) -> FileArtifactStore:
+        drawer = sha256(session_id.encode("utf-8")).hexdigest()
         return FileArtifactStore(self._root / drawer / "artifacts")
 
 
@@ -167,7 +167,7 @@ READ_ARTIFACT_SCHEMA: dict[str, object] = {
             "分页读取因长度限制而外置保存的完整工具结果。"
             "只能使用工具结果真实提供的 artifact_id；"
             "offset 是字符偏移，limit 最大为 3000。"
-            "Artifact 只在所属 Stream 抽屉内有效。"
+            "Artifact 只在所属 Session 抽屉内有效。"
         ),
         "parameters": {
             "type": "object",
@@ -195,7 +195,7 @@ def read_artifact_binding(gateway: ArtifactGateway) -> dict[str, ToolBinding]:
         context: AttemptContext,
         arguments: Mapping[str, object],
     ) -> object:
-        store = gateway.for_stream(context.stream_id)
+        store = gateway.for_session(context.session_id)
         artifact_id = arguments.get("artifact_id")
         if not is_valid_artifact_id(artifact_id):
             return {

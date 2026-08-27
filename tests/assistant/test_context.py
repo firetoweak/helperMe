@@ -75,7 +75,7 @@ def _deliver(text: str) -> ModelDecision:
 
 
 class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
-    STREAM = "ctx-stream"
+    SESSION = "ctx-session"
 
     def _projector(self, **overrides) -> ModelContextProjector:
         gateway = overrides.pop("gateway", MemoryArtifactGateway())
@@ -99,7 +99,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
     def test_projection_rejects_outcome_without_visible_command(self):
         outcome = Event(
             event_id="outcome-1",
-            stream_id=self.STREAM,
+            session_id=self.SESSION,
             sequence=1,
             payload=CommandOutcomeReceived(
                 "missing-command",
@@ -130,12 +130,12 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         )
         for index, text in enumerate(users, start=1):
             await runtime.receive_user_message(
-                self.STREAM,
+                self.SESSION,
                 text,
                 delivery_id=f"ask-{index}",
             )
-            await drive_until_idle(runtime, self.STREAM)
-        events = await runtime._journal.snapshot(self.STREAM)
+            await drive_until_idle(runtime, self.SESSION)
+        events = await runtime._journal.snapshot(self.SESSION)
         return events, delivered
 
     def _tool_messages(self, messages):
@@ -183,7 +183,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         prepared = self._projector(gateway=gateway).prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
         tool = self._tool_messages(prepared.messages)[0]
@@ -193,7 +193,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(artifact_id)
         self.assertIn(tool["tool_call_id"], prepared.age_dehydrated_command_ids)
         self.assertNotIn("old-result", tool["content"])
-        chunk = gateway.for_stream(self.STREAM).read(artifact_id, 0, 3000)
+        chunk = gateway.for_session(self.SESSION).read(artifact_id, 0, 3000)
         self.assertIn("old-result", chunk.content)
 
     async def test_parallel_dehydration_ignores_outcome_arrival_order(self):
@@ -230,7 +230,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         prepared = self._projector().prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
 
@@ -267,7 +267,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         prepared = self._projector().prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
         tool = self._tool_messages(prepared.messages)[0]
@@ -299,7 +299,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         prepared = self._projector().prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
         tool = self._tool_messages(prepared.messages)[0]
@@ -328,24 +328,24 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM,
+            self.SESSION,
             "first",
             delivery_id="ask-1",
         )
-        await runtime.advance(self.STREAM)
+        await runtime.advance(self.SESSION)
         await runtime.dispatcher.wait_all()
-        await runtime.finalize(self.STREAM)
+        await runtime.finalize(self.SESSION)
         await runtime.receive_user_message(
-            self.STREAM,
+            self.SESSION,
             "second",
             delivery_id="ask-2",
         )
-        await drive_until_idle(runtime, self.STREAM)
-        events = await runtime._journal.snapshot(self.STREAM)
+        await drive_until_idle(runtime, self.SESSION)
+        events = await runtime._journal.snapshot(self.SESSION)
         prepared = self._projector().prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
         tool = self._tool_messages(prepared.messages)[0]
@@ -377,7 +377,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         ).prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
         tool = self._tool_messages(prepared.messages)[0]
@@ -388,7 +388,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             tool["tool_call_id"],
             prepared.size_externalized_command_ids,
         )
-        chunk = gateway.for_stream(self.STREAM).read(artifact_id, 0, 3000)
+        chunk = gateway.for_session(self.SESSION).read(artifact_id, 0, 3000)
         self.assertIn(blob, chunk.content)
 
     async def test_oversized_failure_keeps_status_in_externalized_projection(self):
@@ -422,7 +422,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         ).prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
 
@@ -432,7 +432,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["error_type"], "RemoteError")
         self.assertNotIn(failure_body, tool["content"])
         artifact_id = payload["externalized"]["artifact_id"]
-        chunk = gateway.for_stream(self.STREAM).read(artifact_id, 0, 3000)
+        chunk = gateway.for_session(self.SESSION).read(artifact_id, 0, 3000)
         full_outcome = json.loads(chunk.content)
         self.assertEqual(full_outcome["status"], "failed")
         self.assertEqual(full_outcome["error_message"], failure_body)
@@ -463,7 +463,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         ).prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
 
@@ -480,7 +480,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             tool["tool_call_id"],
             prepared.age_dehydrated_command_ids,
         )
-        store = gateway.for_stream(self.STREAM)
+        store = gateway.for_session(self.SESSION)
         self.assertEqual(tuple(store.contents), (artifact_id,))
         full_outcome = json.loads(store.read(artifact_id, 0, 3000).content)
         self.assertEqual(full_outcome["status"], "succeeded")
@@ -507,7 +507,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         ).prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
         tool = self._tool_messages(prepared.messages)[0]
@@ -535,7 +535,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             projector.prepare(
                 events,
                 tuple(event.event_id for event in events),
-                self.STREAM,
+                self.SESSION,
                 "sys",
             )
 
@@ -562,7 +562,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             {},
         )
         self.assertEqual(result["externalized"], True)
-        chunk = gateway.for_stream("s1").read(result["artifact_id"], 0, 3000)
+        chunk = gateway.for_session("s1").read(result["artifact_id"], 0, 3000)
         full_outcome = json.loads(chunk.content)
         self.assertEqual(full_outcome["status"], "succeeded")
         self.assertEqual(
@@ -605,7 +605,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         ).prepare(
             events,
             tuple(event.event_id for event in events),
-            self.STREAM,
+            self.SESSION,
             "sys",
         )
 
@@ -615,9 +615,9 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(payload["value"])
         self.assertIn("artifact_id", payload["externalized"])
 
-    async def test_read_artifact_binding_pages_stream_store(self):
+    async def test_read_artifact_binding_pages_session_store(self):
         gateway = MemoryArtifactGateway()
-        artifact = gateway.for_stream("s1").save("abcdef")
+        artifact = gateway.for_session("s1").save("abcdef")
         binding = read_artifact_binding(gateway)["read_artifact"]
         first = await binding.handler(
             AttemptContext("s1", "cmd-1", "att-1", 1, None),
@@ -635,7 +635,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         gateway = MemoryArtifactGateway()
         payload, artifact_id = externalize_payload(
             {"ok": True},
-            gateway.for_stream("s1"),
+            gateway.for_session("s1"),
             max_chars=80,
             preview_chars=10,
         )

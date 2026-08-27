@@ -10,7 +10,7 @@ from helperme.assistant.completion.criteria import (
     CriterionStatus,
     JudgmentCommitted,
     JudgmentVerdict,
-    StreamFacts,
+    SessionFacts,
     classify_user_intent,
     criteria_fact,
     criteria_from_fact,
@@ -74,7 +74,7 @@ def _payloads(events):
 
 
 class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "judge-stream"
+    SESSION_ID = "judge-session"
 
     def test_matching_malformed_domain_facts_are_not_silently_ignored(self):
         malformed_criteria = DomainFactCommitted(
@@ -98,7 +98,7 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
                 user_objective="修这个 bug",
                 strict_completion=True,
                 inferred=inferred_from_facts(
-                    StreamFacts(True, False, None),
+                    SessionFacts(True, False, None),
                 ),
                 source=CriteriaSource.CLASSIFIER,
             ),
@@ -134,18 +134,18 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "hello",
             delivery_id="ask-1",
         )
         policy = JudgmentPolicy(judge)
-        await policy.on_user_message(runtime, self.STREAM_ID, "hello")
+        await policy.on_user_message(runtime, self.SESSION_ID, "hello")
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
             policy=policy,
         )
-        events = await runtime.snapshot(self.STREAM_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         self.assertEqual(result.state.status, RuntimeStatus.COMPLETED)
         self.assertEqual(delivered, ["done"])
         self.assertFalse(any(
@@ -174,12 +174,12 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "完成严格任务",
             delivery_id="strict-1",
         )
         await runtime.record_fact(
-            self.STREAM_ID,
+            self.SESSION_ID,
             criteria_fact(CriteriaCommitted(
                 version=1,
                 user_objective="完成严格任务",
@@ -195,10 +195,10 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
 
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
             policy=policy,
         )
-        events = await runtime.snapshot(self.STREAM_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         judgments = [
             judgment
             for payload in _payloads(events)
@@ -254,18 +254,18 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "改 a.py",
             delivery_id="ask-1",
         )
         policy = JudgmentPolicy(judge)
-        await policy.on_user_message(runtime, self.STREAM_ID, "改 a.py")
+        await policy.on_user_message(runtime, self.SESSION_ID, "改 a.py")
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
             policy=policy,
         )
-        events = await runtime.snapshot(self.STREAM_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         snapshot = current_criteria(events)
         judgments = [
             judgment
@@ -290,7 +290,7 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
             judgment_from_fact(model.frames[2].trigger_event.payload),
         )
 
-    async def test_judge_pause_keeps_stream_waiting_for_the_user(self):
+    async def test_judge_pause_keeps_session_waiting_for_the_user(self):
         async def write_file(_context, _arguments):
             return {"ok": True}
 
@@ -316,17 +316,17 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "改文件",
             delivery_id="ask-1",
         )
         policy = JudgmentPolicy(
             ScriptedJudge(((JudgmentVerdict.PAUSE, "证据不够"),)),
         )
-        await policy.on_user_message(runtime, self.STREAM_ID, "改文件")
+        await policy.on_user_message(runtime, self.SESSION_ID, "改文件")
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
             policy=policy,
         )
         self.assertEqual(result.state.status, RuntimeStatus.WAITING)
@@ -357,30 +357,30 @@ class CriteriaAndJudgeTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "修这个 bug",
             delivery_id="ask-1",
         )
         policy = JudgmentPolicy(
             ScriptedJudge(((JudgmentVerdict.DONE, "unused"),)),
         )
-        await policy.on_user_message(runtime, self.STREAM_ID, "修这个 bug")
+        await policy.on_user_message(runtime, self.SESSION_ID, "修这个 bug")
         await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
             policy=policy,
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "先改完，测试一会再说",
             delivery_id="ask-2",
         )
         await policy.on_user_message(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
             "先改完，测试一会再说",
         )
-        events = await runtime.snapshot(self.STREAM_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         snapshot = current_criteria(events)
         self.assertEqual(snapshot.user_objective, "修这个 bug")
         deferred = {

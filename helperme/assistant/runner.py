@@ -22,7 +22,7 @@ class DriveResult:
     control_message: str | None = None
 
 
-class StreamNotFoundError(LookupError):
+class SessionNotFoundError(LookupError):
     pass
 
 
@@ -34,52 +34,52 @@ MODEL_DECISION_ERRORS = (
 )
 
 
-async def resume_stream(
+async def resume_session(
     runtime: AgentRuntime,
     surface: ToolSurface,
-    stream_id: str,
+    session_id: str,
     management: ManagementSurface | None = None,
 ) -> CanonicalState:
-    """Resume an explicitly selected Stream; never select one for the caller."""
+    """Resume an explicitly selected Session; never select one for the caller."""
 
-    if not await runtime.stream_exists(stream_id):
-        raise StreamNotFoundError(stream_id)
-    events = await runtime.snapshot(stream_id)
-    await surface.rehydrate(stream_id, events)
+    if not await runtime.session_exists(session_id):
+        raise SessionNotFoundError(session_id)
+    events = await runtime.snapshot(session_id)
+    await surface.rehydrate(session_id, events)
     if management is not None:
-        await management.rehydrate(stream_id, events)
-    await runtime.recover_once(stream_id)
-    return await runtime.state(stream_id)
+        await management.rehydrate(session_id, events)
+    await runtime.recover_once(session_id)
+    return await runtime.state(session_id)
 
 
 async def drive_until_idle(
     runtime: AgentRuntime,
-    stream_id: str,
+    session_id: str,
     *,
     policy: JudgmentPolicy | None = None,
     control: AssistantControlPlane | None = None,
 ) -> DriveResult:
     while True:
-        step = await runtime.advance(stream_id)
+        step = await runtime.advance(session_id)
         control_result = None
         if step is not None and control is not None:
             control_result = await control.after_committed_step(
-                stream_id,
+                session_id,
                 step,
             )
         await runtime.dispatcher.wait_all()
         if control_result is not None:
-            await runtime.finalize(stream_id)
+            await runtime.finalize(session_id)
             return DriveResult(
-                await runtime.state(stream_id),
+                await runtime.state(session_id),
                 control_result.message,
             )
         if policy is not None:
-            await policy.sync(runtime, stream_id)
-            if await policy.gate(runtime, stream_id) is CompletionGate.PAUSE:
-                return DriveResult(await runtime.state(stream_id))
-        await runtime.finalize(stream_id)
-        state = await runtime.state(stream_id)
+            await policy.sync(runtime, session_id)
+            if await policy.gate(runtime, session_id) is CompletionGate.PAUSE:
+                return DriveResult(await runtime.state(session_id))
+        await runtime.finalize(session_id)
+        state = await runtime.state(session_id)
         if state.status in {
             RuntimeStatus.COMPLETED,
             RuntimeStatus.TERMINATED,

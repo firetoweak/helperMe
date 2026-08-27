@@ -2,11 +2,11 @@
 
 Assistant 把产品接到 Runtime：调用模型、装配工具、投影上下文并编排判定。模型窄接口位于 `helperme/llm/`；执行环境边界位于 `helperme/sandbox/`；工具契约与执行器位于 `helperme/tools/`；MCP 领域位于 `helperme/mcp/`。控制台输入属于 CLI Channel。
 
-Assistant 应用层负责接收外部选定的 Stream identity，但不替 Channel 或 Automation 选择当前 Stream。identity 交给 Runtime 后，创建、持久执行、重放和机械恢复属于 Core。
+Assistant 应用层负责接收外部选定的 Session identity，但不替 Channel 或 Automation 选择当前 Session。identity 交给 Runtime 后，创建、持久执行、重放和机械恢复属于 Core。
 
 授权策略由产品装配：`ToolSpec.requires_authorization → ToolBinding → Command`。静态环境工具和动态 Toolset 使用同一条链；Runtime 只消费冻结后的要求及 Journal 中的授权事实。
 
-Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`drive_until_idle()` 不捕获 Dispatcher 的未预期异常；CLI 也不能将其打印后继续。异常发生前已经持久化的 Attempt 仍可在下次显式恢复 Stream 时由 `recover_once()` 按 Recovery Contract 机械处理，当前调用链不得把内部 bug 伪装成正常恢复流程。
+Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`drive_until_idle()` 不捕获 Dispatcher 的未预期异常；CLI 也不能将其打印后继续。异常发生前已经持久化的 Attempt 仍可在下次显式恢复 Session 时由 `recover_once()` 按 Recovery Contract 机械处理，当前调用链不得把内部 bug 伪装成正常恢复流程。
 
 具体实现约束以 [项目架构方向：代码实现原则](../项目架构方向.md#代码实现原则内部相信契约) 为准。当前 Pydantic 工具输入统一使用 strict + forbid-extra；MCP / Skill Registry、Secret Store、Runtime Event / Checkpoint 使用精确版本 schema；宽泛异常捕获只允许清理、回滚与聚合后重新抛出。各外部 Adapter 对文件系统、模型和网络等已知失败做确定转换，其他异常直接穿透 Assistant 与 Channel。
 
@@ -28,11 +28,11 @@ Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`
 | `helperme/mcp/` | MCP Registry、Client、控制面与 Provider 侧 Toolset 类型 |
 | `helperme/assistant/decision.py` | 模型响应到 `ModelDecision`、冻结上下文与 Replay Manifest |
 | `helperme/assistant/context/` | Decision Context 投影、输入预算与 Assistant Prompt |
-| `helperme/assistant/artifacts.py` | 按 Stream 隔离的 Artifact Store 与 `read_artifact` Binding |
+| `helperme/assistant/artifacts.py` | 按 Session 隔离的 Artifact Store 与 `read_artifact` Binding |
 | `helperme/assistant/delivery.py` | 将模型正文转换为可靠投递 Command，并装配 `deliver` Binding |
 | `helperme/assistant/completion/` | 完成标准、独立 Judge 与专用 Prompt |
-| `helperme/assistant/runner.py` | `drive_until_idle`、显式 Stream 恢复 |
-| `helperme/assistant/streams.py` | 给定 identity 后的 Stream 应用操作与 Channel View |
+| `helperme/assistant/runner.py` | `drive_until_idle`、显式 Session 恢复 |
+| `helperme/assistant/sessions.py` | 给定 identity 后的 Session 应用操作与 Channel View |
 | `helperme/assistant/assembly.py` | Assistant 能力装配 |
 | `helperme/assistant/builtin_tools.py` | 当前 Sandbox/环境与内置工具装配 |
 | `helperme/assistant/mcp.py` | MCP Toolset 到 Assistant Toolset 端口的翻译 |

@@ -23,21 +23,21 @@ from helperme.runtime import (
 
 TASKS = (
     """
-这是同一 Stream 的第 1 个任务。读取 inputs/numbers.txt 和 inputs/brief.md；
+这是同一 Session 的第 1 个任务。读取 inputs/numbers.txt 和 inputs/brief.md；
 两个读取彼此独立，请在同一个 Step 并行调用，不根据返回顺序推断含义。
 根据真实内容创建 output/metrics.json 和 output/phase1.md。
 metrics.json 必须是合法 JSON，包含 count、sum、min、max、sorted、codename、owner、constraint；
 phase1.md 必须简洁记录计算结果和来源。完成后自行读取文件验证。
 """.strip(),
     """
-这是同一 Stream 的第 2 个任务，必须延续上一任务的实际结果。
+这是同一 Session 的第 2 个任务，必须延续上一任务的实际结果。
 读取 output/metrics.json 和 output/phase1.md，在 metrics.json 中新增 average=14 和
-marker=STREAM-CONTINUITY-OK，并创建 output/final_report.md。
-final_report.md 必须包含 Atlas、Lin、70、14、offline-first、STREAM-CONTINUITY-OK。
+marker=SESSION-CONTINUITY-OK，并创建 output/final_report.md。
+final_report.md 必须包含 Atlas、Lin、70、14、offline-first、SESSION-CONTINUITY-OK。
 修改后重新读取两个目标文件验证，不要只根据工具成功状态宣布完成。
 """.strip(),
     """
-这是同一 Stream 的第 3 个只读收尾任务。并行核对 output/metrics.json、
+这是同一 Session 的第 3 个只读收尾任务。并行核对 output/metrics.json、
 output/phase1.md、output/final_report.md，并使用 grep 或 glob 做一次交叉检查。
 不得修改任何文件。只有全部要求均由工具结果确认后，最终单独输出 STRESS-PASS；
 否则明确输出 STRESS-FAIL 和不符合项。
@@ -79,20 +79,20 @@ async def main() -> None:
         assembly.bindings,
     )
     assembly.surface.attach(runtime)
-    stream_id = f"final-stress-{run_id}"
+    session_id = f"final-stress-{run_id}"
 
     async with config.llm, assembly.mcp.client_manager:
-        created = await runtime.create_stream(stream_id)
+        created = await runtime.create_session(session_id)
         if not created:
-            raise AssertionError("stress stream was not created")
+            raise AssertionError("stress session was not created")
         for index, task in enumerate(TASKS, start=1):
             await runtime.receive_user_message(
-                stream_id,
+                session_id,
                 task,
                 delivery_id=f"stress-user-{index}",
             )
             result = await asyncio.wait_for(
-                drive_until_idle(runtime, stream_id),
+                drive_until_idle(runtime, session_id),
                 timeout=300,
             )
             if result.state.status is not RuntimeStatus.WAITING:
@@ -117,7 +117,7 @@ async def main() -> None:
         "owner": "Lin",
         "constraint": "offline-first",
         "average": 14,
-        "marker": "STREAM-CONTINUITY-OK",
+        "marker": "SESSION-CONTINUITY-OK",
     }
     for key, expected in expected_metrics.items():
         if metrics.get(key) != expected:
@@ -136,16 +136,16 @@ async def main() -> None:
         "70",
         "14",
         "offline-first",
-        "STREAM-CONTINUITY-OK",
+        "SESSION-CONTINUITY-OK",
     ):
         if marker not in report:
             raise AssertionError(f"final_report.md lacks {marker}")
     if not any(text.strip() == "STRESS-PASS" for text in delivered):
         raise AssertionError(f"final delivery did not report STRESS-PASS: {delivered[-3:]}")
 
-    events = await journal.snapshot(stream_id)
+    events = await journal.snapshot(session_id)
     if sum(isinstance(event.payload, UserMessageReceived) for event in events) != 3:
-        raise AssertionError("stream did not preserve all three user tasks")
+        raise AssertionError("session did not preserve all three user tasks")
     steps = [
         event.payload.step
         for event in events
@@ -180,13 +180,13 @@ async def main() -> None:
         )
 
     reopened = SqliteJournal(journal_path)
-    replayed = await reopened.snapshot(stream_id)
+    replayed = await reopened.snapshot(session_id)
     if replayed != events:
         raise AssertionError("durable Journal replay differs from live history")
 
     print(json.dumps({
         "ok": True,
-        "stream_id": stream_id,
+        "session_id": session_id,
         "journal": str(journal_path),
         "events": len(events),
         "steps": len(steps),

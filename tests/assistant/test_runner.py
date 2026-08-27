@@ -24,12 +24,12 @@ from helperme.assistant.decision import (
     interrupt_resolution_binding,
 )
 from helperme.assistant.runner import (
-    StreamNotFoundError,
+    SessionNotFoundError,
     drive_until_idle,
     pending_authorization_ids,
-    resume_stream,
+    resume_session,
 )
-from helperme.assistant.streams import AssistantStreams
+from helperme.assistant.sessions import AssistantSessions
 from helperme.channels.cli.console import drive_with_console_interrupts
 from helperme.runtime import (
     AgentRuntime,
@@ -92,12 +92,12 @@ class PausingDecisionSnapshotJournal(MemoryJournal):
         self.decision_snapshot_started = asyncio.Event()
         self.release_decision_snapshot = asyncio.Event()
 
-    async def snapshot(self, stream_id: str):
+    async def snapshot(self, session_id: str):
         self.snapshot_count += 1
         if self.snapshot_count == 2:
             self.decision_snapshot_started.set()
             await self.release_decision_snapshot.wait()
-        return await super().snapshot(stream_id)
+        return await super().snapshot(session_id)
 
 
 class RecordingLlm:
@@ -130,7 +130,7 @@ class QueuedLlm:
 
 
 class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "harness-stream"
+    SESSION_ID = "harness-session"
 
     def test_decision_from_llm_maps_text_and_tool_calls(self):
         decision = decision_from_llm(
@@ -199,26 +199,26 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
                 tool_schemas=schemas,
                 system_prompt="frozen prompt",
                 projector=projector,
-                context_usage_sink=lambda stream_id, used, limit: (
-                    context_usage.append((stream_id, used, limit))
+                context_usage_sink=lambda session_id, used, limit: (
+                    context_usage.append((session_id, used, limit))
                 ),
             ),
             deliver_binding(lambda _text: None),
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="ask-1",
         )
 
-        advancing = asyncio.create_task(runtime.advance(self.STREAM_ID))
+        advancing = asyncio.create_task(runtime.advance(self.SESSION_ID))
         await asyncio.wait_for(
             journal.decision_snapshot_started.wait(),
             timeout=1,
         )
         await runtime.record_fact(
-            self.STREAM_ID,
+            self.SESSION_ID,
             criteria_fact(CriteriaCommitted(
                 version=1,
                 user_objective="late objective",
@@ -231,7 +231,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         journal.release_decision_snapshot.set()
         await advancing
 
-        events = await journal.snapshot(self.STREAM_ID)
+        events = await journal.snapshot(self.SESSION_ID)
         committed = next(
             event
             for event in events
@@ -240,14 +240,14 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(committed.artifact_refs), 1)
         manifest_ref = committed.artifact_refs[0]
         manifest = json.loads(
-            gateway.for_stream(self.STREAM_ID).contents[manifest_ref]
+            gateway.for_session(self.SESSION_ID).contents[manifest_ref]
         )
 
         self.assertEqual(llm.messages[0]["content"], "frozen prompt")
         self.assertGreater(context_usage[0][1], 0)
         self.assertEqual(
             context_usage[-1],
-            (self.STREAM_ID, 1, 200_000),
+            (self.SESSION_ID, 1, 200_000),
         )
         self.assertNotIn("late objective", llm.messages[0]["content"])
         self.assertEqual(
@@ -281,15 +281,15 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "hi",
             delivery_id="ask-1",
         )
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         messages = project_chat_messages(
             events,
             tuple(event.event_id for event in events),
@@ -338,18 +338,18 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "keep going",
             delivery_id="continuous-1",
         )
 
-        result = await drive_until_idle(runtime, self.STREAM_ID)
+        result = await drive_until_idle(runtime, self.SESSION_ID)
 
         self.assertEqual(len(model.frames), tool_steps + 1)
         self.assertEqual(delivered, ["done"])
         self.assertEqual(result.state.waiting_for, ("user_message",))
 
-    async def test_resume_stream_uses_explicit_existing_identity(self):
+    async def test_resume_session_uses_explicit_existing_identity(self):
         surface = ToolSurface()
         runtime = AgentRuntime(
             MemoryJournal(),
@@ -361,18 +361,18 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         )
         surface.attach(runtime)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "hello",
             delivery_id="resume-1",
         )
-        await runtime.advance(self.STREAM_ID)
+        await runtime.advance(self.SESSION_ID)
 
-        state = await resume_stream(runtime, surface, self.STREAM_ID)
+        state = await resume_session(runtime, surface, self.SESSION_ID)
 
-        self.assertEqual(state.stream_id, self.STREAM_ID)
+        self.assertEqual(state.session_id, self.SESSION_ID)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
 
-    async def test_resume_stream_rejects_unknown_identity(self):
+    async def test_resume_session_rejects_unknown_identity(self):
         surface = ToolSurface()
         runtime = AgentRuntime(
             MemoryJournal(),
@@ -382,10 +382,10 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         )
         surface.attach(runtime)
 
-        with self.assertRaises(StreamNotFoundError):
-            await resume_stream(runtime, surface, "missing-stream")
+        with self.assertRaises(SessionNotFoundError):
+            await resume_session(runtime, surface, "missing-session")
 
-    async def test_resume_stream_accepts_created_empty_identity(self):
+    async def test_resume_session_accepts_created_empty_identity(self):
         surface = ToolSurface()
         runtime = AgentRuntime(
             MemoryJournal(),
@@ -394,15 +394,15 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         surface.attach(runtime)
-        self.assertTrue(await runtime.create_stream("empty-stream"))
+        self.assertTrue(await runtime.create_session("empty-session"))
 
-        state = await resume_stream(runtime, surface, "empty-stream")
+        state = await resume_session(runtime, surface, "empty-session")
 
-        self.assertEqual(state.stream_id, "empty-stream")
+        self.assertEqual(state.session_id, "empty-session")
         self.assertEqual(state.status, RuntimeStatus.WAITING)
-        self.assertEqual(await runtime.snapshot("empty-stream"), ())
+        self.assertEqual(await runtime.snapshot("empty-session"), ())
 
-    async def test_stream_service_hides_runtime_state_from_channel(self):
+    async def test_session_service_hides_runtime_state_from_channel(self):
         surface = ToolSurface()
         runtime = AgentRuntime(
             MemoryJournal(),
@@ -413,21 +413,21 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         surface.attach(runtime)
-        streams = AssistantStreams(runtime, surface)
+        sessions = AssistantSessions(runtime, surface)
 
-        created = await streams.create(self.STREAM_ID)
-        await streams.receive_user_message(
-            self.STREAM_ID,
+        created = await sessions.create(self.SESSION_ID)
+        await sessions.receive_user_message(
+            self.SESSION_ID,
             "work",
             delivery_id="message-1",
         )
-        finished = await streams.drive(self.STREAM_ID)
+        finished = await sessions.drive(self.SESSION_ID)
 
         self.assertEqual(created.status, RuntimeStatus.WAITING.value)
         self.assertEqual(finished.status, RuntimeStatus.WAITING.value)
         self.assertFalse(finished.terminal)
-        with self.assertRaisesRegex(ValueError, "Stream 已存在"):
-            await streams.create(self.STREAM_ID)
+        with self.assertRaisesRegex(ValueError, "Session 已存在"):
+            await sessions.create(self.SESSION_ID)
 
     async def test_drive_exposes_internal_error_and_leaves_attempt_unknown(self):
         async def broken(_context, _arguments):
@@ -445,16 +445,16 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "run",
             delivery_id="broken-1",
         )
 
         with self.assertRaisesRegex(RuntimeError, "internal bug"):
-            await drive_until_idle(runtime, self.STREAM_ID)
+            await drive_until_idle(runtime, self.SESSION_ID)
 
-        state = await runtime.state(self.STREAM_ID)
-        events = await runtime.snapshot(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         self.assertIs(state.commands[0].phase, CommandPhase.UNKNOWN)
         self.assertFalse(any(
             isinstance(event.payload, CommandRecoveryRequired)
@@ -478,13 +478,13 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "wrap up",
             delivery_id="ask-1",
         )
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
         self.assertEqual(delivered, ["finished"])
         self.assertEqual(result.state.status, RuntimeStatus.COMPLETED)
@@ -519,15 +519,15 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "go",
             delivery_id="ask-1",
         )
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         messages = project_chat_messages(
             events,
             tuple(event.event_id for event in events),
@@ -581,15 +581,15 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "read them",
             delivery_id="ask-1",
         )
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
-        events = await runtime._journal.snapshot(self.STREAM_ID)
+        events = await runtime._journal.snapshot(self.SESSION_ID)
         second_frame = model.frames[1]
         messages = project_chat_messages(
             events,
@@ -632,18 +632,18 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "work",
             delivery_id="ask-1",
         )
-        streams = AssistantStreams(
+        sessions = AssistantSessions(
             runtime,
             ToolSurface(),
         )
         input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         drive = asyncio.create_task(drive_with_console_interrupts(
-            streams,
-            self.STREAM_ID,
+            sessions,
+            self.SESSION_ID,
             input_queue,
         ))
         await asyncio.wait_for(started.wait(), timeout=1)
@@ -702,11 +702,11 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="interrupt-abandon-start",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(started.wait(), timeout=1)
         old_command_id = first.commands[0].command_id
         llm.responses.append(LLMResponse(
@@ -723,15 +723,15 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             ),),
         ))
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "换个任务",
             delivery_id="interrupt-abandon",
         )
 
-        interrupted = await runtime.advance(self.STREAM_ID)
+        interrupted = await runtime.advance(self.SESSION_ID)
         release.set()
         await runtime.dispatcher.wait_all()
-        state = await runtime.state(self.STREAM_ID)
+        state = await runtime.state(self.SESSION_ID)
 
         self.assertEqual(
             interrupted.decision.abandon_command_ids,
@@ -805,11 +805,11 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="interrupt-cancel-start",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(started.wait(), timeout=1)
         old_command_id = first.commands[0].command_id
         llm.responses.append(LLMResponse(
@@ -829,12 +829,12 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             ),
         ))
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "换个任务",
             delivery_id="interrupt-cancel",
         )
 
-        interrupted = await runtime.advance(self.STREAM_ID)
+        interrupted = await runtime.advance(self.SESSION_ID)
         release.set()
         await runtime.dispatcher.wait_all()
 
@@ -891,11 +891,11 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "start",
             delivery_id="interrupt-incomplete-start",
         )
-        first = await runtime.advance(self.STREAM_ID)
+        first = await runtime.advance(self.SESSION_ID)
         await asyncio.wait_for(all_started.wait(), timeout=1)
         command_ids = tuple(
             command.command_id for command in first.commands
@@ -914,7 +914,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             ),),
         ))
         await runtime.receive_interrupt(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "停止",
             delivery_id="interrupt-incomplete",
         )
@@ -923,7 +923,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             InvalidLLMResponse,
             "every unfinished command once",
         ):
-            await runtime.advance(self.STREAM_ID)
+            await runtime.advance(self.SESSION_ID)
 
         llm.responses.append(LLMResponse(calls=(ToolCall(
             "call-4",
@@ -935,7 +935,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
                 ],
             }),
         ),)))
-        kept = await runtime.advance(self.STREAM_ID)
+        kept = await runtime.advance(self.SESSION_ID)
 
         self.assertEqual(kept.decision.abandon_command_ids, ())
         self.assertEqual(len(kept.decision.command_requests), 1)
@@ -982,13 +982,13 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "do the secret thing",
             delivery_id="ask-auth",
         )
         waiting = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
         command_ids = pending_authorization_ids(waiting.state)
 
@@ -996,11 +996,11 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(command_ids), 1)
         self.assertEqual(executions, [])
 
-        granted = await runtime.grant_command(self.STREAM_ID, command_ids[0])
+        granted = await runtime.grant_command(self.SESSION_ID, command_ids[0])
         self.assertIsNotNone(granted)
         finished = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
 
         self.assertEqual(executions, [{}])
@@ -1043,23 +1043,23 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "do the secret thing",
             delivery_id="ask-auth",
         )
         waiting = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
         command_ids = pending_authorization_ids(waiting.state)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "继续",
             delivery_id="say-continue",
         )
         after = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
 
         self.assertEqual(len(model.frames), 2)

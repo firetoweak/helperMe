@@ -101,7 +101,7 @@ def _schema_names(schemas: list[dict[str, object]]) -> set[str]:
 
 
 class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
-    STREAM_ID = "toolset-stream"
+    SESSION_ID = "toolset-session"
 
     async def _committed_load_events(self):
         delivered: list[str] = []
@@ -133,19 +133,19 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         )
         surface.attach(runtime)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "load echo",
             delivery_id="load-1",
         )
-        await drive_until_idle(runtime, self.STREAM_ID)
-        return await runtime.snapshot(self.STREAM_ID)
+        await drive_until_idle(runtime, self.SESSION_ID)
+        return await runtime.snapshot(self.SESSION_ID)
 
     def test_catalog_does_not_expose_loaded_tools_before_load(self):
         surface = ToolSurface(providers=(FakeEchoProvider(),))
-        names = _schema_names(surface.schemas(self.STREAM_ID))
+        names = _schema_names(surface.schemas(self.SESSION_ID))
         self.assertEqual(names, {LOAD_TOOLSET})
-        self.assertIn("demo", surface.catalog_instruction(self.STREAM_ID))
-        self.assertNotIn("demo_ping", surface.catalog_instruction(self.STREAM_ID))
+        self.assertIn("demo", surface.catalog_instruction(self.SESSION_ID))
+        self.assertNotIn("demo_ping", surface.catalog_instruction(self.SESSION_ID))
 
     async def test_unknown_toolset_is_a_model_correctable_error(self):
         surface = ToolSurface(providers=(FakeEchoProvider(),))
@@ -156,11 +156,11 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         surface.attach(runtime)
-        result = await surface.load(self.STREAM_ID, "missing")
+        result = await surface.load(self.SESSION_ID, "missing")
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "TOOLSET_NOT_FOUND")
         self.assertEqual(
-            _schema_names(surface.schemas(self.STREAM_ID)),
+            _schema_names(surface.schemas(self.SESSION_ID)),
             {LOAD_TOOLSET},
         )
 
@@ -173,7 +173,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         seen: list[set[str]] = []
 
         def first(_frame):
-            seen.append(_schema_names(surface.schemas(self.STREAM_ID)))
+            seen.append(_schema_names(surface.schemas(self.SESSION_ID)))
             return ModelDecision(
                 content="loading",
                 command_requests=(
@@ -182,7 +182,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             )
 
         def second(_frame):
-            seen.append(_schema_names(surface.schemas(self.STREAM_ID)))
+            seen.append(_schema_names(surface.schemas(self.SESSION_ID)))
             return ModelDecision(
                 content="pinging",
                 command_requests=(
@@ -209,15 +209,15 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         )
         surface.attach(runtime)
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "use echo",
             delivery_id="ask-1",
         )
         result = await drive_until_idle(
             runtime,
-            self.STREAM_ID,
+            self.SESSION_ID,
         )
-        events = await runtime.snapshot(self.STREAM_ID)
+        events = await runtime.snapshot(self.SESSION_ID)
         names: dict[str, str] = {}
         for event in events:
             payload = event.payload
@@ -239,7 +239,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[1], {LOAD_TOOLSET, "demo_ping"})
         self.assertEqual(echoes[0]["data"]["echo"], "hi")
 
-    async def test_reset_stream_hides_loaded_tools_again(self):
+    async def test_reset_session_hides_loaded_tools_again(self):
         surface = ToolSurface(providers=(FakeEchoProvider(),))
         runtime = AgentRuntime(
             MemoryJournal(),
@@ -248,12 +248,12 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         surface.attach(runtime)
-        loaded = await surface.load(self.STREAM_ID, "demo")
+        loaded = await surface.load(self.SESSION_ID, "demo")
         self.assertTrue(loaded["ok"])
-        self.assertIn("demo_ping", _schema_names(surface.schemas(self.STREAM_ID)))
-        surface.reset(self.STREAM_ID)
+        self.assertIn("demo_ping", _schema_names(surface.schemas(self.SESSION_ID)))
+        surface.reset(self.SESSION_ID)
         self.assertEqual(
-            _schema_names(surface.schemas(self.STREAM_ID)),
+            _schema_names(surface.schemas(self.SESSION_ID)),
             {LOAD_TOOLSET},
         )
 
@@ -268,14 +268,14 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         )
         surface.attach(runtime)
 
-        activations = await surface.rehydrate(self.STREAM_ID, events)
+        activations = await surface.rehydrate(self.SESSION_ID, events)
 
         self.assertEqual(
             [(item.toolset_id, item.revision) for item in activations],
             [("demo", 1)],
         )
         self.assertEqual(
-            _schema_names(surface.schemas(self.STREAM_ID)),
+            _schema_names(surface.schemas(self.SESSION_ID)),
             {LOAD_TOOLSET, "demo_ping"},
         )
 
@@ -291,11 +291,11 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         surface.attach(runtime)
 
         with self.assertRaises(ToolsetLoadError) as raised:
-            await surface.rehydrate(self.STREAM_ID, events)
+            await surface.rehydrate(self.SESSION_ID, events)
 
         self.assertEqual(raised.exception.code, "TOOLSET_REVISION_UNAVAILABLE")
         self.assertEqual(
-            _schema_names(surface.schemas(self.STREAM_ID)),
+            _schema_names(surface.schemas(self.SESSION_ID)),
             {LOAD_TOOLSET},
         )
 
@@ -316,16 +316,16 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         surface.attach(runtime)
-        loaded = await surface.load(self.STREAM_ID, "demo")
+        loaded = await surface.load(self.SESSION_ID, "demo")
         self.assertTrue(loaded["ok"])
         await runtime.receive_user_message(
-            self.STREAM_ID,
+            self.SESSION_ID,
             "ping",
             delivery_id="auth-1",
         )
 
-        step = await runtime.advance(self.STREAM_ID)
-        state = await runtime.state(self.STREAM_ID)
+        step = await runtime.advance(self.SESSION_ID)
+        state = await runtime.state(self.SESSION_ID)
 
         self.assertTrue(step.commands[0].requires_authorization)
         self.assertEqual(

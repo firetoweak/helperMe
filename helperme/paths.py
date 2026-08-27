@@ -38,8 +38,8 @@ class HelperMeHome:
         return self.root / "state"
 
     @property
-    def runtime_streams_root(self) -> Path:
-        return self.root / "runtime_streams"
+    def runtime_sessions_root(self) -> Path:
+        return self.root / "runtime_sessions"
 
     def initialize(self) -> None:
         self.sessions_root.mkdir(parents=True, exist_ok=True)
@@ -49,6 +49,6 @@ class HelperMeHome:
 
 
 def runtime_data_root() -> Path:
-    root = HelperMeHome.default().runtime_streams_root
+    root = HelperMeHome.default().runtime_sessions_root
     root.mkdir(parents=True, exist_ok=True)
     return root
