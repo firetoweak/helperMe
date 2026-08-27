@@ -387,12 +387,21 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(model.frames), 3)
         self.assertEqual(model.frames[2].trigger_event.payload.content, "stop")
-        kinds = [
-            type(event.payload).__name__
-            for event in await runtime.snapshot("session")
-        ]
+        events = await runtime.snapshot("session")
+        kinds = [type(event.payload).__name__ for event in events]
         self.assertEqual(kinds.count("StepCommitted"), 3)
-        self.assertEqual(kinds.count("CommandOutcomeReceived"), 2)
+        outcome_events = [
+            event
+            for event in events
+            if isinstance(event.payload, CommandOutcomeReceived)
+        ]
+        self.assertEqual(len(outcome_events), 2)
+        second_outcome = outcome_events[1]
+        visible = model.frames[2].state.visible_event_ids
+        self.assertIn(second_outcome.event_id, visible)
+        self.assertIsNotNone(
+            model.frames[2].state.command(second_outcome.payload.command_id).outcome
+        )
         await scheduler.close()
 
     async def test_later_user_message_does_not_wait_for_unauthorized_command(self):
