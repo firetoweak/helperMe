@@ -21,6 +21,7 @@ from helperme.runtime import (
     ModelDecision,
     RuntimeStatus,
     SqliteJournal,
+    StepCommitted,
     ToolBinding,
     UserMessageReceived,
     diagnose_artifacts,
@@ -257,6 +258,42 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
             [inbound.event_id],
         )
 
+    async def test_dispatch_attempt_does_not_change_advance_status(self):
+        tool = RecordingTool("slow")
+        runtime = runtime_for(
+            tool,
+            ScriptedDecisionMaker(
+                (
+                    lambda _frame: ModelDecision(
+                        content="run",
+                        command_requests=(InvokeTool("slow"),),
+                    ),
+                )
+            ),
+        )
+        await runtime.receive_user_message(
+            self.SESSION_ID,
+            "run it",
+            delivery_id="ask-1",
+        )
+
+        advance = await runtime.advance(self.SESSION_ID)
+        await asyncio.wait_for(tool.started.wait(), timeout=1)
+        state_after_dispatch = await runtime.state(self.SESSION_ID)
+
+        self.assertEqual(advance.status, state_after_dispatch.status)
+        self.assertEqual(
+            len(
+                state_after_dispatch.command(
+                    advance.step.commands[0].command_id
+                ).attempts
+            ),
+            1,
+        )
+        tool.release.set()
+        while runtime.dispatcher.active_count:
+            await asyncio.sleep(0)
+
     async def test_preview_tokens_cannot_enter_the_journal(self):
         with self.assertRaises(TypeError):
             EventDraft(
@@ -369,3 +406,53 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
+
+    async def test_authorization_reject_contract_matches_across_journals(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journals = (
+            ("memory", MemoryJournal()),
+            ("sqlite", SqliteJournal(Path(temporary.name) / "reject.db")),
+        )
+
+        for name, journal in journals:
+            with self.subTest(journal=name):
+                tool = RecordingTool("sensitive", requires_authorization=True)
+                runtime = runtime_for(
+                    tool,
+                    ScriptedDecisionMaker(
+                        (
+                            lambda _frame: ModelDecision(
+                                content="need authorization",
+                                command_requests=(InvokeTool("sensitive"),),
+                            ),
+                        )
+                    ),
+                    journal=journal,
+                )
+                await runtime.receive_user_message(
+                    self.SESSION_ID,
+                    "do it",
+                    delivery_id=f"ask-{name}",
+                )
+                step = (await runtime.advance(self.SESSION_ID)).step
+                command_id = step.commands[0].command_id
+                issued_event_id = next(
+                    event.event_id
+                    for event in await runtime.snapshot(self.SESSION_ID)
+                    if isinstance(event.payload, StepCommitted)
+                )
+
+                rejected = await runtime.reject_command(
+                    self.SESSION_ID,
+                    command_id,
+                )
+
+                self.assertEqual(rejected.causation_id, issued_event_id)
+                self.assertIsNone(
+                    await runtime.reject_command(self.SESSION_ID, command_id)
+                )
+                with self.assertRaises(KeyError):
+                    await runtime.grant_command(self.SESSION_ID, "missing")
+                with self.assertRaises(KeyError):
+                    await runtime.reject_command(self.SESSION_ID, "missing")
