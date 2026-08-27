@@ -461,7 +461,7 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             for event in events
         ))
 
-    async def test_drive_finalizes_complete_after_deliver(self):
+    async def test_continuous_drive_does_not_finalize_complete_intent(self):
         delivered: list[str] = []
         runtime = AgentRuntime(
             MemoryJournal(),
@@ -487,7 +487,8 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
             self.SESSION_ID,
         )
         self.assertEqual(delivered, ["finished"])
-        self.assertEqual(result.state.status, RuntimeStatus.COMPLETED)
+        self.assertEqual(result.state.status, RuntimeStatus.WAITING)
+        self.assertEqual(result.state.waiting_for, ("user_message",))
 
     async def test_tool_outcome_is_visible_but_deliver_is_not(self):
         delivered: list[str] = []
@@ -1005,7 +1006,8 @@ class AssistantRunnerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(executions, [{}])
         self.assertEqual(delivered, ["authorized"])
-        self.assertEqual(finished.state.status, RuntimeStatus.COMPLETED)
+        self.assertEqual(finished.state.status, RuntimeStatus.WAITING)
+        self.assertEqual(finished.state.waiting_for, ("user_message",))
 
     async def test_user_message_during_authorization_opens_a_step(self):
         executions: list[object] = []

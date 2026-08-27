@@ -59,6 +59,8 @@ async def drive_until_idle(
     policy: JudgmentPolicy | None = None,
     control: AssistantControlPlane | None = None,
 ) -> DriveResult:
+    """Drive until waiting; only an explicit completion policy may finalize."""
+
     while True:
         step = await runtime.advance(session_id)
         control_result = None
@@ -69,7 +71,8 @@ async def drive_until_idle(
             )
         await runtime.dispatcher.wait_all()
         if control_result is not None:
-            await runtime.finalize(session_id)
+            if policy is not None:
+                await runtime.finalize(session_id)
             return DriveResult(
                 await runtime.state(session_id),
                 control_result.message,
@@ -78,7 +81,7 @@ async def drive_until_idle(
             await policy.sync(runtime, session_id)
             if await policy.gate(runtime, session_id) is CompletionGate.PAUSE:
                 return DriveResult(await runtime.state(session_id))
-        await runtime.finalize(session_id)
+            await runtime.finalize(session_id)
         state = await runtime.state(session_id)
         if state.status in {
             RuntimeStatus.COMPLETED,

@@ -6,10 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from helperme.assistant.assembly import build_assistant_assembly
-from helperme.assistant.completion.judgment import (
-    JudgmentPolicy,
-    make_isolated_judge,
-)
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import (
@@ -51,16 +47,6 @@ async def bootstrap_assistant(
     journal_path = runtime_data_root() / "journal.sqlite"
     journal = SqliteJournal(journal_path)
     assembly = await build_assistant_assembly(effective_config, sink)
-    policy = JudgmentPolicy(
-        make_isolated_judge(
-            effective_config.llm,
-            effective_config.model_name,
-            assembly.model_tools,
-            assembly.builtin_tools,
-            assembly.projector.gateway,
-        ),
-        notify=sink,
-    )
     runtime = AgentRuntime(
         journal,
         JournalBackedLlmDecisionMaker(
@@ -80,7 +66,6 @@ async def bootstrap_assistant(
     sessions = AssistantSessions(
         runtime,
         assembly.surface,
-        policy=policy,
         control=assembly.control,
         management=assembly.management,
     )

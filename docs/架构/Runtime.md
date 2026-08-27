@@ -8,6 +8,8 @@
 
 Runtime Core 不负责选择 Session。Channel 或 Automation 生成或选择 Session identity；identity 给定后，`AssistantSessions` 调用幂等的 `create_session(identity)`，Core 持久化这条空执行生命线，并负责后续 Event 持久执行、State 重建、历史重放以及按 Command Contract 进行机械恢复。Session 的存在不以“已经有 Event”为条件；创建本身不是 Event，也不触发模型或 Step。Core 不理解它对应 Conversation、任务、后台工作还是 SubAgent。
 
+Host 决定一条 Session 是持续生命线还是有界执行。当前 Channel 选择的 Session 是持续对话：一轮回答结束后进入 `WAITING(user_message)`，不请求 Runtime 终态。未来 SubAgent 或一次性后台执行可以选择有界 Session，并在自己的产品边界显式请求 finalization。Core 不增加 `session_type`，也不负责物理回收 Session 数据。
+
 ## Event 与 Journal
 
 Event 记录已经确认发生的事，不可变，只能追加。它不解释事实，也不决定下一步。
@@ -24,14 +26,14 @@ Canonical State 由 Event 归约得到，不是先改内存再补日志。Runtim
 |---|---|
 | RUNNABLE | 有待消费的决策触发，可以 `advance()` |
 | WAITING | 等人、等授权、等 Command 结果 |
-| COMPLETED | 完成，且过了 Completion Barrier |
-| TERMINATED | 终止，且过了 Termination Barrier |
+| COMPLETED | 有界执行完成，且过了 Completion Barrier |
+| TERMINATED | 有界执行终止，且过了 Termination Barrier |
 
 `waiting_for` 例如 `user_message`、`authorization:{command_id}`、`command:{command_id}`。
 
 ## Step
 
-决策闭环。一次 Step 消费一个触发（UserMessage、工具结果、请求决策的 Domain Fact、被拒绝的 Command 等），产出 `ModelDecision`：文本、Command 列表、可选 `LifecycleIntent`（none / complete / terminate）。
+决策闭环。一次 Step 消费一个触发（UserMessage、工具结果、请求决策的 Domain Fact、被拒绝的 Command 等），产出 `ModelDecision`：文本、Command 列表、可选 `LifecycleIntent`（none / complete / terminate）。Lifecycle Intent 只是一份可供有界执行 Host 处理的声明；持续 Channel 不据此关闭 Session。
 
 Decision Context 在 Step 开始时冻结模型所见的 Event、Criteria、Prompt、Tool/Skill schemas。模型调用期间的新事实只进入后续 Step。Commit Guard 在提交时重新验证 Runtime 当前真实世界中的 claim、trigger、basis version 与终态等不变量；冻结视图不能替代提交校验。
 
@@ -71,9 +73,9 @@ Runtime 不推断后来的普通 `UserMessageReceived` 会使既有决策输入�
 
 ## 终态
 
-`LifecycleIntent.complete` 只是模型提交的完成声明，不是 Runtime 对任务的判断。`advance()` 不再自动终态化；Host 先运行 Judge / Policy，再显式调用 `finalize()`。Core 的 Finalization Barrier 只原子验证没有未消费的决策输入和必要依赖，不能判断目标是否满足。
+`LifecycleIntent.complete` 只是模型提交的完成声明，不是 Runtime 对任务的判断。只有明确有界的执行 Host 才在 Judge / Policy 通过后显式调用 `finalize()`。持续 Channel 不装配这条终态化路径，即使历史或未来模型产生该声明，也只在完成输出后回到 `WAITING(user_message)`。Core 的 Finalization Barrier 只原子验证没有未消费的决策输入和必要依赖，不能判断目标是否满足。
 
-`LifecycleIntent.terminate` 与 `/stop` 同样留下显式声明并经过相应终态边界。abandon ≠ cancel。
+`LifecycleIntent.terminate` 同样只供有界执行显式收口。abandon ≠ cancel，Interrupt 只结束当前执行链，不终止持续 Session。
 
 ## 不是 Runtime 的事
 

@@ -82,6 +82,8 @@ Host 负责生成或选择 Session identity，Runtime Core 不负责判断“当
 
 Session 与 Conversation、Goal、后台任务或 SubAgent 的具体映射属于 Host 产品策略，不在 Core 中冻结。SubAgent 若使用独立 Session，也只复用同一创建原语；Core 不增加 `parent_session_id`、`agent_type` 等父子领域字段，委派及结果回传由 Core 外的显式事实表达。
 
+Host 同时决定 Session 是持续生命线还是有界执行。当前 Channel Session 映射持续 Conversation identity：一轮回答完成只进入 `WAITING(user_message)`，不请求终态。未来明确有界的 SubAgent 或一次性后台执行可以显式 finalization。Core 不增加 `session_type`，终态也不表示物理删除或回收 Journal。
+
 ### 3.2 Event
 
 Event 表示：
@@ -394,7 +396,7 @@ Command 已终态                → 保留原结果，不回滚
 
 `UserInterruptReceived` 一旦提交，Channel 即可确认这次外部 delivery，因为恢复后所需的正文与后继身份已经进入 Journal。若进程在中断收口或 UserMessage 物化前崩溃，重放会继续未完成阶段；若 UserMessage 已经物化，确定性的 `follow_up_message_id` 使条件追加拒绝重复。派生的 `ExecutionInterrupted` 和 `UserMessageReceived` 是内部因果 Event，不是同一外部 delivery 的第二次接纳。
 
-当前前台执行完成机械收口并写入 `ExecutionInterrupted` 后，本轮决策 Event 结束，旧 Step 不得恢复。存在 `follow_up_message_id` 时，Runtime 随后物化新 UserMessage，Session 转为 `RUNNABLE`；没有后继消息的显式纯中断才进入 `WAITING(user_message)`。Interrupt 不等于 `/stop` 或 `TerminationRequested`，也不终止整个 Session。
+当前前台执行完成机械收口并写入 `ExecutionInterrupted` 后，本轮决策 Event 结束，旧 Step 不得恢复。存在 `follow_up_message_id` 时，Runtime 随后物化新 UserMessage，Session 转为 `RUNNABLE`；没有后继消息的显式纯中断才进入 `WAITING(user_message)`。Interrupt 不终止整个 Session。
 
 ## 7. Command 副作用闭环
 
@@ -500,14 +502,16 @@ Runtime Status 是 State 的确定性派生结果，不是另一个状态所有�
 |---|---|
 | `RUNNABLE` | 存在合法的下一决策输入，可以调度 Step |
 | `WAITING` | 当前没有合法 Step，但存在明确的未来唤醒来源 |
-| `COMPLETED` | 已有成功完成事实，且没有尚未解决的必要依赖 |
-| `TERMINATED` | 已有明确的非成功终止事实，不再允许推进 |
+| `COMPLETED` | 有界执行已有成功完成事实，且没有尚未解决的必要依赖 |
+| `TERMINATED` | 有界执行已有明确的非成功终止事实，不再允许推进 |
 
 `WAITING` 必须能够说明在等待什么，例如 Command Outcome、Timer、Watcher、用户输入或人工审批。没有等待来源、没有可执行 Step、也没有终态，是非法或需要诊断的 Runtime State，不能静默归类。
 
 权限拒绝、工具失败或普通 Command 取消请求不天然等于 `TERMINATED`。`UserInterruptReceived` 确定性结束当前执行链；之后由是否存在待物化的 `follow_up_message_id` 决定派生 UserMessage 并进入 `RUNNABLE`，或进入 `WAITING(user_message)`。只有显式生命周期规则才能终止整个 Session。
 
 Completion/Termination Decision 不能越过已经接纳但尚未消费的决策 Event。Step 只能提交 `CompletionDeclared` 或等价终态意图；`advance()` 到这里即结束，不能自行宣布终态。Host 完成 Judge / Policy 后显式请求 finalization，Runtime 再通过确定性 Finalization Barrier 原子验证“没有待消费决策输入、没有必要依赖、生命周期版本未变化”，成功后才追加真正的 `RuntimeCompleted` / `RuntimeTerminated` 事实。
+
+上述 finalization 只适用于 Host 明确选择的有界执行。持续 Channel 不调用它；模型对一轮任务的完成声明不能关闭 Conversation Session。Channel 的正常稳定状态是 `WAITING(user_message)`。
 
 Finalization Barrier 只回答“这份显式声明现在是否仍可安全提交”，不能回答“任务实际上是否完成”。后一个问题属于工作模型、独立 Judge 或用户。
 

@@ -100,16 +100,11 @@ async def drive_with_console_interrupts(
     sessions: AssistantSessions,
     session_id: str,
     input_queue: asyncio.Queue[str | None],
-    *,
-    evaluate_completion: bool = True,
 ) -> SessionView:
     """Drive one Session while concurrent CLI text becomes a durable interrupt."""
 
     print("\n● 运行中", flush=True)
-    drive = asyncio.create_task(sessions.drive(
-        session_id,
-        evaluate_completion=evaluate_completion,
-    ))
+    drive = asyncio.create_task(sessions.drive(session_id))
     try:
         while not drive.done():
             text = await _running_input(
@@ -124,18 +119,11 @@ async def drive_with_console_interrupts(
                 raise _ConsoleInputClosed
             if not text:
                 continue
-            if text == "/stop":
-                await sessions.request_termination(
-                    session_id,
-                    "console_stop",
-                    delivery_id=f"stop-{uuid4().hex}",
-                )
-            else:
-                await sessions.receive_interrupt(
-                    session_id,
-                    text,
-                    delivery_id=f"interrupt-{uuid4().hex}",
-                )
+            await sessions.receive_interrupt(
+                session_id,
+                text,
+                delivery_id=f"interrupt-{uuid4().hex}",
+            )
         return await drive
     finally:
         if not drive.done():
@@ -208,7 +196,7 @@ async def run_runtime_console() -> None:
         print(f"HelperMe 已启动。model={config.model_name}")
         print(f"工作区：{access}")
         print(f"当前对话：{session_id}")
-        print("/new 新对话    /resume <id> 恢复    /stop 结束")
+        print("/new 新对话    /resume <id> 恢复")
         print("/mcp  /skill  管理外部能力")
         print("直接输入任务。运行中再输入会打断当前任务。")
         print("Ctrl+C 或 Ctrl+D 退出。")
@@ -298,30 +286,6 @@ async def run_runtime_console() -> None:
                     )
                     print(f"\n控制面：{message}")
                     _print_runtime_status(await sessions.view(session_id))
-                    continue
-                if user_message == "/stop":
-                    if view.terminal:
-                        print("当前 Session 已经结束。")
-                        continue
-                    await sessions.request_termination(
-                        session_id,
-                        "console_stop",
-                        delivery_id=f"stop-{uuid4().hex}",
-                    )
-                    try:
-                        view = await drive_with_console_interrupts(
-                            sessions,
-                            session_id,
-                            input_queue,
-                            evaluate_completion=False,
-                        )
-                    except _ConsoleInputClosed:
-                        print("\n已退出。")
-                        return
-                    except MODEL_DECISION_ERRORS as exc:
-                        print(f"\n模型调用失败：{exc}")
-                        continue
-                    _print_runtime_status(view)
                     continue
                 if (
                     view.pending_authorization_ids

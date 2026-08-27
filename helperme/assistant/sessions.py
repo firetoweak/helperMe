@@ -156,20 +156,6 @@ class AssistantSessions:
         )
         await self._runtime.advance(session_id)
 
-    async def request_termination(
-        self,
-        session_id: str,
-        reason: str,
-        *,
-        delivery_id: str,
-    ) -> None:
-        await self._runtime.receive_termination(
-            session_id,
-            reason,
-            delivery_id=delivery_id,
-        )
-        await self._runtime.advance(session_id)
-
     async def resolve_authorizations(
         self,
         session_id: str,
@@ -186,13 +172,11 @@ class AssistantSessions:
     async def drive(
         self,
         session_id: str,
-        *,
-        evaluate_completion: bool = True,
     ) -> SessionView:
         result = await drive_until_idle(
             self._runtime,
             session_id,
-            policy=self._policy if evaluate_completion else None,
+            policy=self._policy,
             control=self._control,
         )
         return self._view(

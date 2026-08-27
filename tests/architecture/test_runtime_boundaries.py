@@ -205,6 +205,12 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
         self.assertNotIn("CanonicalState", source)
         self.assertIn("bootstrap_assistant", source)
         self.assertIn("AssistantSessions", source)
+        self.assertNotIn('"/stop"', source)
+
+    def test_channel_bootstrap_does_not_enable_session_finalization(self):
+        source = (HELPERME_ROOT / "bootstrap.py").read_text(encoding="utf-8")
+        self.assertNotIn("JudgmentPolicy", source)
+        self.assertNotIn("make_isolated_judge", source)
 
     def test_assistant_driver_and_cli_do_not_swallow_internal_errors(self):
         offenders = {
