@@ -6,26 +6,12 @@ from collections.abc import Awaitable, Callable
 from helperme.assistant.control import AssistantControlPlane
 from helperme.assistant.management import ManagementSurface
 from helperme.assistant.toolsets import ToolSurface
-from helperme.llm.api import (
-    InvalidLLMResponse,
-    LLMContextLengthError,
-    LLMProviderError,
-    LLMTransientError,
-)
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState
 
 
 class SessionNotFoundError(LookupError):
     pass
-
-
-MODEL_DECISION_ERRORS = (
-    InvalidLLMResponse,
-    LLMContextLengthError,
-    LLMProviderError,
-    LLMTransientError,
-)
 
 
 async def resume_session(
@@ -83,17 +69,17 @@ class SessionScheduler:
         )
 
     async def _advance_once(self, session_id: str) -> bool:
-        step = await self._runtime.advance(session_id)
-        if step is not None and self._control is not None:
+        advance = await self._runtime.advance(session_id)
+        if advance.step is not None and self._control is not None:
             result = await self._control.after_committed_step(
                 session_id,
-                step,
+                advance.step,
             )
             if result is not None and self._notify is not None:
                 notified = self._notify(result.message)
                 if isinstance(notified, Awaitable):
                     await notified
-        return (await self._runtime.state(session_id)).status is RuntimeStatus.RUNNABLE
+        return advance.status is RuntimeStatus.RUNNABLE
 
     def _task_done(self, session_id: str, task: asyncio.Task[bool]) -> None:
         if self._tasks.get(session_id) is not task:

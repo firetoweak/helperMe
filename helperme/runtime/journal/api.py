@@ -29,7 +29,6 @@ from helperme.runtime.finalization import (
 from helperme.runtime.model import (
     CanonicalState,
     Command,
-    OutcomeStatus,
 )
 
 
@@ -465,9 +464,15 @@ class MemoryJournal:
         if not isinstance(payload, CommandAuthorized):
             raise TypeError(type(payload).__name__)
         async with self._lock:
-            if not self._authorization_is_open(draft, payload.command_id):
+            causation_id = self._authorization_causation_id(
+                draft.session_id,
+                payload.command_id,
+            )
+            if causation_id is None:
                 return None
-            return self._append_locked(draft).event
+            return self._append_locked(
+                replace(draft, causation_id=causation_id)
+            ).event
 
     async def reject_command(self, draft: EventDraft) -> Event | None:
         self._validate_internal_draft(draft)
@@ -475,32 +480,36 @@ class MemoryJournal:
         if not isinstance(payload, CommandRejected):
             raise TypeError(type(payload).__name__)
         async with self._lock:
-            if not self._authorization_is_open(draft, payload.command_id):
+            causation_id = self._authorization_causation_id(
+                draft.session_id,
+                payload.command_id,
+            )
+            if causation_id is None:
                 return None
-            return self._append_locked(draft).event
+            return self._append_locked(
+                replace(draft, causation_id=causation_id)
+            ).event
 
-    def _authorization_is_open(
+    def _authorization_causation_id(
         self,
-        draft: EventDraft,
+        session_id: str,
         command_id: str,
-    ) -> bool:
+    ) -> str | None:
         command = self._commands.get(command_id)
-        if command is None or command[0] != draft.session_id:
+        if command is None or command[0] != session_id:
             raise KeyError(command_id)
         issued_event_id = command[1]
-        if draft.causation_id != issued_event_id:
-            return False
         if command_id in self._abandoned_commands:
-            return False
+            return None
         if command_id in self._terminal_commands:
-            return False
+            return None
         if command_id in self._rejected_commands:
-            return False
+            return None
         if command_id in self._dispatch_eligibility:
-            return False
+            return None
         if self._attempt_count(command_id) != 0:
-            return False
-        return True
+            return None
+        return issued_event_id
 
     async def renew_attempt(
         self,
@@ -948,38 +957,6 @@ class MemoryJournal:
             UserMessageReceived,
         ):
             raise ValueError("delivery payload is not an external event")
-
-    @staticmethod
-    def _validate_pending_cancellation_drafts(
-        target_draft: EventDraft,
-        cancel_draft: EventDraft,
-    ) -> None:
-        target = target_draft.payload
-        cancel = cancel_draft.payload
-        if not isinstance(target, CommandOutcomeReceived) or (
-            target.attempt_id is not None
-        ):
-            raise TypeError("target cancellation outcome is invalid")
-        if not isinstance(cancel, CommandOutcomeReceived) or (
-            cancel.attempt_id is None
-        ):
-            raise TypeError("cancel command outcome is invalid")
-        if target.outcome.status is not OutcomeStatus.CANCELLED:
-            raise ValueError("target outcome must be cancelled")
-        if cancel.outcome.status is not OutcomeStatus.SUCCEEDED:
-            raise ValueError("cancel command outcome must be succeeded")
-        if (
-            target_draft.event_id == cancel_draft.event_id
-            or target_draft.delivery is not None
-            or cancel_draft.delivery is not None
-            or target_draft.causation_id != cancel_draft.causation_id
-        ):
-            raise ValueError("pending cancellation envelope is invalid")
-        for draft in (target_draft, cancel_draft):
-            if draft.schema_version != EVENT_SCHEMA_VERSION:
-                raise ValueError(
-                    f"unsupported event schema version: {draft.schema_version}"
-                )
 
     @staticmethod
     def _validate_internal_draft(draft: EventDraft) -> None:

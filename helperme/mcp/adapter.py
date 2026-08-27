@@ -36,10 +36,6 @@ def encode_tool_name(server_id: str, tool_name: str) -> str:
     return f"{cleaned[:keep]}_{digest}"
 
 
-def toolset_id_for(server_id: str) -> str:
-    return f"mcp:{server_id}"
-
-
 def parse_toolset_id(toolset_id: str) -> str:
     prefix = "mcp:"
     if not toolset_id.startswith(prefix):

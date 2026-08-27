@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 
@@ -27,6 +28,12 @@ from helperme.runtime.projections import (
 )
 from helperme.runtime.state import StateProjector
 from helperme.runtime.step import DecisionMaker, IdFactory, StepRunner, random_id
+
+
+@dataclass(frozen=True, slots=True)
+class AdvanceResult:
+    step: Step | None
+    status: RuntimeStatus
 
 
 async def _cancel_task(task: asyncio.Task[object]) -> None:
@@ -192,18 +199,12 @@ class AgentRuntime:
         session_id: str,
         command_id: str,
     ) -> Event | None:
-        events = await self._journal.snapshot(session_id)
-        command_state = self.projector.project(
-            session_id,
-            events,
-        ).state.command(command_id)
         event = await self._journal.grant_command(
             EventDraft(
                 event_id=self._id_factory("event"),
                 session_id=session_id,
                 payload=CommandAuthorized(command_id),
                 occurred_at=datetime.now(timezone.utc),
-                causation_id=command_state.issued_by_event_id,
             )
         )
         if event is not None:
@@ -215,22 +216,16 @@ class AgentRuntime:
         session_id: str,
         command_id: str,
     ) -> Event | None:
-        events = await self._journal.snapshot(session_id)
-        command_state = self.projector.project(
-            session_id,
-            events,
-        ).state.command(command_id)
         return await self._journal.reject_command(
             EventDraft(
                 event_id=self._id_factory("event"),
                 session_id=session_id,
                 payload=CommandRejected(command_id),
                 occurred_at=datetime.now(timezone.utc),
-                causation_id=command_state.issued_by_event_id,
             )
         )
 
-    async def advance(self, session_id: str) -> Step | None:
+    async def advance(self, session_id: str) -> AdvanceResult:
         lock = self._step_locks.setdefault(session_id, asyncio.Lock())
         async with lock:
             events = await self._journal.snapshot(session_id)
@@ -239,8 +234,8 @@ class AgentRuntime:
                 events,
             ).next_decision
             if frame is None:
-                await self.dispatcher.start_pending(session_id)
-                return None
+                dispatch = await self.dispatcher.start_pending(session_id)
+                return AdvanceResult(None, dispatch.status)
             request = StepClaimRequest(
                 session_id=session_id,
                 trigger_event_id=frame.trigger_event.event_id,
@@ -255,7 +250,7 @@ class AgentRuntime:
                 lease_seconds=self._step_lease_seconds,
             )
             if lease is None:
-                return None
+                return AdvanceResult(None, RuntimeStatus.RUNNABLE)
             heartbeat = asyncio.create_task(
                 self._step_heartbeat(lease),
                 name=f"agent-step-heartbeat:{lease.token}",
@@ -278,7 +273,7 @@ class AgentRuntime:
                     raise error
             except LeaseLostError:
                 await self._journal.release_step(lease)
-                return None
+                return AdvanceResult(None, RuntimeStatus.RUNNABLE)
             except BaseException:
                 await self._journal.release_step(lease)
                 raise
@@ -287,8 +282,8 @@ class AgentRuntime:
                     await _cancel_task(operation)
                 await _stop_heartbeat(heartbeat)
             step = step_event.payload.step
-            await self.dispatcher.start_pending(session_id)
-            return step
+            dispatch = await self.dispatcher.start_pending(session_id)
+            return AdvanceResult(step, dispatch.status)
 
     async def _step_heartbeat(self, lease) -> None:
         interval = self._step_lease_seconds / 3

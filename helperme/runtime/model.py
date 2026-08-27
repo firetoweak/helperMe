@@ -314,15 +314,6 @@ class CommandState:
             "authorization rejected event id",
         )
 
-    @property
-    def attempt_ids(self) -> tuple[str, ...]:
-        return tuple(attempt.attempt_id for attempt in self.attempts)
-
-    @property
-    def current_attempt(self) -> AttemptState | None:
-        return self.attempts[-1] if self.attempts else None
-
-
 @dataclass(frozen=True, slots=True)
 class DecisionState:
     session_id: str

@@ -324,7 +324,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             delivery_id="auth-1",
         )
 
-        step = await runtime.advance(self.SESSION_ID)
+        step = (await runtime.advance(self.SESSION_ID)).step
         state = await runtime.state(self.SESSION_ID)
 
         self.assertTrue(step.commands[0].requires_authorization)

@@ -290,3 +290,28 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scheduler.activations, 2)
         finally:
             await scheduler.close()
+
+    async def test_activation_uses_advance_result_without_reading_state(self):
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker((lambda _frame: ModelDecision(content="done"),)),
+            {},
+            SequentialIds(),
+        )
+        await runtime.create_session("session")
+        await runtime.receive_user_message(
+            "session",
+            "hello",
+            delivery_id="user-1",
+        )
+
+        async def forbidden_state(_session_id):
+            raise AssertionError("scheduler must not read state after advance")
+
+        runtime.state = forbidden_state
+        scheduler = SessionScheduler(runtime)
+        try:
+            should_continue = await scheduler._advance_once("session")
+            self.assertFalse(should_continue)
+        finally:
+            await scheduler.close()

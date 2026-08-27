@@ -56,13 +56,14 @@ from helperme.runtime.projections import (
     project_trace,
     replay,
 )
-from helperme.runtime.runtime import AgentRuntime
+from helperme.runtime.runtime import AdvanceResult, AgentRuntime
 from helperme.runtime.journal.sqlite import SqliteJournal
 from helperme.runtime.state import DecisionFrame, RuntimeProjection, StateProjector
 from helperme.runtime.step import DecisionMaker, IdFactory, RecordedDecision, StepRunner
 
 __all__ = [
     "AgentRuntime",
+    "AdvanceResult",
     "AppendResult",
     "ArtifactResolution",
     "AttemptContext",

@@ -18,6 +18,7 @@ from helperme.runtime.model import (
     CommandPhase,
     InvokeTool,
     OutcomeStatus,
+    RuntimeStatus,
 )
 from helperme.runtime.state import StateProjector
 from helperme.runtime.step import IdFactory, random_id
@@ -34,6 +35,12 @@ class AttemptContext:
 @dataclass(frozen=True, slots=True)
 class ToolTerminal:
     outcome: CommandOutcome
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchStartResult:
+    started_command_ids: tuple[str, ...]
+    status: RuntimeStatus
 
 
 ToolHandler = Callable[[AttemptContext, Mapping[str, object]], Awaitable[object]]
@@ -99,7 +106,7 @@ class Dispatcher:
     def active_count(self) -> int:
         return sum(not task.done() for task in self._tasks.values())
 
-    async def start_pending(self, session_id: str) -> tuple[str, ...]:
+    async def start_pending(self, session_id: str) -> DispatchStartResult:
         events = await self._journal.snapshot(session_id)
         state = self._projector.project(session_id, events).state
         pending = tuple(
@@ -148,7 +155,7 @@ class Dispatcher:
                 )
             )
             started.append(command.command_id)
-        return tuple(started)
+        return DispatchStartResult(tuple(started), state.status)
 
     def _task_done(self, command_id: str, task: asyncio.Task[None]) -> None:
         if self._tasks.get(command_id) is task:

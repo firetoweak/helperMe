@@ -46,13 +46,6 @@ def terminal_status(events: tuple[Event, ...]) -> RuntimeStatus | None:
     return None
 
 
-def terminal_event(events: tuple[Event, ...]) -> Event | None:
-    for event in events:
-        if isinstance(event.payload, (RuntimeCompleted, RuntimeTerminated)):
-            return event
-    return None
-
-
 def finalization_opportunity(
     session_id: str,
     events: tuple[Event, ...],

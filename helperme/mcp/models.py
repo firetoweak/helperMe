@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 import re
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 from urllib.parse import urlparse
 
 
@@ -354,6 +354,3 @@ def _parse_datetime(value: Any) -> datetime:
         raise ValueError("datetime 必须是非空 ISO 8601 字符串")
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-UpsertTransport = Literal["stdio", "streamable_http"]

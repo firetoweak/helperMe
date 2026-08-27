@@ -5,6 +5,7 @@ import json
 import sqlite3
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import TypeVar
@@ -1046,26 +1047,24 @@ class SqliteJournal:
             attempt_lease_expires_at=self._clock() + lease_seconds,
         ).event
 
-    def _authorization_is_open_tx(
+    def _authorization_causation_id_tx(
         self,
         connection: sqlite3.Connection,
-        draft: EventDraft,
+        session_id: str,
         command_id: str,
-    ) -> bool:
+    ) -> str | None:
         command = connection.execute(
             "SELECT * FROM commands WHERE command_id = ?",
             (command_id,),
         ).fetchone()
-        if command is None or command["session_id"] != draft.session_id:
+        if command is None or command["session_id"] != session_id:
             raise KeyError(command_id)
-        if draft.causation_id != command["issued_event_id"]:
-            return False
         if command["abandoned"] or command["canonical_outcome_event_id"]:
-            return False
+            return None
         if command["dispatch_eligible_event_id"] is not None:
-            return False
+            return None
         if command["authorization_rejected_event_id"] is not None:
-            return False
+            return None
         if (
             connection.execute(
                 "SELECT 1 FROM attempts WHERE command_id = ?",
@@ -1073,8 +1072,8 @@ class SqliteJournal:
             ).fetchone()
             is not None
         ):
-            return False
-        return True
+            return None
+        return command["issued_event_id"]
 
     def _grant_command_tx(
         self,
@@ -1082,13 +1081,17 @@ class SqliteJournal:
         draft: EventDraft,
     ) -> Event | None:
         payload = draft.payload
-        if not self._authorization_is_open_tx(
+        causation_id = self._authorization_causation_id_tx(
             connection,
-            draft,
+            draft.session_id,
             payload.command_id,
-        ):
+        )
+        if causation_id is None:
             return None
-        return self._append_tx(connection, draft).event
+        return self._append_tx(
+            connection,
+            replace(draft, causation_id=causation_id),
+        ).event
 
     def _reject_command_tx(
         self,
@@ -1096,13 +1099,17 @@ class SqliteJournal:
         draft: EventDraft,
     ) -> Event | None:
         payload = draft.payload
-        if not self._authorization_is_open_tx(
+        causation_id = self._authorization_causation_id_tx(
             connection,
-            draft,
+            draft.session_id,
             payload.command_id,
-        ):
+        )
+        if causation_id is None:
             return None
-        return self._append_tx(connection, draft).event
+        return self._append_tx(
+            connection,
+            replace(draft, causation_id=causation_id),
+        ).event
 
     def _renew_attempt_tx(
         self,

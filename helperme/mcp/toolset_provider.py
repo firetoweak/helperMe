@@ -57,12 +57,6 @@ class McpToolsetProvider:
             )
         return tuple(descriptors)
 
-    def toolset_snapshot_token(self) -> object:
-        return tuple(
-            (record.id, record.revision, record.enabled)
-            for record in self._registry.snapshot()
-        )
-
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
         server_id = parse_toolset_id(toolset_id)
         record = await self._registry.get(server_id)
