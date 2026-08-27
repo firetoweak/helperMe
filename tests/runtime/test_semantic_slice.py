@@ -330,6 +330,71 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model.frames), 3)
         await scheduler.close()
 
+    async def test_user_message_during_thinking_runs_same_step_commands_only(
+        self,
+    ):
+        tool = RecordingTool("work")
+        thinking = asyncio.Event()
+        release_think = asyncio.Event()
+
+        async def continue_old(_frame):
+            thinking.set()
+            await release_think.wait()
+            return ModelDecision(command_requests=(InvokeTool("work"),))
+
+        model = ScriptedDecisionMaker(
+            (
+                lambda _frame: ModelDecision(
+                    command_requests=(InvokeTool("work"),),
+                ),
+                continue_old,
+                lambda _frame: ModelDecision(content="stopped"),
+            )
+        )
+        runtime = runtime_for(tool, model)
+        scheduler = SettlingScheduler(runtime)
+        await runtime.create_session("session")
+        await runtime.receive_user_message(
+            "session",
+            "go",
+            delivery_id="user-1",
+        )
+        await scheduler.wake("session")
+        await asyncio.wait_for(tool.started.wait(), timeout=1)
+        tool.release.set()
+        await asyncio.wait_for(thinking.wait(), timeout=1)
+
+        await runtime.receive_user_message(
+            "session",
+            "stop",
+            delivery_id="user-2",
+        )
+        tool.started = asyncio.Event()
+        tool.release = asyncio.Event()
+        release_think.set()
+        await asyncio.wait_for(tool.started.wait(), timeout=1)
+
+        state = await runtime.state("session")
+        self.assertEqual(len(model.frames), 2)
+        self.assertFalse(
+            isinstance(model.frames[1].trigger_event.payload, UserMessageReceived)
+        )
+        self.assertIsNone(state.next_trigger_event_id)
+        self.assertTrue(any(item.startswith("command:") for item in state.waiting_for))
+
+        tool.release.set()
+        await scheduler.join()
+
+        self.assertEqual(len(model.frames), 3)
+        self.assertEqual(model.frames[2].trigger_event.payload.content, "stop")
+        kinds = [
+            type(event.payload).__name__
+            for event in await runtime.snapshot("session")
+        ]
+        self.assertEqual(kinds.count("StepCommitted"), 3)
+        self.assertEqual(kinds.count("CommandOutcomeReceived"), 2)
+        await scheduler.close()
+
     async def test_later_user_message_does_not_wait_for_unauthorized_command(self):
         tool = RecordingTool("secret", requires_authorization=True)
         model = ScriptedDecisionMaker(

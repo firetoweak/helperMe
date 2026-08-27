@@ -300,6 +300,11 @@ class StateProjector:
         self._validate_session(session_id, events)
         step_events = self._index_step_events(events)
         event_sequences = {event.event_id: event.sequence for event in events}
+        issuing_observed = {
+            event.event_id: event.payload.step.observed_journal_position
+            for event in events
+            if isinstance(event.payload, StepCommitted)
+        }
 
         operational = _StateBuilder(session_id)
         for event in events:
@@ -329,6 +334,7 @@ class StateProjector:
                         event,
                         operational,
                         event_sequences,
+                        issuing_observed,
                         until_sequence=step.observed_journal_position,
                     )
                 expected_cursor = len(consumed) + 1
@@ -357,14 +363,14 @@ class StateProjector:
                 event,
                 decision,
                 events,
-                event_sequences,
+                issuing_observed,
             ):
                 continue
             if isinstance(event.payload, UserMessageReceived) and (
                 self._user_message_blocked_by_in_flight(
                     event,
                     operational,
-                    event_sequences,
+                    issuing_observed,
                 )
             ):
                 break
@@ -376,6 +382,7 @@ class StateProjector:
                     event,
                     operational,
                     event_sequences,
+                    issuing_observed,
                     until_sequence=events[-1].sequence,
                 )
             break
@@ -501,7 +508,7 @@ class StateProjector:
         event: Event,
         state: _StateBuilder,
         events: tuple[Event, ...],
-        event_sequences: dict[str, int],
+        issuing_observed: dict[str, int],
     ) -> bool:
         payload = event.payload
         if isinstance(payload, UserMessageReceived):
@@ -519,10 +526,10 @@ class StateProjector:
                 and _parallel_decision_group_closed(state, command_state)
             ):
                 return False
-            issued_sequence = event_sequences[command_state.issued_by_event_id]
+            observed = issuing_observed[command_state.issued_by_event_id]
             if any(
                 isinstance(item.payload, UserMessageReceived)
-                and item.sequence > issued_sequence
+                and item.sequence > observed
                 for item in events
             ):
                 return False
@@ -533,12 +540,15 @@ class StateProjector:
     def _user_message_blocked_by_in_flight(
         message: Event,
         operational: _StateBuilder,
-        event_sequences: dict[str, int],
+        issuing_observed: dict[str, int],
     ) -> bool:
         for command_state in operational.commands.values():
             if command_state.abandoned:
                 continue
-            if event_sequences[command_state.issued_by_event_id] >= message.sequence:
+            if (
+                issuing_observed[command_state.issued_by_event_id]
+                >= message.sequence
+            ):
                 continue
             if not command_state.attempts:
                 continue
@@ -554,6 +564,7 @@ class StateProjector:
         trigger: Event,
         operational: _StateBuilder,
         event_sequences: dict[str, int],
+        issuing_observed: dict[str, int],
         until_sequence: int,
     ) -> None:
         past_trigger = False
@@ -571,7 +582,7 @@ class StateProjector:
                 event,
                 trigger.sequence,
                 operational,
-                event_sequences,
+                issuing_observed,
             ):
                 continue
             decision.apply_regular(event)
@@ -579,7 +590,7 @@ class StateProjector:
                 decision,
                 trigger.sequence,
                 operational,
-                event_sequences,
+                issuing_observed,
             ):
                 return
 
@@ -588,12 +599,14 @@ def _is_waited_follow_up(
     event: Event,
     trigger_sequence: int,
     operational: _StateBuilder,
-    event_sequences: dict[str, int],
+    issuing_observed: dict[str, int],
 ) -> bool:
     payload = event.payload
     if isinstance(payload, (DispatchAttemptStarted, CommandOutcomeReceived)):
         command_state = operational.commands[payload.command_id]
-        return event_sequences[command_state.issued_by_event_id] < trigger_sequence
+        return (
+            issuing_observed[command_state.issued_by_event_id] < trigger_sequence
+        )
     return False
 
 
@@ -601,12 +614,12 @@ def _waited_batch_complete(
     decision: _StateBuilder,
     trigger_sequence: int,
     operational: _StateBuilder,
-    event_sequences: dict[str, int],
+    issuing_observed: dict[str, int],
 ) -> bool:
     for command_state in operational.commands.values():
         if command_state.abandoned:
             continue
-        if event_sequences[command_state.issued_by_event_id] >= trigger_sequence:
+        if issuing_observed[command_state.issued_by_event_id] >= trigger_sequence:
             continue
         if not command_state.attempts:
             continue

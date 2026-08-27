@@ -133,38 +133,43 @@ Runtime 不解析工具返回值中的 `ok`、`code` 或其他领域字段。Too
 
 Runtime 不读这句话的含义，也不区分空闲 / 运行中输入的类型。没有 `InterruptReceived`，没有抢占当前 Step 的特殊消息，也不提供通用 Cancel。Channel 不维护对应用户消息的 worker 或 Run 生命周期，不提供 `/stop`；`Ctrl+C` / `Ctrl+D` 只退出进程。后到消息与 `TerminationRequested` / `TERMINATED` 无关：Channel 对话生命线在消息之后仍继续。
 
-Channel 接纳即时：文本一旦通过 delivery 幂等写入 Journal 就可以展示并 wake。当前冻结中的 Step 仍基于冻结视图提交完毕。已签发的 Command 继续派发；已经 `DispatchAttemptStarted` 的 Attempt 跑到真实 Outcome。Runtime 不杀工具进程、不写伪装的取消结果、不收拾残局。
+Channel 接纳即时：文本一旦通过 delivery 幂等写入 Journal 就可以展示并 wake。当前冻结中的 Step 仍基于冻结视图提交完毕。该 Step **已经签发**的 Command 继续派发；已经 `DispatchAttemptStarted` 的 Attempt 跑到真实 Outcome。这只覆盖这一轮 Step 里的那一批 Command，不是批准旧任务再开下一轮。Runtime 不杀工具进程、不写伪装的取消结果、不收拾残局。
 
 后到的 `UserMessageReceived` 只改写下一次决策的起点。归约多两条机械规则。
 
 ### 规则 1：这条 UserMessage 现在能不能当 `next_trigger`
 
-消息立刻入账，但它是不是**当前可执行的决策 Event**，取决于它前面有没有已动手、尚未结束的副作用：
+消息立刻入账，但它是不是**当前可执行的决策 Event**，取决于有没有它看不见的、已经动手、尚未结束的副作用：
 
-> 若存在签发时间早于这条消息、已经 `DispatchAttemptStarted`、尚未终态的 Command，这条 UserMessage 还不是可执行决策。等这些 Attempt 都有 Outcome 之后，它才成为 `next_trigger`。
+> 若存在签发 Step 的 `observed_journal_position` 早于这条消息、已经 `DispatchAttemptStarted`、尚未终态的 Command，这条 UserMessage 还不是可执行决策。等这些 Attempt 都有 Outcome 之后，它才成为 `next_trigger`。
+
+这包括：消息入账前就已派发的工具；以及模型还在跑时入账、该 Step 随后才提交并派发的同一轮 Command。后一种 Command 的签发 Event 序号可能大于消息，但冻结视图里没有这句话，仍算这句话要等的「这一轮」。
 
 | 前面是什么 | 等不等 |
 |---|---|
 | 模型还在跑、Step 尚未提交 | 先等当前 Step 提交（同一 Session 本就 single-flight） |
-| 已签发、已派发、工具还在跑 | 等这批全部终态 |
+| 上述 Step 提交后，同一轮已派发工具还在跑 | 等这批全部终态 |
+| 更早签发、已派发、工具还在跑 | 等这批全部终态 |
 | 已签发、还卡在授权、没有 Attempt | 不等；否则与 yes/no 死锁 |
 | 空闲，`WAITING(user_message)` | 不等，立刻可执行 |
 
-等的是已经动手的进程，不是整份 Session 忙闲。未派发的 Command（含待授权）不阻塞新消息；它们仍按原规则等待授权或 Dispatcher，不因此被写成取消。Step 提交时 Commands 一次性签发：已授权、尚未启动的同一批仍照常启动并跑完。
+等的是已经动手的进程，不是整份 Session 忙闲。未派发的 Command（含待授权）不阻塞新消息；它们仍按原规则等待授权或 Dispatcher，不因此被写成取消。
 
 ### 规则 2：旧那批 Outcome 还要不要自己再要一次 Step
 
 今天并行组闭合后，合格 Outcome 会请求下一次 Step。后到的 UserMessage 否决这次自动续跑：
 
-> 若该组的签发 Step 之后已经出现后来的 `UserMessageReceived`，这组闭合时不再单独请求 Step。下一次决策的 trigger 是那条 UserMessage。
+> 若该组签发 Step 的冻结视图（`observed_journal_position`）之后已经出现 `UserMessageReceived`，这组闭合时不再单独请求 Step。下一次决策的 trigger 是那条 UserMessage。
 
-Outcome 照常写入。改的只是「要不要为这组 Outcome 再开一轮模型」。没有后到 UserMessage 时，行为与现在相同。有后到 UserMessage 时，那条消息吃掉这次无人值守续跑——包括工具还在跑时说的，也包括工具刚结束、模型还没开始想结果时说的。
+「之后」相对冻结切面，不是相对 `StepCommitted` 落盘序号。模型还在想时入账的话，Journal 上会写在该 Step 提交之前，但它已经晚于冻结视图，仍是否决续跑。
 
-冻结视图因此带着真实 Outcome 与这句用户话，一次决策看完。多条后到消息仍按 Journal 顺序消费，谁也不插队；每一条吃掉的是**它之前那批**的自动续跑。
+Outcome 照常写入。改的只是「要不要为这组 Outcome **再开一轮**模型」。同一轮里多个 Command 的派发与跑完不是「再批准」。没有后到 UserMessage 时，行为与现在相同。有后到 UserMessage 时，那条消息吃掉无人值守续跑——包括工具还在跑时说的，也包括工具刚结束、模型还在想或还没开始想时说的。
 
-「掐掉」的不是工作本身。已动手的工具仍跑完；模型若把「继续」理解成接着干，就在这一拍接着干。Runtime 不猜「继续」和「停下」的差别。
+冻结视图因此带着真实 Outcome 与这句用户话，一次决策看完。多条后到消息仍按 Journal 顺序消费，谁也不插队；每一条吃掉的是**它之前那批**的自动续跑。签发 Step 冻结时已经看见的排队消息是 FIFO，不按后到插队。
 
-审计不需要新 Event 类型。重放时只要看到某条 UserMessage 落在一次 `StepCommitted` 与该批最终 Outcome 之间，或落在组闭合之后、下一次 Step 之前，就是一次后到输入改写了决策起点。
+「掐掉」的不是工作本身。当前 Step 会提交；这一轮已签发的工具仍跑完。模型若在**下一拍**（后到消息当 trigger 的那次）把「继续」理解成接着干，就在那一拍接着干。Runtime 不猜「继续」和「停下」的差别，也不再为旧组自动开一轮让模型在看不见新指令的上下文里续跑。
+
+审计不需要新 Event 类型。重放时只要看到某条 UserMessage 晚于一次签发 Step 的 `observed_journal_position`——无论它落在 `StepCommitted` 与该批 Outcome 之间、落在组闭合之后、还是落在该 StepCommitted 之前——就是一次后到输入改写了决策起点。
 
 ## 7. Runtime Status
 
@@ -214,4 +219,4 @@ Runtime 不承诺外部副作用 exactly-once。它承诺所有已知事实可�
 | Session application service | `helperme/assistant/sessions.py` |
 | Channel | `helperme/channels/` |
 
-验收重点不是“一个调用是否跑到 idle”，而是：每个 Event 是否可靠唤醒、每次激活是否只提交一个 Step、不同 Session 是否能独立并行、Outcome 是否再次驱动 Session、进程重启后是否只从 Journal 重建事实、未知 Attempt 是否保持未知，以及后到 `UserMessageReceived` 是否只改写下一拍决策起点（规则 1 等待已派发 Attempt；规则 2 抑制旧组自动续跑）。
+验收重点不是“一个调用是否跑到 idle”，而是：每个 Event 是否可靠唤醒、每次激活是否只提交一个 Step、不同 Session 是否能独立并行、Outcome 是否再次驱动 Session、进程重启后是否只从 Journal 重建事实、未知 Attempt 是否保持未知，以及后到 `UserMessageReceived` 是否只改写下一拍决策起点（规则 1 等待签发冻结早于该消息的已派发 Attempt；规则 2 按冻结切面抑制旧组自动续跑，不抑制同一轮已签发 Command 跑完）。

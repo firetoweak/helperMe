@@ -17,7 +17,7 @@
 - 能力执行目录与管理目录分离：disabled 能力不得进入可执行目录，但必须可被观察、诊断和提出恢复方案。
 - 工具失败只证明本次动作失败。可恢复错误应给出结构化状态和下一动作；恢复后必须重新验证原目标。持久信任变更继续经过人审批。
 - 人负责目标；模型补全判定；后一句默认改 inferred；只有人明确换事才改目标。不恢复 Goal / Plain 并列；Kanban 不进入 Runtime，也不预建 TodoList。见 [判定](架构/判定.md)与 [计划](计划.md)第 3 章。
-- Runtime 不做语义判断：Host 只把明确的 yes/no 写成 `CommandAuthorized` / `CommandRejected`；其他话一律 `UserMessage`。副作用安全边界是授权，不是模型自述。后到的 `UserMessageReceived` 只改写下一次决策起点：已派发 Attempt 先终态，旧 `decision_on_outcome` 组不再单独要 Step。没有 Interrupt Event，也不杀在途工具。见 [Runtime 状态推进模型](架构/Runtime状态推进模型.md) 第 6 节。
+- Runtime 不做语义判断：Host 只把明确的 yes/no 写成 `CommandAuthorized` / `CommandRejected`；其他话一律 `UserMessage`。副作用安全边界是授权，不是模型自述。后到的 `UserMessageReceived` 只改写下一次决策起点：签发冻结早于该消息的已派发 Attempt 先终态（含模型还在想时入账、随后才派发的同一轮 Command）；旧 `decision_on_outcome` 组不再单独要 Step。没有 Interrupt Event，也不杀在途工具。见 [Runtime 状态推进模型](架构/Runtime状态推进模型.md) 第 6 节。
 - MCP 与 Skill 不是同一端口。MCP 经 Assistant `load_toolset`，下一 Step 才出现工具。Skill 是两个普通工具。见 [工具与能力](架构/工具与能力.md)。
 - 生产代码不保留泛化 `adapters` 包。内置工具只在 `helperme/assistant/builtin_tools.py` 装配；`helperme.runtime` 除自身子模块外不得 import 其他 `helperme` 模块，也不得 import `host` / `plugins` / `tools`；Sandbox 和 Tools 不得反向依赖 Assistant 或 Runtime。
 - SubAgent、后台定时任务、Long Memory 是已确认的后续方向，但当前不预建其状态机；分别从 Assistant 委派、Automation 外部唤醒、Memory 投影接入。见 [计划](计划.md) 第 4～6 章。

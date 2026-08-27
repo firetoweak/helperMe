@@ -19,7 +19,7 @@ Canonical State 由 Journal 重放得到：
 
 CLI / Telegram Session 是持续对话，永不因普通回答自动终态化。`COMPLETED / TERMINATED` 只供未来有界后台任务或 SubAgent Host 显式使用。
 
-所有 Channel 文本统一为有序 `UserMessageReceived`。运行中到达的新消息不会抢占或取消冻结中的 Step，也不另建 Interrupt Event；它改写的是下一次决策从哪来。已派发 Attempt 先跑完并记账，旧 `decision_on_outcome` 组不再单独要 Step。见 [Runtime 状态推进模型](Runtime状态推进模型.md) 第 6 节。
+所有 Channel 文本统一为有序 `UserMessageReceived`。运行中到达的新消息不会抢占或取消冻结中的 Step，也不另建 Interrupt Event；它改写的是下一次决策从哪来。当前 Step 已签发的 Attempt 先跑完并记账，旧 `decision_on_outcome` 组不再单独要 Step。见 [Runtime 状态推进模型](Runtime状态推进模型.md) 第 6 节。
 
 Command 当前只有 `InvokeTool`。Dispatcher 先持久化 Attempt，再执行 Binding，最后写入确定 Outcome。未预期异常原样穿透；已经开始但没有 Outcome 的 Attempt 保持 `unknown`。Runtime 不提供通用 Recovery、Reconcile、Retry 或 Cancel，也不会在 `/resume` 时盲目重试。
 
