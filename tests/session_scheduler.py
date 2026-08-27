@@ -8,6 +8,16 @@ from helperme.runtime import AgentRuntime
 from helperme.runtime.model import CanonicalState
 
 
+class RecordingScheduler(SessionScheduler):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.woken: list[str] = []
+
+    async def wake(self, session_id: str) -> None:
+        self.woken.append(session_id)
+        await super().wake(session_id)
+
+
 @dataclass(frozen=True, slots=True)
 class SettledSession:
     state: CanonicalState

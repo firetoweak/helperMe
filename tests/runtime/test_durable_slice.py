@@ -5,15 +5,19 @@ import unittest
 from pathlib import Path
 
 from helperme.assistant.runner import SessionScheduler
+from helperme.assistant.sessions import AssistantSessions
+from helperme.assistant.toolsets import ToolSurface
 from helperme.runtime import (
     AgentRuntime,
     CommandPhase,
+    DispatchAttemptStarted,
     InvokeTool,
     ModelDecision,
     SqliteJournal,
     ToolBinding,
 )
 from tests.assistant.test_runner import ScriptedDecisionMaker, SequentialIds
+from tests.session_scheduler import RecordingScheduler
 
 
 class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
@@ -138,6 +142,75 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 state.commands[0].phase,
                 CommandPhase.UNKNOWN,
             )
+
+    async def test_resume_and_wake_do_not_retry_unknown_attempt(self):
+        explode_calls: list[int] = []
+
+        async def explode(_context, _arguments):
+            explode_calls.append(1)
+            raise RuntimeError("boom")
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.sqlite"
+            runtime = AgentRuntime(
+                SqliteJournal(path),
+                ScriptedDecisionMaker(
+                    (
+                        lambda _frame: ModelDecision(
+                            command_requests=(InvokeTool("explode"),),
+                        ),
+                    )
+                ),
+                {"explode": ToolBinding(explode)},
+                SequentialIds(),
+            )
+            scheduler = SessionScheduler(runtime)
+            await runtime.create_session("session")
+            await runtime.receive_user_message(
+                "session",
+                "go",
+                delivery_id="delivery-1",
+            )
+            await scheduler.wake("session")
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                await scheduler.join()
+            await scheduler.close()
+            self.assertEqual(explode_calls, [1])
+
+            restored = AgentRuntime(
+                SqliteJournal(path),
+                ScriptedDecisionMaker(()),
+                {"explode": ToolBinding(explode)},
+                SequentialIds(),
+            )
+            restored_scheduler = RecordingScheduler(restored)
+            surface = ToolSurface()
+            surface.attach(restored)
+            sessions = AssistantSessions(restored, surface, restored_scheduler)
+            try:
+                view = await sessions.resume("session")
+                state = await restored.state("session")
+                self.assertEqual(state.commands[0].phase, CommandPhase.UNKNOWN)
+                self.assertEqual(len(state.commands[0].attempts), 1)
+                self.assertEqual(state.commands[0].attempts[0].attempt_number, 1)
+                self.assertFalse(view.should_wake)
+                self.assertEqual(restored_scheduler.woken, [])
+
+                await restored_scheduler.wake("session")
+                await restored_scheduler.join()
+                after_wake = await restored.state("session")
+                started = [
+                    event.payload
+                    for event in await restored.snapshot("session")
+                    if isinstance(event.payload, DispatchAttemptStarted)
+                ]
+                self.assertEqual(len(started), 1)
+                self.assertEqual(started[0].attempt_number, 1)
+                self.assertEqual(after_wake.commands[0].phase, CommandPhase.UNKNOWN)
+                self.assertEqual(len(after_wake.commands[0].attempts), 1)
+                self.assertEqual(explode_calls, [1])
+            finally:
+                await restored_scheduler.close()
 
 
 async def _echo(_context, _arguments):
