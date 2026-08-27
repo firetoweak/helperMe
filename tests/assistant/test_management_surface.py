@@ -14,7 +14,7 @@ from helperme.assistant.management import (
     ManagementSurface,
 )
 from helperme.assistant.context.projection import ModelContextSettings
-from helperme.assistant.runner import drive_until_idle
+from tests.session_scheduler import settle_session
 from helperme.runtime import AgentRuntime, InvokeTool, MemoryJournal, ModelDecision
 from helperme.runtime.state import DecisionFrame
 from helperme.tools.spec import PydanticParameters, ToolSpec
@@ -50,9 +50,7 @@ class ScriptedDecisionMaker:
     async def decide(self, frame: DecisionFrame) -> ModelDecision:
         session_id = frame.state.session_id
         self.seen.append(_names(self.management.schemas(session_id, frame.state)))
-        self.control_seen.append(
-            self.management.control_names(session_id, frame.state)
-        )
+        self.control_seen.append(self.management.control_names(session_id, frame.state))
         if len(self.seen) == 1:
             return ModelDecision(
                 content="load mcp twice",
@@ -69,9 +67,7 @@ class ScriptedDecisionMaker:
             )
         return ModelDecision(
             content="done",
-            command_requests=(
-                InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),
-            ),
+            command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),),
         )
 
 
@@ -114,7 +110,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 delivery_id="user-1",
             )
 
-            await drive_until_idle(runtime, "management-session")
+            await settle_session(runtime, "management-session")
             events = await runtime.snapshot("management-session")
 
             self.assertEqual(decisions.seen[0], {LOAD_MANAGEMENT_TOOLS})

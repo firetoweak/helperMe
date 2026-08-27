@@ -4,7 +4,7 @@ import unittest
 from collections.abc import Awaitable, Callable, Mapping
 
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
-from helperme.assistant.runner import drive_until_idle
+from tests.session_scheduler import settle_session
 from helperme.assistant.toolsets import (
     LOAD_TOOLSET,
     LoadedTool,
@@ -137,7 +137,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             "load echo",
             delivery_id="load-1",
         )
-        await drive_until_idle(runtime, self.SESSION_ID)
+        await settle_session(runtime, self.SESSION_ID)
         return await runtime.snapshot(self.SESSION_ID)
 
     def test_catalog_does_not_expose_loaded_tools_before_load(self):
@@ -176,26 +176,20 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             seen.append(_schema_names(surface.schemas(self.SESSION_ID)))
             return ModelDecision(
                 content="loading",
-                command_requests=(
-                    InvokeTool(LOAD_TOOLSET, (("toolset_id", "demo"),)),
-                ),
+                command_requests=(InvokeTool(LOAD_TOOLSET, (("toolset_id", "demo"),)),),
             )
 
         def second(_frame):
             seen.append(_schema_names(surface.schemas(self.SESSION_ID)))
             return ModelDecision(
                 content="pinging",
-                command_requests=(
-                    InvokeTool("demo_ping", (("text", "hi"),)),
-                ),
+                command_requests=(InvokeTool("demo_ping", (("text", "hi"),)),),
             )
 
         def third(_frame):
             return ModelDecision(
                 content="done",
-                command_requests=(
-                    InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),
-                ),
+                command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),),
             )
 
         runtime = AgentRuntime(
@@ -213,7 +207,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             "use echo",
             delivery_id="ask-1",
         )
-        result = await drive_until_idle(
+        result = await settle_session(
             runtime,
             self.SESSION_ID,
         )
@@ -300,15 +294,21 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_dynamic_tool_freezes_host_authorization_requirement(self):
-        surface = ToolSurface(providers=(FakeEchoProvider(
-            requires_authorization=True,
-        ),))
-        model = ScriptedDecisionMaker((
-            lambda _frame: ModelDecision(
-                content="ping",
-                command_requests=(InvokeTool("demo_ping"),),
-            ),
-        ))
+        surface = ToolSurface(
+            providers=(
+                FakeEchoProvider(
+                    requires_authorization=True,
+                ),
+            )
+        )
+        model = ScriptedDecisionMaker(
+            (
+                lambda _frame: ModelDecision(
+                    content="ping",
+                    command_requests=(InvokeTool("demo_ping"),),
+                ),
+            )
+        )
         runtime = AgentRuntime(
             MemoryJournal(),
             model,

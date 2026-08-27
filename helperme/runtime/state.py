@@ -7,31 +7,24 @@ from hashlib import sha256
 from helperme.runtime.codec import EVENT_SCHEMA_VERSION
 from helperme.runtime.events import (
     CommandAuthorized,
-    CommandRecoveryRequired,
-    CommandReconcileStarted,
     CommandRejected,
     CommandOutcomeReceived,
     DomainFactCommitted,
-    DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
     Event,
-    ExternalOperationAccepted,
     RuntimeCompleted,
     RuntimeTerminated,
     StepCommitted,
     TerminationRequested,
-    UserInterruptReceived,
     UserMessageReceived,
 )
 from helperme.runtime.model import (
     AttemptPhase,
     AttemptState,
-    CancelTool,
     CanonicalState,
     CommandPhase,
     CommandState,
     DecisionState,
-    RetrySemantics,
     RuntimeStatus,
     Step,
 )
@@ -56,16 +49,12 @@ class _StateBuilder:
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         self.user_messages: list[str] = []
-        self.interrupts: list[str | None] = []
         self.commands: dict[str, CommandState] = {}
         self.steps: list[Step] = []
         self.step_ids: set[str] = set()
         self.visible_event_ids: list[str] = []
         self.attempt_event_ids: dict[tuple[str, str], str] = {}
         self.dispatch_command_ids: dict[str, str] = {}
-        self.reconcile_event_attempts: dict[str, tuple[str, str]] = {}
-        self.reconcile_counts: dict[tuple[str, str], int] = {}
-        self.recovery_required: set[tuple[str, str]] = set()
         self.canonical_outcome_event_ids: set[str] = set()
         self.terminal_event_id: str | None = None
         self.terminal_status: RuntimeStatus | None = None
@@ -86,7 +75,6 @@ class _StateBuilder:
             session_id=self.session_id,
             version=self.version(),
             user_messages=tuple(self.user_messages),
-            interrupts=tuple(self.interrupts),
             commands=tuple(self.commands.values()),
             prior_steps=tuple(self.steps),
             visible_event_ids=tuple(self.visible_event_ids),
@@ -97,22 +85,12 @@ class _StateBuilder:
         payload = event.payload
         if isinstance(payload, UserMessageReceived):
             self.user_messages.append(payload.content)
-        elif isinstance(payload, UserInterruptReceived):
-            self.interrupts.append(payload.reason)
         elif isinstance(payload, CommandAuthorized):
             self._apply_authorized(event, payload)
         elif isinstance(payload, CommandRejected):
             self._apply_rejected(event, payload)
         elif isinstance(payload, DispatchAttemptStarted):
             self._apply_dispatch_started(event, payload)
-        elif isinstance(payload, CommandReconcileStarted):
-            self._apply_reconcile_started(event, payload)
-        elif isinstance(payload, ExternalOperationAccepted):
-            self._apply_external_accepted(event, payload)
-        elif isinstance(payload, DispatchAttemptConfirmedNoEffect):
-            self._apply_no_effect(event, payload)
-        elif isinstance(payload, CommandRecoveryRequired):
-            self._apply_recovery_required(event, payload)
         elif isinstance(payload, CommandOutcomeReceived):
             self._apply_outcome(event, payload)
         elif isinstance(payload, TerminationRequested):
@@ -136,15 +114,11 @@ class _StateBuilder:
         if state.authorization_rejected_by_event_id is not None:
             raise ValueError(f"command already rejected: {payload.command_id}")
         if state.dispatch_eligible_by_event_id is not None:
-            raise ValueError(
-                f"command already authorized: {payload.command_id}"
-            )
+            raise ValueError(f"command already authorized: {payload.command_id}")
         if state.phase is not CommandPhase.PENDING:
             raise ValueError(f"command is not pending: {payload.command_id}")
         if event.causation_id != state.issued_by_event_id:
-            raise ValueError(
-                f"authorization causation mismatch: {payload.command_id}"
-            )
+            raise ValueError(f"authorization causation mismatch: {payload.command_id}")
         self.commands[payload.command_id] = replace(
             state,
             dispatch_eligible_by_event_id=event.event_id,
@@ -159,15 +133,11 @@ class _StateBuilder:
         if state.authorization_rejected_by_event_id is not None:
             raise ValueError(f"command already rejected: {payload.command_id}")
         if state.dispatch_eligible_by_event_id is not None:
-            raise ValueError(
-                f"cannot reject authorized command: {payload.command_id}"
-            )
+            raise ValueError(f"cannot reject authorized command: {payload.command_id}")
         if state.phase is not CommandPhase.PENDING:
             raise ValueError(f"command is not pending: {payload.command_id}")
         if event.causation_id != state.issued_by_event_id:
-            raise ValueError(
-                f"rejection causation mismatch: {payload.command_id}"
-            )
+            raise ValueError(f"rejection causation mismatch: {payload.command_id}")
         self.commands[payload.command_id] = replace(
             state,
             authorization_rejected_by_event_id=event.event_id,
@@ -182,18 +152,12 @@ class _StateBuilder:
         if state.phase is not CommandPhase.PENDING:
             raise ValueError(f"command is not pending: {payload.command_id}")
         if event.causation_id != state.dispatch_eligible_by_event_id:
-            raise ValueError(
-                f"dispatch causation mismatch: {payload.attempt_id}"
-            )
+            raise ValueError(f"dispatch causation mismatch: {payload.attempt_id}")
         attempt_key = (payload.command_id, payload.attempt_id)
         if attempt_key in self.attempt_event_ids:
-            raise ValueError(
-                f"duplicate command attempt: {payload.attempt_id}"
-            )
+            raise ValueError(f"duplicate command attempt: {payload.attempt_id}")
         if payload.attempt_number != len(state.attempts) + 1:
-            raise ValueError(
-                f"attempt number mismatch: {payload.attempt_id}"
-            )
+            raise ValueError(f"attempt number mismatch: {payload.attempt_id}")
         attempt = AttemptState(
             attempt_id=payload.attempt_id,
             attempt_number=payload.attempt_number,
@@ -201,150 +165,12 @@ class _StateBuilder:
         )
         self.attempt_event_ids[attempt_key] = event.event_id
         self.dispatch_command_ids[event.event_id] = payload.command_id
-        previous_attempts = tuple(
-            replace(previous, superseded=True)
-            if not previous.superseded
-            else previous
-            for previous in state.attempts
-        )
         self.commands[payload.command_id] = replace(
             state,
             phase=CommandPhase.UNKNOWN,
-            attempts=(*previous_attempts, attempt),
+            attempts=(*state.attempts, attempt),
             dispatch_eligible_by_event_id=None,
         )
-
-    def _apply_reconcile_started(
-        self,
-        event: Event,
-        payload: CommandReconcileStarted,
-    ) -> None:
-        state = self.commands[payload.command_id]
-        attempt = self._attempt(state, payload.attempt_id)
-        expected_cause = (
-            attempt.accepted_event_id
-            if attempt.phase is AttemptPhase.RUNNING
-            else attempt.started_event_id
-        )
-        if event.causation_id != expected_cause:
-            raise ValueError(
-                f"reconcile causation mismatch: {payload.reconcile_id}"
-            )
-        key = (payload.command_id, payload.attempt_id)
-        expected_number = self.reconcile_counts.get(key, 0) + 1
-        if payload.reconcile_number != expected_number:
-            raise ValueError(
-                f"reconcile number mismatch: {payload.reconcile_id}"
-            )
-        self.reconcile_counts[key] = expected_number
-        self.reconcile_event_attempts[event.event_id] = key
-        self.commands[payload.command_id] = replace(
-            state,
-            attempts=self._replace_attempt(
-                state,
-                replace(attempt, reconcile_count=expected_number),
-            ),
-        )
-
-    def _apply_external_accepted(
-        self,
-        event: Event,
-        payload: ExternalOperationAccepted,
-    ) -> None:
-        state = self.commands[payload.command_id]
-        attempt = self._attempt(state, payload.attempt_id)
-        self._validate_attempt_fact_cause(
-            event,
-            payload.command_id,
-            attempt,
-        )
-        if (
-            attempt.external_operation_id is not None
-            and attempt.external_operation_id != payload.external_operation_id
-        ):
-            raise ValueError(
-                f"external operation conflict: {payload.attempt_id}"
-            )
-        attempt_phase = (
-            attempt.phase
-            if attempt.phase is AttemptPhase.TERMINAL
-            else AttemptPhase.RUNNING
-        )
-        revive_superseded = (
-            attempt.superseded
-            and state.outcome is None
-            and state.phase is CommandPhase.PENDING
-            and state.current_attempt is None
-            and attempt_phase is AttemptPhase.RUNNING
-        )
-        updated = replace(
-            attempt,
-            phase=attempt_phase,
-            external_operation_id=payload.external_operation_id,
-            accepted_event_id=event.event_id,
-            superseded=(
-                False if revive_superseded else attempt.superseded
-            ),
-        )
-        phase = state.phase
-        dispatch_eligible_by_event_id = state.dispatch_eligible_by_event_id
-        if (
-            state.outcome is None
-            and (not attempt.superseded or revive_superseded)
-            and attempt_phase is AttemptPhase.RUNNING
-        ):
-            phase = CommandPhase.RUNNING
-            dispatch_eligible_by_event_id = None
-        self.commands[payload.command_id] = replace(
-            state,
-            phase=phase,
-            attempts=self._replace_attempt(state, updated),
-            dispatch_eligible_by_event_id=dispatch_eligible_by_event_id,
-        )
-
-    def _apply_no_effect(
-        self,
-        event: Event,
-        payload: DispatchAttemptConfirmedNoEffect,
-    ) -> None:
-        state = self.commands[payload.command_id]
-        attempt = self._attempt(state, payload.attempt_id)
-        self._validate_reconcile_cause(event, payload.command_id, attempt)
-        updated = replace(attempt, phase=AttemptPhase.NO_EFFECT)
-        changes: dict[str, object] = {
-            "attempts": self._replace_attempt(state, updated),
-        }
-        current_attempt = state.current_attempt
-        if (
-            state.outcome is None
-            and state.phase is CommandPhase.UNKNOWN
-            and current_attempt is not None
-            and current_attempt.attempt_id == attempt.attempt_id
-        ):
-            changes.update(
-                phase=CommandPhase.PENDING,
-                dispatch_eligible_by_event_id=event.event_id,
-            )
-        self.commands[payload.command_id] = replace(state, **changes)
-
-    def _apply_recovery_required(
-        self,
-        event: Event,
-        payload: CommandRecoveryRequired,
-    ) -> None:
-        state = self.commands[payload.command_id]
-        attempt = self._attempt(state, payload.attempt_id)
-        self._validate_attempt_fact_cause(
-            event,
-            payload.command_id,
-            attempt,
-        )
-        key = (payload.command_id, payload.attempt_id)
-        if key in self.recovery_required:
-            raise ValueError(
-                f"duplicate recovery requirement: {payload.command_id}"
-            )
-        self.recovery_required.add(key)
 
     def _apply_outcome(
         self,
@@ -353,52 +179,21 @@ class _StateBuilder:
     ) -> None:
         state = self.commands[payload.command_id]
         attempts = state.attempts
-        if payload.attempt_id is not None:
-            attempt = self._attempt(state, payload.attempt_id)
-            self._validate_attempt_fact_cause(
-                event,
-                payload.command_id,
+        if payload.attempt_id is None:
+            raise ValueError(f"outcome has no attempt: {payload.command_id}")
+        attempt = self._attempt(state, payload.attempt_id)
+        if event.causation_id != attempt.started_event_id:
+            raise ValueError(f"attempt fact causation mismatch: {payload.command_id}")
+        if attempt.outcome is not None:
+            raise ValueError(f"attempt already terminal: {payload.attempt_id}")
+        attempts = self._replace_attempt(
+            state,
+            replace(
                 attempt,
-            )
-            if attempt.outcome is not None:
-                raise ValueError(
-                    f"attempt already terminal: {payload.attempt_id}"
-                )
-            attempts = self._replace_attempt(
-                state,
-                replace(
-                    attempt,
-                    phase=AttemptPhase.TERMINAL,
-                    outcome=payload.outcome,
-                ),
-            )
-        else:
-            cancel_command_id = self.dispatch_command_ids.get(
-                event.causation_id
-            )
-            if cancel_command_id is None:
-                reconcile_source = self.reconcile_event_attempts.get(
-                    event.causation_id
-                )
-                cancel_command_id = (
-                    reconcile_source[0]
-                    if reconcile_source is not None
-                    else None
-                )
-            if cancel_command_id is None:
-                raise ValueError(
-                    f"outcome has no dispatch cause: {payload.command_id}"
-                )
-            cancel_effect = self.commands[
-                cancel_command_id
-            ].command.effect
-            if (
-                not isinstance(cancel_effect, CancelTool)
-                or cancel_effect.target_command_id != payload.command_id
-            ):
-                raise ValueError(
-                    f"outcome cancel cause mismatch: {payload.command_id}"
-                )
+                phase=AttemptPhase.TERMINAL,
+                outcome=payload.outcome,
+            ),
+        )
         if state.outcome is None:
             self.canonical_outcome_event_ids.add(event.event_id)
             self.commands[payload.command_id] = replace(
@@ -414,28 +209,6 @@ class _StateBuilder:
                 state,
                 attempts=attempts,
             )
-
-    def _validate_attempt_fact_cause(
-        self,
-        event: Event,
-        command_id: str,
-        attempt: AttemptState,
-    ) -> None:
-        if event.causation_id == attempt.started_event_id:
-            return
-        self._validate_reconcile_cause(event, command_id, attempt)
-
-    def _validate_reconcile_cause(
-        self,
-        event: Event,
-        command_id: str,
-        attempt: AttemptState,
-    ) -> None:
-        if self.reconcile_event_attempts.get(event.causation_id) != (
-            command_id,
-            attempt.attempt_id,
-        ):
-            raise ValueError(f"attempt fact causation mismatch: {command_id}")
 
     @staticmethod
     def _attempt(state: CommandState, attempt_id: str) -> AttemptState:
@@ -501,57 +274,16 @@ class _StateBuilder:
             expected_basis_state_version is not None
             and step.basis_state_version != expected_basis_state_version
         ):
-            raise ValueError(
-                f"step basis mismatch: {step.step_id}"
-            )
-        for command_id in step.decision.abandon_command_ids:
-            state = self.commands[command_id]
-            self.commands[command_id] = replace(state, abandoned=True)
-        for command_id, retry_attempt_id in step.retry_attempts:
-            state = self.commands[command_id]
-            retry = state.command.recovery.retry_semantics
-            if retry is RetrySemantics.PROHIBITED:
-                raise ValueError(f"command retry is prohibited: {command_id}")
-            if (
-                retry is RetrySemantics.IDEMPOTENCY_KEY_REQUIRED
-                and not state.command.idempotency_key
-            ):
-                raise ValueError(
-                    f"command retry lacks idempotency key: {command_id}"
-                )
-            current = state.current_attempt
-            if (
-                state.phase is CommandPhase.UNKNOWN
-                and current is not None
-                and current.attempt_id == retry_attempt_id
-            ):
-                attempts = tuple(
-                    replace(attempt, superseded=True)
-                    if current is not None
-                    and attempt.attempt_id == current.attempt_id
-                    else attempt
-                    for attempt in state.attempts
-                )
-                self.commands[command_id] = replace(
-                    state,
-                    phase=CommandPhase.PENDING,
-                    attempts=attempts,
-                    dispatch_eligible_by_event_id=event.event_id,
-                )
+            raise ValueError(f"step basis mismatch: {step.step_id}")
         for command in step.commands:
             if command.command_id in self.commands:
                 raise ValueError(f"duplicate command id: {command.command_id}")
-            if isinstance(command.effect, CancelTool):
-                if command.effect.target_command_id not in self.commands:
-                    raise KeyError(command.effect.target_command_id)
             self.commands[command.command_id] = CommandState(
                 command=command,
                 phase=CommandPhase.PENDING,
                 issued_by_event_id=event.event_id,
                 dispatch_eligible_by_event_id=(
-                    None
-                    if command.requires_authorization
-                    else event.event_id
+                    None if command.requires_authorization else event.event_id
                 ),
             )
         self.steps.append(step)
@@ -567,9 +299,7 @@ class StateProjector:
     ) -> RuntimeProjection:
         self._validate_session(session_id, events)
         step_events = self._index_step_events(events)
-        event_sequences = {
-            event.event_id: event.sequence for event in events
-        }
+        event_sequences = {event.event_id: event.sequence for event in events}
 
         operational = _StateBuilder(session_id)
         for event in events:
@@ -601,21 +331,16 @@ class StateProjector:
             step = step_event.payload.step
             expected_cursor = len(consumed) + 1
             if step.decision_cursor != expected_cursor:
-                raise ValueError(
-                    f"step decision cursor mismatch: {step.step_id}"
-                )
+                raise ValueError(f"step decision cursor mismatch: {step.step_id}")
             minimum_observed_position = max(
-                event_sequences[event_id]
-                for event_id in decision.visible_event_ids
+                event_sequences[event_id] for event_id in decision.visible_event_ids
             )
             if not (
                 minimum_observed_position
                 <= step.observed_journal_position
                 < step_event.sequence
             ):
-                raise ValueError(
-                    f"step observed position mismatch: {step.step_id}"
-                )
+                raise ValueError(f"step observed position mismatch: {step.step_id}")
             decision.apply_step(
                 step_event,
                 expected_basis_state_version=decision.version(),
@@ -624,13 +349,11 @@ class StateProjector:
             applied_step_event_ids.add(step_event.event_id)
 
         unapplied = {
-            event.event_id
-            for event in step_events.values()
+            event.event_id for event in step_events.values()
         } - applied_step_event_ids
         if unapplied:
             raise ValueError(
-                f"step commits cross an unconsumed decision event: "
-                f"{sorted(unapplied)}"
+                f"step commits cross an unconsumed decision event: {sorted(unapplied)}"
             )
 
         decision_state = decision.decision_state(tuple(consumed))
@@ -667,8 +390,7 @@ class StateProjector:
             if next_frame is not None
             else (
                 tuple(
-                    f"authorization:{command_id}"
-                    for command_id in unauthorized_pending
+                    f"authorization:{command_id}" for command_id in unauthorized_pending
                 )
                 + tuple(
                     f"command:{command_id}"
@@ -710,17 +432,12 @@ class StateProjector:
         event_ids: set[str] = set()
         for expected_sequence, event in enumerate(events, start=1):
             if event.session_id != session_id:
-                raise ValueError(
-                    f"event belongs to another session: {event.event_id}"
-                )
+                raise ValueError(f"event belongs to another session: {event.event_id}")
             if event.sequence != expected_sequence:
-                raise ValueError(
-                    f"invalid event sequence: {event.event_id}"
-                )
+                raise ValueError(f"invalid event sequence: {event.event_id}")
             if event.schema_version != EVENT_SCHEMA_VERSION:
                 raise ValueError(
-                    f"unsupported event schema version: "
-                    f"{event.schema_version}"
+                    f"unsupported event schema version: {event.schema_version}"
                 )
             if event.event_id in event_ids:
                 raise ValueError(f"duplicate event id: {event.event_id}")
@@ -737,21 +454,13 @@ class StateProjector:
             trigger_id = payload.step.trigger_event_id
             trigger = events_by_id.get(trigger_id)
             if trigger is None:
-                raise ValueError(
-                    f"step trigger does not exist: {trigger_id}"
-                )
+                raise ValueError(f"step trigger does not exist: {trigger_id}")
             if trigger.sequence >= event.sequence:
-                raise ValueError(
-                    f"step precedes its trigger: {payload.step.step_id}"
-                )
+                raise ValueError(f"step precedes its trigger: {payload.step.step_id}")
             if event.causation_id != trigger_id:
-                raise ValueError(
-                    f"step causation mismatch: {payload.step.step_id}"
-                )
+                raise ValueError(f"step causation mismatch: {payload.step.step_id}")
             if trigger_id in result:
-                raise ValueError(
-                    f"decision event consumed twice: {trigger_id}"
-                )
+                raise ValueError(f"decision event consumed twice: {trigger_id}")
             result[trigger_id] = event
         return result
 
@@ -763,13 +472,11 @@ class StateProjector:
         later_events: tuple[Event, ...],
     ) -> bool:
         payload = event.payload
-        if isinstance(payload, (UserMessageReceived, UserInterruptReceived)):
+        if isinstance(payload, UserMessageReceived):
             return True
         if isinstance(payload, DomainFactCommitted):
             return payload.requests_decision
         if isinstance(payload, CommandRejected):
-            return not state.commands[payload.command_id].abandoned
-        if isinstance(payload, CommandRecoveryRequired):
             return not state.commands[payload.command_id].abandoned
         if isinstance(payload, CommandOutcomeReceived):
             command_state = state.commands[payload.command_id]
@@ -780,17 +487,8 @@ class StateProjector:
                 and _parallel_decision_group_closed(state, command_state)
             ):
                 return False
-            if event.event_id in step_events:
-                return True
-            return not _has_later_user_interrupt(later_events)
+            return True
         return False
-
-
-def _has_later_user_interrupt(later_events: tuple[Event, ...]) -> bool:
-    return any(
-        isinstance(event.payload, UserInterruptReceived)
-        for event in later_events
-    )
 
 
 def _parallel_decision_group_closed(

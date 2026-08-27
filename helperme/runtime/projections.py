@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from helperme.runtime.events import (
     CommandOutcomeReceived,
     Event,
-    UserInterruptReceived,
     UserMessageReceived,
 )
 from helperme.runtime.model import CanonicalState, Step
@@ -21,13 +20,6 @@ class OutcomeView:
 
 
 @dataclass(frozen=True, slots=True)
-class InterruptView:
-    event_id: str
-    sequence: int
-    reason: str | None
-
-
-@dataclass(frozen=True, slots=True)
 class UserMessageView:
     event_id: str
     sequence: int
@@ -38,7 +30,6 @@ class UserMessageView:
 class TurnView:
     session_id: str
     user_messages: tuple[UserMessageView, ...]
-    interrupts: tuple[InterruptView, ...]
     steps: tuple[Step, ...]
     outcomes: tuple[OutcomeView, ...]
 
@@ -82,11 +73,7 @@ def diagnose_artifacts(
     events: tuple[Event, ...],
     available_refs: Collection[str] | None = None,
 ) -> ArtifactResolution:
-    refs = tuple(dict.fromkeys(
-        ref
-        for event in events
-        for ref in event.artifact_refs
-    ))
+    refs = tuple(dict.fromkeys(ref for event in events for ref in event.artifact_refs))
     if available_refs is None:
         return ArtifactResolution(refs=refs, missing=(), inspected=False)
     available = frozenset(available_refs)
@@ -100,11 +87,13 @@ def project_turn(
     projector: StateProjector | None = None,
 ) -> TurnView:
     state = (
-        StateProjector() if projector is None else projector
-    ).project(
-        session_id,
-        events,
-    ).state
+        (StateProjector() if projector is None else projector)
+        .project(
+            session_id,
+            events,
+        )
+        .state
+    )
     return TurnView(
         session_id=session_id,
         user_messages=tuple(
@@ -115,15 +104,6 @@ def project_turn(
             )
             for event in events
             if isinstance(event.payload, UserMessageReceived)
-        ),
-        interrupts=tuple(
-            InterruptView(
-                event_id=event.event_id,
-                sequence=event.sequence,
-                reason=event.payload.reason,
-            )
-            for event in events
-            if isinstance(event.payload, UserInterruptReceived)
         ),
         steps=state.steps,
         outcomes=tuple(

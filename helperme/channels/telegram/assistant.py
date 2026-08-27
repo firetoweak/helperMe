@@ -5,7 +5,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, Update
 
-from helperme.assistant.runner import MODEL_DECISION_ERRORS, SessionNotFoundError
+from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import InitialConfigCreated, load_app_config
 
@@ -50,8 +50,6 @@ class TelegramChannel:
         self._chat_id = chat_id
         self._session_id = session_id
         self._delivery_prefix = f"telegram-bot-{bot_id}-update-"
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
-        self._driving = False
 
     async def send(self, text: str) -> None:
         await self._bot.send_message(chat_id=self._chat_id, text=text)
@@ -61,15 +59,6 @@ class TelegramChannel:
             return
         if message.text.strip() == "/start":
             await self.send("HelperMe 已连接。直接发送任务即可。")
-            return
-
-        if self._driving:
-            await self._sessions.receive_interrupt(
-                self._session_id,
-                message.text,
-                delivery_id=f"{self._delivery_prefix}{update_id}",
-                source="telegram",
-            )
             return
 
         view = await self._sessions.view(self._session_id)
@@ -86,22 +75,6 @@ class TelegramChannel:
                 delivery_id=f"{self._delivery_prefix}{update_id}",
                 source="telegram",
             )
-        self._driving = True
-        await self._queue.put(self._session_id)
-
-    async def run_worker(self) -> None:
-        while True:
-            await self.drive_next()
-
-    async def drive_next(self) -> None:
-        session_id = await self._queue.get()
-        try:
-            await self._sessions.drive(session_id)
-        except MODEL_DECISION_ERRORS as exc:
-            await self.send(f"模型调用失败：{exc}")
-        finally:
-            self._driving = False
-            self._queue.task_done()
 
 
 async def _open_chat_channel(
@@ -135,10 +108,7 @@ async def run_telegram_assistant() -> None:
             async def receive_pairing(message: Message) -> None:
                 await pairing.accept(message)
 
-            print(
-                "Telegram 配对模式已启动；"
-                "请向机器人发送 /start 获取 chat_id。"
-            )
+            print("Telegram 配对模式已启动；请向机器人发送 /start 获取 chat_id。")
             await dispatcher.start_polling(
                 bot,
                 allowed_updates=["message"],
@@ -169,27 +139,12 @@ async def run_telegram_assistant() -> None:
             ) -> None:
                 await channel.accept(event_update.update_id, message)
 
-            worker = asyncio.create_task(channel.run_worker())
-            polling = asyncio.create_task(dispatcher.start_polling(
+            await dispatcher.start_polling(
                 bot,
                 allowed_updates=["message"],
                 handle_as_tasks=False,
                 close_bot_session=False,
-            ))
-            print(
-                f"Telegram Assistant 已启动，chat_id={chat_id}；"
-                "按 Ctrl+C 退出。"
             )
-            try:
-                done, _ = await asyncio.wait(
-                    (worker, polling),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                await next(iter(done))
-            finally:
-                for task in (worker, polling):
-                    task.cancel()
-                await asyncio.gather(worker, polling, return_exceptions=True)
 
 
 def main() -> None:

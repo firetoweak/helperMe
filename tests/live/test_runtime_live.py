@@ -6,7 +6,7 @@ import unittest
 from helperme.runtime import AgentRuntime, MemoryJournal, RuntimeStatus
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
-from helperme.assistant.runner import drive_until_idle
+from tests.session_scheduler import settle_session
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.client import LLMClient
 
@@ -42,7 +42,7 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
                 delivery_id="live-1",
             )
             result = await asyncio.wait_for(
-                drive_until_idle(runtime, session_id),
+                settle_session(runtime, session_id),
                 timeout=180,
             )
         events = await journal.snapshot(session_id)

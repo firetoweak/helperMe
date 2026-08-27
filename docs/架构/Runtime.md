@@ -1,82 +1,28 @@
 # Runtime
 
-内核在 `helperme/runtime/`。它不认识 MCP、Skill、Goal、Todo、Conversation 等产品词。
+Runtime Core 是 `helperme/runtime`。它只负责 Event 持久化、State 归约、Step 原子提交、Command 派发约束和显式终态屏障。
 
-## Session
+Session 是持续 Event 流，不是一次用户消息的执行循环。Channel 或 Automation 选择 identity，`create_session(identity)` 幂等持久化生命线；创建本身不是 Event，也不触发 Step。
 
-一条可独立排序、推进、等待、恢复的执行生命线。同一时刻最多一个 Step 在为该 Session 做模型决策。
+一次推进的原子单元是 Step：消费一个决策 Event，冻结 Decision State，调用一次模型，提交一个 Decision，并原子签发 Commands。`AgentRuntime.advance(session_id)` 最多提交一个 Step，不负责把 Session 循环跑到 idle。
 
-Runtime Core 不负责选择 Session。Channel 或 Automation 生成或选择 Session identity；identity 给定后，`AssistantSessions` 调用幂等的 `create_session(identity)`，Core 持久化这条空执行生命线，并负责后续 Event 持久执行、State 重建、历史重放以及按 Command Contract 进行机械恢复。Session 的存在不以“已经有 Event”为条件；创建本身不是 Event，也不触发模型或 Step。Core 不理解它对应 Conversation、任务、后台工作还是 SubAgent。
+`SessionScheduler` 监听事实提交后的 wake：外部输入唤醒 Session；Step 提交后 Dispatcher 独立启动 Commands；Outcome Event 再唤醒 Session。Scheduler 是跨 Session 的调度边界，不属于 Runtime Core，也不是 Turn/Run wrapper。
 
-Host 决定一条 Session 是持续生命线还是有界执行。当前 Channel 选择的 Session 是持续对话：一轮回答结束后进入 `WAITING(user_message)`，不请求 Runtime 终态。未来 SubAgent 或一次性后台执行可以选择有界 Session，并在自己的产品边界显式请求 finalization。Core 不增加 `session_type`，也不负责物理回收 Session 数据。
+Canonical State 由 Journal 重放得到：
 
-## Event 与 Journal
-
-Event 记录已经确认发生的事，不可变，只能追加。它不解释事实，也不决定下一步。
-
-Journal 是顺序与语义权威。大正文在 Artifact Store；Journal 持稳定引用。Replay 重放 Event，不调用模型或工具。
-
-`helperme/runtime/journal/api.py` 定义协议、Lease 与 `MemoryJournal`；`journal/sqlite.py` 实现控制台使用的 `SqliteJournal`。Journal 只负责事实持久化与机械原子性，不承载 State 或决策语义。
-
-## State
-
-Canonical State 由 Event 归约得到，不是先改内存再补日志。Runtime Status 由 State 确定：
-
-| 状态 | 含义 |
+| Status | 含义 |
 |---|---|
-| RUNNABLE | 有待消费的决策触发，可以 `advance()` |
-| WAITING | 等人、等授权、等 Command 结果 |
-| COMPLETED | 有界执行完成，且过了 Completion Barrier |
-| TERMINATED | 有界执行终止，且过了 Termination Barrier |
+| `RUNNABLE` | 有一个合法的待消费决策 Event |
+| `WAITING` | 等待输入、授权或 Command Outcome |
+| `COMPLETED` | 有界 Host 已显式完成 finalization |
+| `TERMINATED` | 有界 Host 已显式终止 finalization |
 
-`waiting_for` 例如 `user_message`、`authorization:{command_id}`、`command:{command_id}`。
+CLI / Telegram Session 是持续对话，永不因普通回答自动终态化。`COMPLETED / TERMINATED` 只供未来有界后台任务或 SubAgent Host 显式使用。
 
-## Step
+所有 Channel 文本统一为有序 `UserMessageReceived`。运行中到达的新消息不会抢占或取消冻结中的 Step，只会成为后续 Step 的决策 Event。Runtime 没有 Interrupt 协议。
 
-决策闭环。一次 Step 消费一个触发（UserMessage、工具结果、请求决策的 Domain Fact、被拒绝的 Command 等），产出 `ModelDecision`：文本、Command 列表、可选 `LifecycleIntent`（none / complete / terminate）。Lifecycle Intent 只是一份可供有界执行 Host 处理的声明；持续 Channel 不据此关闭 Session。
+Command 当前只有 `InvokeTool`。Dispatcher 先持久化 Attempt，再执行 Binding，最后写入确定 Outcome。未预期异常原样穿透；已经开始但没有 Outcome 的 Attempt 保持 `unknown`。Runtime 不提供通用 Recovery、Reconcile、Retry 或 Cancel，也不会在 `/resume` 时盲目重试。
 
-Decision Context 在 Step 开始时冻结模型所见的 Event、Criteria、Prompt、Tool/Skill schemas。模型调用期间的新事实只进入后续 Step。Commit Guard 在提交时重新验证 Runtime 当前真实世界中的 claim、trigger、basis version 与终态等不变量；冻结视图不能替代提交校验。
+`/resume` 只选择已有 Session、重建投影，并在 State 本身为 `RUNNABLE` 时唤醒。Journal、Step claim、Attempt claim、投递幂等和 Finalization Barrier 仍提供机械一致性。
 
-Runtime 不替模型做语义判断。它只接收 `ModelDecision`，并确定性检查该 Decision 能否提交、Command 能否派发。Assistant 决策边界把本次精确请求、模型配置、Projector 版本和原始响应保存为 Replay Manifest；Core 只随 `StepCommitted` 保存不透明 `artifact_refs`，不解析 Prompt、Schema 或模型协议。
-
-同 Step、`decision_on_outcome=True` 的并行 Command 构成无序集合。调用、开始、完成和 Outcome 写入顺序都没有决策语义；全部终态后才形成下一次决策（sibling join）。
-
-`decision_on_outcome` 是 Command 签发时冻结的机械调度事实，默认 `True`。该值由 Core 外的 Tool Binding 提供；Core 只读取，不根据工具身份、Command 类型或 Outcome 内容推断。目前唯一显式例外是 `deliver=False`。
-
-Journal 仍按真实接纳顺序记录每个 Outcome，用于审计和并发裁决，但 Runtime 不为并行结果顺序建立额外语义，也不因单个结果到达触发模型。
-
-Assistant 向模型序列化同一段相邻并行结果时，按 Command 签发顺序做稳定展示，避免完成竞速改变模型输入；这只是投影规范化，不改写 Journal，也不赋予该顺序业务含义。
-
-Runtime 不推断后来的普通 `UserMessageReceived` 会使既有决策输入失效。闭合的 Command 结果组与后续 UserMessage 按各自顺序分别触发 Step。
-
-`UserInterruptReceived` 是纯 Runtime 控制事实，不是决策输入。Channel 对运行中用户输入只接纳一次外部 delivery；Interrupt 持久保存正文与确定性的 `follow_up_message_id`，使当前未提交 Step 失去提交资格，取消未派发 Command，并按 Tool Contract 向运行中 Command 传播 cancellation；已终态结果保持不变。Interrupt 本身不进入 Model Context，也不提供任何模型中断裁决工具。旧执行收口并写入 `ExecutionInterrupted` 后，Runtime 以确定性 ID 幂等派生新的 `UserMessageReceived`，由它开启新的决策 Event 和 Step；旧 Step 永不恢复。该顺序不需要原子 Event batch，任一崩溃点都从 Journal 继续。没有后继消息的显式纯中断才进入 `WAITING(user_message)`。`Ctrl+C` 只退出 CLI 进程，不进入 Runtime。
-
-## Domain Fact
-
-产品领域事实通过 `DomainFactCommitted(fact_type, data, requests_decision)` 进入 Journal。Runtime 只校验通用载荷并读取 `requests_decision` 调度位，不解释 `fact_type` 和 `data`。Criteria、Judgment 等类型、编码和投影属于 Assistant Completion；新增或删除它们不修改 Runtime Event、Codec 或 Reducer。
-
-不是每种连续交互状态都要新增 Domain Fact。若领域状态能由既有 Event 无歧义投影，就直接复用它：例如 Toolset 激活由成功的 `load_toolset` Command Outcome 投影，并由 Assistant ToolSurface 恢复连接。Runtime 不认识 Toolset，也不保存其缓存。
-
-## Command
-
-副作用闭环。Dispatcher 按结果到达顺序写回 Event。Host Binding 声明的授权要求在 Command 签发时冻结；需要人批准的 Command 在 dispatch 前等待 `CommandAuthorized`。Runtime 不按工具名或参数推断风险，模型也不能给自己授权。
-
-`OutcomeStatus` 描述执行适配器报告的调用层终态，不解释返回正文。普通工具即使返回 `{ "ok": false, "code": ... }`，Runtime 也只把完整 value 交给后续 Step；它不能读取领域字段后自行改写 Outcome、重试、终止或选择替代方案。需要调用层 `FAILED` 时，由 Tool Adapter 显式返回对应 `ToolTerminal`。
-
-预期内失败必须由 Tool Adapter / handler 转换成确定 Outcome。只有异常逃逸到 Runtime 边界、且没有可靠最终结果时，Attempt 才保守地停在现有 `unknown`；不新增更细异常状态，也不把“抛异常”武断等同于“外部动作失败且无副作用”。
-
-未预期异常必须原样穿透当前调用链，Host 不得为了继续运行而宽泛捕获。异常发生前已持久化的 Attempt 仍保持 `unknown`；下次显式恢复 Session 时才启动现有 Recovery Contract。Runtime 能查询就记录查询事实；不能确认就追加 `CommandRecoveryRequired`。这只是恢复历史中的不确定执行，不是把程序 bug 改写成业务错误。
-
-`bind_tool` 允许 Host 在 Session 进行中补 Binding。Runtime 不解释工具从哪来。
-
-恢复同样遵守“Runtime 不替模型决定”：Dispatcher 可以按 Tool Recovery Contract 查询外部事实；查到终态就记录 Outcome，确认 Attempt 从未产生外部效果则继续派发原 Command。若结果仍是 `unknown`，Runtime 只写 `CommandRecoveryRequired` 及契约允许的选择，不自行 retry、abandon 或 cancel。选择由后续模型 Step 或用户作出。
-
-## 终态
-
-`LifecycleIntent.complete` 只是模型提交的完成声明，不是 Runtime 对任务的判断。只有明确有界的执行 Host 才在 Judge / Policy 通过后显式调用 `finalize()`。持续 Channel 不装配这条终态化路径，即使历史或未来模型产生该声明，也只在完成输出后回到 `WAITING(user_message)`。Core 的 Finalization Barrier 只原子验证没有未消费的决策输入和必要依赖，不能判断目标是否满足。
-
-`LifecycleIntent.terminate` 同样只供有界执行显式收口。abandon ≠ cancel，Interrupt 只结束当前执行链，不终止持续 Session。
-
-## 不是 Runtime 的事
-
-Turn、Conversation、Context 窗口、Trace、判定标准文本、MCP Server 列表、Skill 目录：都是投影或 Host 策略。细节见 [状态推进模型](Runtime状态推进模型.md)。
+Runtime 不理解 Turn、Conversation、Context、Criteria、MCP、Skill 或工具返回值中的领域字段。完整决策见 [Runtime 状态推进模型](Runtime状态推进模型.md)。

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
+from helperme.assistant.runner import SessionScheduler
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import (
     AppConfig,
@@ -23,6 +24,7 @@ from helperme.runtime import AgentRuntime, SqliteJournal
 class BootstrappedAssistant:
     config: AssistantConfig
     sessions: AssistantSessions
+    scheduler: SessionScheduler
     journal_path: Path
     mcp_service: object
     skill_service: object
@@ -63,17 +65,27 @@ async def bootstrap_assistant(
         assembly.bindings,
     )
     assembly.surface.attach(runtime)
+    scheduler = SessionScheduler(
+        runtime,
+        control=assembly.control,
+        notify=sink,
+    )
     sessions = AssistantSessions(
         runtime,
         assembly.surface,
+        scheduler,
         control=assembly.control,
         management=assembly.management,
     )
     async with effective_config.llm, assembly.mcp.client_manager:
-        yield BootstrappedAssistant(
-            config=effective_config,
-            sessions=sessions,
-            journal_path=journal_path,
-            mcp_service=assembly.mcp.service,
-            skill_service=assembly.skills.service,
-        )
+        try:
+            yield BootstrappedAssistant(
+                config=effective_config,
+                sessions=sessions,
+                scheduler=scheduler,
+                journal_path=journal_path,
+                mcp_service=assembly.mcp.service,
+                skill_service=assembly.skills.service,
+            )
+        finally:
+            await scheduler.close()

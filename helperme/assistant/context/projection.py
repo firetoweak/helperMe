@@ -24,11 +24,9 @@ from helperme.runtime.events import (
     CommandOutcomeReceived,
     Event,
     StepCommitted,
-    UserInterruptReceived,
     UserMessageReceived,
 )
 from helperme.runtime.model import (
-    CancelTool,
     CommandOutcome,
     InvokeTool,
     OutcomeStatus,
@@ -149,36 +147,33 @@ def _translate_visible_events(
             "system",
         ),
     ]
-    commands: dict[str, InvokeTool | CancelTool] = {}
+    commands: dict[str, InvokeTool] = {}
     command_ranks: dict[str, tuple[int, int]] = {}
     for event in events:
         if event.event_id not in visible:
             continue
         payload = event.payload
         if isinstance(payload, UserMessageReceived):
-            items.append(_Projected(
-                {"role": "user", "content": payload.content},
-                "user",
-            ))
-            continue
-        if isinstance(payload, UserInterruptReceived):
-            reason = payload.reason or "interrupted"
-            items.append(_Projected(
-                {"role": "user", "content": f"[interrupt] {reason}"},
-                "interrupt",
-            ))
+            items.append(
+                _Projected(
+                    {"role": "user", "content": payload.content},
+                    "user",
+                )
+            )
             continue
         judgment = judgment_from_fact(payload)
         if judgment is not None:
-            items.append(_Projected(
-                {
-                    "role": "user",
-                    "content": (
-                        f"[judge {judgment.verdict.value}] {judgment.summary}"
-                    ),
-                },
-                "judgment",
-            ))
+            items.append(
+                _Projected(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[judge {judgment.verdict.value}] {judgment.summary}"
+                        ),
+                    },
+                    "judgment",
+                )
+            )
             continue
         if isinstance(payload, StepCommitted):
             shown: list[dict[str, object]] = []
@@ -193,17 +188,19 @@ def _translate_visible_events(
                     continue
                 if effect.name == DELIVER_TOOL_NAME:
                     continue
-                shown.append({
-                    "id": command.command_id,
-                    "type": "function",
-                    "function": {
-                        "name": effect.name,
-                        "arguments": json.dumps(
-                            dict(effect.arguments),
-                            ensure_ascii=False,
-                        ),
-                    },
-                })
+                shown.append(
+                    {
+                        "id": command.command_id,
+                        "type": "function",
+                        "function": {
+                            "name": effect.name,
+                            "arguments": json.dumps(
+                                dict(effect.arguments),
+                                ensure_ascii=False,
+                            ),
+                        },
+                    }
+                )
             content = payload.step.decision.content
             if not content and not shown:
                 continue
@@ -221,15 +218,17 @@ def _translate_visible_events(
                 continue
             if effect.name == DELIVER_TOOL_NAME:
                 continue
-            items.append(_Projected(
-                {
-                    "role": "tool",
-                    "tool_call_id": payload.command_id,
-                    "content": outcome_text(payload.outcome),
-                },
-                "tool",
-                payload.command_id,
-            ))
+            items.append(
+                _Projected(
+                    {
+                        "role": "tool",
+                        "tool_call_id": payload.command_id,
+                        "content": outcome_text(payload.outcome),
+                    },
+                    "tool",
+                    payload.command_id,
+                )
+            )
     return _canonicalize_tool_result_runs(items, command_ranks)
 
 
@@ -272,25 +271,18 @@ def _externalized_meta(content: object) -> dict[str, object] | None:
     data = payload.get("data")
     if isinstance(data, dict):
         artifact_id = data.get("artifact_id")
-        if (
-            data.get("externalized") is True
-            and is_valid_artifact_id(artifact_id)
-        ):
+        if data.get("externalized") is True and is_valid_artifact_id(artifact_id):
             return data
     value = payload.get("value")
     if isinstance(value, dict):
         artifact_id = value.get("artifact_id")
-        if (
-            value.get("externalized") is True
-            and is_valid_artifact_id(artifact_id)
-        ):
+        if value.get("externalized") is True and is_valid_artifact_id(artifact_id):
             return value
         nested_data = value.get("data")
         if isinstance(nested_data, dict):
             artifact_id = nested_data.get("artifact_id")
-            if (
-                nested_data.get("externalized") is True
-                and is_valid_artifact_id(artifact_id)
+            if nested_data.get("externalized") is True and is_valid_artifact_id(
+                artifact_id
             ):
                 return nested_data
     return None
@@ -376,12 +368,8 @@ class ModelContextProjector:
         settings: ModelContextSettings | None = None,
         estimator: TokenEstimator | None = None,
     ) -> None:
-        self._gateway = (
-            MemoryArtifactGateway() if gateway is None else gateway
-        )
-        self._settings = (
-            ModelContextSettings() if settings is None else settings
-        )
+        self._gateway = MemoryArtifactGateway() if gateway is None else gateway
+        self._settings = ModelContextSettings() if settings is None else settings
         self._budget = (
             InputBudget(
                 TiktokenEstimator() if estimator is None else estimator,
@@ -460,11 +448,7 @@ class ModelContextProjector:
             content = item.message["content"]
             meta = _externalized_meta(content)
             if meta is not None:
-                payload = (
-                    json.loads(content)
-                    if isinstance(content, str)
-                    else content
-                )
+                payload = json.loads(content) if isinstance(content, str) else content
                 if not isinstance(payload, dict):
                     raise TypeError("projected tool content must be a JSON object")
                 if not isinstance(payload.get("externalized"), dict):
@@ -477,9 +461,13 @@ class ModelContextProjector:
                 continue
             if _content_char_length(content) <= self._settings.size_externalize_chars:
                 continue
-            original = content if isinstance(content, str) else json.dumps(
-                jsonable(content),
-                ensure_ascii=False,
+            original = (
+                content
+                if isinstance(content, str)
+                else json.dumps(
+                    jsonable(content),
+                    ensure_ascii=False,
+                )
             )
             artifact_id = self._save(
                 session_id,
@@ -520,10 +508,7 @@ class ModelContextProjector:
                 raise TypeError("projected assistant tool_calls must be a list")
 
             result_end = index + 1
-            while (
-                result_end < len(payloads)
-                and items[result_end].kind == "tool"
-            ):
+            while result_end < len(payloads) and items[result_end].kind == "tool":
                 result_end += 1
 
             results = payloads[index + 1 : result_end]
@@ -547,9 +532,7 @@ class ModelContextProjector:
                 for tool_index in range(index + 1, result_end):
                     item = items[tool_index]
                     if item.command_id is None:
-                        raise ValueError(
-                            "projected tool message lacks command id"
-                        )
+                        raise ValueError("projected tool message lacks command id")
                     meta = _externalized_meta(item.message["content"])
                     if meta is not None:
                         if meta.get("preview"):

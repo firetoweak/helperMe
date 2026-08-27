@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -22,9 +21,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
 
         channel = await _open_chat_channel(sessions, bot, 101, 7)
 
-        sessions.resume.assert_awaited_once_with(
-            "telegram-bot-101-chat-7"
-        )
+        sessions.resume.assert_awaited_once_with("telegram-bot-101-chat-7")
         sessions.create.assert_not_awaited()
         await channel.accept(10, _message(7, "新任务"))
         sessions.receive_user_message.assert_awaited_once_with(
@@ -40,12 +37,8 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
 
         await _open_chat_channel(sessions, AsyncMock(), 202, 7)
 
-        sessions.resume.assert_awaited_once_with(
-            "telegram-bot-202-chat-7"
-        )
-        sessions.create.assert_awaited_once_with(
-            "telegram-bot-202-chat-7"
-        )
+        sessions.resume.assert_awaited_once_with("telegram-bot-202-chat-7")
+        sessions.create.assert_awaited_once_with("telegram-bot-202-chat-7")
 
     async def test_unpaired_start_reports_chat_id_without_touching_runtime(
         self,
@@ -81,7 +74,9 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(sessions.method_calls, [])
 
-    async def test_message_is_persisted_before_worker_drives(self) -> None:
+    async def test_message_is_persisted_and_scheduler_is_owned_by_sessions(
+        self,
+    ) -> None:
         bot = AsyncMock()
         sessions = AsyncMock()
         sessions.view.return_value = _session_view()
@@ -95,23 +90,11 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
             delivery_id="telegram-bot-101-update-11",
             source="telegram",
         )
-        sessions.drive.assert_not_awaited()
+        self.assertFalse(hasattr(channel, "drive_next"))
 
-        await channel.drive_next()
-        sessions.drive.assert_awaited_once_with("session-current")
-        sessions.resume.assert_not_awaited()
-
-    async def test_message_during_drive_becomes_interrupt(self) -> None:
+    async def test_each_message_is_an_ordered_user_event(self) -> None:
         sessions = AsyncMock()
         sessions.view.return_value = _session_view()
-        drive_started = asyncio.Event()
-        release_drive = asyncio.Event()
-
-        async def drive(_session_id: str) -> None:
-            drive_started.set()
-            await release_drive.wait()
-
-        sessions.drive.side_effect = drive
         channel = TelegramChannel(
             sessions,
             AsyncMock(),
@@ -121,18 +104,13 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         )
 
         await channel.accept(11, _message(7, "先检查项目"))
-        running = asyncio.create_task(channel.drive_next())
-        await drive_started.wait()
         await channel.accept(12, _message(7, "停一下，先别执行"))
 
-        sessions.receive_interrupt.assert_awaited_once_with(
-            "session-current",
-            "停一下，先别执行",
-            delivery_id="telegram-bot-101-update-12",
-            source="telegram",
+        self.assertEqual(sessions.receive_user_message.await_count, 2)
+        self.assertEqual(
+            sessions.receive_user_message.await_args_list[1].args,
+            ("session-current", "停一下，先别执行"),
         )
-        release_drive.set()
-        await running
 
     async def test_authorization_reply_resumes_session(self) -> None:
         sessions = AsyncMock()
@@ -153,8 +131,6 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
             "session-current",
             approved=True,
         )
-        await channel.drive_next()
-        sessions.drive.assert_awaited_once_with("session-current")
 
     async def test_other_chat_is_ignored(self) -> None:
         sessions = AsyncMock()
@@ -177,7 +153,7 @@ def _session_view(**overrides) -> SessionView:
         "waiting_for": ("user_message",),
         "pending_authorization_ids": (),
         "terminal": False,
-        "should_drive": False,
+        "should_wake": False,
     }
     values.update(overrides)
     return SessionView(**values)

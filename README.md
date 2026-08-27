@@ -15,7 +15,7 @@ This project explores a different goal: build an assistant for one person that c
 
 Start the console and give the assistant a task. It can inspect and modify files, run commands, and load external capabilities while keeping every important action in a durable execution history.
 
-- Type a new instruction while it is working; the instruction becomes a durable Interrupt instead of being lost or starting an unrelated turn.
+- Type a new instruction while it is working; it is durably appended to the same Session and becomes a later Step trigger.
 - Exit and later resume a Session from its Journal-backed state.
 - Connect MCP Servers without placing every external tool in the model context up front.
 - Install and enable Skills, then let the model read their instructions only when needed.
@@ -27,7 +27,7 @@ The result is a durable execution Session rather than a disposable chat connecti
 
 ### Traceable by construction
 
-User messages, model decisions, tool outcomes, Interrupts, and termination requests are recorded as Events. Runtime State is deterministically rebuilt from those facts, so important behavior has an observable origin.
+User messages, model decisions, tool outcomes, and explicit lifecycle requests are recorded as Events. Runtime State is deterministically rebuilt from those facts, so important behavior has an observable origin.
 
 ### Long-running work is not a conversation trick
 
@@ -82,11 +82,10 @@ The main console commands are:
 |---|---|
 | `/new` | Create a new Session |
 | `/resume <session_id>` | Resume a Session from the Journal |
-| `/stop` | Terminate the current Session |
 | `/mcp` | Inspect and manage MCP Servers |
 | `/skill` | Inspect and manage Skills |
 
-Typing normal text while the Agent is running creates an Interrupt in the current Session. `Ctrl+C` or `Ctrl+D` exits the program; neither represents an Agent Interrupt.
+Typing normal text while the Agent is running appends another ordered `UserMessageReceived` to the current Session. `Ctrl+C` or `Ctrl+D` exits the program.
 
 ## Current Status
 

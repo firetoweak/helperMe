@@ -24,13 +24,10 @@ from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
 from helperme.runtime import (
-    CancelTool,
-    CommandPhase,
     InvokeTool,
     ModelDecision,
     RecordedDecision,
     ToolBinding,
-    UserInterruptReceived,
 )
 from helperme.runtime.dispatcher import AttemptContext
 from helperme.runtime.state import DecisionFrame
@@ -43,23 +40,16 @@ from helperme.llm.api import (
 )
 
 
-INTERRUPT_RESOLUTION_TOOL_NAME = "resolve_interrupt"
-_INTERRUPT_ACTIONS = frozenset({"keep", "abandon", "cancel"})
-
-
 class ToolRunner(Protocol):
-    def names(self) -> Sequence[str]:
-        ...
+    def names(self) -> Sequence[str]: ...
 
     async def execute(
         self,
         name: str,
         arguments: Mapping[str, object],
-    ) -> object:
-        ...
+    ) -> object: ...
 
-    def requires_authorization(self, name: str) -> bool:
-        ...
+    def requires_authorization(self, name: str) -> bool: ...
 
 
 def decision_from_llm(
@@ -105,135 +95,6 @@ def _invoke_requests(
             )
         requests.append(InvokeTool(call.name, tuple(payload.items())))
     return tuple(requests)
-
-
-def _interrupt_command_ids(frame: DecisionFrame) -> tuple[str, ...]:
-    if not isinstance(frame.trigger_event.payload, UserInterruptReceived):
-        return ()
-    return tuple(
-        state.command.command_id
-        for state in frame.state.commands
-        if state.phase is not CommandPhase.TERMINAL
-        and not state.abandoned
-        and state.authorization_rejected_by_event_id is None
-        and isinstance(state.command.effect, InvokeTool)
-        and state.command.effect.name not in {
-            DELIVER_TOOL_NAME,
-            INTERRUPT_RESOLUTION_TOOL_NAME,
-        }
-    )
-
-
-def _interrupt_resolution_schema(
-    command_ids: tuple[str, ...],
-) -> dict[str, object]:
-    return {
-        "type": "function",
-        "function": {
-            "name": INTERRUPT_RESOLUTION_TOOL_NAME,
-            "description": (
-                "处理中断时必须调用一次。为列出的每个未完成命令显式选择："
-                "keep 保留并等待结果；abandon 忽略后续结果；cancel 尽力取消"
-                "且同时忽略后续结果。可以与新的普通工具调用同时使用。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "commands": {
-                        "type": "array",
-                        "minItems": len(command_ids),
-                        "maxItems": len(command_ids),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "command_id": {
-                                    "type": "string",
-                                    "enum": list(command_ids),
-                                },
-                                "action": {
-                                    "type": "string",
-                                    "enum": sorted(_INTERRUPT_ACTIONS),
-                                },
-                            },
-                            "required": ["command_id", "action"],
-                            "additionalProperties": False,
-                        },
-                    },
-                },
-                "required": ["commands"],
-                "additionalProperties": False,
-            },
-        },
-    }
-
-
-def _parse_interrupt_resolution(
-    call: ToolCall,
-    expected_command_ids: tuple[str, ...],
-) -> tuple[tuple[str, str], ...]:
-    try:
-        payload = json.loads(call.arguments)
-    except json.JSONDecodeError as exc:
-        raise InvalidLLMResponse(
-            "invalid_interrupt_resolution",
-            "resolve_interrupt arguments are not valid JSON",
-        ) from exc
-    if type(payload) is not dict or set(payload) != {"commands"}:
-        raise InvalidLLMResponse(
-            "invalid_interrupt_resolution",
-            "resolve_interrupt requires exactly the commands field",
-        )
-    commands = payload["commands"]
-    if type(commands) is not list:
-        raise InvalidLLMResponse(
-            "invalid_interrupt_resolution",
-            "resolve_interrupt commands must be an array",
-        )
-    choices: list[tuple[str, str]] = []
-    for index, item in enumerate(commands):
-        if type(item) is not dict or set(item) != {"command_id", "action"}:
-            raise InvalidLLMResponse(
-                "invalid_interrupt_resolution",
-                f"resolve_interrupt commands[{index}] is invalid",
-            )
-        command_id = item["command_id"]
-        action = item["action"]
-        if type(command_id) is not str or command_id not in expected_command_ids:
-            raise InvalidLLMResponse(
-                "invalid_interrupt_resolution",
-                f"resolve_interrupt contains unknown command: {command_id!r}",
-            )
-        if type(action) is not str or action not in _INTERRUPT_ACTIONS:
-            raise InvalidLLMResponse(
-                "invalid_interrupt_resolution",
-                f"resolve_interrupt contains invalid action: {action!r}",
-            )
-        choices.append((command_id, action))
-    chosen_ids = tuple(command_id for command_id, _action in choices)
-    if (
-        len(chosen_ids) != len(set(chosen_ids))
-        or set(chosen_ids) != set(expected_command_ids)
-    ):
-        raise InvalidLLMResponse(
-            "invalid_interrupt_resolution",
-            "resolve_interrupt must resolve every unfinished command once",
-        )
-    return tuple(choices)
-
-
-def interrupt_resolution_binding() -> dict[str, ToolBinding]:
-    async def handler(
-        _context: AttemptContext,
-        _arguments: Mapping[str, object],
-    ) -> str:
-        return "resolved"
-
-    return {
-        INTERRUPT_RESOLUTION_TOOL_NAME: ToolBinding(
-            handler,
-            decision_on_outcome=False,
-        ),
-    }
 
 
 def _tool_names(
@@ -311,9 +172,7 @@ class JournalBackedLlmDecisionMaker:
         self._model = model
         self._tool_schemas = [] if tool_schemas is None else tool_schemas
         self._system_prompt = system_prompt
-        self._projector = (
-            ModelContextProjector() if projector is None else projector
-        )
+        self._projector = ModelContextProjector() if projector is None else projector
         self._surface = surface
         self._skill_tools = skill_tools
         self._control = control
@@ -365,24 +224,7 @@ class JournalBackedLlmDecisionMaker:
         response: LLMResponse,
         allowed_tool_names: AbstractSet[str],
         control_names: AbstractSet[str],
-        interrupt_command_ids: tuple[str, ...],
     ) -> ModelDecision:
-        resolution_calls = tuple(
-            call
-            for call in response.calls
-            if call.name == INTERRUPT_RESOLUTION_TOOL_NAME
-        )
-        if interrupt_command_ids and len(resolution_calls) != 1:
-            raise InvalidLLMResponse(
-                "missing_interrupt_resolution",
-                "an interrupt with unfinished commands requires exactly one "
-                "resolve_interrupt call",
-            )
-        if not interrupt_command_ids and resolution_calls:
-            raise InvalidLLMResponse(
-                "unknown_tool",
-                "resolve_interrupt was not offered in this decision context",
-            )
         control_calls = tuple(
             call for call in response.calls if call.name in control_names
         )
@@ -412,58 +254,20 @@ class JournalBackedLlmDecisionMaker:
             except ControlArgumentsError as exc:
                 raise InvalidLLMResponse(
                     "invalid_tool_arguments",
-                    f"tool {call.name} arguments violate its schema: "
-                    f"{exc.details}",
+                    f"tool {call.name} arguments violate its schema: {exc.details}",
                 ) from exc
             return ModelDecision(
                 content=(
-                    response.content
-                    or "已提交控制操作方案，等待主机生成确认信息。"
+                    response.content or "已提交控制操作方案，等待主机生成确认信息。"
                 ),
             )
 
-        choices = (
-            _parse_interrupt_resolution(
-                resolution_calls[0],
-                interrupt_command_ids,
-            )
-            if resolution_calls
-            else ()
-        )
-        ordinary_calls = tuple(
-            call
-            for call in response.calls
-            if call.name != INTERRUPT_RESOLUTION_TOOL_NAME
-        )
-        requests = list(_invoke_requests(
-            ordinary_calls,
-            allowed_tool_names - {INTERRUPT_RESOLUTION_TOOL_NAME},
-        ))
-        if choices:
-            requests.append(InvokeTool(
-                INTERRUPT_RESOLUTION_TOOL_NAME,
-                (("commands", tuple(
-                    {
-                        "command_id": command_id,
-                        "action": action,
-                    }
-                    for command_id, action in choices
-                )),),
-            ))
-        abandoned = tuple(
-            command_id
-            for command_id, action in choices
-            if action in {"abandon", "cancel"}
-        )
-        requests.extend(
-            CancelTool(command_id)
-            for command_id, action in choices
-            if action == "cancel"
-        )
         return ModelDecision(
             content=response.content,
-            command_requests=tuple(requests),
-            abandon_command_ids=abandoned,
+            command_requests=_invoke_requests(
+                response.calls,
+                allowed_tool_names,
+            ),
         )
 
     async def decide(self, frame: DecisionFrame) -> RecordedDecision:
@@ -479,17 +283,6 @@ class JournalBackedLlmDecisionMaker:
             else None
         )
         schemas, control_names = self._schemas(frame)
-        interrupt_command_ids = _interrupt_command_ids(frame)
-        if interrupt_command_ids:
-            schemas.append(_interrupt_resolution_schema(
-                interrupt_command_ids,
-            ))
-            prompt = (
-                f"{prompt}\n\n中断处置：必须调用 "
-                f"{INTERRUPT_RESOLUTION_TOOL_NAME}，为当前每个未完成命令"
-                "选择 keep、abandon 或 cancel。该调用可以与新的普通工具"
-                "调用同时出现。"
-            )
         allowed_tool_names = _tool_names(schemas)
         journal_tail = await self._journal.snapshot(frame.state.session_id)
         events = tuple(
@@ -547,13 +340,14 @@ class JournalBackedLlmDecisionMaker:
                 schemas,
                 usage.input_tokens,
             )
-        decision = ensure_deliver(self._decision_from_response(
-            frame,
-            result.response,
-            allowed_tool_names,
-            control_names,
-            interrupt_command_ids,
-        ))
+        decision = ensure_deliver(
+            self._decision_from_response(
+                frame,
+                result.response,
+                allowed_tool_names,
+                control_names,
+            )
+        )
         manifest = {
             "schema": "decision-replay-manifest/v1",
             "decision_basis": {
@@ -585,7 +379,7 @@ class JournalBackedLlmDecisionMaker:
                 "output_tokens": usage.output_tokens,
             },
         }
-        artifact = self._projector.gateway.for_session(
-            frame.state.session_id
-        ).save(json.dumps(manifest, ensure_ascii=False, sort_keys=True))
+        artifact = self._projector.gateway.for_session(frame.state.session_id).save(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True)
+        )
         return RecordedDecision(decision, (artifact.artifact_id,))

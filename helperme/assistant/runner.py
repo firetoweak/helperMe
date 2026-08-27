@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from collections.abc import Awaitable, Callable
 
-from helperme.assistant.completion.judgment import CompletionGate, JudgmentPolicy
 from helperme.assistant.control import AssistantControlPlane
-from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
+from helperme.assistant.toolsets import ToolSurface
 from helperme.llm.api import (
     InvalidLLMResponse,
     LLMContextLengthError,
@@ -14,12 +14,6 @@ from helperme.llm.api import (
 )
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState
-
-
-@dataclass(frozen=True, slots=True)
-class DriveResult:
-    state: CanonicalState
-    control_message: str | None = None
 
 
 class SessionNotFoundError(LookupError):
@@ -40,7 +34,7 @@ async def resume_session(
     session_id: str,
     management: ManagementSurface | None = None,
 ) -> CanonicalState:
-    """Resume an explicitly selected Session; never select one for the caller."""
+    """Select an existing Session and rebuild Host projections."""
 
     if not await runtime.session_exists(session_id):
         raise SessionNotFoundError(session_id)
@@ -48,54 +42,115 @@ async def resume_session(
     await surface.rehydrate(session_id, events)
     if management is not None:
         await management.rehydrate(session_id, events)
-    await runtime.recover_once(session_id)
     return await runtime.state(session_id)
 
 
-async def drive_until_idle(
-    runtime: AgentRuntime,
-    session_id: str,
-    *,
-    policy: JudgmentPolicy | None = None,
-    control: AssistantControlPlane | None = None,
-) -> DriveResult:
-    """Drive until waiting; only an explicit completion policy may finalize."""
+class SessionScheduler:
+    """Wake Sessions from committed facts; execute at most one Step per wake."""
 
-    while True:
-        step = await runtime.advance(session_id)
-        control_result = None
-        if step is not None and control is not None:
-            control_result = await control.after_committed_step(
-                session_id,
-                step,
+    def __init__(
+        self,
+        runtime: AgentRuntime,
+        *,
+        control: AssistantControlPlane | None = None,
+        notify: Callable[[str], Awaitable[None] | None] | None = None,
+    ) -> None:
+        self._runtime = runtime
+        self._control = control
+        self._notify = notify
+        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._queued: set[str] = set()
+        self._processing = 0
+        self._worker: asyncio.Task[None] | None = None
+        self._failure: BaseException | None = None
+        self._failure_event = asyncio.Event()
+        runtime.dispatcher.connect(self.wake, self._record_failure)
+
+    def start(self) -> None:
+        if self._worker is None:
+            self._worker = asyncio.create_task(
+                self._run(),
+                name="agent-session-scheduler",
             )
-        await runtime.dispatcher.wait_all()
-        if control_result is not None:
-            if policy is not None:
-                await runtime.finalize(session_id)
-            return DriveResult(
-                await runtime.state(session_id),
-                control_result.message,
+            self._worker.add_done_callback(self._worker_done)
+
+    def _worker_done(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self._record_failure(error)
+
+    async def wake(self, session_id: str) -> None:
+        if self._failure is not None:
+            raise self._failure
+        self.start()
+        if session_id in self._queued:
+            return
+        self._queued.add(session_id)
+        await self._queue.put(session_id)
+
+    async def _run(self) -> None:
+        while True:
+            session_id = await self._queue.get()
+            self._queued.discard(session_id)
+            self._processing += 1
+            try:
+                step = await self._runtime.advance(session_id)
+                if step is not None and self._control is not None:
+                    result = await self._control.after_committed_step(
+                        session_id,
+                        step,
+                    )
+                    if result is not None and self._notify is not None:
+                        notified = self._notify(result.message)
+                        if isinstance(notified, Awaitable):
+                            await notified
+                state = await self._runtime.state(session_id)
+                if state.status is RuntimeStatus.RUNNABLE:
+                    await self.wake(session_id)
+            finally:
+                self._processing -= 1
+                self._queue.task_done()
+
+    def _record_failure(self, error: BaseException) -> None:
+        if self._failure is None:
+            self._failure = error
+            self._failure_event.set()
+
+    async def join(self) -> None:
+        """Wait for queued Step activations; primarily a test/CLI observation aid."""
+
+        while True:
+            queue_idle = asyncio.create_task(self._queue.join())
+            failed = asyncio.create_task(self._failure_event.wait())
+            done, pending = await asyncio.wait(
+                (queue_idle, failed),
+                return_when=asyncio.FIRST_COMPLETED,
             )
-        if policy is not None:
-            await policy.sync(runtime, session_id)
-            if await policy.gate(runtime, session_id) is CompletionGate.PAUSE:
-                return DriveResult(await runtime.state(session_id))
-            await runtime.finalize(session_id)
-        state = await runtime.state(session_id)
-        if state.status in {
-            RuntimeStatus.COMPLETED,
-            RuntimeStatus.TERMINATED,
-        }:
-            return DriveResult(state)
-        if state.status is RuntimeStatus.WAITING:
-            if pending_authorization_ids(state):
-                return DriveResult(state)
-            if state.waiting_for == ("user_message",):
-                return DriveResult(state)
-        if state.status is RuntimeStatus.RUNNABLE or state.waiting_command_ids:
-            continue
-        return DriveResult(state)
+            for task in pending:
+                task.cancel()
+            if failed in done and self._failure is not None:
+                raise self._failure
+            await asyncio.sleep(0)
+            if (
+                self._processing == 0
+                and self._queue.empty()
+                and self._runtime.dispatcher.active_count == 0
+            ):
+                break
+        if self._failure is not None:
+            raise self._failure
+
+    async def close(self) -> None:
+        await self._runtime.dispatcher.close()
+        if self._worker is None:
+            return
+        self._worker.cancel()
+        try:
+            await self._worker
+        except asyncio.CancelledError:
+            pass
 
 
 def pending_authorization_ids(state: CanonicalState) -> tuple[str, ...]:

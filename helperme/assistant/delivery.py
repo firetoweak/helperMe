@@ -8,8 +8,6 @@ from helperme.runtime.dispatcher import AttemptContext, ToolBinding
 from helperme.runtime.model import (
     InvokeTool,
     ModelDecision,
-    RecoveryContract,
-    RetrySemantics,
 )
 from helperme.runtime.state import DecisionFrame
 from helperme.runtime.step import DecisionMaker
@@ -38,9 +36,8 @@ def ensure_deliver(decision: ModelDecision) -> ModelDecision:
         return decision
     return replace(
         decision,
-        command_requests=decision.command_requests + (
-            InvokeTool(DELIVER_TOOL_NAME, (("text", text),)),
-        ),
+        command_requests=decision.command_requests
+        + (InvokeTool(DELIVER_TOOL_NAME, (("text", text),)),),
     )
 
 
@@ -72,9 +69,6 @@ def deliver_binding(sink: DeliverySink) -> dict[str, ToolBinding]:
     return {
         DELIVER_TOOL_NAME: ToolBinding(
             handler,
-            recovery=RecoveryContract(
-                retry_semantics=RetrySemantics.PROHIBITED,
-            ),
             decision_on_outcome=False,
         ),
     }

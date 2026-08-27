@@ -22,7 +22,7 @@ from helperme.assistant.context.projection import (
     project_chat_messages,
 )
 from helperme.assistant.decision import bind_executor_tools
-from helperme.assistant.runner import drive_until_idle
+from tests.session_scheduler import settle_session
 from helperme.runtime import (
     AgentRuntime,
     CommandOutcome,
@@ -68,9 +68,7 @@ class CharacterEstimator:
 def _deliver(text: str) -> ModelDecision:
     return ModelDecision(
         content=text,
-        command_requests=(
-            InvokeTool(DELIVER_TOOL_NAME, (("text", text),)),
-        ),
+        command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("text", text),)),),
     )
 
 
@@ -134,7 +132,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
                 text,
                 delivery_id=f"ask-{index}",
             )
-            await drive_until_idle(runtime, self.SESSION)
+            await settle_session(runtime, self.SESSION)
         events = await runtime._journal.snapshot(self.SESSION)
         return events, delivered
 
@@ -306,21 +304,23 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("failed-on-purpose", tool["content"])
         self.assertEqual(prepared.age_dehydrated_command_ids, ())
 
-    async def test_result_consumed_before_latest_user_stays(self):
+    async def test_result_consumed_before_latest_user_is_dehydrated(self):
         async def ping(_context, _arguments):
             return "pending-result"
 
         delivered: list[str] = []
         runtime = AgentRuntime(
             MemoryJournal(),
-            ScriptedDecisionMaker((
-                lambda _frame: ModelDecision(
-                    content="checking",
-                    command_requests=(InvokeTool("ping"),),
-                ),
-                lambda _frame: ModelDecision(content="observed result"),
-                lambda _frame: _deliver("after-new-user"),
-            )),
+            ScriptedDecisionMaker(
+                (
+                    lambda _frame: ModelDecision(
+                        content="checking",
+                        command_requests=(InvokeTool("ping"),),
+                    ),
+                    lambda _frame: ModelDecision(content="observed result"),
+                    lambda _frame: _deliver("after-new-user"),
+                )
+            ),
             {
                 "ping": ToolBinding(ping),
                 **deliver_binding(delivered.append),
@@ -332,15 +332,13 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             "first",
             delivery_id="ask-1",
         )
-        await runtime.advance(self.SESSION)
-        await runtime.dispatcher.wait_all()
-        await runtime.finalize(self.SESSION)
+        await settle_session(runtime, self.SESSION)
         await runtime.receive_user_message(
             self.SESSION,
             "second",
             delivery_id="ask-2",
         )
-        await drive_until_idle(runtime, self.SESSION)
+        await settle_session(runtime, self.SESSION)
         events = await runtime._journal.snapshot(self.SESSION)
         prepared = self._projector().prepare(
             events,
@@ -349,8 +347,8 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             "sys",
         )
         tool = self._tool_messages(prepared.messages)[0]
-        self.assertIn("pending-result", tool["content"])
-        self.assertEqual(prepared.age_dehydrated_command_ids, ())
+        self.assertNotIn("pending-result", tool["content"])
+        self.assertEqual(len(prepared.age_dehydrated_command_ids), 1)
         self.assertEqual(delivered, ["after-new-user"])
 
     async def test_oversized_result_in_protection_window_is_stubbed(self):
@@ -558,7 +556,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
         bindings = bind_executor_tools(_Runner(), gateway, settings)
         result = await bindings["blob"].handler(
-            AttemptContext("s1", "cmd-1", "att-1", 1, None),
+            AttemptContext("s1", "cmd-1", "att-1", 1),
             {},
         )
         self.assertEqual(result["externalized"], True)
@@ -620,13 +618,13 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         artifact = gateway.for_session("s1").save("abcdef")
         binding = read_artifact_binding(gateway)["read_artifact"]
         first = await binding.handler(
-            AttemptContext("s1", "cmd-1", "att-1", 1, None),
+            AttemptContext("s1", "cmd-1", "att-1", 1),
             {"artifact_id": artifact.artifact_id, "offset": 0, "limit": 3},
         )
         self.assertEqual(first["data"]["content"], "abc")
         self.assertEqual(first["data"]["next_offset"], 3)
         missing = await binding.handler(
-            AttemptContext("s2", "cmd-1", "att-1", 1, None),
+            AttemptContext("s2", "cmd-1", "att-1", 1),
             {"artifact_id": artifact.artifact_id, "offset": 0, "limit": 3},
         )
         self.assertEqual(missing["code"], "ARTIFACT_NOT_FOUND")

@@ -12,7 +12,6 @@ from helperme.runtime.events import (
     RuntimeTerminated,
     StepCommitted,
     TerminationRequested,
-    UserInterruptReceived,
     UserMessageReceived,
 )
 from helperme.runtime.model import (
@@ -66,8 +65,7 @@ def finalization_opportunity(
         abandoned = tuple(
             state.command.command_id
             for state in projection.state.commands
-            if state.phase is not CommandPhase.TERMINAL
-            and not state.abandoned
+            if state.phase is not CommandPhase.TERMINAL and not state.abandoned
         )
         return FinalizationOpportunity(
             kind=FinalizationKind.TERMINATE_FROM_REQUEST,
@@ -156,7 +154,7 @@ def _live_termination_request(events: tuple[Event, ...]) -> Event | None:
             continue
         if isinstance(
             payload,
-            (UserMessageReceived, UserInterruptReceived, StepCommitted),
+            (UserMessageReceived, StepCommitted),
         ):
             latest = None
     return latest
@@ -165,9 +163,6 @@ def _live_termination_request(events: tuple[Event, ...]) -> Event | None:
 def _step_event_id(events: tuple[Event, ...], step_id: str) -> str:
     for event in events:
         payload = event.payload
-        if (
-            isinstance(payload, StepCommitted)
-            and payload.step.step_id == step_id
-        ):
+        if isinstance(payload, StepCommitted) and payload.step.step_id == step_id:
             return event.event_id
     raise KeyError(step_id)

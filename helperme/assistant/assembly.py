@@ -19,11 +19,7 @@ from helperme.assistant.builtin_tools import (
     BuiltinToolRunner,
     build_builtin_tools,
 )
-from helperme.assistant.decision import (
-    INTERRUPT_RESOLUTION_TOOL_NAME,
-    bind_executor_tools,
-    interrupt_resolution_binding,
-)
+from helperme.assistant.decision import bind_executor_tools
 from helperme.assistant.mcp import McpToolsetAdapter
 from helperme.assistant.management import ManagementDomain, ManagementSurface
 from helperme.assistant.skills import SkillToolAdapter
@@ -132,7 +128,6 @@ async def build_assistant_assembly(
             *builtin_tools.names(),
             "read_artifact",
             DELIVER_TOOL_NAME,
-            INTERRUPT_RESOLUTION_TOOL_NAME,
             LOAD_SKILL,
             READ_SKILL_RESOURCE,
             *management.names(),
@@ -146,7 +141,6 @@ async def build_assistant_assembly(
             **bind_executor_tools(builtin_tools, gateway, settings),
             **read_artifact_binding(gateway),
             **deliver_binding(sink),
-            **interrupt_resolution_binding(),
             **load_toolset_binding(surface),
             **skill_tools.bindings(),
             **management.bindings(),

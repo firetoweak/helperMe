@@ -7,7 +7,7 @@ from pathlib import Path
 
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
-from helperme.assistant.runner import drive_until_idle
+from tests.session_scheduler import settle_session
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.client import LLMClient
 from helperme.runtime import (
@@ -52,9 +52,7 @@ async def main() -> None:
         Path(__file__).resolve().parents[1] / ".live_workspace"
     ).resolve()
     if workspace != expected_workspace:
-        raise AssertionError(
-            f"config workspace mismatch: {workspace}"
-        )
+        raise AssertionError(f"config workspace mismatch: {workspace}")
 
     config = assistant_config_from_app(
         app_config,
@@ -92,13 +90,11 @@ async def main() -> None:
                 delivery_id=f"stress-user-{index}",
             )
             result = await asyncio.wait_for(
-                drive_until_idle(runtime, session_id),
+                settle_session(runtime, session_id),
                 timeout=300,
             )
             if result.state.status is not RuntimeStatus.WAITING:
-                raise AssertionError(
-                    f"task {index} stopped in {result.state.status}"
-                )
+                raise AssertionError(f"task {index} stopped in {result.state.status}")
             if result.state.waiting_for != ("user_message",):
                 raise AssertionError(
                     f"task {index} waits for {result.state.waiting_for}"
@@ -125,9 +121,7 @@ async def main() -> None:
                 f"metrics[{key!r}]={metrics.get(key)!r}, expected {expected!r}"
             )
     phase1 = (workspace / "output" / "phase1.md").read_text(encoding="utf-8")
-    report = (workspace / "output" / "final_report.md").read_text(
-        encoding="utf-8"
-    )
+    report = (workspace / "output" / "final_report.md").read_text(encoding="utf-8")
     if "Atlas" not in phase1 or "70" not in phase1:
         raise AssertionError("phase1.md lacks verified phase-one facts")
     for marker in (
@@ -141,7 +135,9 @@ async def main() -> None:
         if marker not in report:
             raise AssertionError(f"final_report.md lacks {marker}")
     if not any(text.strip() == "STRESS-PASS" for text in delivered):
-        raise AssertionError(f"final delivery did not report STRESS-PASS: {delivered[-3:]}")
+        raise AssertionError(
+            f"final delivery did not report STRESS-PASS: {delivered[-3:]}"
+        )
 
     events = await journal.snapshot(session_id)
     if sum(isinstance(event.payload, UserMessageReceived) for event in events) != 3:
@@ -152,24 +148,22 @@ async def main() -> None:
         if isinstance(event.payload, StepCommitted)
     ]
     outcomes = [
-        event for event in events
-        if isinstance(event.payload, CommandOutcomeReceived)
+        event for event in events if isinstance(event.payload, CommandOutcomeReceived)
     ]
     tool_names = {
         command.effect.name
         for step in steps
         for command in step.commands
-        if isinstance(command.effect, InvokeTool)
-        and command.effect.name != "deliver"
+        if isinstance(command.effect, InvokeTool) and command.effect.name != "deliver"
     }
     parallel_steps = [
         step
         for step in steps
         if sum(
-            isinstance(command.effect, InvokeTool)
-            and command.effect.name != "deliver"
+            isinstance(command.effect, InvokeTool) and command.effect.name != "deliver"
             for command in step.commands
-        ) >= 2
+        )
+        >= 2
     ]
     if not parallel_steps:
         raise AssertionError("model never issued an actual parallel tool batch")
@@ -184,17 +178,23 @@ async def main() -> None:
     if replayed != events:
         raise AssertionError("durable Journal replay differs from live history")
 
-    print(json.dumps({
-        "ok": True,
-        "session_id": session_id,
-        "journal": str(journal_path),
-        "events": len(events),
-        "steps": len(steps),
-        "outcomes": len(outcomes),
-        "tool_names": sorted(tool_names),
-        "parallel_steps": len(parallel_steps),
-        "deliveries": len(delivered),
-    }, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "session_id": session_id,
+                "journal": str(journal_path),
+                "events": len(events),
+                "steps": len(steps),
+                "outcomes": len(outcomes),
+                "tool_names": sorted(tool_names),
+                "parallel_steps": len(parallel_steps),
+                "deliveries": len(delivered),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

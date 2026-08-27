@@ -14,7 +14,6 @@ from helperme.runtime.events import (
     UserMessageReceived,
 )
 from helperme.runtime.model import (
-    CancelTool,
     InvokeTool,
     LifecycleIntent,
     OutcomeStatus,
@@ -153,13 +152,9 @@ def criteria_from_fact(payload: object) -> CriteriaCommitted | None:
     }:
         raise ValueError("invalid criteria fact fields")
     inferred_raw = data["inferred"]
-    if (
-        not isinstance(inferred_raw, tuple)
-        or any(
-            not isinstance(item, Mapping)
-            or set(item) != {"criterion_id", "text", "status"}
-            for item in inferred_raw
-        )
+    if not isinstance(inferred_raw, tuple) or any(
+        not isinstance(item, Mapping) or set(item) != {"criterion_id", "text", "status"}
+        for item in inferred_raw
     ):
         raise ValueError("invalid inferred criteria facts")
     try:
@@ -204,6 +199,7 @@ def judgment_from_fact(payload: object) -> JudgmentCommitted | None:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("invalid judgment fact") from exc
+
 
 CRITERION_WORKSPACE = InferredCriterion(
     "inf-workspace",
@@ -257,10 +253,6 @@ def command_names(events: tuple[Event, ...]) -> dict[str, str]:
             effect = command.effect
             if isinstance(effect, InvokeTool):
                 names[command.command_id] = effect.name
-            elif isinstance(effect, CancelTool):
-                names[command.command_id] = "cancel_tool"
-            else:
-                raise TypeError(type(effect).__name__)
     return names
 
 
@@ -467,12 +459,8 @@ def format_criteria_for_worker(snapshot: CriteriaCommitted | None) -> str:
     if snapshot.inferred:
         lines.append("inferred：")
         for item in snapshot.inferred:
-            lines.append(
-                f"- [{item.status.value}] {item.criterion_id}: {item.text}"
-            )
-        lines.append(
-            "deferred 表示人已推迟该条，不要自行恢复。"
-        )
+            lines.append(f"- [{item.status.value}] {item.criterion_id}: {item.text}")
+        lines.append("deferred 表示人已推迟该条，不要自行恢复。")
     else:
         lines.append("inferred：无")
     if snapshot.strict_completion:

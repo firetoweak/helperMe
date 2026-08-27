@@ -53,9 +53,7 @@ def _freeze_value(
         if type(value) is float and not isfinite(value):
             raise ValueError("JSON number must be finite")
         encoded = (
-            value.encode("utf-8")
-            if type(value) is str
-            else str(value).encode("ascii")
+            value.encode("utf-8") if type(value) is str else str(value).encode("ascii")
         )
         budget[0] -= len(encoded) + 2
         if budget[0] < 0:
@@ -67,18 +65,17 @@ def _freeze_value(
         budget[0] -= 2
         if budget[0] < 0:
             raise ValueError("JSON value exceeds maximum size")
-        return MappingProxyType({
-            key: _freeze_mapping_item(key, item, depth, budget)
-            for key, item in value.items()
-        })
+        return MappingProxyType(
+            {
+                key: _freeze_mapping_item(key, item, depth, budget)
+                for key, item in value.items()
+            }
+        )
     if isinstance(value, (list, tuple)):
         budget[0] -= 2
         if budget[0] < 0:
             raise ValueError("JSON value exceeds maximum size")
-        return tuple(
-            _freeze_value(item, depth + 1, budget)
-            for item in value
-        )
+        return tuple(_freeze_value(item, depth + 1, budget) for item in value)
     raise TypeError(f"value is not JSON-compatible: {type(value).__name__}")
 
 
@@ -116,52 +113,14 @@ class InvokeTool:
         object.__setattr__(
             self,
             "arguments",
-            tuple(
-                (key, freeze_value(value))
-                for key, value in self.arguments
-            ),
+            tuple((key, freeze_value(value)) for key, value in self.arguments),
         )
 
     def argument_dict(self) -> dict[str, object]:
         return dict(self.arguments)
 
 
-@dataclass(frozen=True, slots=True)
-class CancelTool:
-    target_command_id: str
-
-    def __post_init__(self) -> None:
-        _require_str(self.target_command_id, "target command id")
-
-
-CommandEffect: TypeAlias = InvokeTool | CancelTool
-
-
-class RetrySemantics(str, Enum):
-    SAFE = "safe"
-    IDEMPOTENCY_KEY_REQUIRED = "idempotency_key_required"
-    PROHIBITED = "prohibited"
-
-
-class RunningRecovery(str, Enum):
-    NONE = "none"
-    QUERY = "query"
-    CALLBACK = "callback"
-
-
-@dataclass(frozen=True, slots=True)
-class RecoveryContract:
-    retry_semantics: RetrySemantics = RetrySemantics.PROHIBITED
-    reconcile_unknown: bool = False
-    running_recovery: RunningRecovery = RunningRecovery.NONE
-
-    def __post_init__(self) -> None:
-        if type(self.retry_semantics) is not RetrySemantics:
-            raise TypeError("retry semantics is invalid")
-        if type(self.reconcile_unknown) is not bool:
-            raise TypeError("reconcile_unknown must be bool")
-        if type(self.running_recovery) is not RunningRecovery:
-            raise TypeError("running recovery is invalid")
+CommandEffect: TypeAlias = InvokeTool
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,26 +134,15 @@ class Command:
 
     command_id: str
     effect: CommandEffect
-    recovery: RecoveryContract = RecoveryContract()
-    idempotency_key: str | None = None
     requires_authorization: bool = False
     decision_on_outcome: bool = True
 
     def __post_init__(self) -> None:
         _require_str(self.command_id, "command id")
-        if type(self.effect) not in (InvokeTool, CancelTool):
+        if type(self.effect) is not InvokeTool:
             raise TypeError("command effect is invalid")
-        if type(self.recovery) is not RecoveryContract:
-            raise TypeError("command recovery is invalid")
-        _require_optional_str(self.idempotency_key, "idempotency key")
         if type(self.requires_authorization) is not bool:
             raise TypeError("requires_authorization must be bool")
-        if (
-            self.recovery.retry_semantics
-            is RetrySemantics.IDEMPOTENCY_KEY_REQUIRED
-            and not self.idempotency_key
-        ):
-            raise ValueError("idempotency key is required")
         if type(self.decision_on_outcome) is not bool:
             raise TypeError("decision_on_outcome must be bool")
 
@@ -209,8 +157,6 @@ class LifecycleIntent(str, Enum):
 class ModelDecision:
     content: str = ""
     command_requests: tuple[CommandEffect, ...] = ()
-    abandon_command_ids: tuple[str, ...] = ()
-    retry_command_ids: tuple[str, ...] = ()
     lifecycle_intent: LifecycleIntent = LifecycleIntent.NONE
 
     def __post_init__(self) -> None:
@@ -218,40 +164,13 @@ class ModelDecision:
             raise TypeError("decision content must be str")
         if type(self.command_requests) is not tuple:
             raise TypeError("command requests must be tuple")
-        if any(
-            type(request) not in (InvokeTool, CancelTool)
-            for request in self.command_requests
-        ):
+        if any(type(request) is not InvokeTool for request in self.command_requests):
             raise TypeError("command request is invalid")
-        if type(self.abandon_command_ids) is not tuple:
-            raise TypeError("abandon command ids must be tuple")
-        if any(
-            type(command_id) is not str or not command_id
-            for command_id in self.abandon_command_ids
-        ):
-            raise ValueError("abandon command ids are invalid")
-        if len(self.abandon_command_ids) != len(
-            set(self.abandon_command_ids)
-        ):
-            raise ValueError("abandon command ids contain duplicates")
-        if type(self.retry_command_ids) is not tuple:
-            raise TypeError("retry command ids must be tuple")
-        if any(
-            type(command_id) is not str or not command_id
-            for command_id in self.retry_command_ids
-        ):
-            raise ValueError("retry command ids are invalid")
-        if len(self.retry_command_ids) != len(set(self.retry_command_ids)):
-            raise ValueError("retry command ids contain duplicates")
-        if set(self.abandon_command_ids) & set(self.retry_command_ids):
-            raise ValueError("a command cannot be abandoned and retried")
         if type(self.lifecycle_intent) is not LifecycleIntent:
             raise TypeError("lifecycle intent must be LifecycleIntent")
         if (
             not self.content.strip()
             and not self.command_requests
-            and not self.abandon_command_ids
-            and not self.retry_command_ids
             and self.lifecycle_intent is LifecycleIntent.NONE
         ):
             raise ValueError("decision must contain content or effects")
@@ -266,16 +185,12 @@ class Step:
     observed_journal_position: int
     decision: ModelDecision
     commands: tuple[Command, ...]
-    retry_attempts: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         _require_str(self.step_id, "step id")
         _require_str(self.trigger_event_id, "trigger event id")
         _require_str(self.basis_state_version, "basis state version")
-        if (
-            type(self.decision_cursor) is not int
-            or self.decision_cursor < 1
-        ):
+        if type(self.decision_cursor) is not int or self.decision_cursor < 1:
             raise ValueError("decision cursor must be positive")
         if (
             type(self.observed_journal_position) is not int
@@ -288,39 +203,14 @@ class Step:
             raise TypeError("step commands must be tuple")
         if any(type(command) is not Command for command in self.commands):
             raise TypeError("step command is invalid")
-        if type(self.retry_attempts) is not tuple or any(
-            type(item) is not tuple or len(item) != 2
-            for item in self.retry_attempts
-        ):
-            raise TypeError("step retry attempts must be key-value tuples")
         command_ids = [command.command_id for command in self.commands]
         if len(command_ids) != len(set(command_ids)):
             raise ValueError("step commands contain duplicate ids")
-        if tuple(
-            command.effect for command in self.commands
-        ) != self.decision.command_requests:
-            raise ValueError("step commands do not match decision requests")
-        retry_command_ids = tuple(
-            command_id for command_id, _ in self.retry_attempts
-        )
-        retry_attempt_ids = tuple(
-            attempt_id for _, attempt_id in self.retry_attempts
-        )
-        if any(
-            type(command_id) is not str or not command_id
-            for command_id in retry_command_ids
-        ):
-            raise ValueError("step retry command ids are invalid")
-        if retry_command_ids != self.decision.retry_command_ids:
-            raise ValueError("step retry attempts do not match decision")
         if (
-            any(
-                type(attempt_id) is not str or not attempt_id
-                for attempt_id in retry_attempt_ids
-            )
-            or len(retry_attempt_ids) != len(set(retry_attempt_ids))
+            tuple(command.effect for command in self.commands)
+            != self.decision.command_requests
         ):
-            raise ValueError("step retry attempt ids are invalid")
+            raise ValueError("step commands do not match decision requests")
 
 
 class OutcomeStatus(str, Enum):
@@ -355,14 +245,11 @@ class CommandPhase(str, Enum):
 
     PENDING = "pending"
     UNKNOWN = "unknown"
-    RUNNING = "running"
     TERMINAL = "terminal"
 
 
 class AttemptPhase(str, Enum):
     UNKNOWN = "unknown"
-    RUNNING = "running"
-    NO_EFFECT = "no_effect"
     TERMINAL = "terminal"
 
 
@@ -372,11 +259,7 @@ class AttemptState:
     attempt_number: int
     started_event_id: str
     phase: AttemptPhase = AttemptPhase.UNKNOWN
-    external_operation_id: str | None = None
-    accepted_event_id: str | None = None
     outcome: CommandOutcome | None = None
-    superseded: bool = False
-    reconcile_count: int = 0
 
     def __post_init__(self) -> None:
         _require_str(self.attempt_id, "attempt id")
@@ -385,16 +268,8 @@ class AttemptState:
         _require_str(self.started_event_id, "attempt started event id")
         if type(self.phase) is not AttemptPhase:
             raise TypeError("attempt phase is invalid")
-        _require_optional_str(
-            self.external_operation_id,
-            "external operation id",
-        )
-        _require_optional_str(self.accepted_event_id, "accepted event id")
         if self.outcome is not None and type(self.outcome) is not CommandOutcome:
             raise TypeError("attempt outcome is invalid")
-        if type(self.superseded) is not bool:
-            raise TypeError("attempt superseded must be bool")
-        _require_nonnegative_int(self.reconcile_count, "reconcile count")
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,10 +320,7 @@ class CommandState:
 
     @property
     def current_attempt(self) -> AttemptState | None:
-        for attempt in reversed(self.attempts):
-            if not attempt.superseded:
-                return attempt
-        return None
+        return self.attempts[-1] if self.attempts else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,7 +328,6 @@ class DecisionState:
     session_id: str
     version: str
     user_messages: tuple[str, ...]
-    interrupts: tuple[str | None, ...]
     commands: tuple[CommandState, ...]
     prior_steps: tuple[Step, ...]
     visible_event_ids: tuple[str, ...]
@@ -466,11 +337,6 @@ class DecisionState:
         _require_str(self.session_id, "decision session id")
         _require_str(self.version, "decision state version")
         _require_str_tuple(self.user_messages, "decision user messages")
-        if type(self.interrupts) is not tuple or any(
-            item is not None and (type(item) is not str or not item)
-            for item in self.interrupts
-        ):
-            raise ValueError("decision interrupts are invalid")
         if type(self.commands) is not tuple or any(
             type(command) is not CommandState for command in self.commands
         ):

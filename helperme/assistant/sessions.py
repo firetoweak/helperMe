@@ -2,21 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from helperme.assistant.completion.judgment import JudgmentPolicy
 from helperme.assistant.control import (
     AssistantControlPlane,
     ControlApprovalView,
 )
 from helperme.assistant.runner import (
-    SessionNotFoundError,
-    drive_until_idle,
+    SessionScheduler,
     pending_authorization_ids,
     resume_session,
 )
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
 from helperme.runtime import AgentRuntime, RuntimeStatus
-from helperme.runtime.model import CanonicalState
+from helperme.runtime.model import CanonicalState, CommandPhase
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +23,7 @@ class SessionView:
     waiting_for: tuple[str, ...]
     pending_authorization_ids: tuple[str, ...]
     terminal: bool
-    should_drive: bool
+    should_wake: bool
     control_approval: ControlApprovalView | None = None
     control_message: str | None = None
 
@@ -45,11 +43,13 @@ def session_view(
         waiting_for=state.waiting_for,
         pending_authorization_ids=pending_authorization_ids(state),
         terminal=terminal,
-        should_drive=(
+        should_wake=(
             not terminal
             and (
                 state.status is RuntimeStatus.RUNNABLE
-                or bool(state.waiting_command_ids)
+                or any(
+                    command.phase is CommandPhase.PENDING for command in state.commands
+                )
             )
         ),
         control_approval=control_approval,
@@ -64,14 +64,14 @@ class AssistantSessions:
         self,
         runtime: AgentRuntime,
         surface: ToolSurface,
+        scheduler: SessionScheduler,
         *,
-        policy: JudgmentPolicy | None = None,
         control: AssistantControlPlane | None = None,
         management: ManagementSurface | None = None,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
-        self._policy = policy
+        self._scheduler = scheduler
         self._control = control
         self._management = management
 
@@ -104,6 +104,8 @@ class AssistantSessions:
             session_id,
             self._management,
         )
+        if self._view(state).should_wake:
+            await self._scheduler.wake(session_id)
         return self._view(state)
 
     async def view(self, session_id: str) -> SessionView:
@@ -133,28 +135,7 @@ class AssistantSessions:
             delivery_id=delivery_id,
             source=source,
         )
-        if self._policy is not None:
-            await self._policy.on_user_message(
-                self._runtime,
-                session_id,
-                content,
-            )
-
-    async def receive_interrupt(
-        self,
-        session_id: str,
-        reason: str,
-        *,
-        delivery_id: str,
-        source: str = "user",
-    ) -> None:
-        await self._runtime.receive_interrupt(
-            session_id,
-            reason,
-            delivery_id=delivery_id,
-            source=source,
-        )
-        await self._runtime.advance(session_id)
+        await self._scheduler.wake(session_id)
 
     async def resolve_authorizations(
         self,
@@ -168,18 +149,4 @@ class AssistantSessions:
                 await self._runtime.grant_command(session_id, command_id)
             else:
                 await self._runtime.reject_command(session_id, command_id)
-
-    async def drive(
-        self,
-        session_id: str,
-    ) -> SessionView:
-        result = await drive_until_idle(
-            self._runtime,
-            session_id,
-            policy=self._policy,
-            control=self._control,
-        )
-        return self._view(
-            result.state,
-            control_message=result.control_message,
-        )
+        await self._scheduler.wake(session_id)

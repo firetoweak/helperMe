@@ -57,16 +57,11 @@ def _payload_size(value: object, depth: int = 0) -> int:
         return len(str(value).encode("ascii"))
     if isinstance(value, Mapping):
         return 2 + sum(
-            len(key.encode("utf-8"))
-            + _payload_size(item, depth + 1)
-            + 3
+            len(key.encode("utf-8")) + _payload_size(item, depth + 1) + 3
             for key, item in value.items()
         )
     if isinstance(value, (list, tuple)):
-        return 2 + sum(
-            _payload_size(item, depth + 1) + 1
-            for item in value
-        )
+        return 2 + sum(_payload_size(item, depth + 1) + 1 for item in value)
     if is_dataclass(value) and not isinstance(value, type):
         return 2 + sum(
             len(field.name.encode("utf-8"))
@@ -74,9 +69,7 @@ def _payload_size(value: object, depth: int = 0) -> int:
             + 3
             for field in fields(value)
         )
-    raise TypeError(
-        f"event payload value is unsupported: {type(value).__name__}"
-    )
+    raise TypeError(f"event payload value is unsupported: {type(value).__name__}")
 
 
 def _validate_payload_size(payload: object) -> None:
@@ -96,10 +89,7 @@ def _validate_envelope(
         raise TypeError("occurred_at must be datetime")
     if occurred_at.tzinfo is not timezone.utc:
         raise ValueError("occurred_at must use UTC")
-    if (
-        type(schema_version) is not int
-        or schema_version < 1
-    ):
+    if type(schema_version) is not int or schema_version < 1:
         raise ValueError("schema version must be positive")
 
 
@@ -125,14 +115,6 @@ class UserMessageReceived:
 
     def __post_init__(self) -> None:
         _require_str(self.content, "user message")
-
-
-@dataclass(frozen=True, slots=True)
-class UserInterruptReceived:
-    reason: str | None = None
-
-    def __post_init__(self) -> None:
-        _require_optional_str(self.reason, "interrupt reason")
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,79 +153,10 @@ class DispatchAttemptStarted:
     def __post_init__(self) -> None:
         _require_str(self.attempt_id, "attempt id")
         _require_str(self.command_id, "command id")
-        if (
-            type(self.attempt_number) is not int
-            or self.attempt_number < 1
-        ):
+        if type(self.attempt_number) is not int or self.attempt_number < 1:
             raise ValueError("attempt number must be positive")
         _require_str(self.claim_token, "attempt claim token")
         _require_str(self.worker_id, "attempt worker id")
-
-
-@dataclass(frozen=True, slots=True)
-class CommandReconcileStarted:
-    reconcile_id: str
-    reconcile_number: int
-    command_id: str
-    attempt_id: str
-    worker_id: str
-
-    def __post_init__(self) -> None:
-        _require_str(self.reconcile_id, "reconcile id")
-        _require_str(self.command_id, "command id")
-        _require_str(self.attempt_id, "attempt id")
-        _require_str(self.worker_id, "reconcile worker id")
-        if (
-            type(self.reconcile_number) is not int
-            or self.reconcile_number < 1
-        ):
-            raise ValueError("reconcile number must be positive")
-
-
-@dataclass(frozen=True, slots=True)
-class ExternalOperationAccepted:
-    command_id: str
-    attempt_id: str
-    external_operation_id: str
-
-    def __post_init__(self) -> None:
-        _require_str(self.command_id, "command id")
-        _require_str(self.attempt_id, "attempt id")
-        _require_str(self.external_operation_id, "external operation id")
-
-
-@dataclass(frozen=True, slots=True)
-class DispatchAttemptConfirmedNoEffect:
-    command_id: str
-    attempt_id: str
-
-    def __post_init__(self) -> None:
-        _require_str(self.command_id, "command id")
-        _require_str(self.attempt_id, "attempt id")
-
-
-@dataclass(frozen=True, slots=True)
-class CommandRecoveryRequired:
-    command_id: str
-    attempt_id: str
-    reason: str
-    allowed_actions: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        _require_str(self.command_id, "command id")
-        _require_str(self.attempt_id, "attempt id")
-        _require_str(self.reason, "recovery reason")
-        if type(self.allowed_actions) is not tuple:
-            raise TypeError("allowed recovery actions must be tuple")
-        if (
-            not self.allowed_actions
-            or any(
-                type(action) is not str or not action
-                for action in self.allowed_actions
-            )
-            or len(self.allowed_actions) != len(set(self.allowed_actions))
-        ):
-            raise ValueError("allowed recovery actions are invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,15 +213,10 @@ class DomainFactCommitted:
 
 EventPayload: TypeAlias = (
     UserMessageReceived
-    | UserInterruptReceived
     | StepCommitted
     | CommandAuthorized
     | CommandRejected
     | DispatchAttemptStarted
-    | CommandReconcileStarted
-    | ExternalOperationAccepted
-    | DispatchAttemptConfirmedNoEffect
-    | CommandRecoveryRequired
     | CommandOutcomeReceived
     | TerminationRequested
     | RuntimeCompleted
@@ -318,15 +226,10 @@ EventPayload: TypeAlias = (
 
 _EVENT_PAYLOAD_TYPES = (
     UserMessageReceived,
-    UserInterruptReceived,
     StepCommitted,
     CommandAuthorized,
     CommandRejected,
     DispatchAttemptStarted,
-    CommandReconcileStarted,
-    ExternalOperationAccepted,
-    DispatchAttemptConfirmedNoEffect,
-    CommandRecoveryRequired,
     CommandOutcomeReceived,
     TerminationRequested,
     RuntimeCompleted,
@@ -343,7 +246,7 @@ class EventDraft:
     occurred_at: datetime
     causation_id: str | None = None
     correlation_id: str | None = None
-    schema_version: int = 2
+    schema_version: int = 3
     artifact_refs: tuple[str, ...] = ()
     delivery: DeliveryIdentity | None = None
 
@@ -379,10 +282,7 @@ class Event:
     delivery: DeliveryIdentity | None = None
 
     def __post_init__(self) -> None:
-        if (
-            type(self.sequence) is not int
-            or self.sequence < 1
-        ):
+        if type(self.sequence) is not int or self.sequence < 1:
             raise ValueError("event sequence must be positive")
         _validate_envelope(
             self.event_id,

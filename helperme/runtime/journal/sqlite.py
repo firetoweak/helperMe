@@ -22,20 +22,15 @@ from helperme.runtime.codec import (
 from helperme.runtime.events import (
     CommandAuthorized,
     CommandOutcomeReceived,
-    CommandRecoveryRequired,
-    CommandReconcileStarted,
     CommandRejected,
     DeliveryIdentity,
-    DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
     Event,
     EventDraft,
-    ExternalOperationAccepted,
     RuntimeCompleted,
     RuntimeTerminated,
     StepCommitted,
     TerminationRequested,
-    UserInterruptReceived,
     UserMessageReceived,
 )
 from helperme.runtime.finalization import (
@@ -51,15 +46,12 @@ from helperme.runtime.journal.api import (
     StepLease,
 )
 from helperme.runtime.model import (
-    CancelTool,
     CanonicalState,
-    InvokeTool,
-    OutcomeStatus,
 )
 
 
 _T = TypeVar("_T")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 async def _await_task_uninterruptibly(task: asyncio.Task[_T]) -> _T:
@@ -148,39 +140,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     claim_token TEXT NOT NULL UNIQUE,
     claim_expires_at REAL NOT NULL,
     worker_id TEXT NOT NULL,
-    recovery_claim_token TEXT UNIQUE,
-    recovery_claim_expires_at REAL,
     terminal_event_id TEXT UNIQUE REFERENCES events(event_id),
-    CHECK (
-        (recovery_claim_token IS NULL AND recovery_claim_expires_at IS NULL)
-        OR
-        (recovery_claim_token IS NOT NULL
-            AND recovery_claim_expires_at IS NOT NULL)
-    ),
     UNIQUE (command_id, attempt_number)
-);
-
-CREATE TABLE IF NOT EXISTS reconciles (
-    reconcile_id TEXT PRIMARY KEY,
-    attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
-    reconcile_number INTEGER NOT NULL CHECK (reconcile_number >= 1),
-    event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
-    worker_id TEXT NOT NULL,
-    UNIQUE (attempt_id, reconcile_number)
-);
-
-CREATE TABLE IF NOT EXISTS external_operations (
-    attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id),
-    command_id TEXT NOT NULL REFERENCES commands(command_id),
-    receipt_event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
-    external_operation_id TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS recovery_requirements (
-    command_id TEXT NOT NULL REFERENCES commands(command_id),
-    attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
-    event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
-    PRIMARY KEY (command_id, attempt_id)
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -198,7 +159,7 @@ CREATE TABLE IF NOT EXISTS session_terminals (
     kind TEXT NOT NULL CHECK (kind IN ('completed', 'terminated'))
 );
 
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 """
 
 
@@ -256,17 +217,15 @@ class SqliteJournal:
 
     async def append(self, draft: EventDraft) -> Event:
         self._validate_generic_append(draft)
-        return (await self._write(
-            lambda connection: self._append_tx(connection, draft)
-        )).event
+        return (
+            await self._write(lambda connection: self._append_tx(connection, draft))
+        ).event
 
     async def accept_delivery(self, draft: EventDraft) -> AppendResult:
         self._validate_external_delivery(draft)
         if draft.delivery is None:
             raise ValueError("external event requires delivery identity")
-        return await self._write(
-            lambda connection: self._append_tx(connection, draft)
-        )
+        return await self._write(lambda connection: self._append_tx(connection, draft))
 
     async def snapshot(self, session_id: str) -> tuple[Event, ...]:
         return await self._read(lambda: self._snapshot_sync(session_id))
@@ -290,33 +249,35 @@ class SqliteJournal:
             raise ValueError("step claim identity must not be empty")
         if lease_seconds <= 0:
             raise ValueError("step lease duration must be positive")
-        operation = asyncio.create_task(self._write(
-            lambda connection: self._acquire_step_tx(
-                connection,
-                request,
-                token,
-                owner_id,
-                lease_seconds,
+        operation = asyncio.create_task(
+            self._write(
+                lambda connection: self._acquire_step_tx(
+                    connection,
+                    request,
+                    token,
+                    owner_id,
+                    lease_seconds,
+                )
             )
-        ))
+        )
         try:
             return await asyncio.shield(operation)
         except asyncio.CancelledError:
             lease = await _await_task_uninterruptibly(operation)
             if lease is not None:
-                compensation = asyncio.create_task(self._write(
-                    lambda connection: self._release_step_tx(
-                        connection,
-                        lease,
+                compensation = asyncio.create_task(
+                    self._write(
+                        lambda connection: self._release_step_tx(
+                            connection,
+                            lease,
+                        )
                     )
-                ))
+                )
                 await _await_task_uninterruptibly(compensation)
             raise
 
     async def release_step(self, lease: StepLease) -> None:
-        await self._write(
-            lambda connection: self._release_step_tx(connection, lease)
-        )
+        await self._write(lambda connection: self._release_step_tx(connection, lease))
 
     async def renew_step(
         self,
@@ -360,22 +321,26 @@ class SqliteJournal:
             raise TypeError(type(payload).__name__)
         if lease_seconds <= 0:
             raise ValueError("attempt lease duration must be positive")
-        operation = asyncio.create_task(self._write(
-            lambda connection: self._start_attempt_tx(
-                connection,
-                draft,
-                lease_seconds,
+        operation = asyncio.create_task(
+            self._write(
+                lambda connection: self._start_attempt_tx(
+                    connection,
+                    draft,
+                    lease_seconds,
+                )
             )
-        ))
+        )
         try:
             return await asyncio.shield(operation)
         except asyncio.CancelledError:
             event = await _await_task_uninterruptibly(operation)
             if event is not None:
-                compensation = asyncio.create_task(self.release_attempt(
-                    payload.attempt_id,
-                    payload.claim_token,
-                ))
+                compensation = asyncio.create_task(
+                    self.release_attempt(
+                        payload.attempt_id,
+                        payload.claim_token,
+                    )
+                )
                 await _await_task_uninterruptibly(compensation)
             raise
 
@@ -418,83 +383,13 @@ class SqliteJournal:
         attempt_id: str,
         claim_token: str,
     ) -> None:
-        await self._write(lambda connection: connection.execute(
-            """
+        await self._write(
+            lambda connection: connection.execute(
+                """
             UPDATE attempts SET claim_expires_at = 0
             WHERE attempt_id = ? AND claim_token = ?
             """,
-            (attempt_id, claim_token),
-        ))
-
-    async def start_reconcile(
-        self,
-        draft: EventDraft,
-        *,
-        lease_seconds: float = 30.0,
-    ) -> Event | None:
-        self._validate_internal_draft(draft)
-        payload = draft.payload
-        if not isinstance(payload, CommandReconcileStarted):
-            raise TypeError(type(payload).__name__)
-        if lease_seconds <= 0:
-            raise ValueError("reconcile lease duration must be positive")
-        operation = asyncio.create_task(self._write(
-            lambda connection: self._start_reconcile_tx(
-                connection,
-                draft,
-                lease_seconds,
-            )
-        ))
-        try:
-            return await asyncio.shield(operation)
-        except asyncio.CancelledError:
-            event = await _await_task_uninterruptibly(operation)
-            if event is not None:
-                compensation = asyncio.create_task(
-                    self.release_reconcile(payload.reconcile_id)
-                )
-                await _await_task_uninterruptibly(compensation)
-            raise
-
-    async def renew_reconcile(
-        self,
-        reconcile_id: str,
-        *,
-        lease_seconds: float,
-    ) -> bool:
-        if lease_seconds <= 0:
-            raise ValueError("reconcile lease duration must be positive")
-        return await self._write(
-            lambda connection: self._renew_reconcile_tx(
-                connection,
-                reconcile_id,
-                lease_seconds,
-            )
-        )
-
-    async def release_reconcile(self, reconcile_id: str) -> None:
-        await self._write(lambda connection: connection.execute(
-            """
-            UPDATE attempts SET
-                recovery_claim_token = NULL,
-                recovery_claim_expires_at = NULL
-            WHERE recovery_claim_token = ?
-            """,
-            (reconcile_id,),
-        ))
-
-    async def confirm_no_effect(
-        self,
-        draft: EventDraft,
-    ) -> Event | None:
-        self._validate_internal_draft(draft)
-        payload = draft.payload
-        if not isinstance(payload, DispatchAttemptConfirmedNoEffect):
-            raise TypeError(type(payload).__name__)
-        return await self._write(
-            lambda connection: self._confirm_no_effect_tx(
-                connection,
-                draft,
+                (attempt_id, claim_token),
             )
         )
 
@@ -504,50 +399,12 @@ class SqliteJournal:
     ) -> Event | None:
         self._validate_internal_draft(draft)
         payload = draft.payload
-        if not isinstance(
-            payload,
-            (ExternalOperationAccepted, CommandOutcomeReceived),
-        ):
+        if not isinstance(payload, CommandOutcomeReceived):
             raise TypeError(type(payload).__name__)
-        if (
-            isinstance(payload, CommandOutcomeReceived)
-            and payload.attempt_id is None
-        ):
+        if payload.attempt_id is None:
             raise ValueError("attempt fact requires attempt identity")
         return await self._write(
             lambda connection: self._record_attempt_fact_tx(
-                connection,
-                draft,
-            )
-        )
-
-    async def commit_pending_cancellation(
-        self,
-        target_draft: EventDraft,
-        cancel_draft: EventDraft,
-    ) -> tuple[Event, Event] | None:
-        self._validate_pending_cancellation_drafts(
-            target_draft,
-            cancel_draft,
-        )
-        return await self._write(
-            lambda connection: self._commit_pending_cancellation_tx(
-                connection,
-                target_draft,
-                cancel_draft,
-            )
-        )
-
-    async def ensure_recovery_required(
-        self,
-        draft: EventDraft,
-    ) -> AppendResult | None:
-        self._validate_internal_draft(draft)
-        payload = draft.payload
-        if not isinstance(payload, CommandRecoveryRequired):
-            raise TypeError(type(payload).__name__)
-        return await self._write(
-            lambda connection: self._ensure_recovery_required_tx(
                 connection,
                 draft,
             )
@@ -573,18 +430,22 @@ class SqliteJournal:
         fingerprint: str,
     ) -> None:
         state_json = encode_state(state)
-        await self._write(lambda connection: self._save_checkpoint_tx(
-            connection,
-            state,
-            fingerprint,
-            state_json,
-        ))
+        await self._write(
+            lambda connection: self._save_checkpoint_tx(
+                connection,
+                state,
+                fingerprint,
+                state_json,
+            )
+        )
 
     async def delete_checkpoint(self, session_id: str) -> None:
-        await self._write(lambda connection: connection.execute(
-            "DELETE FROM checkpoints WHERE session_id = ?",
-            (session_id,),
-        ))
+        await self._write(
+            lambda connection: connection.execute(
+                "DELETE FROM checkpoints WHERE session_id = ?",
+                (session_id,),
+            )
+        )
 
     async def finalize(self, session_id: str, event_id: str) -> Event | None:
         return await self._write(
@@ -621,19 +482,14 @@ class SqliteJournal:
         )
         try:
             connection.execute(
-                f"PRAGMA busy_timeout = "
-                f"{int(self._busy_timeout_seconds * 1000)}"
+                f"PRAGMA busy_timeout = {int(self._busy_timeout_seconds * 1000)}"
             )
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA synchronous = FULL")
             connection.execute("PRAGMA foreign_keys = ON")
-            version = connection.execute(
-                "PRAGMA user_version"
-            ).fetchone()[0]
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, SCHEMA_VERSION):
-                raise ValueError(
-                    f"unsupported database schema version: {version}"
-                )
+                raise ValueError(f"unsupported database schema version: {version}")
             connection.executescript(_SCHEMA)
         finally:
             connection.close()
@@ -646,18 +502,19 @@ class SqliteJournal:
         )
         connection.row_factory = sqlite3.Row
         connection.execute(
-            f"PRAGMA busy_timeout = "
-            f"{int(self._busy_timeout_seconds * 1000)}"
+            f"PRAGMA busy_timeout = {int(self._busy_timeout_seconds * 1000)}"
         )
         connection.execute("PRAGMA synchronous = FULL")
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     async def _write(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
-        thread = asyncio.create_task(asyncio.to_thread(
-            self._write_sync,
-            operation,
-        ))
+        thread = asyncio.create_task(
+            asyncio.to_thread(
+                self._write_sync,
+                operation,
+            )
+        )
         try:
             return await asyncio.shield(thread)
         except asyncio.CancelledError:
@@ -773,7 +630,6 @@ class SqliteJournal:
         draft: EventDraft,
         *,
         attempt_lease_expires_at: float | None = None,
-        reconcile_lease_expires_at: float | None = None,
     ) -> AppendResult:
         if draft.schema_version != EVENT_SCHEMA_VERSION:
             raise ValueError(
@@ -805,9 +661,7 @@ class SqliteJournal:
             if row is not None:
                 terminal = self._event_from_row(row)
                 if terminal.payload != payload:
-                    raise ValueError(
-                        f"attempt terminal conflict: {payload.attempt_id}"
-                    )
+                    raise ValueError(f"attempt terminal conflict: {payload.attempt_id}")
                 return AppendResult(terminal, False)
 
         fingerprint: str | None = None
@@ -829,12 +683,8 @@ class SqliteJournal:
 
         sequence = self._next_sequence(connection, draft.session_id)
         kind, payload_json = encode_payload(draft.payload)
-        delivery_source = (
-            draft.delivery.source if draft.delivery is not None else None
-        )
-        delivery_id = (
-            draft.delivery.delivery_id if draft.delivery is not None else None
-        )
+        delivery_source = draft.delivery.source if draft.delivery is not None else None
+        delivery_id = draft.delivery.delivery_id if draft.delivery is not None else None
         connection.execute(
             """
             INSERT INTO events(
@@ -885,7 +735,6 @@ class SqliteJournal:
             connection,
             event,
             attempt_lease_expires_at=attempt_lease_expires_at,
-            reconcile_lease_expires_at=reconcile_lease_expires_at,
         )
         return AppendResult(event, True)
 
@@ -928,18 +777,24 @@ class SqliteJournal:
         ).fetchone()
         if trigger is None or trigger["session_id"] != request.session_id:
             raise KeyError(request.trigger_event_id)
-        if connection.execute(
-            """
+        if (
+            connection.execute(
+                """
             SELECT 1 FROM step_consumptions
             WHERE trigger_event_id = ?
             """,
-            (request.trigger_event_id,),
-        ).fetchone() is not None:
+                (request.trigger_event_id,),
+            ).fetchone()
+            is not None
+        ):
             return None
-        if connection.execute(
-            "SELECT 1 FROM session_terminals WHERE session_id = ?",
-            (request.session_id,),
-        ).fetchone() is not None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM session_terminals WHERE session_id = ?",
+                (request.session_id,),
+            ).fetchone()
+            is not None
+        ):
             return None
 
         current = connection.execute(
@@ -948,10 +803,7 @@ class SqliteJournal:
         ).fetchone()
         now = self._clock()
         if current is not None and current["expires_at"] > now:
-            if (
-                current["token"] == token
-                and self._request_from_row(current) == request
-            ):
+            if current["token"] == token and self._request_from_row(current) == request:
                 return self._lease_from_row(current)
             return None
 
@@ -1099,10 +951,7 @@ class SqliteJournal:
                 """,
                 (lease.request.trigger_event_id,),
             ).fetchone()
-            if (
-                consumption is None
-                or consumption["step_event_id"] != event.event_id
-            ):
+            if consumption is None or consumption["step_event_id"] != event.event_id:
                 raise LeaseLostError(lease.token)
             return event
 
@@ -1120,18 +969,24 @@ class SqliteJournal:
         ):
             raise LeaseLostError(lease.token)
         self._validate_step_draft(lease.request, draft)
-        if connection.execute(
-            """
+        if (
+            connection.execute(
+                """
             SELECT 1 FROM step_consumptions
             WHERE trigger_event_id = ?
             """,
-            (lease.request.trigger_event_id,),
-        ).fetchone() is not None:
+                (lease.request.trigger_event_id,),
+            ).fetchone()
+            is not None
+        ):
             raise LeaseLostError(lease.token)
-        if connection.execute(
-            "SELECT 1 FROM session_terminals WHERE session_id = ?",
-            (lease.request.session_id,),
-        ).fetchone() is not None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM session_terminals WHERE session_id = ?",
+                (lease.request.session_id,),
+            ).fetchone()
+            is not None
+        ):
             raise LeaseLostError(lease.token)
 
         event = self._append_tx(connection, draft).event
@@ -1155,13 +1010,16 @@ class SqliteJournal:
         lease_seconds: float,
     ) -> Event | None:
         payload = draft.payload
-        if connection.execute(
-            """
+        if (
+            connection.execute(
+                """
             SELECT 1 FROM attempts
             WHERE command_id = ? AND attempt_number = ?
             """,
-            (payload.command_id, payload.attempt_number),
-        ).fetchone() is not None:
+                (payload.command_id, payload.attempt_number),
+            ).fetchone()
+            is not None
+        ):
             return None
         command = connection.execute(
             "SELECT * FROM commands WHERE command_id = ?",
@@ -1208,10 +1066,13 @@ class SqliteJournal:
             return False
         if command["authorization_rejected_event_id"] is not None:
             return False
-        if connection.execute(
-            "SELECT 1 FROM attempts WHERE command_id = ?",
-            (command_id,),
-        ).fetchone() is not None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM attempts WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+            is not None
+        ):
             return False
         return True
 
@@ -1263,159 +1124,6 @@ class SqliteJournal:
         )
         return cursor.rowcount == 1
 
-    def _start_reconcile_tx(
-        self,
-        connection: sqlite3.Connection,
-        draft: EventDraft,
-        lease_seconds: float,
-    ) -> Event | None:
-        payload = draft.payload
-        if connection.execute(
-            """
-            SELECT 1 FROM reconciles
-            WHERE attempt_id = ? AND reconcile_number = ?
-            """,
-            (payload.attempt_id, payload.reconcile_number),
-        ).fetchone() is not None:
-            return None
-        attempt = connection.execute(
-            """
-            SELECT
-                attempts.command_id,
-                attempts.dispatch_event_id,
-                attempts.claim_expires_at,
-                attempts.recovery_claim_expires_at,
-                commands.session_id,
-                commands.canonical_outcome_event_id
-            FROM attempts
-            JOIN commands USING(command_id)
-            WHERE attempt_id = ?
-            """,
-            (payload.attempt_id,),
-        ).fetchone()
-        if attempt is None:
-            raise KeyError(payload.attempt_id)
-        if (
-            attempt["command_id"] != payload.command_id
-            or attempt["session_id"] != draft.session_id
-        ):
-            raise ValueError("reconcile attempt mismatch")
-        if attempt["canonical_outcome_event_id"] is not None:
-            return None
-        now = self._clock()
-        if attempt["claim_expires_at"] > now:
-            return None
-        if (
-            attempt["recovery_claim_expires_at"] is not None
-            and attempt["recovery_claim_expires_at"] > now
-        ):
-            return None
-        receipt = connection.execute(
-            """
-            SELECT receipt_event_id FROM external_operations
-            WHERE attempt_id = ?
-            """,
-            (payload.attempt_id,),
-        ).fetchone()
-        expected_cause = (
-            receipt["receipt_event_id"]
-            if receipt is not None
-            else attempt["dispatch_event_id"]
-        )
-        if draft.causation_id != expected_cause:
-            return None
-        count = connection.execute(
-            "SELECT COUNT(*) AS count FROM reconciles WHERE attempt_id = ?",
-            (payload.attempt_id,),
-        ).fetchone()["count"]
-        if payload.reconcile_number != count + 1:
-            return None
-        return self._append_tx(
-            connection,
-            draft,
-            reconcile_lease_expires_at=now + lease_seconds,
-        ).event
-
-    def _renew_reconcile_tx(
-        self,
-        connection: sqlite3.Connection,
-        reconcile_id: str,
-        lease_seconds: float,
-    ) -> bool:
-        now = self._clock()
-        cursor = connection.execute(
-            """
-            UPDATE attempts SET recovery_claim_expires_at = ?
-            WHERE recovery_claim_token = ?
-                AND recovery_claim_expires_at > ?
-                AND terminal_event_id IS NULL
-            """,
-            (now + lease_seconds, reconcile_id, now),
-        )
-        return cursor.rowcount == 1
-
-    def _confirm_no_effect_tx(
-        self,
-        connection: sqlite3.Connection,
-        draft: EventDraft,
-    ) -> Event | None:
-        payload = draft.payload
-        existing = connection.execute(
-            "SELECT * FROM events WHERE event_id = ?",
-            (draft.event_id,),
-        ).fetchone()
-        if existing is not None:
-            event = self._event_from_row(existing)
-            if not self._same_event(event, draft):
-                raise ValueError(f"event id conflict: {draft.event_id}")
-            return event
-        claim = connection.execute(
-            """
-            SELECT
-                reconciles.reconcile_id,
-                attempts.attempt_number,
-                attempts.recovery_claim_token,
-                attempts.recovery_claim_expires_at,
-                attempts.terminal_event_id,
-                commands.canonical_outcome_event_id,
-                commands.dispatch_eligible_event_id,
-                (
-                    SELECT MAX(latest.attempt_number)
-                    FROM attempts AS latest
-                    WHERE latest.command_id = attempts.command_id
-                ) AS latest_attempt_number,
-                EXISTS (
-                    SELECT 1 FROM external_operations
-                    WHERE external_operations.attempt_id
-                        = attempts.attempt_id
-                ) AS has_receipt
-            FROM reconciles
-            JOIN attempts USING(attempt_id)
-            JOIN commands USING(command_id)
-            WHERE reconciles.event_id = ?
-                AND reconciles.attempt_id = ?
-                AND attempts.command_id = ?
-            """,
-            (
-                draft.causation_id,
-                payload.attempt_id,
-                payload.command_id,
-            ),
-        ).fetchone()
-        if claim is None:
-            return None
-        if (
-            claim["recovery_claim_token"] != claim["reconcile_id"]
-            or claim["recovery_claim_expires_at"] <= self._clock()
-            or claim["terminal_event_id"] is not None
-            or claim["canonical_outcome_event_id"] is not None
-            or claim["dispatch_eligible_event_id"] is not None
-            or claim["attempt_number"] != claim["latest_attempt_number"]
-            or claim["has_receipt"]
-        ):
-            return None
-        return self._append_tx(connection, draft).event
-
     def _record_attempt_fact_tx(
         self,
         connection: sqlite3.Connection,
@@ -1433,282 +1141,35 @@ class SqliteJournal:
             return event
 
         attempt_id = payload.attempt_id
-        if isinstance(payload, ExternalOperationAccepted):
-            existing = connection.execute(
-                """
-                SELECT events.* FROM external_operations
-                JOIN events
-                    ON events.event_id
-                        = external_operations.receipt_event_id
-                WHERE external_operations.attempt_id = ?
-                """,
-                (attempt_id,),
-            ).fetchone()
-            conflict_name = "external operation"
-        else:
-            existing = connection.execute(
-                """
-                SELECT events.* FROM attempts
-                JOIN events ON events.event_id = attempts.terminal_event_id
-                WHERE attempts.attempt_id = ?
-                """,
-                (attempt_id,),
-            ).fetchone()
-            conflict_name = "attempt terminal"
+        existing = connection.execute(
+            """
+            SELECT events.* FROM attempts
+            JOIN events ON events.event_id = attempts.terminal_event_id
+            WHERE attempts.attempt_id = ?
+            """,
+            (attempt_id,),
+        ).fetchone()
         if existing is not None:
             event = self._event_from_row(existing)
             if event.payload != payload:
-                raise ValueError(f"{conflict_name} conflict: {attempt_id}")
+                raise ValueError(f"attempt terminal conflict: {attempt_id}")
             return event
 
         attempt = connection.execute(
             """
-            SELECT
-                attempts.command_id,
-                attempts.dispatch_event_id,
-                attempts.claim_expires_at,
-                attempts.recovery_claim_token,
-                attempts.recovery_claim_expires_at,
-                commands.issued_event_id,
-                reconciles.reconcile_id
+            SELECT attempts.command_id, attempts.dispatch_event_id
             FROM attempts
-            JOIN commands USING(command_id)
-            LEFT JOIN reconciles
-                ON reconciles.attempt_id = attempts.attempt_id
-                AND reconciles.event_id = ?
             WHERE attempts.attempt_id = ?
             """,
-            (draft.causation_id, attempt_id),
+            (attempt_id,),
         ).fetchone()
         if attempt is None:
             raise KeyError(attempt_id)
         if attempt["command_id"] != payload.command_id:
             raise ValueError("attempt fact command mismatch")
-        issued = connection.execute(
-            "SELECT * FROM events WHERE event_id = ?",
-            (attempt["issued_event_id"],),
-        ).fetchone()
-        step_event = self._event_from_row(issued)
-        command = next(
-            command
-            for command in step_event.payload.step.commands
-            if command.command_id == payload.command_id
-        )
-        if (
-            isinstance(payload, ExternalOperationAccepted)
-            and not isinstance(command.effect, InvokeTool)
-        ):
-            raise ValueError("external receipt requires tool command")
         if draft.causation_id != attempt["dispatch_event_id"]:
-            if (
-                attempt["reconcile_id"] is None
-                or attempt["recovery_claim_token"]
-                != attempt["reconcile_id"]
-                or attempt["recovery_claim_expires_at"] <= self._clock()
-            ):
-                return None
-        elif (
-            isinstance(command.effect, CancelTool)
-            and attempt["claim_expires_at"] <= self._clock()
-        ):
             return None
         return self._append_tx(connection, draft).event
-
-    def _commit_pending_cancellation_tx(
-        self,
-        connection: sqlite3.Connection,
-        target_draft: EventDraft,
-        cancel_draft: EventDraft,
-    ) -> tuple[Event, Event] | None:
-        target_payload = target_draft.payload
-        cancel_payload = cancel_draft.payload
-        existing_events: list[Event | None] = []
-        for draft in (target_draft, cancel_draft):
-            row = connection.execute(
-                "SELECT * FROM events WHERE event_id = ?",
-                (draft.event_id,),
-            ).fetchone()
-            event = self._event_from_row(row) if row is not None else None
-            if event is not None and not self._same_event(event, draft):
-                raise ValueError(f"event id conflict: {draft.event_id}")
-            existing_events.append(event)
-        if any(event is not None for event in existing_events):
-            if any(event is None for event in existing_events):
-                raise RuntimeError("partial pending cancellation commit")
-            return existing_events[0], existing_events[1]
-
-        attempt_id = cancel_payload.attempt_id
-        source = connection.execute(
-            """
-            SELECT
-                attempts.command_id,
-                attempts.dispatch_event_id,
-                attempts.claim_expires_at,
-                attempts.recovery_claim_token,
-                attempts.recovery_claim_expires_at,
-                attempts.terminal_event_id,
-                commands.session_id,
-                commands.issued_event_id,
-                commands.canonical_outcome_event_id,
-                reconciles.reconcile_id
-            FROM attempts
-            JOIN commands USING(command_id)
-            LEFT JOIN reconciles
-                ON reconciles.attempt_id = attempts.attempt_id
-                AND reconciles.event_id = ?
-            WHERE attempts.attempt_id = ?
-            """,
-            (cancel_draft.causation_id, attempt_id),
-        ).fetchone()
-        if source is None:
-            raise KeyError(attempt_id)
-        if source["command_id"] != cancel_payload.command_id:
-            raise ValueError("cancel attempt command mismatch")
-        if (
-            source["session_id"] != cancel_draft.session_id
-            or target_draft.session_id != cancel_draft.session_id
-        ):
-            raise ValueError("pending cancellation session mismatch")
-        issued = connection.execute(
-            "SELECT * FROM events WHERE event_id = ?",
-            (source["issued_event_id"],),
-        ).fetchone()
-        step_event = self._event_from_row(issued)
-        cancel_command = next(
-            command
-            for command in step_event.payload.step.commands
-            if command.command_id == cancel_payload.command_id
-        )
-        if (
-            not isinstance(cancel_command.effect, CancelTool)
-            or cancel_command.effect.target_command_id
-            != target_payload.command_id
-        ):
-            raise ValueError("cancel command target mismatch")
-        if (
-            source["terminal_event_id"] is not None
-            or source["canonical_outcome_event_id"] is not None
-        ):
-            return None
-
-        now = self._clock()
-        if cancel_draft.causation_id == source["dispatch_event_id"]:
-            if source["claim_expires_at"] <= now:
-                return None
-        elif (
-            source["reconcile_id"] is None
-            or source["recovery_claim_token"]
-            != source["reconcile_id"]
-            or source["recovery_claim_expires_at"] <= now
-        ):
-            return None
-
-        target = connection.execute(
-            """
-            SELECT
-                commands.session_id,
-                commands.canonical_outcome_event_id,
-                commands.dispatch_eligible_event_id
-            FROM commands
-            WHERE commands.command_id = ?
-            """,
-            (target_payload.command_id,),
-        ).fetchone()
-        if target is None:
-            raise KeyError(target_payload.command_id)
-        if target["session_id"] != target_draft.session_id:
-            raise ValueError("pending cancellation session mismatch")
-        if (
-            target["canonical_outcome_event_id"] is not None
-            or target["dispatch_eligible_event_id"] is None
-        ):
-            return None
-
-        target_event = self._append_tx(connection, target_draft).event
-        cancel_event = self._append_tx(connection, cancel_draft).event
-        return target_event, cancel_event
-
-    def _ensure_recovery_required_tx(
-        self,
-        connection: sqlite3.Connection,
-        draft: EventDraft,
-    ) -> AppendResult | None:
-        payload = draft.payload
-        row = connection.execute(
-            """
-            SELECT events.* FROM recovery_requirements
-            JOIN events ON events.event_id = recovery_requirements.event_id
-            WHERE command_id = ? AND attempt_id = ?
-            """,
-            (payload.command_id, payload.attempt_id),
-        ).fetchone()
-        if row is not None:
-            return AppendResult(self._event_from_row(row), False)
-        attempt = connection.execute(
-            """
-            SELECT
-                attempts.dispatch_event_id,
-                attempts.attempt_number,
-                attempts.claim_expires_at,
-                attempts.recovery_claim_token,
-                attempts.recovery_claim_expires_at,
-                attempts.terminal_event_id,
-                commands.canonical_outcome_event_id,
-                commands.dispatch_eligible_event_id,
-                (
-                    SELECT MAX(latest.attempt_number)
-                    FROM attempts AS latest
-                    WHERE latest.command_id = attempts.command_id
-                ) AS latest_attempt_number,
-                EXISTS (
-                    SELECT 1 FROM external_operations
-                    WHERE external_operations.attempt_id
-                        = attempts.attempt_id
-                ) AS has_receipt,
-                reconciles.reconcile_id
-            FROM attempts
-            JOIN commands USING(command_id)
-            LEFT JOIN reconciles
-                ON reconciles.attempt_id = attempts.attempt_id
-                AND reconciles.event_id = ?
-            WHERE attempts.attempt_id = ?
-                AND attempts.command_id = ?
-            """,
-            (
-                draft.causation_id,
-                payload.attempt_id,
-                payload.command_id,
-            ),
-        ).fetchone()
-        if attempt is None:
-            raise KeyError(payload.attempt_id)
-        if (
-            attempt["terminal_event_id"] is not None
-            or attempt["canonical_outcome_event_id"] is not None
-            or attempt["dispatch_eligible_event_id"] is not None
-            or attempt["attempt_number"]
-            != attempt["latest_attempt_number"]
-            or attempt["has_receipt"]
-        ):
-            return None
-        now = self._clock()
-        if attempt["reconcile_id"] is not None:
-            if (
-                attempt["recovery_claim_token"]
-                != attempt["reconcile_id"]
-                or attempt["recovery_claim_expires_at"] <= now
-            ):
-                return None
-        elif (
-            draft.causation_id != attempt["dispatch_event_id"]
-            or attempt["claim_expires_at"] > now
-            or (
-                attempt["recovery_claim_expires_at"] is not None
-                and attempt["recovery_claim_expires_at"] > now
-            )
-        ):
-            return None
-        return self._append_tx(connection, draft)
 
     def _index_event_tx(
         self,
@@ -1716,7 +1177,6 @@ class SqliteJournal:
         event: Event,
         *,
         attempt_lease_expires_at: float | None = None,
-        reconcile_lease_expires_at: float | None = None,
     ) -> None:
         payload = event.payload
         if isinstance(payload, StepCommitted):
@@ -1734,37 +1194,6 @@ class SqliteJournal:
                     step.step_id,
                 ),
             )
-            for command_id in step.decision.abandon_command_ids:
-                connection.execute(
-                    "UPDATE commands SET abandoned = 1 WHERE command_id = ?",
-                    (command_id,),
-                )
-            for command_id, retry_attempt_id in step.retry_attempts:
-                connection.execute(
-                    """
-                    UPDATE commands SET dispatch_eligible_event_id = ?
-                    WHERE command_id = ?
-                        AND canonical_outcome_event_id IS NULL
-                        AND dispatch_eligible_event_id IS NULL
-                        AND EXISTS (
-                            SELECT 1 FROM attempts
-                            WHERE attempts.command_id = commands.command_id
-                                AND attempts.attempt_id = ?
-                                AND attempts.attempt_number = (
-                                    SELECT MAX(latest.attempt_number)
-                                    FROM attempts AS latest
-                                    WHERE latest.command_id = commands.command_id
-                                )
-                                AND attempts.terminal_event_id IS NULL
-                                AND NOT EXISTS (
-                                    SELECT 1 FROM external_operations
-                                    WHERE external_operations.attempt_id
-                                        = attempts.attempt_id
-                                )
-                        )
-                    """,
-                    (event.event_id, command_id, retry_attempt_id),
-                )
             for command in step.commands:
                 connection.execute(
                     """
@@ -1799,9 +1228,7 @@ class SqliteJournal:
                 (event.event_id, payload.command_id),
             )
             if cursor.rowcount != 1:
-                raise ValueError(
-                    f"command is not grantable: {payload.command_id}"
-                )
+                raise ValueError(f"command is not grantable: {payload.command_id}")
         elif isinstance(payload, CommandRejected):
             cursor = connection.execute(
                 """
@@ -1818,9 +1245,7 @@ class SqliteJournal:
                 (event.event_id, payload.command_id, payload.command_id),
             )
             if cursor.rowcount != 1:
-                raise ValueError(
-                    f"command is not rejectable: {payload.command_id}"
-                )
+                raise ValueError(f"command is not rejectable: {payload.command_id}")
         elif isinstance(payload, DispatchAttemptStarted):
             if attempt_lease_expires_at is None:
                 raise ValueError("attempt lease is required")
@@ -1853,116 +1278,6 @@ class SqliteJournal:
                 """,
                 (payload.command_id,),
             )
-        elif isinstance(payload, CommandReconcileStarted):
-            if reconcile_lease_expires_at is None:
-                raise ValueError("reconcile lease is required")
-            connection.execute(
-                """
-                INSERT INTO reconciles(
-                    reconcile_id,
-                    attempt_id,
-                    reconcile_number,
-                    event_id,
-                    worker_id
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    payload.reconcile_id,
-                    payload.attempt_id,
-                    payload.reconcile_number,
-                    event.event_id,
-                    payload.worker_id,
-                ),
-            )
-            connection.execute(
-                """
-                UPDATE attempts SET
-                    recovery_claim_token = ?,
-                    recovery_claim_expires_at = ?
-                WHERE attempt_id = ?
-                """,
-                (
-                    payload.reconcile_id,
-                    reconcile_lease_expires_at,
-                    payload.attempt_id,
-                ),
-            )
-        elif isinstance(payload, ExternalOperationAccepted):
-            connection.execute(
-                """
-                INSERT INTO external_operations(
-                    attempt_id,
-                    command_id,
-                    receipt_event_id,
-                    external_operation_id
-                ) VALUES (?, ?, ?, ?)
-                """,
-                (
-                    payload.attempt_id,
-                    payload.command_id,
-                    event.event_id,
-                    payload.external_operation_id,
-                ),
-            )
-            connection.execute(
-                """
-                UPDATE commands SET dispatch_eligible_event_id = NULL
-                WHERE command_id = ?
-                    AND EXISTS (
-                        SELECT 1 FROM attempts
-                        WHERE attempts.attempt_id = ?
-                            AND attempts.command_id = commands.command_id
-                            AND attempts.attempt_number = (
-                                SELECT MAX(latest.attempt_number)
-                                FROM attempts AS latest
-                                WHERE latest.command_id = commands.command_id
-                            )
-                    )
-                """,
-                (payload.command_id, payload.attempt_id),
-            )
-            self._clear_attempt_claims_tx(connection, payload.attempt_id)
-        elif isinstance(payload, DispatchAttemptConfirmedNoEffect):
-            connection.execute(
-                """
-                UPDATE commands SET dispatch_eligible_event_id = ?
-                WHERE command_id = ?
-                    AND canonical_outcome_event_id IS NULL
-                    AND dispatch_eligible_event_id IS NULL
-                    AND EXISTS (
-                        SELECT 1 FROM attempts
-                        WHERE attempts.attempt_id = ?
-                            AND attempts.command_id = commands.command_id
-                            AND attempts.attempt_number = (
-                                SELECT MAX(latest.attempt_number)
-                                FROM attempts AS latest
-                                WHERE latest.command_id = commands.command_id
-                            )
-                            AND attempts.terminal_event_id IS NULL
-                            AND NOT EXISTS (
-                                SELECT 1 FROM external_operations
-                                WHERE external_operations.attempt_id
-                                    = attempts.attempt_id
-                            )
-                    )
-                """,
-                (
-                    event.event_id,
-                    payload.command_id,
-                    payload.attempt_id,
-                ),
-            )
-            self._clear_attempt_claims_tx(connection, payload.attempt_id)
-        elif isinstance(payload, CommandRecoveryRequired):
-            connection.execute(
-                """
-                INSERT INTO recovery_requirements(
-                    command_id, attempt_id, event_id
-                ) VALUES (?, ?, ?)
-                """,
-                (payload.command_id, payload.attempt_id, event.event_id),
-            )
-            self._clear_attempt_claims_tx(connection, payload.attempt_id)
         elif isinstance(payload, CommandOutcomeReceived):
             current = connection.execute(
                 """
@@ -1992,18 +1307,14 @@ class SqliteJournal:
                     (event.event_id, payload.attempt_id),
                 )
                 if cursor.rowcount != 1:
-                    raise ValueError(
-                        f"attempt already terminal: {payload.attempt_id}"
-                    )
+                    raise ValueError(f"attempt already terminal: {payload.attempt_id}")
                 self._clear_attempt_claims_tx(
                     connection,
                     payload.attempt_id,
                 )
         elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
             kind = (
-                "completed"
-                if isinstance(payload, RuntimeCompleted)
-                else "terminated"
+                "completed" if isinstance(payload, RuntimeCompleted) else "terminated"
             )
             connection.execute(
                 """
@@ -2036,9 +1347,7 @@ class SqliteJournal:
         connection.execute(
             """
             UPDATE attempts SET
-                claim_expires_at = 0,
-                recovery_claim_token = NULL,
-                recovery_claim_expires_at = NULL
+                claim_expires_at = 0
             WHERE attempt_id = ?
             """,
             (attempt_id,),
@@ -2126,8 +1435,7 @@ class SqliteJournal:
             or step.trigger_event_id != request.trigger_event_id
             or step.decision_cursor != request.decision_cursor
             or step.basis_state_version != request.basis_state_version
-            or step.observed_journal_position
-            != request.observed_journal_position
+            or step.observed_journal_position != request.observed_journal_position
             or draft.causation_id != request.trigger_event_id
         ):
             raise ValueError("step does not match its claim")
@@ -2198,10 +1506,7 @@ class SqliteJournal:
 
     @classmethod
     def _same_event(cls, event: Event, draft: EventDraft) -> bool:
-        return (
-            cls._same_delivery(event, draft)
-            and event.delivery == draft.delivery
-        )
+        return cls._same_delivery(event, draft) and event.delivery == draft.delivery
 
     @staticmethod
     def _json_dump(value: object) -> str:
@@ -2224,67 +1529,23 @@ class SqliteJournal:
                 CommandAuthorized,
                 CommandRejected,
                 DispatchAttemptStarted,
-                CommandReconcileStarted,
-                DispatchAttemptConfirmedNoEffect,
-                CommandRecoveryRequired,
                 UserMessageReceived,
-                UserInterruptReceived,
                 TerminationRequested,
                 RuntimeCompleted,
                 RuntimeTerminated,
             ),
         ):
             raise ValueError("conditional event requires its Journal method")
-        if isinstance(draft.payload, ExternalOperationAccepted) or (
-            isinstance(draft.payload, CommandOutcomeReceived)
-            and draft.payload.attempt_id is not None
-        ):
-            raise ValueError("attempt fact requires conditional append")
         if isinstance(draft.payload, CommandOutcomeReceived):
-            raise ValueError(
-                "pending cancellation requires conditional commit"
-            )
+            raise ValueError("attempt fact requires conditional append")
 
     @staticmethod
     def _validate_external_delivery(draft: EventDraft) -> None:
         if not isinstance(
             draft.payload,
-            (UserMessageReceived, UserInterruptReceived),
+            UserMessageReceived,
         ):
             raise ValueError("delivery payload is not an external event")
-
-    @staticmethod
-    def _validate_pending_cancellation_drafts(
-        target_draft: EventDraft,
-        cancel_draft: EventDraft,
-    ) -> None:
-        target = target_draft.payload
-        cancel = cancel_draft.payload
-        if not isinstance(target, CommandOutcomeReceived) or (
-            target.attempt_id is not None
-        ):
-            raise TypeError("target cancellation outcome is invalid")
-        if not isinstance(cancel, CommandOutcomeReceived) or (
-            cancel.attempt_id is None
-        ):
-            raise TypeError("cancel command outcome is invalid")
-        if target.outcome.status is not OutcomeStatus.CANCELLED:
-            raise ValueError("target outcome must be cancelled")
-        if cancel.outcome.status is not OutcomeStatus.SUCCEEDED:
-            raise ValueError("cancel command outcome must be succeeded")
-        if (
-            target_draft.event_id == cancel_draft.event_id
-            or target_draft.delivery is not None
-            or cancel_draft.delivery is not None
-            or target_draft.causation_id != cancel_draft.causation_id
-        ):
-            raise ValueError("pending cancellation envelope is invalid")
-        for draft in (target_draft, cancel_draft):
-            if draft.schema_version != EVENT_SCHEMA_VERSION:
-                raise ValueError(
-                    "unsupported event schema version: "
-                    f"{draft.schema_version}"
-                )
 
     @staticmethod
     def _validate_internal_draft(draft: EventDraft) -> None:

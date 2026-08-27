@@ -8,7 +8,7 @@ from pathlib import Path
 from helperme.assistant.artifacts import MemoryArtifactGateway
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
 from helperme.assistant.context.projection import ModelContextSettings
-from helperme.assistant.runner import drive_until_idle
+from tests.session_scheduler import settle_session
 from helperme.assistant.skills import SkillToolAdapter
 from helperme.runtime import (
     AgentRuntime,
@@ -122,20 +122,22 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
         delivered: list[str] = []
         runtime = AgentRuntime(
             MemoryJournal(),
-            ScriptedDecisionMaker((
-                lambda _frame: ModelDecision(
-                    content="loading skill",
-                    command_requests=(
-                        InvokeTool(LOAD_SKILL, (("skill_id", "demo"),)),
+            ScriptedDecisionMaker(
+                (
+                    lambda _frame: ModelDecision(
+                        content="loading skill",
+                        command_requests=(
+                            InvokeTool(LOAD_SKILL, (("skill_id", "demo"),)),
+                        ),
                     ),
-                ),
-                lambda _frame: ModelDecision(
-                    content="loaded",
-                    command_requests=(
-                        InvokeTool(DELIVER_TOOL_NAME, (("text", "loaded"),)),
+                    lambda _frame: ModelDecision(
+                        content="loaded",
+                        command_requests=(
+                            InvokeTool(DELIVER_TOOL_NAME, (("text", "loaded"),)),
+                        ),
                     ),
-                ),
-            )),
+                )
+            ),
             {
                 **self.adapter.bindings(),
                 **deliver_binding(delivered.append),
@@ -147,7 +149,7 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             "use demo skill",
             delivery_id="ask-1",
         )
-        result = await drive_until_idle(
+        result = await settle_session(
             runtime,
             self.SESSION_ID,
         )
@@ -165,28 +167,30 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
         delivered: list[str] = []
         runtime = AgentRuntime(
             MemoryJournal(),
-            ScriptedDecisionMaker((
-                lambda _frame: ModelDecision(
-                    content="reading",
-                    command_requests=(
-                        InvokeTool(
-                            READ_SKILL_RESOURCE,
-                            (
-                                ("skill_id", "demo"),
-                                ("relative_path", "references/guide.md"),
-                                ("offset", 2),
-                                ("limit", 4),
+            ScriptedDecisionMaker(
+                (
+                    lambda _frame: ModelDecision(
+                        content="reading",
+                        command_requests=(
+                            InvokeTool(
+                                READ_SKILL_RESOURCE,
+                                (
+                                    ("skill_id", "demo"),
+                                    ("relative_path", "references/guide.md"),
+                                    ("offset", 2),
+                                    ("limit", 4),
+                                ),
                             ),
                         ),
                     ),
-                ),
-                lambda _frame: ModelDecision(
-                    content="ok",
-                    command_requests=(
-                        InvokeTool(DELIVER_TOOL_NAME, (("text", "ok"),)),
+                    lambda _frame: ModelDecision(
+                        content="ok",
+                        command_requests=(
+                            InvokeTool(DELIVER_TOOL_NAME, (("text", "ok"),)),
+                        ),
                     ),
-                ),
-            )),
+                )
+            ),
             {
                 **self.adapter.bindings(),
                 **deliver_binding(delivered.append),
@@ -198,7 +202,7 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             "read guide",
             delivery_id="ask-1",
         )
-        await drive_until_idle(runtime, self.SESSION_ID)
+        await settle_session(runtime, self.SESSION_ID)
         events = await runtime.snapshot(self.SESSION_ID)
         reads = _outcomes_named(events, READ_SKILL_RESOURCE)
         self.assertEqual(reads[0]["data"]["content"], "cdef")

@@ -2,11 +2,11 @@
 
 Assistant 把产品接到 Runtime：调用模型、装配工具、投影上下文并编排判定。模型窄接口位于 `helperme/llm/`；执行环境边界位于 `helperme/sandbox/`；工具契约与执行器位于 `helperme/tools/`；MCP 领域位于 `helperme/mcp/`。控制台输入属于 CLI Channel。
 
-Assistant 应用层负责接收外部选定的 Session identity，但不替 Channel 或 Automation 选择当前 Session。identity 交给 Runtime 后，创建、持久执行、重放和机械恢复属于 Core。
+Assistant 应用层负责接收外部选定的 Session identity，但不替 Channel 或 Automation 选择当前 Session。identity 交给 Runtime 后，创建、持久执行和重放属于 Core；Scheduler 依据已提交事实唤醒它。
 
 授权策略由产品装配：`ToolSpec.requires_authorization → ToolBinding → Command`。静态环境工具和动态 Toolset 使用同一条链；Runtime 只消费冻结后的要求及 Journal 中的授权事实。
 
-Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`drive_until_idle()` 不捕获 Dispatcher 的未预期异常；CLI 也不能将其打印后继续。异常发生前已经持久化的 Attempt 仍可在下次显式恢复 Session 时由 `recover_once()` 按 Recovery Contract 机械处理，当前调用链不得把内部 bug 伪装成正常恢复流程。
+Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`SessionScheduler` 不吞掉 Dispatcher 的未预期异常；CLI 也不能将其打印后继续。异常发生前已经持久化且没有 Outcome 的 Attempt 保持 `unknown`；`/resume` 不自动重试或协调，当前调用链不得把内部 bug 伪装成正常恢复流程。
 
 具体实现约束以 [项目架构方向：代码实现原则](../项目架构方向.md#代码实现原则内部相信契约) 为准。当前 Pydantic 工具输入统一使用 strict + forbid-extra；MCP / Skill Registry、Secret Store、Runtime Event / Checkpoint 使用精确版本 schema；宽泛异常捕获只允许清理、回滚与聚合后重新抛出。各外部 Adapter 对文件系统、模型和网络等已知失败做确定转换，其他异常直接穿透 Assistant 与 Channel。
 
@@ -31,7 +31,7 @@ Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`
 | `helperme/assistant/artifacts.py` | 按 Session 隔离的 Artifact Store 与 `read_artifact` Binding |
 | `helperme/assistant/delivery.py` | 将模型正文转换为可靠投递 Command，并装配 `deliver` Binding |
 | `helperme/assistant/completion/` | 完成标准、独立 Judge 与专用 Prompt |
-| `helperme/assistant/runner.py` | `drive_until_idle`、显式 Session 恢复 |
+| `helperme/assistant/runner.py` | Event wake、单 Step Session Scheduler、Session 选择与投影恢复 |
 | `helperme/assistant/sessions.py` | 给定 identity 后的 Session 应用操作与 Channel View |
 | `helperme/assistant/assembly.py` | Assistant 能力装配 |
 | `helperme/assistant/builtin_tools.py` | 当前 Sandbox/环境与内置工具装配 |
@@ -42,7 +42,7 @@ Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`
 | `helperme/assistant/toolsets.py` | Toolset 目录端口、渐进加载、激活投影与缓存恢复 |
 | `helperme/config.py` / `paths.py` | 完整应用配置与 `HelperMeHome` 产品数据布局（MCP / Skills 独立根） |
 | `helperme/bootstrap.py` | Journal、Runtime、Assistant 与外部资源生命周期装配 |
-| `helperme/channels/cli/console.py` | CLI 循环、并发输入与 `UserInterrupt` 映射 |
+| `helperme/channels/cli/console.py` | CLI 循环、并发输入与有序 `UserMessageReceived` 映射 |
 
 Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox。Tools 只消费 Sandbox 的窄契约。
 
@@ -50,7 +50,7 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 `JournalBackedLlmDecisionMaker` 位于 `helperme/assistant/decision.py`。它从 Journal 快照投影消息，带上当前 Step 可见的 tools，调用 `helperme.llm`，把结果译成 `ModelDecision`。content-only 由 Assistant 补 `deliver`。
 
-`UserInterruptReceived` 不会到达 DecisionMaker。Assistant 不把它投影成模型消息，不提供模型中断裁决工具，也不要求模型逐条裁决未完成 Command。Runtime 根据 Step 与 Command 的机械阶段执行提交围栏和取消；收口后，DecisionMaker 只处理 Runtime 从 `follow_up_message_id` 幂等物化的全新 `UserMessageReceived`，不会恢复旧 Step。
+每条 `UserMessageReceived` 都可以成为后续 DecisionMaker 的 trigger。模型调用期间到达的新消息不进入当前冻结 Context，也不取消当前 Step；Scheduler 按 Journal 顺序继续推进。
 
 ## 环境
 
@@ -58,4 +58,4 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 配置
 
-`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置只包含 model_context_limit 与 input_budget_ratio，不读取 Turn / Step 次数预算。Assistant 持续推进到语义 idle、授权等待、终态或显式中断；未来后台公平调度属于 Automation Scheduler，不进入 Runtime 配置。
+`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置只包含 model_context_limit 与 input_budget_ratio，不读取 Turn / Step 次数预算。Assistant Scheduler 每次 wake 最多执行一个 Step，并在 State 仍为 `RUNNABLE` 时重新排队。

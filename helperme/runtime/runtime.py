@@ -15,7 +15,6 @@ from helperme.runtime.events import (
     DeliveryIdentity,
     EventPayload,
     TerminationRequested,
-    UserInterruptReceived,
     UserMessageReceived,
 )
 from helperme.runtime.journal.api import Journal, LeaseLostError, StepClaimRequest
@@ -61,25 +60,18 @@ class AgentRuntime:
         worker_id: str | None = None,
         step_lease_seconds: float = 30.0,
         attempt_lease_seconds: float = 30.0,
-        reconcile_lease_seconds: float = 30.0,
     ) -> None:
         if step_lease_seconds <= 0:
             raise ValueError("step lease duration must be positive")
         self._journal = journal
         self._id_factory = id_factory
-        self._worker_id = (
-            id_factory("worker") if worker_id is None else worker_id
-        )
+        self._worker_id = id_factory("worker") if worker_id is None else worker_id
         self._step_lease_seconds = step_lease_seconds
         self.projector = StateProjector()
         self.step_runner = StepRunner(
             journal,
             self.projector,
             decision_maker,
-            {
-                name: binding.recovery
-                for name, binding in tool_bindings.items()
-            },
             id_factory,
             requires_authorization={
                 name: binding.requires_authorization
@@ -97,7 +89,6 @@ class AgentRuntime:
             id_factory,
             worker_id=self._worker_id,
             attempt_lease_seconds=attempt_lease_seconds,
-            reconcile_lease_seconds=reconcile_lease_seconds,
         )
         self._step_locks: dict[str, asyncio.Lock] = {}
 
@@ -109,7 +100,6 @@ class AgentRuntime:
         self.dispatcher.bind(name, binding)
         self.step_runner.bind(
             name,
-            recovery=binding.recovery,
             decision_on_outcome=binding.decision_on_outcome,
             requires_authorization=binding.requires_authorization,
         )
@@ -125,16 +115,18 @@ class AgentRuntime:
     async def _append_external(
         self,
         session_id: str,
-        payload: UserMessageReceived | UserInterruptReceived,
+        payload: UserMessageReceived,
         delivery: DeliveryIdentity,
     ) -> Event:
-        result = await self._journal.accept_delivery(EventDraft(
-            event_id=self._id_factory("event"),
-            session_id=session_id,
-            payload=payload,
-            occurred_at=datetime.now(timezone.utc),
-            delivery=delivery,
-        ))
+        result = await self._journal.accept_delivery(
+            EventDraft(
+                event_id=self._id_factory("event"),
+                session_id=session_id,
+                payload=payload,
+                occurred_at=datetime.now(timezone.utc),
+                delivery=delivery,
+            )
+        )
         return result.event
 
     async def record_fact(
@@ -144,13 +136,15 @@ class AgentRuntime:
         *,
         causation_id: str | None = None,
     ) -> Event:
-        return await self._journal.append(EventDraft(
-            event_id=self._id_factory("event"),
-            session_id=session_id,
-            payload=payload,
-            occurred_at=datetime.now(timezone.utc),
-            causation_id=causation_id,
-        ))
+        return await self._journal.append(
+            EventDraft(
+                event_id=self._id_factory("event"),
+                session_id=session_id,
+                payload=payload,
+                occurred_at=datetime.now(timezone.utc),
+                causation_id=causation_id,
+            )
+        )
 
     async def snapshot(self, session_id: str) -> tuple[Event, ...]:
         return await self._journal.snapshot(session_id)
@@ -166,20 +160,6 @@ class AgentRuntime:
         return await self._append_external(
             session_id,
             UserMessageReceived(content),
-            DeliveryIdentity(source, delivery_id),
-        )
-
-    async def receive_interrupt(
-        self,
-        session_id: str,
-        reason: str | None = None,
-        *,
-        delivery_id: str,
-        source: str = "user",
-    ) -> Event:
-        return await self._append_external(
-            session_id,
-            UserInterruptReceived(reason),
             DeliveryIdentity(source, delivery_id),
         )
 
@@ -219,13 +199,15 @@ class AgentRuntime:
             session_id,
             events,
         ).state.command(command_id)
-        event = await self._journal.grant_command(EventDraft(
-            event_id=self._id_factory("event"),
-            session_id=session_id,
-            payload=CommandAuthorized(command_id),
-            occurred_at=datetime.now(timezone.utc),
-            causation_id=command_state.issued_by_event_id,
-        ))
+        event = await self._journal.grant_command(
+            EventDraft(
+                event_id=self._id_factory("event"),
+                session_id=session_id,
+                payload=CommandAuthorized(command_id),
+                occurred_at=datetime.now(timezone.utc),
+                causation_id=command_state.issued_by_event_id,
+            )
+        )
         if event is not None:
             await self.dispatcher.start_pending(session_id)
         return event
@@ -240,13 +222,15 @@ class AgentRuntime:
             session_id,
             events,
         ).state.command(command_id)
-        return await self._journal.reject_command(EventDraft(
-            event_id=self._id_factory("event"),
-            session_id=session_id,
-            payload=CommandRejected(command_id),
-            occurred_at=datetime.now(timezone.utc),
-            causation_id=command_state.issued_by_event_id,
-        ))
+        return await self._journal.reject_command(
+            EventDraft(
+                event_id=self._id_factory("event"),
+                session_id=session_id,
+                payload=CommandRejected(command_id),
+                occurred_at=datetime.now(timezone.utc),
+                causation_id=command_state.issued_by_event_id,
+            )
+        )
 
     async def advance(self, session_id: str) -> Step | None:
         lock = self._step_locks.setdefault(session_id, asyncio.Lock())
@@ -333,9 +317,6 @@ class AgentRuntime:
         state = self.projector.project(session_id, events).state
         await self._journal.save_checkpoint(state, fingerprint)
         return state
-
-    async def recover_once(self, session_id: str) -> tuple[str, ...]:
-        return await self.dispatcher.recover_once(session_id)
 
     async def status(self, session_id: str) -> RuntimeStatus:
         return (await self.state(session_id)).status

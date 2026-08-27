@@ -12,7 +12,7 @@ from helperme.assistant.control import AssistantControlPlane
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.delivery import deliver_binding
-from helperme.assistant.runner import drive_until_idle
+from tests.session_scheduler import settle_session
 from helperme.llm.types import (
     LLMCallResult,
     LLMResponse,
@@ -43,11 +43,13 @@ class ControlLlm:
         return LLMCallResult(
             LLMResponse(
                 content="我已整理方案。",
-                calls=(ToolCall(
-                    "control-1",
-                    "propose_test_control",
-                    '{"value":"frozen"}',
-                ),),
+                calls=(
+                    ToolCall(
+                        "control-1",
+                        "propose_test_control",
+                        '{"value":"frozen"}',
+                    ),
+                ),
             ),
             LLMUsage(input_tokens=1, output_tokens=1),
         )
@@ -89,23 +91,28 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         names = assembly.control.names()
-        self.assertEqual(names, {
-            "propose_mcp_install",
-            "propose_mcp_recovery",
-            "propose_mcp_update",
-            "propose_skill_install",
-            "propose_skill_enable",
-            "propose_skill_update",
-            "propose_skill_repair",
-        })
+        self.assertEqual(
+            names,
+            {
+                "propose_mcp_install",
+                "propose_mcp_recovery",
+                "propose_mcp_update",
+                "propose_skill_install",
+                "propose_skill_enable",
+                "propose_skill_update",
+                "propose_skill_repair",
+            },
+        )
         self.assertTrue(names.isdisjoint(assembly.bindings))
-        self.assertTrue({
-            "list_mcp_servers",
-            "test_mcp_server",
-            "list_installed_skills",
-            "inspect_installed_skill",
-            "test_installed_skill",
-        }.issubset(assembly.bindings))
+        self.assertTrue(
+            {
+                "list_mcp_servers",
+                "test_mcp_server",
+                "list_installed_skills",
+                "inspect_installed_skill",
+                "test_installed_skill",
+            }.issubset(assembly.bindings)
+        )
 
     async def test_proposal_runs_only_after_step_commit_then_waits_for_yes(self):
         journal = MemoryJournal()
@@ -113,10 +120,9 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
 
         async def propose(input_data: ProposalInput):
             events = await journal.snapshot("control-session")
-            proposal_saw_committed_step.append(any(
-                isinstance(event.payload, StepCommitted)
-                for event in events
-            ))
+            proposal_saw_committed_step.append(
+                any(isinstance(event.payload, StepCommitted) for event in events)
+            )
             return ControlApprovalRequest(
                 id="approval-1",
                 action="test.install",
@@ -152,7 +158,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             delivery_id="user-1",
         )
 
-        result = await drive_until_idle(
+        result = await settle_session(
             runtime,
             "control-session",
             control=control,
@@ -180,6 +186,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message, "安装完成")
         self.assertEqual(dict(handler.payloads[0]), {"value": "frozen"})
         self.assertIsNone(control.pending_view("control-session"))
+
 
 if __name__ == "__main__":
     unittest.main()

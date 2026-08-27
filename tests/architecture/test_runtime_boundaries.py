@@ -100,9 +100,7 @@ def _unsafe_broad_exception_handlers(path: Path) -> tuple[int, ...]:
         ):
             continue
         descendants = tuple(
-            child
-            for statement in node.body
-            for child in local_descendants(statement)
+            child for statement in node.body for child in local_descendants(statement)
         )
         if any(
             isinstance(child, (ast.Return, ast.Continue, ast.Break, ast.Pass))
@@ -124,9 +122,7 @@ def _unsafe_broad_exception_handlers(path: Path) -> tuple[int, ...]:
 
 class RuntimeArchitecturePurityTest(unittest.TestCase):
     def test_removed_stream_api_is_not_reintroduced(self):
-        self.assertIsNone(
-            importlib.util.find_spec("helperme.assistant.streams")
-        )
+        self.assertIsNone(importlib.util.find_spec("helperme.assistant.streams"))
         self.assertFalse(hasattr(AgentRuntime, "create_stream"))
         self.assertFalse(hasattr(AgentRuntime, "stream_exists"))
         self.assertFalse(hasattr(MemoryJournal, "create_stream"))
@@ -147,8 +143,10 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
         for path in sorted(RUNTIME_ROOT.rglob("*.py")):
             modules = _all_imported_modules(path)
             leaked = sorted(
-                (_all_imported_roots(path)
-                & {"core", "tools", "plugins", "host", "adapters"})
+                (
+                    _all_imported_roots(path)
+                    & {"core", "tools", "plugins", "host", "adapters"}
+                )
                 | {
                     module
                     for module in modules
@@ -189,12 +187,13 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
                 )
         self.assertEqual(offenders, [])
 
-    def test_assistant_runner_is_not_a_turn_wrapper(self):
+    def test_assistant_runner_is_an_event_scheduler(self):
         runner = (ASSISTANT_ROOT / "runner.py").read_text(encoding="utf-8")
         found = [marker for marker in TURN_FAILURE_MARKERS if marker in runner]
         self.assertEqual(found, [])
         self.assertIn("pending_authorization_ids", runner)
-        self.assertIn("drive_until_idle", runner)
+        self.assertIn("class SessionScheduler", runner)
+        self.assertNotIn("drive_until_idle", runner)
 
     def test_cli_uses_bootstrap_and_session_application_service(self):
         source = (CLI_ROOT / "console.py").read_text(encoding="utf-8")
@@ -204,7 +203,7 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
         self.assertNotIn("SqliteJournal", source)
         self.assertNotIn("CanonicalState", source)
         self.assertIn("bootstrap_assistant", source)
-        self.assertIn("AssistantSessions", source)
+        self.assertIn("sessions = app.sessions", source)
         self.assertNotIn('"/stop"', source)
 
     def test_channel_bootstrap_does_not_enable_session_finalization(self):
@@ -243,7 +242,12 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
             source = path.read_text(encoding="utf-8")
             found = [
                 marker
-                for marker in ("TurnRuntime", "TurnHost", "TodoList", "AgentApplication")
+                for marker in (
+                    "TurnRuntime",
+                    "TurnHost",
+                    "TodoList",
+                    "AgentApplication",
+                )
                 if marker in source
             ]
             if found:

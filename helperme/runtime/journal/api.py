@@ -10,20 +10,15 @@ from helperme.runtime.codec import EVENT_SCHEMA_VERSION, delivery_fingerprint
 from helperme.runtime.events import (
     CommandAuthorized,
     CommandOutcomeReceived,
-    CommandRecoveryRequired,
-    CommandReconcileStarted,
     CommandRejected,
     DeliveryIdentity,
-    DispatchAttemptConfirmedNoEffect,
     DispatchAttemptStarted,
     Event,
     EventDraft,
-    ExternalOperationAccepted,
     RuntimeCompleted,
     RuntimeTerminated,
     StepCommitted,
     TerminationRequested,
-    UserInterruptReceived,
     UserMessageReceived,
 )
 from helperme.runtime.finalization import (
@@ -32,10 +27,8 @@ from helperme.runtime.finalization import (
     terminal_event_draft,
 )
 from helperme.runtime.model import (
-    CancelTool,
     CanonicalState,
     Command,
-    InvokeTool,
     OutcomeStatus,
 )
 
@@ -101,28 +94,22 @@ class StepLease:
                 raise ValueError(f"step lease {label} must be a non-empty str")
         if type(self.generation) is not int or self.generation < 1:
             raise ValueError("step lease generation must be positive")
-        if (
-            isinstance(self.expires_at, bool)
-            or not isinstance(self.expires_at, (int, float))
+        if isinstance(self.expires_at, bool) or not isinstance(
+            self.expires_at, (int, float)
         ):
             raise TypeError("step lease expires_at must be numeric")
 
 
 class Journal(Protocol):
-    async def create_session(self, session_id: str) -> bool:
-        ...
+    async def create_session(self, session_id: str) -> bool: ...
 
-    async def session_exists(self, session_id: str) -> bool:
-        ...
+    async def session_exists(self, session_id: str) -> bool: ...
 
-    async def append(self, draft: EventDraft) -> Event:
-        ...
+    async def append(self, draft: EventDraft) -> Event: ...
 
-    async def accept_delivery(self, draft: EventDraft) -> AppendResult:
-        ...
+    async def accept_delivery(self, draft: EventDraft) -> AppendResult: ...
 
-    async def snapshot(self, session_id: str) -> tuple[Event, ...]:
-        ...
+    async def snapshot(self, session_id: str) -> tuple[Event, ...]: ...
 
     async def acquire_step(
         self,
@@ -131,40 +118,33 @@ class Journal(Protocol):
         token: str,
         owner_id: str,
         lease_seconds: float,
-    ) -> StepLease | None:
-        ...
+    ) -> StepLease | None: ...
 
-    async def release_step(self, lease: StepLease) -> None:
-        ...
+    async def release_step(self, lease: StepLease) -> None: ...
 
     async def renew_step(
         self,
         lease: StepLease,
         *,
         lease_seconds: float,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
     async def commit_step(
         self,
         lease: StepLease,
         draft: EventDraft,
-    ) -> Event:
-        ...
+    ) -> Event: ...
 
     async def start_attempt(
         self,
         draft: EventDraft,
         *,
         lease_seconds: float = 30.0,
-    ) -> Event | None:
-        ...
+    ) -> Event | None: ...
 
-    async def grant_command(self, draft: EventDraft) -> Event | None:
-        ...
+    async def grant_command(self, draft: EventDraft) -> Event | None: ...
 
-    async def reject_command(self, draft: EventDraft) -> Event | None:
-        ...
+    async def reject_command(self, draft: EventDraft) -> Event | None: ...
 
     async def renew_attempt(
         self,
@@ -172,88 +152,42 @@ class Journal(Protocol):
         claim_token: str,
         *,
         lease_seconds: float,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
     async def release_attempt(
         self,
         attempt_id: str,
         claim_token: str,
-    ) -> None:
-        ...
-
-    async def start_reconcile(
-        self,
-        draft: EventDraft,
-        *,
-        lease_seconds: float = 30.0,
-    ) -> Event | None:
-        ...
-
-    async def renew_reconcile(
-        self,
-        reconcile_id: str,
-        *,
-        lease_seconds: float,
-    ) -> bool:
-        ...
-
-    async def release_reconcile(self, reconcile_id: str) -> None:
-        ...
-
-    async def confirm_no_effect(
-        self,
-        draft: EventDraft,
-    ) -> Event | None:
-        ...
+    ) -> None: ...
 
     async def record_attempt_fact(
         self,
         draft: EventDraft,
-    ) -> Event | None:
-        ...
-
-    async def commit_pending_cancellation(
-        self,
-        target_draft: EventDraft,
-        cancel_draft: EventDraft,
-    ) -> tuple[Event, Event] | None:
-        ...
-
-    async def ensure_recovery_required(
-        self,
-        draft: EventDraft,
-    ) -> AppendResult | None:
-        ...
+    ) -> Event | None: ...
 
     async def load_checkpoint(
         self,
         session_id: str,
         journal_position: int,
         fingerprint: str,
-    ) -> CanonicalState | None:
-        ...
+    ) -> CanonicalState | None: ...
 
     async def save_checkpoint(
         self,
         state: CanonicalState,
         fingerprint: str,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    async def delete_checkpoint(self, session_id: str) -> None:
-        ...
+    async def delete_checkpoint(self, session_id: str) -> None: ...
 
-    async def finalize(self, session_id: str, event_id: str) -> Event | None:
-        ...
+    async def finalize(self, session_id: str, event_id: str) -> Event | None: ...
 
     async def accept_termination(
         self,
         request_draft: EventDraft,
         *,
         terminal_event_id: str,
-    ) -> AppendResult:
-        ...
+    ) -> AppendResult: ...
 
 
 class MemoryJournal:
@@ -283,12 +217,6 @@ class MemoryJournal:
         self._attempt_claim_tokens: dict[str, Event] = {}
         self._attempt_leases: dict[str, tuple[str, float]] = {}
         self._attempt_terminal_events: dict[str, Event] = {}
-        self._reconciles: dict[tuple[str, int], Event] = {}
-        self._reconcile_ids: dict[str, Event] = {}
-        self._reconcile_event_ids: dict[str, str] = {}
-        self._reconcile_leases: dict[str, tuple[str, float]] = {}
-        self._external_operations: dict[str, Event] = {}
-        self._recovery_required: dict[tuple[str, str], Event] = {}
         self._terminal_commands: set[str] = set()
         self._terminals: dict[str, Event] = {}
         self._checkpoints: dict[str, tuple[int, str, CanonicalState]] = {}
@@ -321,7 +249,6 @@ class MemoryJournal:
             event.payload,
             (
                 UserMessageReceived,
-                UserInterruptReceived,
                 TerminationRequested,
             ),
         )
@@ -416,9 +343,7 @@ class MemoryJournal:
             if token_session_id is not None and token_session_id != request.session_id:
                 raise ValueError(f"duplicate step claim token: {token}")
             if current is not None:
-                if self._step_claim_tokens.get(
-                    current.token
-                ) == request.session_id:
+                if self._step_claim_tokens.get(current.token) == request.session_id:
                     self._step_claim_tokens.pop(current.token, None)
             generation = current.generation + 1 if current is not None else 1
             lease = StepLease(
@@ -437,9 +362,7 @@ class MemoryJournal:
             current = self._step_claims.get(lease.request.session_id)
             if self._same_step_lease_identity(current, lease):
                 del self._step_claims[lease.request.session_id]
-                if self._step_claim_tokens.get(
-                    lease.token
-                ) == lease.request.session_id:
+                if self._step_claim_tokens.get(lease.token) == lease.request.session_id:
                     self._step_claim_tokens.pop(lease.token, None)
 
     async def renew_step(
@@ -475,9 +398,10 @@ class MemoryJournal:
             if existing is not None:
                 if not self._same_event(existing, draft):
                     raise ValueError(f"event id conflict: {draft.event_id}")
-                if self._step_consumptions.get(
-                    lease.request.trigger_event_id
-                ) != existing.event_id:
+                if (
+                    self._step_consumptions.get(lease.request.trigger_event_id)
+                    != existing.event_id
+                ):
                     raise LeaseLostError(lease.token)
                 return existing
             self._validate_step_lease(lease, draft)
@@ -485,9 +409,7 @@ class MemoryJournal:
                 raise LeaseLostError(lease.token)
             event = self._append_locked(draft).event
             del self._step_claims[lease.request.session_id]
-            if self._step_claim_tokens.get(
-                lease.token
-            ) == lease.request.session_id:
+            if self._step_claim_tokens.get(lease.token) == lease.request.session_id:
                 self._step_claim_tokens.pop(lease.token, None)
             return event
 
@@ -512,13 +434,10 @@ class MemoryJournal:
                 existing_payload = existing_attempt.payload
                 if (
                     existing_payload.command_id == payload.command_id
-                    and existing_payload.attempt_number
-                    == payload.attempt_number
+                    and existing_payload.attempt_number == payload.attempt_number
                 ):
                     return None
-                raise ValueError(
-                    f"duplicate attempt id: {payload.attempt_id}"
-                )
+                raise ValueError(f"duplicate attempt id: {payload.attempt_id}")
             if payload.claim_token in self._attempt_claim_tokens:
                 raise ValueError(
                     f"duplicate attempt claim token: {payload.claim_token}"
@@ -531,10 +450,7 @@ class MemoryJournal:
             if payload.command_id in self._terminal_commands:
                 return None
             expected_cause = self._dispatch_eligibility.get(payload.command_id)
-            if (
-                expected_cause is None
-                or draft.causation_id != expected_cause
-            ):
+            if expected_cause is None or draft.causation_id != expected_cause:
                 return None
             if payload.attempt_number != self._attempt_count(payload.command_id) + 1:
                 return None
@@ -598,11 +514,7 @@ class MemoryJournal:
         async with self._lock:
             current = self._attempt_leases.get(attempt_id)
             now = self._clock()
-            if (
-                current is None
-                or current[0] != claim_token
-                or current[1] <= now
-            ):
+            if current is None or current[0] != claim_token or current[1] <= now:
                 return False
             self._attempt_leases[attempt_id] = (
                 claim_token,
@@ -620,158 +532,15 @@ class MemoryJournal:
             if current is not None and current[0] == claim_token:
                 self._attempt_leases.pop(attempt_id, None)
 
-    async def start_reconcile(
-        self,
-        draft: EventDraft,
-        *,
-        lease_seconds: float = 30.0,
-    ) -> Event | None:
-        self._validate_internal_draft(draft)
-        payload = draft.payload
-        if not isinstance(payload, CommandReconcileStarted):
-            raise TypeError(type(payload).__name__)
-        if lease_seconds <= 0:
-            raise ValueError("reconcile lease duration must be positive")
-        async with self._lock:
-            key = (payload.attempt_id, payload.reconcile_number)
-            if key in self._reconciles:
-                return None
-            if payload.reconcile_id in self._reconcile_ids:
-                raise ValueError(
-                    f"duplicate reconcile id: {payload.reconcile_id}"
-                )
-            attempt_event = self._attempt_ids.get(payload.attempt_id)
-            if attempt_event is None:
-                raise KeyError(payload.attempt_id)
-            attempt_payload = attempt_event.payload
-            if attempt_payload.command_id != payload.command_id:
-                raise ValueError("reconcile attempt mismatch")
-            if payload.command_id in self._terminal_commands:
-                return None
-            now = self._clock()
-            attempt_lease = self._attempt_leases.get(payload.attempt_id)
-            if attempt_lease is not None and attempt_lease[1] > now:
-                return None
-            reconcile_lease = self._reconcile_leases.get(payload.attempt_id)
-            if reconcile_lease is not None and reconcile_lease[1] > now:
-                return None
-            receipt = self._external_operations.get(payload.attempt_id)
-            expected_cause = (
-                receipt.event_id
-                if receipt is not None
-                else attempt_event.event_id
-            )
-            if draft.causation_id != expected_cause:
-                return None
-            expected_number = 1 + sum(
-                1
-                for attempt_id, _ in self._reconciles
-                if attempt_id == payload.attempt_id
-            )
-            if payload.reconcile_number != expected_number:
-                return None
-            return self._append_locked(
-                draft,
-                reconcile_lease_expires_at=now + lease_seconds,
-            ).event
-
-    async def renew_reconcile(
-        self,
-        reconcile_id: str,
-        *,
-        lease_seconds: float,
-    ) -> bool:
-        if lease_seconds <= 0:
-            raise ValueError("reconcile lease duration must be positive")
-        async with self._lock:
-            event = self._reconcile_ids.get(reconcile_id)
-            if event is None:
-                raise KeyError(reconcile_id)
-            attempt_id = event.payload.attempt_id
-            current = self._reconcile_leases.get(attempt_id)
-            now = self._clock()
-            if (
-                current is None
-                or current[0] != reconcile_id
-                or current[1] <= now
-            ):
-                return False
-            self._reconcile_leases[attempt_id] = (
-                reconcile_id,
-                now + lease_seconds,
-            )
-            return True
-
-    async def release_reconcile(self, reconcile_id: str) -> None:
-        async with self._lock:
-            event = self._reconcile_ids.get(reconcile_id)
-            if event is None:
-                return
-            attempt_id = event.payload.attempt_id
-            current = self._reconcile_leases.get(attempt_id)
-            if current is not None and current[0] == reconcile_id:
-                self._reconcile_leases.pop(attempt_id, None)
-
-    async def confirm_no_effect(
-        self,
-        draft: EventDraft,
-    ) -> Event | None:
-        self._validate_internal_draft(draft)
-        payload = draft.payload
-        if not isinstance(payload, DispatchAttemptConfirmedNoEffect):
-            raise TypeError(type(payload).__name__)
-        async with self._lock:
-            existing = self._event_ids.get(draft.event_id)
-            if existing is not None:
-                if not self._same_event(existing, draft):
-                    raise ValueError(f"event id conflict: {draft.event_id}")
-                return existing
-            reconcile_id = self._reconcile_event_ids.get(
-                draft.causation_id
-            )
-            if reconcile_id is None:
-                return None
-            reconcile = self._reconcile_ids[reconcile_id].payload
-            if (
-                reconcile.command_id != payload.command_id
-                or reconcile.attempt_id != payload.attempt_id
-            ):
-                return None
-            current = self._reconcile_leases.get(payload.attempt_id)
-            if (
-                current is None
-                or current[0] != reconcile_id
-                or current[1] <= self._clock()
-            ):
-                return None
-            attempt_event = self._attempt_ids[payload.attempt_id]
-            attempt = attempt_event.payload
-            if (
-                payload.command_id in self._terminal_commands
-                or attempt.attempt_number
-                != self._attempt_count(payload.command_id)
-                or payload.command_id in self._dispatch_eligibility
-                or payload.attempt_id in self._external_operations
-                or payload.attempt_id in self._attempt_terminal_events
-            ):
-                return None
-            return self._append_locked(draft).event
-
     async def record_attempt_fact(
         self,
         draft: EventDraft,
     ) -> Event | None:
         self._validate_internal_draft(draft)
         payload = draft.payload
-        if not isinstance(
-            payload,
-            (ExternalOperationAccepted, CommandOutcomeReceived),
-        ):
+        if not isinstance(payload, CommandOutcomeReceived):
             raise TypeError(type(payload).__name__)
-        if (
-            isinstance(payload, CommandOutcomeReceived)
-            and payload.attempt_id is None
-        ):
+        if payload.attempt_id is None:
             raise ValueError("attempt fact requires attempt identity")
         async with self._lock:
             existing = self._event_ids.get(draft.event_id)
@@ -780,199 +549,20 @@ class MemoryJournal:
                     raise ValueError(f"event id conflict: {draft.event_id}")
                 return existing
             attempt_id = payload.attempt_id
-            if isinstance(payload, ExternalOperationAccepted):
-                accepted = self._external_operations.get(attempt_id)
-                if accepted is not None:
-                    if accepted.payload != payload:
-                        raise ValueError(
-                            f"external operation conflict: {attempt_id}"
-                        )
-                    return accepted
-            else:
-                terminal = self._attempt_terminal_events.get(attempt_id)
-                if terminal is not None:
-                    if terminal.payload != payload:
-                        raise ValueError(
-                            f"attempt terminal conflict: {attempt_id}"
-                        )
-                    return terminal
+            terminal = self._attempt_terminal_events.get(attempt_id)
+            if terminal is not None:
+                if terminal.payload != payload:
+                    raise ValueError(f"attempt terminal conflict: {attempt_id}")
+                return terminal
             attempt_event = self._attempt_ids.get(attempt_id)
             if attempt_event is None:
                 raise KeyError(attempt_id)
             attempt = attempt_event.payload
             if attempt.command_id != payload.command_id:
                 raise ValueError("attempt fact command mismatch")
-            command = self._command_definitions[payload.command_id]
-            if (
-                isinstance(payload, ExternalOperationAccepted)
-                and not isinstance(command.effect, InvokeTool)
-            ):
-                raise ValueError("external receipt requires tool command")
             if draft.causation_id != attempt_event.event_id:
-                reconcile_id = self._reconcile_event_ids.get(
-                    draft.causation_id
-                )
-                if reconcile_id is None:
-                    return None
-                reconcile = self._reconcile_ids[reconcile_id].payload
-                current = self._reconcile_leases.get(attempt_id)
-                if (
-                    reconcile.command_id != payload.command_id
-                    or reconcile.attempt_id != attempt_id
-                    or current is None
-                    or current[0] != reconcile_id
-                    or current[1] <= self._clock()
-                ):
-                    return None
-            elif isinstance(command.effect, CancelTool):
-                attempt_lease = self._attempt_leases.get(attempt_id)
-                if (
-                    attempt_lease is None
-                    or attempt_lease[1] <= self._clock()
-                ):
-                    return None
+                return None
             return self._append_locked(draft).event
-
-    async def commit_pending_cancellation(
-        self,
-        target_draft: EventDraft,
-        cancel_draft: EventDraft,
-    ) -> tuple[Event, Event] | None:
-        self._validate_pending_cancellation_drafts(
-            target_draft,
-            cancel_draft,
-        )
-        target_payload = target_draft.payload
-        cancel_payload = cancel_draft.payload
-        async with self._lock:
-            for draft in (target_draft, cancel_draft):
-                existing = self._event_ids.get(draft.event_id)
-                if existing is not None and not self._same_event(
-                    existing,
-                    draft,
-                ):
-                    raise ValueError(f"event id conflict: {draft.event_id}")
-            target_existing = self._event_ids.get(target_draft.event_id)
-            cancel_existing = self._event_ids.get(cancel_draft.event_id)
-            if target_existing is not None or cancel_existing is not None:
-                if target_existing is None or cancel_existing is None:
-                    raise RuntimeError("partial pending cancellation commit")
-                return target_existing, cancel_existing
-
-            attempt_id = cancel_payload.attempt_id
-            attempt_event = self._attempt_ids.get(attempt_id)
-            if attempt_event is None:
-                raise KeyError(attempt_id)
-            attempt = attempt_event.payload
-            if attempt.command_id != cancel_payload.command_id:
-                raise ValueError("cancel attempt command mismatch")
-            cancel_command = self._command_definitions[
-                cancel_payload.command_id
-            ]
-            if (
-                not isinstance(cancel_command.effect, CancelTool)
-                or cancel_command.effect.target_command_id
-                != target_payload.command_id
-            ):
-                raise ValueError("cancel command target mismatch")
-            if (
-                target_draft.session_id != cancel_draft.session_id
-                or self._commands[target_payload.command_id][0]
-                != target_draft.session_id
-                or self._commands[cancel_payload.command_id][0]
-                != cancel_draft.session_id
-            ):
-                raise ValueError("pending cancellation session mismatch")
-            if (
-                cancel_payload.command_id in self._terminal_commands
-                or attempt_id in self._attempt_terminal_events
-            ):
-                return None
-
-            now = self._clock()
-            cause = cancel_draft.causation_id
-            if cause == attempt_event.event_id:
-                attempt_lease = self._attempt_leases.get(attempt_id)
-                if attempt_lease is None or attempt_lease[1] <= now:
-                    return None
-            else:
-                reconcile_id = self._reconcile_event_ids.get(cause)
-                current = self._reconcile_leases.get(attempt_id)
-                if reconcile_id is None or current is None:
-                    return None
-                reconcile = self._reconcile_ids[reconcile_id].payload
-                if (
-                    reconcile.command_id != cancel_payload.command_id
-                    or reconcile.attempt_id != attempt_id
-                    or current[0] != reconcile_id
-                    or current[1] <= now
-                ):
-                    return None
-
-            if (
-                target_payload.command_id in self._terminal_commands
-                or target_payload.command_id
-                not in self._dispatch_eligibility
-            ):
-                return None
-
-            target_event = self._append_locked(target_draft).event
-            cancel_event = self._append_locked(cancel_draft).event
-            return target_event, cancel_event
-
-    async def ensure_recovery_required(
-        self,
-        draft: EventDraft,
-    ) -> AppendResult | None:
-        self._validate_internal_draft(draft)
-        payload = draft.payload
-        if not isinstance(payload, CommandRecoveryRequired):
-            raise TypeError(type(payload).__name__)
-        async with self._lock:
-            key = (payload.command_id, payload.attempt_id)
-            existing = self._recovery_required.get(key)
-            if existing is not None:
-                return AppendResult(existing, False)
-            if payload.attempt_id not in self._attempt_ids:
-                raise KeyError(payload.attempt_id)
-            attempt_event = self._attempt_ids[payload.attempt_id]
-            attempt = attempt_event.payload
-            if attempt.command_id != payload.command_id:
-                raise ValueError("recovery requirement command mismatch")
-            if (
-                payload.command_id in self._terminal_commands
-                or payload.attempt_id in self._attempt_terminal_events
-                or payload.attempt_id in self._external_operations
-                or payload.command_id in self._dispatch_eligibility
-                or attempt.attempt_number
-                != self._attempt_count(payload.command_id)
-            ):
-                return None
-            now = self._clock()
-            attempt_lease = self._attempt_leases.get(payload.attempt_id)
-            reconcile_lease = self._reconcile_leases.get(payload.attempt_id)
-            reconcile_id = self._reconcile_event_ids.get(
-                draft.causation_id
-            )
-            if reconcile_id is not None:
-                if (
-                    reconcile_lease is None
-                    or reconcile_lease[0] != reconcile_id
-                    or reconcile_lease[1] <= now
-                ):
-                    return None
-            else:
-                if draft.causation_id != attempt_event.event_id:
-                    return None
-                if (
-                    attempt_lease is not None
-                    and attempt_lease[1] > now
-                ) or (
-                    reconcile_lease is not None
-                    and reconcile_lease[1] > now
-                ):
-                    return None
-            return self._append_locked(draft)
 
     async def load_checkpoint(
         self,
@@ -1068,7 +658,6 @@ class MemoryJournal:
         draft: EventDraft,
         *,
         attempt_lease_expires_at: float = 0.0,
-        reconcile_lease_expires_at: float = 0.0,
     ) -> AppendResult:
         if draft.schema_version != EVENT_SCHEMA_VERSION:
             raise ValueError(
@@ -1087,9 +676,7 @@ class MemoryJournal:
             terminal = self._attempt_terminal_events.get(payload.attempt_id)
             if terminal is not None:
                 if terminal.payload != payload:
-                    raise ValueError(
-                        f"attempt terminal conflict: {payload.attempt_id}"
-                    )
+                    raise ValueError(f"attempt terminal conflict: {payload.attempt_id}")
                 return AppendResult(terminal, False)
         session_events = self._events.setdefault(draft.session_id, [])
         event = Event(
@@ -1110,7 +697,6 @@ class MemoryJournal:
         self._index_event(
             event,
             attempt_lease_expires_at=attempt_lease_expires_at,
-            reconcile_lease_expires_at=reconcile_lease_expires_at,
         )
         return AppendResult(event, True)
 
@@ -1119,33 +705,12 @@ class MemoryJournal:
         event: Event,
         *,
         attempt_lease_expires_at: float = 0.0,
-        reconcile_lease_expires_at: float = 0.0,
     ) -> None:
         payload = event.payload
         if isinstance(payload, StepCommitted):
             step = payload.step
             self._step_consumptions[step.trigger_event_id] = event.event_id
             self._step_ids.add(step.step_id)
-            for command_id in step.decision.abandon_command_ids:
-                self._abandoned_commands.add(command_id)
-            for command_id, retry_attempt_id in step.retry_attempts:
-                attempt_count = self._attempt_count(command_id)
-                latest = self._attempts.get((command_id, attempt_count))
-                latest_attempt_id = (
-                    latest.payload.attempt_id
-                    if latest is not None
-                    else None
-                )
-                if (
-                    command_id not in self._terminal_commands
-                    and command_id not in self._dispatch_eligibility
-                    and latest_attempt_id is not None
-                    and latest_attempt_id == retry_attempt_id
-                    and latest_attempt_id not in self._external_operations
-                    and latest_attempt_id
-                    not in self._attempt_terminal_events
-                ):
-                    self._dispatch_eligibility[command_id] = event.event_id
             for command in step.commands:
                 self._commands[command.command_id] = (
                     event.session_id,
@@ -1153,34 +718,28 @@ class MemoryJournal:
                 )
                 self._command_definitions[command.command_id] = command
                 if not command.requires_authorization:
-                    self._dispatch_eligibility[command.command_id] = (
-                        event.event_id
-                    )
+                    self._dispatch_eligibility[command.command_id] = event.event_id
         elif isinstance(payload, CommandAuthorized):
             if payload.command_id in self._dispatch_eligibility:
-                raise ValueError(
-                    f"command already authorized: {payload.command_id}"
-                )
+                raise ValueError(f"command already authorized: {payload.command_id}")
             if payload.command_id in self._rejected_commands:
-                raise ValueError(
-                    f"command already rejected: {payload.command_id}"
-                )
+                raise ValueError(f"command already rejected: {payload.command_id}")
             self._dispatch_eligibility[payload.command_id] = event.event_id
         elif isinstance(payload, CommandRejected):
             if payload.command_id in self._rejected_commands:
-                raise ValueError(
-                    f"command already rejected: {payload.command_id}"
-                )
+                raise ValueError(f"command already rejected: {payload.command_id}")
             if payload.command_id in self._dispatch_eligibility:
                 raise ValueError(
                     f"cannot reject authorized command: {payload.command_id}"
                 )
             self._rejected_commands[payload.command_id] = event.event_id
         elif isinstance(payload, DispatchAttemptStarted):
-            self._attempts[(
-                payload.command_id,
-                payload.attempt_number,
-            )] = event
+            self._attempts[
+                (
+                    payload.command_id,
+                    payload.attempt_number,
+                )
+            ] = event
             self._attempt_ids[payload.attempt_id] = event
             self._attempt_claim_tokens[payload.claim_token] = event
             self._attempt_leases[payload.attempt_id] = (
@@ -1188,44 +747,6 @@ class MemoryJournal:
                 attempt_lease_expires_at,
             )
             self._dispatch_eligibility.pop(payload.command_id, None)
-        elif isinstance(payload, CommandReconcileStarted):
-            self._reconciles[(
-                payload.attempt_id,
-                payload.reconcile_number,
-            )] = event
-            self._reconcile_ids[payload.reconcile_id] = event
-            self._reconcile_event_ids[event.event_id] = payload.reconcile_id
-            self._reconcile_leases[payload.attempt_id] = (
-                payload.reconcile_id,
-                reconcile_lease_expires_at,
-            )
-        elif isinstance(payload, ExternalOperationAccepted):
-            self._external_operations[payload.attempt_id] = event
-            attempt = self._attempt_ids[payload.attempt_id].payload
-            if (
-                attempt.attempt_number
-                == self._attempt_count(payload.command_id)
-            ):
-                self._dispatch_eligibility.pop(payload.command_id, None)
-            self._clear_attempt_claims(payload.attempt_id)
-        elif isinstance(payload, DispatchAttemptConfirmedNoEffect):
-            attempt_event = self._attempt_ids[payload.attempt_id]
-            attempt = attempt_event.payload
-            if (
-                payload.command_id not in self._terminal_commands
-                and attempt.attempt_number
-                == self._attempt_count(payload.command_id)
-                and payload.command_id not in self._dispatch_eligibility
-                and payload.attempt_id not in self._external_operations
-            ):
-                self._dispatch_eligibility[payload.command_id] = event.event_id
-            self._clear_attempt_claims(payload.attempt_id)
-        elif isinstance(payload, CommandRecoveryRequired):
-            self._recovery_required[(
-                payload.command_id,
-                payload.attempt_id,
-            )] = event
-            self._clear_attempt_claims(payload.attempt_id)
         elif isinstance(payload, CommandOutcomeReceived):
             if payload.attempt_id is not None:
                 self._attempt_terminal_events[payload.attempt_id] = event
@@ -1242,7 +763,6 @@ class MemoryJournal:
 
     def _clear_attempt_claims(self, attempt_id: str) -> None:
         self._attempt_leases.pop(attempt_id, None)
-        self._reconcile_leases.pop(attempt_id, None)
 
     def _prevalidate_index(self, event: Event) -> None:
         payload = event.payload
@@ -1254,11 +774,14 @@ class MemoryJournal:
                 raise ValueError(
                     f"decision event consumed twice: {step.trigger_event_id}"
                 )
-            duplicate = next((
-                command.command_id
-                for command in step.commands
-                if command.command_id in self._commands
-            ), None)
+            duplicate = next(
+                (
+                    command.command_id
+                    for command in step.commands
+                    if command.command_id in self._commands
+                ),
+                None,
+            )
             if duplicate is not None:
                 raise ValueError(f"duplicate command id: {duplicate}")
         elif isinstance(payload, (CommandAuthorized, CommandRejected)):
@@ -1273,30 +796,6 @@ class MemoryJournal:
                 raise ValueError(
                     f"duplicate attempt claim token: {payload.claim_token}"
                 )
-        elif isinstance(payload, CommandReconcileStarted):
-            if (
-                payload.attempt_id,
-                payload.reconcile_number,
-            ) in self._reconciles:
-                raise ValueError("duplicate attempt reconcile")
-            if payload.reconcile_id in self._reconcile_ids:
-                raise ValueError(
-                    f"duplicate reconcile id: {payload.reconcile_id}"
-                )
-        elif isinstance(payload, ExternalOperationAccepted):
-            if payload.attempt_id in self._external_operations:
-                raise ValueError(
-                    f"external operation already accepted: "
-                    f"{payload.attempt_id}"
-                )
-        elif isinstance(payload, CommandRecoveryRequired):
-            if (
-                payload.command_id,
-                payload.attempt_id,
-            ) in self._recovery_required:
-                raise ValueError(
-                    f"duplicate recovery requirement: {payload.command_id}"
-                )
         elif isinstance(payload, CommandOutcomeReceived):
             if payload.command_id not in self._commands:
                 raise KeyError(payload.command_id)
@@ -1304,9 +803,7 @@ class MemoryJournal:
                 payload.attempt_id is not None
                 and payload.attempt_id in self._attempt_terminal_events
             ):
-                raise ValueError(
-                    f"attempt already terminal: {payload.attempt_id}"
-                )
+                raise ValueError(f"attempt already terminal: {payload.attempt_id}")
         elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
             if event.session_id in self._terminals:
                 raise ValueError("runtime already terminal")
@@ -1322,11 +819,14 @@ class MemoryJournal:
             ):
                 raise ValueError("termination declaration source is invalid")
             if isinstance(payload, RuntimeTerminated):
-                missing = next((
-                    command_id
-                    for command_id in payload.abandoned_command_ids
-                    if command_id not in self._commands
-                ), None)
+                missing = next(
+                    (
+                        command_id
+                        for command_id in payload.abandoned_command_ids
+                        if command_id not in self._commands
+                    ),
+                    None,
+                )
                 if missing is not None:
                     raise KeyError(missing)
 
@@ -1363,8 +863,7 @@ class MemoryJournal:
             or step.trigger_event_id != request.trigger_event_id
             or step.decision_cursor != request.decision_cursor
             or step.basis_state_version != request.basis_state_version
-            or step.observed_journal_position
-            != request.observed_journal_position
+            or step.observed_journal_position != request.observed_journal_position
             or draft.causation_id != request.trigger_event_id
         ):
             raise ValueError("step does not match its claim")
@@ -1407,17 +906,19 @@ class MemoryJournal:
 
     @staticmethod
     def _event_delivery_fingerprint(event: Event) -> str:
-        return delivery_fingerprint(EventDraft(
-            event_id=event.event_id,
-            session_id=event.session_id,
-            payload=event.payload,
-            occurred_at=event.occurred_at,
-            causation_id=event.causation_id,
-            correlation_id=event.correlation_id,
-            schema_version=event.schema_version,
-            artifact_refs=event.artifact_refs,
-            delivery=event.delivery,
-        ))
+        return delivery_fingerprint(
+            EventDraft(
+                event_id=event.event_id,
+                session_id=event.session_id,
+                payload=event.payload,
+                occurred_at=event.occurred_at,
+                causation_id=event.causation_id,
+                correlation_id=event.correlation_id,
+                schema_version=event.schema_version,
+                artifact_refs=event.artifact_refs,
+                delivery=event.delivery,
+            )
+        )
 
     @staticmethod
     def _validate_generic_append(draft: EventDraft) -> None:
@@ -1430,32 +931,21 @@ class MemoryJournal:
                 CommandAuthorized,
                 CommandRejected,
                 DispatchAttemptStarted,
-                CommandReconcileStarted,
-                DispatchAttemptConfirmedNoEffect,
-                CommandRecoveryRequired,
                 UserMessageReceived,
-                UserInterruptReceived,
                 TerminationRequested,
                 RuntimeCompleted,
                 RuntimeTerminated,
             ),
         ):
             raise ValueError("conditional event requires its Journal method")
-        if isinstance(draft.payload, ExternalOperationAccepted) or (
-            isinstance(draft.payload, CommandOutcomeReceived)
-            and draft.payload.attempt_id is not None
-        ):
-            raise ValueError("attempt fact requires conditional append")
         if isinstance(draft.payload, CommandOutcomeReceived):
-            raise ValueError(
-                "pending cancellation requires conditional commit"
-            )
+            raise ValueError("attempt fact requires conditional append")
 
     @staticmethod
     def _validate_external_delivery(draft: EventDraft) -> None:
         if not isinstance(
             draft.payload,
-            (UserMessageReceived, UserInterruptReceived),
+            UserMessageReceived,
         ):
             raise ValueError("delivery payload is not an external event")
 
@@ -1488,8 +978,7 @@ class MemoryJournal:
         for draft in (target_draft, cancel_draft):
             if draft.schema_version != EVENT_SCHEMA_VERSION:
                 raise ValueError(
-                    "unsupported event schema version: "
-                    f"{draft.schema_version}"
+                    f"unsupported event schema version: {draft.schema_version}"
                 )
 
     @staticmethod
