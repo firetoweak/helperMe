@@ -33,7 +33,7 @@ Canonical State 只由有序 Event 归约得到。它回答：
 - 哪些 Command 等待授权、派发或 Outcome；
 - 是否已经进入显式终态。
 
-State、Checkpoint、Context、Turn 和 Trace 都不是第二事实源。Checkpoint 只是带版本和指纹的重放缓存。
+State、Checkpoint、Context 和 Trace 都不是第二事实源。Checkpoint 只是带版本和指纹的重放缓存。
 
 ### Step
 
@@ -137,7 +137,7 @@ Runtime 不解析工具返回值中的 `ok`、`code` 或其他领域字段。Too
 - 新消息作为后续决策 Event 保留；
 - Scheduler 之后为它执行新的 Step。
 
-Channel 不维护一个对应用户消息的 worker，不创建 Turn/Run 生命周期，也不提供 `/stop`。`Ctrl+C` / `Ctrl+D` 只退出进程。
+Channel 不维护一个对应用户消息的 worker 或 Run 生命周期，也不提供 `/stop`。`Ctrl+C` / `Ctrl+D` 只退出进程。
 
 ## 7. Runtime Status
 
@@ -169,7 +169,6 @@ Runtime 不承诺外部副作用 exactly-once。它承诺所有已知事实可�
 
 ## 9. 投影边界
 
-- Turn：人类如何理解一段交互；
 - Context：下一 Step 的模型输入；
 - Trace：执行与因果观察；
 - Replay Manifest：重建一次模型请求所需的 Assistant 产物。

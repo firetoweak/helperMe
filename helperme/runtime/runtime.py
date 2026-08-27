@@ -22,9 +22,7 @@ from helperme.runtime.model import CanonicalState, RuntimeStatus, Step
 from helperme.runtime.projections import (
     ReplayView,
     TraceView,
-    TurnView,
     project_trace,
-    project_turn,
     replay,
 )
 from helperme.runtime.state import StateProjector
@@ -320,10 +318,6 @@ class AgentRuntime:
 
     async def status(self, session_id: str) -> RuntimeStatus:
         return (await self.state(session_id)).status
-
-    async def turn(self, session_id: str) -> TurnView:
-        events = await self._journal.snapshot(session_id)
-        return project_turn(session_id, events, self.projector)
 
     async def trace(self, session_id: str) -> TraceView:
         events = await self._journal.snapshot(session_id)

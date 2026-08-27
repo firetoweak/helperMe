@@ -52,11 +52,8 @@ from helperme.runtime.projections import (
     ReplayView,
     TraceEntry,
     TraceView,
-    TurnView,
-    UserMessageView,
     diagnose_artifacts,
     project_trace,
-    project_turn,
     replay,
 )
 from helperme.runtime.runtime import AgentRuntime
@@ -117,12 +114,9 @@ __all__ = [
     "ToolTerminal",
     "TraceEntry",
     "TraceView",
-    "TurnView",
     "TerminationRequested",
     "UserMessageReceived",
-    "UserMessageView",
     "project_trace",
-    "project_turn",
     "replay",
     "diagnose_artifacts",
 ]

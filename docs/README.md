@@ -1,6 +1,6 @@
 # HelperMe 文档
 
-当前系统按 **Event / State / Step / Command** 运行。Turn 只是人类交互投影，不是执行量子。
+当前系统按 **Session / Event / State / Step / Command** 运行。
 
 ## 先读
 

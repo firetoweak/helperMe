@@ -224,13 +224,7 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         while runtime.dispatcher.active_count:
             await asyncio.sleep(0)
 
-        turn = await runtime.turn(self.SESSION_ID)
         events = await runtime._journal.snapshot(self.SESSION_ID)
-        self.assertEqual(
-            [item.event_id for item in turn.user_messages],
-            [inbound.event_id],
-        )
-        self.assertEqual(turn.user_messages[0].content, "say hello")
         self.assertEqual(step.decision.content, "任务完成")
         self.assertEqual(tool.executions, [{"text": "hello user"}])
         self.assertEqual(
@@ -279,7 +273,6 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uninspected.missing, ())
         self.assertFalse(uninspected.inspected)
         self.assertFalse(uninspected.complete)
-        self.assertEqual(rebuilt.turn.user_messages[0].content, "read this")
         self.assertEqual(rebuilt.trace.entries[0].kind, "UserMessageReceived")
         self.assertFalse(rebuilt.artifacts.inspected)
         self.assertEqual(rebuilt.artifacts.missing, ())

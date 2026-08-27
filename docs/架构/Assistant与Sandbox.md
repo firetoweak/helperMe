@@ -58,4 +58,4 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 配置
 
-`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置只包含 model_context_limit 与 input_budget_ratio，不读取 Turn / Step 次数预算。Assistant Scheduler 每次激活最多执行一个 Step，仍为 `RUNNABLE` 时再次激活；不同 Session 不经过全局执行队列，默认并行。
+`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置只包含 model_context_limit 与 input_budget_ratio，不读取 Step 次数预算。Assistant Scheduler 每次激活最多执行一个 Step，仍为 `RUNNABLE` 时再次激活；不同 Session 不经过全局执行队列，默认并行。
