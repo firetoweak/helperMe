@@ -313,15 +313,13 @@ class StateProjector:
         applied_step_event_ids: set[str] = set()
         next_trigger: Event | None = None
 
-        for index, event in enumerate(events):
+        for event in events:
             if isinstance(event.payload, StepCommitted):
                 continue
             decision.apply_regular(event)
             if not self._requires_decision(
                 event,
                 decision,
-                step_events,
-                events[index + 1 :],
             ):
                 continue
             step_event = step_events.get(event.event_id)
@@ -468,8 +466,6 @@ class StateProjector:
     def _requires_decision(
         event: Event,
         state: _StateBuilder,
-        step_events: dict[str, Event],
-        later_events: tuple[Event, ...],
     ) -> bool:
         payload = event.payload
         if isinstance(payload, UserMessageReceived):
