@@ -16,6 +16,7 @@ from helperme.runtime import (
     UserMessageReceived,
 )
 from helperme.runtime.state import DecisionFrame
+from tests.session_scheduler import SettlingScheduler
 
 
 DecisionScript = Callable[
@@ -68,7 +69,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
     async def test_user_event_wakes_one_step_and_session_remains_open(self):
         model = ScriptedDecisionMaker((lambda _frame: ModelDecision(content="done"),))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
 
         try:
@@ -102,7 +103,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
 
         try:
@@ -129,5 +130,163 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
                 if isinstance(frame.trigger_event.payload, UserMessageReceived)
             ]
             self.assertEqual(messages, ["one", "two"])
+        finally:
+            await scheduler.close()
+
+    async def test_independent_sessions_advance_concurrently(self):
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        second_finished = asyncio.Event()
+
+        async def decide(frame):
+            if frame.state.session_id == "session-a":
+                first_started.set()
+                await release_first.wait()
+            else:
+                second_finished.set()
+            return ModelDecision(content=frame.state.session_id)
+
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker((decide, decide)),
+            {},
+            SequentialIds(),
+        )
+        scheduler = SettlingScheduler(runtime)
+        await runtime.create_session("session-a")
+        await runtime.create_session("session-b")
+        await runtime.receive_user_message(
+            "session-a",
+            "one",
+            delivery_id="user-a",
+        )
+        await runtime.receive_user_message(
+            "session-b",
+            "two",
+            delivery_id="user-b",
+        )
+
+        try:
+            await scheduler.wake("session-a")
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            await scheduler.wake("session-b")
+            await asyncio.wait_for(second_finished.wait(), timeout=1)
+            release_first.set()
+            await asyncio.wait_for(scheduler.join(), timeout=1)
+
+            self.assertEqual(len((await runtime.state("session-a")).steps), 1)
+            self.assertEqual(len((await runtime.state("session-b")).steps), 1)
+        finally:
+            release_first.set()
+            await scheduler.close()
+
+    async def test_same_session_wakes_never_overlap_advance(self):
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker((lambda _frame: ModelDecision(content="done"),)),
+            {},
+            SequentialIds(),
+        )
+        original_advance = runtime.advance
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        second_finished = asyncio.Event()
+        calls = 0
+        active = 0
+        maximum_active = 0
+
+        async def tracked_advance(session_id):
+            nonlocal calls, active, maximum_active
+            calls += 1
+            call = calls
+            active += 1
+            maximum_active = max(maximum_active, active)
+            try:
+                if call == 1:
+                    first_started.set()
+                    await release_first.wait()
+                return await original_advance(session_id)
+            finally:
+                active -= 1
+                if call == 2:
+                    second_finished.set()
+
+        runtime.advance = tracked_advance
+        scheduler = SessionScheduler(runtime)
+        await runtime.create_session("session")
+        await runtime.receive_user_message(
+            "session",
+            "hello",
+            delivery_id="user-1",
+        )
+
+        try:
+            await scheduler.wake("session")
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            await scheduler.wake("session")
+            await asyncio.sleep(0)
+            self.assertEqual(maximum_active, 1)
+
+            release_first.set()
+            await asyncio.wait_for(second_finished.wait(), timeout=1)
+            self.assertEqual(calls, 2)
+            self.assertEqual(maximum_active, 1)
+        finally:
+            release_first.set()
+            await scheduler.close()
+
+    async def test_each_activation_calls_advance_once(self):
+        second_finished = asyncio.Event()
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker(
+                (
+                    lambda _frame: ModelDecision(content="first"),
+                    lambda _frame: ModelDecision(content="second"),
+                )
+            ),
+            {},
+            SequentialIds(),
+        )
+        original_advance = runtime.advance
+        advance_calls = 0
+
+        async def tracked_advance(session_id):
+            nonlocal advance_calls
+            advance_calls += 1
+            try:
+                return await original_advance(session_id)
+            finally:
+                if advance_calls == 2:
+                    second_finished.set()
+
+        class ActivationCountingScheduler(SessionScheduler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.activations = 0
+
+            def _start(self, session_id):
+                self.activations += 1
+                super()._start(session_id)
+
+        runtime.advance = tracked_advance
+        scheduler = ActivationCountingScheduler(runtime)
+        await runtime.create_session("session")
+        await runtime.receive_user_message(
+            "session",
+            "one",
+            delivery_id="user-1",
+        )
+        await runtime.receive_user_message(
+            "session",
+            "two",
+            delivery_id="user-2",
+        )
+
+        try:
+            await scheduler.wake("session")
+            await asyncio.wait_for(second_finished.wait(), timeout=1)
+            self.assertEqual(advance_calls, 2)
+            self.assertEqual(scheduler.activations, 2)
         finally:
             await scheduler.close()

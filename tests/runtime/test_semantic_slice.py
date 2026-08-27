@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from helperme.assistant.runner import SessionScheduler
 from helperme.runtime import (
     AgentRuntime,
     CommandPhase,
@@ -15,6 +14,7 @@ from helperme.runtime import (
     UserMessageReceived,
 )
 from tests.assistant.test_runner import ScriptedDecisionMaker, SequentialIds
+from tests.session_scheduler import SettlingScheduler
 
 
 class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
@@ -50,7 +50,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             },
             SequentialIds(),
         )
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -79,7 +79,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -118,7 +118,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             {"explode": ToolBinding(explode)},
             SequentialIds(),
         )
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",

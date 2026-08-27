@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from helperme.assistant.control import AssistantControlPlane
@@ -8,7 +9,25 @@ from helperme.runtime import AgentRuntime
 from helperme.runtime.model import CanonicalState
 
 
-class RecordingScheduler(SessionScheduler):
+class SettlingScheduler(SessionScheduler):
+    async def join(self) -> None:
+        while True:
+            await asyncio.sleep(0)
+            if self._failure is not None:
+                raise self._failure
+            tasks = (
+                *self._tasks.values(),
+                *self._runtime.dispatcher._tasks.values(),
+            )
+            if not tasks:
+                await asyncio.sleep(0)
+                if not self._tasks and not self._runtime.dispatcher._tasks:
+                    return
+                continue
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+
+class RecordingScheduler(SettlingScheduler):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.woken: list[str] = []
@@ -31,7 +50,7 @@ async def settle_session(
     control: AssistantControlPlane | None = None,
 ) -> SettledSession:
     messages: list[str] = []
-    scheduler = SessionScheduler(
+    scheduler = SettlingScheduler(
         runtime,
         control=control,
         notify=messages.append,

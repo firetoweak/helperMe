@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helperme.assistant.runner import SessionScheduler
 from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.toolsets import ToolSurface
 from helperme.runtime import (
@@ -17,7 +16,7 @@ from helperme.runtime import (
     ToolBinding,
 )
 from tests.assistant.test_runner import ScriptedDecisionMaker, SequentialIds
-from tests.session_scheduler import RecordingScheduler
+from tests.session_scheduler import RecordingScheduler, SettlingScheduler
 
 
 class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
@@ -78,7 +77,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 {"echo": ToolBinding(_echo)},
                 SequentialIds(),
             )
-            scheduler = SessionScheduler(runtime)
+            scheduler = SettlingScheduler(runtime)
             await runtime.create_session("session")
             try:
                 await runtime.receive_user_message(
@@ -120,7 +119,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 {"explode": ToolBinding(_explode)},
                 SequentialIds(),
             )
-            scheduler = SessionScheduler(runtime)
+            scheduler = SettlingScheduler(runtime)
             await runtime.create_session("session")
             await runtime.receive_user_message(
                 "session",
@@ -164,7 +163,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 {"explode": ToolBinding(explode)},
                 SequentialIds(),
             )
-            scheduler = SessionScheduler(runtime)
+            scheduler = SettlingScheduler(runtime)
             await runtime.create_session("session")
             await runtime.receive_user_message(
                 "session",

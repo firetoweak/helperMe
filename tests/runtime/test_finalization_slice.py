@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unittest
 
-from helperme.assistant.runner import SessionScheduler
 from helperme.runtime import (
     AgentRuntime,
     LifecycleIntent,
@@ -11,6 +10,7 @@ from helperme.runtime import (
     RuntimeStatus,
 )
 from tests.assistant.test_runner import ScriptedDecisionMaker, SequentialIds
+from tests.session_scheduler import SettlingScheduler
 
 
 class ExplicitFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
@@ -28,7 +28,7 @@ class ExplicitFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -58,7 +58,7 @@ class ExplicitFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -92,7 +92,7 @@ class ExplicitFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SessionScheduler(runtime)
+        scheduler = SettlingScheduler(runtime)
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",

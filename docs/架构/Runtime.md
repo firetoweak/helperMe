@@ -6,7 +6,7 @@ Session 是持续 Event 流，不是一次用户消息的执行循环。Channel 
 
 一次推进的原子单元是 Step：消费一个决策 Event，冻结 Decision State，调用一次模型，提交一个 Decision，并原子签发 Commands。`AgentRuntime.advance(session_id)` 最多提交一个 Step，不负责把 Session 循环跑到 idle。
 
-`SessionScheduler` 监听事实提交后的 wake：外部输入唤醒 Session；Step 提交后 Dispatcher 独立启动 Commands；Outcome Event 再唤醒 Session。Scheduler 是跨 Session 的调度边界，不属于 Runtime Core，也不是 Turn/Run wrapper。
+`SessionScheduler` 监听事实提交后的 wake：外部输入激活对应 Session；Step 提交后 Dispatcher 独立启动 Commands；Outcome Event 再次激活 Session。Scheduler 不属于 Runtime Core，也不是 Turn/Run wrapper；不同 Session 的推进任务默认并行，同一 Session 保持 single-flight。
 
 Canonical State 由 Journal 重放得到：
 
