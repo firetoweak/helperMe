@@ -54,6 +54,7 @@ from helperme.runtime import (
 )
 from helperme.runtime.codec import (
     EVENT_SCHEMA_VERSION,
+    decode_state,
     decode_payload,
     delivery_fingerprint,
     encode_payload,
@@ -1854,10 +1855,46 @@ class SqliteDurableSliceTest(unittest.IsolatedAsyncioTestCase):
             connection.commit()
         finally:
             connection.close()
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
 
         with self.assertRaisesRegex(ValueError, "database schema version"):
             self.journal()
+
+    def test_stream_database_schema_is_rejected_without_partial_setup(self):
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                "CREATE TABLE streams (stream_id TEXT PRIMARY KEY)"
+            )
+            connection.execute("PRAGMA user_version = 2")
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaisesRegex(ValueError, "database schema version"):
+            self.journal()
+
+        connection = sqlite3.connect(self.database_path)
+        try:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        finally:
+            connection.close()
+        self.assertEqual(tables, {"streams"})
+
+    def test_stream_state_codec_is_rejected(self):
+        old_state = json.dumps({
+            "codec_version": 3,
+            "projection_version": "canonical-state-v1",
+            "state": {},
+        })
+
+        with self.assertRaisesRegex(ValueError, "state codec version"):
+            decode_state(old_state)
 
     async def _accept_message(self, journal: SqliteJournal) -> None:
         await journal.accept_delivery(EventDraft(
@@ -2252,5 +2289,5 @@ class DurableCodecContractTest(unittest.TestCase):
 
         self.assertEqual(
             delivery_fingerprint(draft),
-            "v1:c3e891834f59557fd79778d2ef23b259a858c1cb30235792800df855ca616332",
+            "v2:c3e891834f59557fd79778d2ef23b259a858c1cb30235792800df855ca616332",
         )

@@ -59,7 +59,7 @@ from helperme.runtime.model import (
 
 
 _T = TypeVar("_T")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 async def _await_task_uninterruptibly(task: asyncio.Task[_T]) -> _T:
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS session_terminals (
     kind TEXT NOT NULL CHECK (kind IN ('completed', 'terminated'))
 );
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 """
 
 

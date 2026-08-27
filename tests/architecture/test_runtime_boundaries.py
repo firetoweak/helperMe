@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 import unittest
+
+from helperme.runtime import AgentRuntime, MemoryJournal
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -120,6 +123,15 @@ def _unsafe_broad_exception_handlers(path: Path) -> tuple[int, ...]:
 
 
 class RuntimeArchitecturePurityTest(unittest.TestCase):
+    def test_removed_stream_api_is_not_reintroduced(self):
+        self.assertIsNone(
+            importlib.util.find_spec("helperme.assistant.streams")
+        )
+        self.assertFalse(hasattr(AgentRuntime, "create_stream"))
+        self.assertFalse(hasattr(AgentRuntime, "stream_exists"))
+        self.assertFalse(hasattr(MemoryJournal, "create_stream"))
+        self.assertFalse(hasattr(MemoryJournal, "stream_exists"))
+
     def test_removed_core_source_tree_is_not_reintroduced(self):
         self.assertFalse(CORE_ROOT.exists())
 
