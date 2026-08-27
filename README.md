@@ -29,9 +29,9 @@ The result is a durable execution Session rather than a disposable chat connecti
 
 User messages, model decisions, tool outcomes, and explicit lifecycle requests are recorded as Events. Runtime State is deterministically rebuilt from those facts, so important behavior has an observable origin.
 
-### Long-running work is not a conversation trick
+### Long-running work is durable
 
-A Turn is only the human-facing projection of an interaction. The durable unit is a Session, which can continue across multiple model Steps and be resumed after the process exits.
+A Session is a durable Event stream that can continue across multiple model Steps and be resumed after the process exits.
 
 ### Capabilities enter context only when needed
 
@@ -121,7 +121,7 @@ flowchart LR
     Command --> Dispatcher["Dispatcher"]
     Dispatcher --> Outcome["Outcome"]
     Outcome --> Event
-    Event -. project .-> Views["Turn / Context / Trace"]
+    Event -. project .-> Views["Context / Trace"]
 ```
 
 The Journal is the sole durable execution truth. Runtime reduces facts, schedules Commands, enforces invariants, and finalizes terminal states. The model, an explicit Judge, or the user makes semantic decisions; those decisions return to the Journal as traceable facts.

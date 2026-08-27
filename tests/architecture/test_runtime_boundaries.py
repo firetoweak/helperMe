@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+from dataclasses import fields
 from pathlib import Path
 import unittest
 
-from helperme.runtime import AgentRuntime, MemoryJournal
+import helperme.assistant.control as assistant_control
+import helperme.runtime as runtime_api
+import helperme.runtime.projections as runtime_projections
+from helperme.runtime import AgentRuntime, MemoryJournal, ReplayView
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,16 +19,10 @@ RUNTIME_ROOT = ROOT / "helperme" / "runtime"
 ASSISTANT_ROOT = ROOT / "helperme" / "assistant"
 CLI_ROOT = ROOT / "helperme" / "channels" / "cli"
 HELPERME_ROOT = ROOT / "helperme"
-TURN_FAILURE_MARKERS = (
-    "TurnRuntime",
-    "TurnHost",
-    "TurnInvocation",
-    "TurnStatus",
+REMOVED_RUNNER_MARKERS = (
     "AgentApplication",
-    "SessionTurnOutcome",
     "TodoList",
     "rewrite_todos",
-    "max_goal_turns",
     "GoalLoop",
 )
 
@@ -189,7 +187,7 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
 
     def test_assistant_runner_is_an_event_scheduler(self):
         runner = (ASSISTANT_ROOT / "runner.py").read_text(encoding="utf-8")
-        found = [marker for marker in TURN_FAILURE_MARKERS if marker in runner]
+        found = [marker for marker in REMOVED_RUNNER_MARKERS if marker in runner]
         self.assertEqual(found, [])
         self.assertIn("pending_authorization_ids", runner)
         self.assertIn("class SessionScheduler", runner)
@@ -236,22 +234,21 @@ class RuntimeArchitecturePurityTest(unittest.TestCase):
             [],
         )
 
-    def test_assistant_does_not_mention_removed_turn_runtime(self):
-        offenders: list[str] = []
-        for path in sorted(ASSISTANT_ROOT.rglob("*.py")):
-            source = path.read_text(encoding="utf-8")
-            found = [
-                marker
-                for marker in (
-                    "TurnRuntime",
-                    "TurnHost",
-                    "TodoList",
-                    "AgentApplication",
-                )
-                if marker in source
-            ]
-            if found:
-                offenders.append(
-                    f"{path.relative_to(ASSISTANT_ROOT)}: {', '.join(found)}"
-                )
-        self.assertEqual(offenders, [])
+    def test_removed_interaction_projection_api_is_not_reintroduced(self):
+        removed_exports = (
+            "TurnView",
+            "UserMessageView",
+            "OutcomeView",
+            "project_turn",
+        )
+        self.assertEqual(
+            [name for name in removed_exports if hasattr(runtime_api, name)],
+            [],
+        )
+        self.assertEqual(
+            [name for name in removed_exports if hasattr(runtime_projections, name)],
+            [],
+        )
+        self.assertFalse(hasattr(AgentRuntime, "turn"))
+        self.assertNotIn("turn", {field.name for field in fields(ReplayView)})
+        self.assertFalse(hasattr(assistant_control, "ControlTurnResult"))

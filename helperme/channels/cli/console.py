@@ -18,7 +18,7 @@ from helperme.skills.console import SkillCommandError, SkillConsoleAdapter
 from helperme.skills.errors import SkillInputError
 
 
-_TURN_RULE = "─" * 72
+_INPUT_SEPARATOR = "─" * 72
 
 
 class _BottomAnchoredPromptSession(PromptSession[str]):
@@ -134,7 +134,7 @@ async def run_runtime_console() -> None:
             separate_turns = False
             while True:
                 if separate_turns:
-                    print(f"\n{_TURN_RULE}", flush=True)
+                    print(f"\n{_INPUT_SEPARATOR}", flush=True)
                     separate_turns = False
                 user_message = await input_queue.get()
                 if user_message is None:

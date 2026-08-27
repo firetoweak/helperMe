@@ -39,7 +39,7 @@ class ControlApprovalView:
 
 
 @dataclass(frozen=True, slots=True)
-class ControlTurnResult:
+class ControlNotice:
     message: str
 
 
@@ -126,7 +126,7 @@ class AssistantControlPlane:
         self,
         session_id: str,
         step: Step,
-    ) -> ControlTurnResult | None:
+    ) -> ControlNotice | None:
         key = _DecisionKey(
             session_id,
             step.trigger_event_id,
@@ -145,10 +145,10 @@ class AssistantControlPlane:
             if result.action not in self._handlers:
                 raise KeyError(result.action)
             self._pending[session_id] = result
-            return ControlTurnResult(self._approval_message(result))
+            return ControlNotice(self._approval_message(result))
         if type(result) is not dict:
             raise TypeError("控制工具返回值不符合契约")
-        return ControlTurnResult(json.dumps(
+        return ControlNotice(json.dumps(
             result,
             ensure_ascii=False,
             sort_keys=True,
