@@ -358,7 +358,6 @@ class StateProjector:
                 decision,
                 events,
                 event_sequences,
-                step_events,
             ):
                 continue
             if isinstance(event.payload, UserMessageReceived) and (
@@ -503,7 +502,6 @@ class StateProjector:
         state: _StateBuilder,
         events: tuple[Event, ...],
         event_sequences: dict[str, int],
-        step_events: dict[str, Event],
     ) -> bool:
         payload = event.payload
         if isinstance(payload, UserMessageReceived):
@@ -525,7 +523,6 @@ class StateProjector:
             if any(
                 isinstance(item.payload, UserMessageReceived)
                 and item.sequence > issued_sequence
-                and item.event_id not in step_events
                 for item in events
             ):
                 return False
@@ -568,14 +565,23 @@ class StateProjector:
                 continue
             if event.sequence > until_sequence:
                 return
+            if event.event_id in decision.visible_event_ids:
+                continue
             if not _is_waited_follow_up(
                 event,
                 trigger.sequence,
                 operational,
                 event_sequences,
             ):
-                return
+                continue
             decision.apply_regular(event)
+            if _waited_batch_complete(
+                decision,
+                trigger.sequence,
+                operational,
+                event_sequences,
+            ):
+                return
 
 
 def _is_waited_follow_up(
@@ -589,6 +595,25 @@ def _is_waited_follow_up(
         command_state = operational.commands[payload.command_id]
         return event_sequences[command_state.issued_by_event_id] < trigger_sequence
     return False
+
+
+def _waited_batch_complete(
+    decision: _StateBuilder,
+    trigger_sequence: int,
+    operational: _StateBuilder,
+    event_sequences: dict[str, int],
+) -> bool:
+    for command_state in operational.commands.values():
+        if command_state.abandoned:
+            continue
+        if event_sequences[command_state.issued_by_event_id] >= trigger_sequence:
+            continue
+        if not command_state.attempts:
+            continue
+        frozen = decision.commands.get(command_state.command.command_id)
+        if frozen is None or frozen.phase is not CommandPhase.TERMINAL:
+            return False
+    return True
 
 
 def _parallel_decision_group_closed(
