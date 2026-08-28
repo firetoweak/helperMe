@@ -66,6 +66,7 @@ class LLMResponse:
 class LLMUsage:
     input_tokens: int
     output_tokens: int
+    cached_input_tokens: int = 0
 
     def __post_init__(self) -> None:
         if (
@@ -73,15 +74,21 @@ class LLMUsage:
             or self.input_tokens < 0
             or type(self.output_tokens) is not int
             or self.output_tokens < 0
+            or type(self.cached_input_tokens) is not int
+            or not 0 <= self.cached_input_tokens <= self.input_tokens
         ):
             raise InvalidLLMResponse(
                 "invalid_llm_usage",
-                "token usage must contain nonnegative ints",
+                "token usage must contain valid nonnegative ints",
             )
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+    @property
+    def uncached_input_tokens(self) -> int:
+        return self.input_tokens - self.cached_input_tokens
 
 
 @dataclass(frozen=True)

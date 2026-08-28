@@ -15,6 +15,7 @@ from helperme.sandbox.api import (
     EnvironmentBinding,
     ExecutionAttachment,
 )
+from helperme.sandbox.command import CaptureLimit, ShellNotFoundError
 from helperme.sandbox.workspace import (
     FilesystemPermission,
     PermissionBinding,
@@ -30,7 +31,6 @@ from helperme.tools.builtin.command_execution import (
 )
 from helperme.tools.spec import EmptyInput, pydantic_tool_spec
 from helperme.sandbox.local.powershell import (
-    CaptureLimit,
     CommandEnvironmentPolicy,
     PowerShellCommandRunner,
 )
@@ -107,6 +107,45 @@ class CommandEnvironmentPolicyTest(unittest.IsolatedAsyncioTestCase):
         child_env = policy.build({"HELPER_ALLOWED": "yes"})
 
         self.assertEqual(child_env["HELPER_ALLOWED"], "yes")
+
+
+class ExecuteCommandContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_binding_shell_metadata_and_maps_missing_shell(self):
+        class MissingShellRunner:
+            async def run(self, command, cwd, timeout_seconds):
+                raise ShellNotFoundError("bash", "/bin/bash")
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace_root = Path(directory)
+            view = WorkspaceViewSnapshot((
+                RootBinding("project", WorkspaceScope.TASK, workspace_root),
+            ))
+            binding = EnvironmentBinding(
+                environment_id="linux-test",
+                workspace_view=view,
+                permission_binding=PermissionBinding((
+                    ("project", FilesystemPermission.READ_WRITE),
+                )),
+                cwd=workspace_root,
+                shell_name="bash",
+                shell_path="/bin/bash",
+                execution_attachment=ExecutionAttachment(
+                    "linux-test",
+                    MissingShellRunner(),
+                ),
+            )
+            spec = create_command_execution_spec(binding)
+
+            result = await spec.handler(ExecuteCommandInput(
+                command="true",
+                workspace_effect="read_only",
+            ))
+
+        self.assertIn("使用 bash", spec.description)
+        self.assertIn("/bin/bash", spec.description)
+        self.assertEqual(result["code"], "SHELL_NOT_FOUND")
+        self.assertEqual(result["shell"], "bash")
+        self.assertEqual(result["executable"], "/bin/bash")
 
 
 @unittest.skipUnless(POWERSHELL, "需要 Windows PowerShell")
@@ -255,7 +294,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
             executable="missing-powershell-for-helperme-test.exe"
         )
 
-        with self.assertRaisesRegex(FileNotFoundError, "未找到 PowerShell"):
+        with self.assertRaisesRegex(FileNotFoundError, "未找到 Shell"):
             await runner.run("Write-Output ok", Path.cwd(), 10)
 
 

@@ -5,11 +5,11 @@ from pathlib import Path
 
 from helperme.sandbox.api import (
     EnvironmentBinding,
-    EnvironmentCommandExecutor,
     EnvironmentSelection,
     ExecutionAttachment,
     UnknownEnvironment,
 )
+from helperme.sandbox.command import EnvironmentCommandExecutor
 from helperme.sandbox.workspace import (
     PermissionBinding,
     RootBinding,

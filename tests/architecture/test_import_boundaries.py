@@ -229,6 +229,21 @@ class LayerImportBoundaryTest(unittest.TestCase):
                 )
         self.assertEqual(offenders, [])
 
+    def test_tools_do_not_import_sandbox_implementations(self):
+        offenders: list[str] = []
+        for path in sorted(TOOLS_ROOT.rglob("*.py")):
+            leaked = sorted(
+                _imports_any(
+                    _imported_modules(path),
+                    {"helperme.sandbox.local"},
+                )
+            )
+            if leaked:
+                offenders.append(
+                    f"{path.relative_to(TOOLS_ROOT)}: {', '.join(leaked)}"
+                )
+        self.assertEqual(offenders, [])
+
     def test_runtime_does_not_import_product_layers(self):
         offenders: list[str] = []
         for path in sorted(RUNTIME_ROOT.rglob("*.py")):

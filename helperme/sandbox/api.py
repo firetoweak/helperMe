@@ -5,7 +5,9 @@ from datetime import datetime
 from html import escape
 import os
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
+
+from helperme.sandbox.command import EnvironmentCommandExecutor
 
 from helperme.sandbox.workspace import (
     EnvironmentInputError,
@@ -51,16 +53,6 @@ class EnvironmentSelection:
             workspace_view=WorkspaceViewSnapshot.from_dict(workspace_view),
             cwd=cwd,
         )
-
-
-class EnvironmentCommandExecutor(Protocol):
-    async def run(
-        self,
-        command: str,
-        cwd: Path,
-        timeout_seconds: int,
-    ) -> Any:
-        ...
 
 
 @dataclass(frozen=True)

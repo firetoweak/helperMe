@@ -18,6 +18,7 @@ Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`
 | `helperme/llm/client.py` | 当前唯一 OpenAI-compatible 客户端实现 |
 | `helperme/llm/config.py` / `types.py` | Provider 连接配置与调用结果类型 |
 | `helperme/sandbox/api.py` | Environment 选择、绑定与 Provider 窄协议 |
+| `helperme/sandbox/command.py` | 平台无关的命令执行契约、结果与预期启动错误 |
 | `helperme/sandbox/workspace.py` | Workspace View、权限与路径解析 |
 | `helperme/sandbox/local/` | 本机 Environment Provider 与 PowerShell 进程执行 |
 | `helperme/tools/spec.py` | ToolSpec、参数契约与当前 OpenAI-compatible schema 导出 |

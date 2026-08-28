@@ -1,6 +1,6 @@
 import unittest
 
-from helperme.llm.types import InvalidLLMResponse, LLMResponse, ToolCall
+from helperme.llm.types import InvalidLLMResponse, LLMResponse, LLMUsage, ToolCall
 
 
 class LLMResponseContractTest(unittest.TestCase):
@@ -16,3 +16,11 @@ class LLMResponseContractTest(unittest.TestCase):
             calls=(ToolCall("c1", "read_file", "{}"),),
         )
         self.assertEqual(response.calls[0].name, "read_file")
+
+    def test_cached_input_tokens_cannot_exceed_input_tokens(self):
+        with self.assertRaises(InvalidLLMResponse):
+            LLMUsage(
+                input_tokens=10,
+                output_tokens=1,
+                cached_input_tokens=11,
+            )

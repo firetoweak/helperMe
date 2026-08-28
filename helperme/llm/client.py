@@ -112,11 +112,18 @@ class LLMClient:
                 "invalid_llm_response",
                 "model response choice or usage fields are invalid",
             ) from exc
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        cached_tokens = (
+            0
+            if prompt_details is None
+            else getattr(prompt_details, "cached_tokens", 0) or 0
+        )
         return LLMCallResult(
             response=self._parse_response(message),
             usage=LLMUsage(
                 input_tokens=prompt_tokens,
                 output_tokens=completion_tokens,
+                cached_input_tokens=cached_tokens,
             ),
         )
 

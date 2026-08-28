@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -9,19 +8,19 @@ from helperme.sandbox.api import (
     EnvironmentBinding,
     environment_error,
 )
+from helperme.sandbox.command import (
+    CommandResult,
+    CommandStartError,
+    ShellNotFoundError,
+)
 from helperme.sandbox.workspace import EnvironmentInputError
 from helperme.tools.spec import PydanticParameters, ToolSpec
-from helperme.sandbox.local.powershell import (
-    CommandStartError,
-    CommandResult,
-    PowerShellNotFoundError,
-)
 
 
 EXECUTE_COMMAND_DESCRIPTION = """
-用途：在当前 Environment 中使用 PowerShell 执行本机 CLI 命令。
+用途：在当前 Environment 中使用 {shell_name} 执行本机 CLI 命令。
 何时使用：用于依赖安装、构建、测试、格式化、静态检查、Git、包管理器和运行脚本；常规文件发现、搜索、读取和修改应使用专用文件工具。
-关键限制：相对 cwd 基于当前 Environment cwd，绝对 cwd 使用 Environment 原生语义；cwd 只决定启动位置，当前本地实现尚无进程级 Sandbox；command 使用 PowerShell 语义；workspace_effect 必须按预期副作用声明；仅支持有超时的前台非交互命令。
+关键限制：相对 cwd 基于当前 Environment cwd，绝对 cwd 使用 Environment 原生语义；cwd 只决定启动位置，当前本地实现尚无进程级 Sandbox；command 使用 {shell_name} 语义；Shell 路径为 {shell_path}；workspace_effect 必须按预期副作用声明；仅支持有超时的前台非交互命令。
 失败/截断后：检查 exit_code、stdout、stderr、timed_out 和各流的 truncated；超时或失败时不能假定命令成功，也不要无条件重试可能产生副作用的命令；命令产生的文件变化需通过文件工具或 Git diff 重新验证。
 """.strip()
 
@@ -105,11 +104,13 @@ def create_command_execution_spec(
 
         try:
             result = await runner.run(raw.command, cwd, raw.timeout_seconds)
-        except PowerShellNotFoundError as exc:
+        except ShellNotFoundError as exc:
             return {
                 "ok": False,
-                "code": "POWERSHELL_NOT_FOUND",
+                "code": "SHELL_NOT_FOUND",
                 "error": str(exc),
+                "shell": exc.shell_name,
+                "executable": exc.executable,
                 "execution_location": resolved_cwd.location.to_dict(),
                 "workspace_membership": (
                     resolved_cwd.workspace_membership.to_dict()
@@ -150,7 +151,10 @@ def create_command_execution_spec(
 
     return ToolSpec(
         name="execute_command",
-        description=EXECUTE_COMMAND_DESCRIPTION,
+        description=EXECUTE_COMMAND_DESCRIPTION.format(
+            shell_name=binding.shell_name,
+            shell_path=binding.shell_path,
+        ),
         parameters=PydanticParameters(ExecuteCommandInput),
         handler=execute_command,
     )
