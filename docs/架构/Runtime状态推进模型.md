@@ -131,7 +131,7 @@ Runtime 不解析工具返回值中的 `ok`、`code` 或其他领域字段。Too
 
 所有普通文本都按 Channel delivery 顺序写成 `UserMessageReceived`。运行中说「不对」「不要继续」「继续」，和 `WAITING(user_message)` 时再说一句，是同一种外部事实：人改的是**下一次决策从哪来**，不是另开中断协议。
 
-Runtime 不读这句话的含义，也不区分空闲 / 运行中输入的类型。没有 `InterruptReceived`，没有抢占当前 Step 的特殊消息，也不提供通用 Cancel。Channel 不维护对应用户消息的 worker 或 Run 生命周期，不提供 `/stop`；`Ctrl+C` / `Ctrl+D` 只退出进程。后到消息与 `TerminationRequested` / `TERMINATED` 无关：Channel 对话生命线在消息之后仍继续。
+Runtime 不读这句话的含义，也不区分空闲 / 运行中输入的类型。没有 `InterruptReceived`，没有抢占当前 Step 的特殊消息，也不提供通用 Cancel。Channel 不维护对应用户消息的 worker 或 Run 生命周期；`Ctrl+C` / `Ctrl+D` 只退出进程。后到消息与 `TerminationRequested` / `TERMINATED` 无关：Channel 对话生命线在消息之后仍继续。
 
 Channel 接纳即时：文本一旦通过 delivery 幂等写入 Journal 就可以展示并 wake。当前冻结中的 Step 仍基于冻结视图提交完毕。该 Step **已经签发**的 Command 继续派发；已经 `DispatchAttemptStarted` 的 Attempt 跑到真实 Outcome。这只覆盖这一轮 Step 里的那一批 Command，不是批准旧任务再开下一轮。Runtime 不杀工具进程、不写伪装的取消结果、不收拾残局。
 

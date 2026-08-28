@@ -10,11 +10,11 @@ Session 是持续 Event 流，不是一次用户消息的执行循环。Channel 
 
 Canonical State 由 Journal 重放得到：
 
-| Status | 含义 |
-|---|---|
-| `RUNNABLE` | 有一个合法的待消费决策 Event |
-| `WAITING` | 等待输入、授权或 Command Outcome |
-| `COMPLETED` | 有界 Host 已显式完成 finalization |
+| Status       | 含义                         |
+| ------------ | -------------------------- |
+| `RUNNABLE`   | 有一个合法的待消费决策 Event          |
+| `WAITING`    | 等待输入、授权或 Command Outcome   |
+| `COMPLETED`  | 有界 Host 已显式完成 finalization |
 | `TERMINATED` | 有界 Host 已显式终止 finalization |
 
 CLI / Telegram Session 是持续对话，永不因普通回答自动终态化。`COMPLETED / TERMINATED` 只供未来有界后台任务或 SubAgent Host 显式使用。
