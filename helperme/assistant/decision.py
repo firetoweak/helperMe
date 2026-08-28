@@ -10,10 +10,6 @@ from helperme.assistant.control import (
     AssistantControlPlane,
     ControlArgumentsError,
 )
-from helperme.assistant.completion.criteria import (
-    current_criteria,
-    format_criteria_for_worker,
-)
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, ensure_deliver
 from helperme.assistant.context.projection import (
     ModelContextProjector,
@@ -290,13 +286,6 @@ class JournalBackedLlmDecisionMaker:
             for event in journal_tail
             if event.sequence <= frame.observed_journal_position
         )
-        visible_ids = frozenset(frame.state.visible_event_ids)
-        visible_events = tuple(
-            event for event in events if event.event_id in visible_ids
-        )
-        block = format_criteria_for_worker(current_criteria(visible_events))
-        if block:
-            prompt = f"{prompt}\n\n{block}"
         if catalog is not None:
             prompt = f"{prompt}\n\n{catalog}"
         if self._management is not None:

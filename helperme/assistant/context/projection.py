@@ -19,7 +19,6 @@ from helperme.assistant.context.budget import (
 )
 from helperme.assistant.delivery import DELIVER_TOOL_NAME
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
-from helperme.assistant.completion.criteria import judgment_from_fact
 from helperme.runtime.events import (
     CommandOutcomeReceived,
     Event,
@@ -178,20 +177,6 @@ def _translate_visible_events(
                 _Projected(
                     {"role": "user", "content": payload.content},
                     "user",
-                )
-            )
-            continue
-        judgment = judgment_from_fact(payload)
-        if judgment is not None:
-            items.append(
-                _Projected(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"[judge {judgment.verdict.value}] {judgment.summary}"
-                        ),
-                    },
-                    "judgment",
                 )
             )
             continue
