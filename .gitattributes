@@ -1,0 +1,2 @@
+# 工作区文本统一使用 LF，避免 Windows Git autocrlf 与 Obsidian 互相改写。
+* text=auto eol=lf
