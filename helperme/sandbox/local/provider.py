@@ -66,13 +66,11 @@ def create_local_environment_provider() -> LocalEnvironmentProvider:
 
         runner = PowerShellCommandRunner()
         shell_name = "powershell"
-    elif os.name == "posix":
+    else:
         from helperme.sandbox.local.bash import BashCommandRunner
 
         runner = BashCommandRunner()
         shell_name = "bash"
-    else:
-        raise RuntimeError(f"不支持的本地操作系统: {os.name}")
     return LocalEnvironmentProvider(
         runner,
         shell_name=shell_name,

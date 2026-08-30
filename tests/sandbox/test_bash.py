@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from helperme.sandbox.command import CaptureLimit, ShellNotFoundError
 from helperme.sandbox.local.bash import (
@@ -67,9 +67,9 @@ class BashDiscoveryTest(unittest.TestCase):
 
 
 class LocalEnvironmentProviderSelectionTest(unittest.TestCase):
-    def test_selects_bash_for_posix(self):
+    def test_selects_bash_for_non_windows(self):
         with (
-            patch("helperme.sandbox.local.provider.os.name", "posix"),
+            patch("helperme.sandbox.local.provider.os.name", "other"),
             patch(
                 "helperme.sandbox.local.bash.BashCommandRunner"
             ) as runner_type,
@@ -81,10 +81,37 @@ class LocalEnvironmentProviderSelectionTest(unittest.TestCase):
         self.assertEqual(provider.shell_name, "bash")
         self.assertEqual(provider.shell_path, "/usr/bin/bash")
 
-    def test_rejects_an_unknown_local_os(self):
-        with patch("helperme.sandbox.local.provider.os.name", "unknown"):
-            with self.assertRaisesRegex(RuntimeError, "不支持的本地操作系统"):
-                create_local_environment_provider()
+    def test_selects_powershell_for_windows(self):
+        with (
+            patch("helperme.sandbox.local.provider.os.name", "nt"),
+            patch(
+                "helperme.sandbox.local.powershell.PowerShellCommandRunner"
+            ) as runner_type,
+        ):
+            runner_type.return_value.executable = "C:/PowerShell/7/pwsh.exe"
+            provider = create_local_environment_provider()
+
+        self.assertIs(provider.command_executor, runner_type.return_value)
+        self.assertEqual(provider.shell_name, "powershell")
+        self.assertEqual(provider.shell_path, "C:/PowerShell/7/pwsh.exe")
+
+
+class BashFailureContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_process_start_error_passes_through(self):
+        runner = BashCommandRunner(executable="/usr/bin/bash")
+
+        with (
+            patch(
+                "helperme.sandbox.local.bash.shutil.which",
+                return_value="/usr/bin/bash",
+            ),
+            patch(
+                "helperme.sandbox.local.bash.asyncio.create_subprocess_exec",
+                new=AsyncMock(side_effect=RuntimeError("internal bug")),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "internal bug"):
+                await runner.run("printf ok", Path.cwd(), 10)
 
 
 @unittest.skipUnless(BASH, "需要 POSIX Bash")
