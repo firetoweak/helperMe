@@ -108,12 +108,23 @@ class PowerShellCommandRunner:
 
     def __init__(
         self,
-        executable: str = "powershell.exe",
+        executable: str | None = None,
         environment_policy: CommandEnvironmentPolicy | None = None,
         capture_limit: CaptureLimit | None = None,
     ) -> None:
-        if not executable or not executable.strip():
+        if executable is not None and not executable.strip():
             raise ValueError("PowerShell executable 不能为空")
+        if executable is None:
+            for candidate in ("pwsh.exe", "powershell.exe"):
+                resolved = shutil.which(candidate)
+                if resolved is not None:
+                    executable = resolved
+                    break
+            else:
+                raise ShellNotFoundError(
+                    "powershell",
+                    "pwsh.exe / powershell.exe",
+                )
         self.executable = executable
         self.environment_policy = (
             CommandEnvironmentPolicy()

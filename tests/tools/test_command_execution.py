@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
@@ -36,7 +37,7 @@ from helperme.sandbox.local.powershell import (
 )
 
 
-POWERSHELL = shutil.which("powershell.exe")
+POWERSHELL = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
 
 
 class ToolContractBoundaryTest(unittest.IsolatedAsyncioTestCase):
@@ -146,6 +147,42 @@ class ExecuteCommandContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["code"], "SHELL_NOT_FOUND")
         self.assertEqual(result["shell"], "bash")
         self.assertEqual(result["executable"], "/bin/bash")
+
+
+class PowerShellDiscoveryTest(unittest.TestCase):
+    def test_prefers_powershell_7(self):
+        with patch(
+            "helperme.sandbox.local.powershell.shutil.which",
+            side_effect=lambda name: {
+                "pwsh.exe": "C:/PowerShell/7/pwsh.exe",
+                "powershell.exe": "C:/Windows/powershell.exe",
+            }.get(name),
+        ):
+            runner = PowerShellCommandRunner()
+
+        self.assertEqual(runner.executable, "C:/PowerShell/7/pwsh.exe")
+
+    def test_falls_back_to_windows_powershell(self):
+        with patch(
+            "helperme.sandbox.local.powershell.shutil.which",
+            side_effect=lambda name: {
+                "powershell.exe": "C:/Windows/powershell.exe",
+            }.get(name),
+        ):
+            runner = PowerShellCommandRunner()
+
+        self.assertEqual(runner.executable, "C:/Windows/powershell.exe")
+
+    def test_fails_when_no_powershell_is_available(self):
+        with patch(
+            "helperme.sandbox.local.powershell.shutil.which",
+            return_value=None,
+        ):
+            with self.assertRaisesRegex(
+                ShellNotFoundError,
+                "pwsh.exe / powershell.exe",
+            ):
+                PowerShellCommandRunner()
 
 
 @unittest.skipUnless(POWERSHELL, "需要 Windows PowerShell")
