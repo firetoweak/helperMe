@@ -8,10 +8,9 @@ from helperme.assistant.tool_results import runtime_tool_result
 from helperme.config import AssistantConfig
 from helperme.sandbox.api import EnvironmentSelection
 from helperme.sandbox.local.provider import (
-    LocalEnvironmentProvider,
+    create_local_environment_provider,
     discover_host_roots,
 )
-from helperme.sandbox.local.powershell import PowerShellCommandRunner
 from helperme.sandbox.workspace import (
     RootBinding,
     WorkspaceScope,
@@ -85,11 +84,7 @@ async def build_builtin_tools(config: AssistantConfig) -> BuiltinToolRunner:
         )
         for name, root in effective.items()
     ))
-    command_runner = PowerShellCommandRunner()
-    provider = LocalEnvironmentProvider(
-        command_runner,
-        shell_path=command_runner.executable,
-    )
+    provider = create_local_environment_provider()
     binding = await provider.attach(EnvironmentSelection(
         environment_id=provider.environment_id,
         workspace_view=view,

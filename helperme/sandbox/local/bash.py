@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import codecs
 import asyncio
+import codecs
 import os
 import shutil
-import subprocess
+import signal
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -19,29 +19,18 @@ from helperme.sandbox.command import (
 
 
 DEFAULT_ENV_NAMES = (
-    "ALLUSERSPROFILE",
-    "APPDATA",
-    "COMSPEC",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "LOCALAPPDATA",
+    "HOME",
+    "LANG",
+    "LC_ALL",
     "PATH",
-    "PATHEXT",
-    "PROGRAMDATA",
-    "PROGRAMFILES",
-    "PROGRAMFILES(X86)",
-    "PSMODULEPATH",
-    "SYSTEMDRIVE",
-    "SYSTEMROOT",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "WINDIR",
+    "TMPDIR",
+    "USER",
+    "VIRTUAL_ENV",
 )
 
 
-class CommandEnvironmentPolicy:
-    """从宿主环境中选择明确允许传给命令子进程的变量。"""
+class BashCommandEnvironmentPolicy:
+    """Select explicitly allowed host variables for Bash child processes."""
 
     def __init__(
         self,
@@ -51,7 +40,7 @@ class CommandEnvironmentPolicy:
         names = (*DEFAULT_ENV_NAMES, *forward_names)
         if any(not name or not name.strip() for name in names):
             raise ValueError("环境变量名称不能为空")
-        self._forward_names = tuple(dict.fromkeys(name.casefold() for name in names))
+        self._forward_names = tuple(dict.fromkeys(names))
         self._fixed_values = {
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
@@ -59,41 +48,33 @@ class CommandEnvironmentPolicy:
         }
 
     def build(self, host_env: Mapping[str, str]) -> dict[str, str]:
-        indexed = {name.casefold(): (name, value) for name, value in host_env.items()}
         child_env = {
-            indexed[name][0]: indexed[name][1]
+            name: host_env[name]
             for name in self._forward_names
-            if name in indexed
+            if name in host_env
         }
         child_env.update(self._fixed_values)
         return child_env
 
 
-class PowerShellCommandRunner:
-    """在固定 PowerShell 中执行单次前台、非交互命令。"""
+class BashCommandRunner:
+    """Run one foreground, non-interactive command in a fixed Bash."""
 
     def __init__(
         self,
         executable: str | None = None,
-        environment_policy: CommandEnvironmentPolicy | None = None,
+        environment_policy: BashCommandEnvironmentPolicy | None = None,
         capture_limit: CaptureLimit | None = None,
     ) -> None:
         if executable is not None and not executable.strip():
-            raise ValueError("PowerShell executable 不能为空")
+            raise ValueError("Bash executable 不能为空")
         if executable is None:
-            for candidate in ("pwsh.exe", "powershell.exe"):
-                resolved = shutil.which(candidate)
-                if resolved is not None:
-                    executable = resolved
-                    break
-            else:
-                raise ShellNotFoundError(
-                    "powershell",
-                    "pwsh.exe / powershell.exe",
-                )
+            executable = shutil.which("bash")
+            if executable is None:
+                raise ShellNotFoundError("bash", "bash")
         self.executable = executable
         self.environment_policy = (
-            CommandEnvironmentPolicy()
+            BashCommandEnvironmentPolicy()
             if environment_policy is None
             else environment_policy
         )
@@ -109,32 +90,23 @@ class PowerShellCommandRunner:
     ) -> CommandResult:
         executable = shutil.which(self.executable)
         if executable is None:
-            raise ShellNotFoundError("powershell", self.executable)
+            raise ShellNotFoundError("bash", self.executable)
 
         child_env = self.environment_policy.build(os.environ)
-        utf8_command = (
-            "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);"
-            "$OutputEncoding=[Console]::OutputEncoding;"
-            + command
-        )
-        creationflags = (
-            subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-        )
         started = time.perf_counter()
         try:
             proc = await asyncio.create_subprocess_exec(
                 executable,
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                utf8_command,
+                "--noprofile",
+                "--norc",
+                "-c",
+                command,
                 cwd=cwd,
                 env=child_env,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=creationflags,
+                start_new_session=True,
             )
         except OSError as exc:
             raise CommandStartError(str(exc)) from exc
@@ -143,6 +115,7 @@ class PowerShellCommandRunner:
 
         stdout_capture = BoundedTextCapture(self.capture_limit)
         stderr_capture = BoundedTextCapture(self.capture_limit)
+
         async def drain(stream, capture: BoundedTextCapture) -> None:
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             while chunk := await stream.read(4_096):
@@ -156,26 +129,10 @@ class PowerShellCommandRunner:
 
         async def terminate_and_drain() -> None:
             if proc.returncode is None:
-                if os.name == "nt":
-                    try:
-                        killer = await asyncio.create_subprocess_exec(
-                            "taskkill",
-                            "/PID",
-                            str(proc.pid),
-                            "/T",
-                            "/F",
-                            stdin=asyncio.subprocess.DEVNULL,
-                            stdout=asyncio.subprocess.DEVNULL,
-                            stderr=asyncio.subprocess.DEVNULL,
-                        )
-                        await killer.wait()
-                    except OSError:
-                        pass
-                if proc.returncode is None:
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        pass
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 await proc.wait()
             await asyncio.gather(*readers)
 

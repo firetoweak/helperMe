@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
-import os
+import platform
 from pathlib import Path
 from typing import Protocol
 
@@ -115,7 +115,7 @@ def render_environment_context(binding: EnvironmentBinding) -> str:
         "<environment_context>",
         (
             f'  <environment id="{escape(binding.environment_id)}" '
-            f'kind="host" os="{os.name}" />'
+            f'kind="host" os="{escape(platform.system())}" />'
         ),
         f"  <cwd>{escape(str(binding.cwd))}</cwd>",
         f"  <current_date>{now.date().isoformat()}</current_date>",

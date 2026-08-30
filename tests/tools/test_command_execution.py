@@ -144,9 +144,43 @@ class ExecuteCommandContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("使用 bash", spec.description)
         self.assertIn("/bin/bash", spec.description)
+        command_schema = spec.to_openai_tool()["function"]["parameters"][
+            "properties"
+        ]["command"]
+        self.assertIn("Environment Shell", command_schema["description"])
+        self.assertNotIn("PowerShell", command_schema["description"])
         self.assertEqual(result["code"], "SHELL_NOT_FOUND")
         self.assertEqual(result["shell"], "bash")
         self.assertEqual(result["executable"], "/bin/bash")
+
+    async def test_unknown_executor_error_passes_through(self):
+        class BrokenRunner:
+            async def run(self, command, cwd, timeout_seconds):
+                raise RuntimeError("internal executor bug")
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace_root = Path(directory)
+            view = WorkspaceViewSnapshot((
+                RootBinding("project", WorkspaceScope.TASK, workspace_root),
+            ))
+            binding = EnvironmentBinding(
+                environment_id="failure-test",
+                workspace_view=view,
+                permission_binding=PermissionBinding((
+                    ("project", FilesystemPermission.READ_WRITE),
+                )),
+                cwd=workspace_root,
+                shell_name="bash",
+                shell_path="/bin/bash",
+                execution_attachment=ExecutionAttachment(
+                    "failure-test",
+                    BrokenRunner(),
+                ),
+            )
+            spec = create_command_execution_spec(binding)
+
+            with self.assertRaisesRegex(RuntimeError, "internal executor bug"):
+                await spec.handler(ExecuteCommandInput(command="true"))
 
 
 class PowerShellDiscoveryTest(unittest.TestCase):

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from helperme.sandbox.api import (
     EnvironmentBinding,
@@ -131,6 +132,18 @@ class EnvironmentPathContractTest(unittest.TestCase):
             self.assertIn("<timezone>", fragment)
             self.assertIn('id="project"', fragment)
             self.assertIn('access="read_write"', fragment)
+
+    def test_environment_context_exposes_platform_system_without_mapping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binding = self.binding(Path(directory))
+            for system in ("Windows", "Linux", "Darwin", "FreeBSD"):
+                with self.subTest(system=system), patch(
+                    "helperme.sandbox.api.platform.system",
+                    return_value=system,
+                ):
+                    fragment = render_environment_context(binding)
+
+                self.assertIn(f'os="{system}"', fragment)
 
     def test_environment_selection_has_a_serializable_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
