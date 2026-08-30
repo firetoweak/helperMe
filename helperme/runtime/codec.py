@@ -81,13 +81,11 @@ def _require_object(
 
 
 def _effect_to_data(effect: InvokeTool) -> dict[str, object]:
-    if isinstance(effect, InvokeTool):
-        return {
-            "type": "invoke_tool",
-            "name": effect.name,
-            "arguments": [[key, _thaw(value)] for key, value in effect.arguments],
-        }
-    raise TypeError(type(effect).__name__)
+    return {
+        "type": "invoke_tool",
+        "name": effect.name,
+        "arguments": [[key, _thaw(value)] for key, value in effect.arguments],
+    }
 
 
 def _effect_from_data(data: dict[str, object]) -> InvokeTool:

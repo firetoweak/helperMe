@@ -16,7 +16,6 @@ from helperme.runtime.model import (
     Command,
     CommandOutcome,
     CommandPhase,
-    InvokeTool,
     OutcomeStatus,
     RuntimeStatus,
 )
@@ -222,7 +221,4 @@ class Dispatcher:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _binding_for(self, command: Command) -> ToolBinding:
-        effect = command.effect
-        if not isinstance(effect, InvokeTool):
-            raise TypeError(type(effect).__name__)
-        return self._bindings[effect.name]
+        return self._bindings[command.effect.name]

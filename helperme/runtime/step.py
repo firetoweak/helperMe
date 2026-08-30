@@ -10,7 +10,6 @@ from helperme.runtime.events import Event, EventDraft, StepCommitted
 from helperme.runtime.journal.api import Journal, StepLease
 from helperme.runtime.model import (
     Command,
-    InvokeTool,
     ModelDecision,
     Step,
 )
@@ -92,20 +91,15 @@ class StepRunner:
         else:
             decision = result
             artifact_refs = ()
-        if type(decision) is not ModelDecision:
-            raise TypeError("decision maker returned an invalid decision")
         commands: list[Command] = []
         for request in decision.command_requests:
             command_id = self._id_factory("command")
-            if isinstance(request, InvokeTool):
-                command = Command(
-                    command_id=command_id,
-                    effect=request,
-                    requires_authorization=(self._requires_authorization[request.name]),
-                    decision_on_outcome=(self._decision_on_outcome[request.name]),
-                )
-            else:
-                raise TypeError(type(request).__name__)
+            command = Command(
+                command_id=command_id,
+                effect=request,
+                requires_authorization=(self._requires_authorization[request.name]),
+                decision_on_outcome=(self._decision_on_outcome[request.name]),
+            )
             commands.append(command)
         command_tuple = tuple(commands)
         step = Step(

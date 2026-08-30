@@ -641,6 +641,28 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload, {"ok": True})
         self.assertIsNone(artifact_id)
 
+    def test_legacy_nested_externalized_marker_is_not_recognized(self):
+        artifact_id = (
+            MemoryArtifactGateway().for_session("s1").save("body").artifact_id
+        )
+        legacy = json.dumps(
+            {
+                "status": "succeeded",
+                "value": {
+                    "data": {
+                        "externalized": True,
+                        "artifact_id": artifact_id,
+                        "size_chars": 4,
+                        "preview": "body",
+                    }
+                },
+                "error_type": None,
+                "error_message": None,
+            }
+        )
+
+        self.assertEqual(parse_tool_result_meta(legacy), (False, None))
+
     def test_externalize_payload_above_threshold_saves_outcome_shaped_artifact(self):
         gateway = MemoryArtifactGateway()
         blob = "oversized-tool-result-" + "Y" * 80

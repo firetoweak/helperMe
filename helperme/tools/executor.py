@@ -1,12 +1,21 @@
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from helperme.tools.control import ControlApprovalRequest
 from helperme.tools.registry import ToolRegistry
-from helperme.tools.spec import ToolArgumentsError
+from helperme.tools.spec import ToolArgumentsError, ToolSpec
 
 
 RESERVED_KEYS = frozenset({"ok", "code", "data", "error", "hint"})
+
+
+def _mutable_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _mutable_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_mutable_json(item) for item in value]
+    return value
 
 
 def _as_str_error(error: Any) -> str | None:
@@ -28,6 +37,21 @@ def normalize_tool_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _tool_not_found(tool_name: str) -> dict[str, Any]:
+    return normalize_tool_result(
+        {
+            "ok": False,
+            "code": "TOOL_NOT_FOUND",
+            "data": {"tool_name": tool_name},
+            "error": f"Tool {tool_name} is not available",
+            "hint": (
+                "只能调用当前 Step 中暴露的精确名称；"
+                "能力来自未加载的 Toolset 时，先调用 load_toolset。"
+            ),
+        }
+    )
+
+
 class ToolsExecutor:
     def __init__(self, registry: ToolRegistry) -> None:
         self.registry = registry
@@ -39,18 +63,7 @@ class ToolsExecutor:
     ) -> dict[str, Any] | ControlApprovalRequest:
         spec = self.registry.get(tool_name)
         if spec is None:
-            return normalize_tool_result(
-                {
-                    "ok": False,
-                    "code": "TOOL_NOT_FOUND",
-                    "data": {"tool_name": tool_name},
-                    "error": f"Tool {tool_name} is not available",
-                    "hint": (
-                        "只能调用当前 Step 中暴露的精确名称；"
-                        "能力来自未加载的 Toolset 时，先调用 load_toolset。"
-                    ),
-                }
-            )
+            return _tool_not_found(tool_name)
 
         if not tool_arguments or not tool_arguments.strip():
             return normalize_tool_result(
@@ -74,9 +87,36 @@ class ToolsExecutor:
                 }
             )
 
+        if not isinstance(payload, dict):
+            return normalize_tool_result(
+                {
+                    "ok": False,
+                    "code": "VALIDATION_ERROR",
+                    "error": "tool arguments 必须是 JSON object",
+                    "hint": "按工具 schema 修正参数后重试。",
+                }
+            )
+        return await self._execute_spec(spec, payload)
+
+    async def execute_parsed(
+        self,
+        tool_name: str,
+        tool_arguments: Mapping[str, object],
+    ) -> dict[str, Any] | ControlApprovalRequest:
+        """执行已经通过模型协议边界解析的内部参数。"""
+
+        spec = self.registry.get(tool_name)
+        if spec is None:
+            raise KeyError(tool_name)
+        payload = _mutable_json(tool_arguments)
+        return await self._execute_spec(spec, payload)
+
+    @staticmethod
+    async def _execute_spec(
+        spec: ToolSpec,
+        payload: object,
+    ) -> dict[str, Any] | ControlApprovalRequest:
         try:
-            if not isinstance(payload, dict):
-                raise ToolArgumentsError("tool arguments 必须是 JSON object")
             data = spec.parameters.validate(payload)
         except ToolArgumentsError as exc:
             return normalize_tool_result(

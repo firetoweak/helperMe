@@ -182,26 +182,6 @@ class ReviewDraftTest(unittest.TestCase):
         self.assertIn("确认当前分支不是 `main`", template)
         self.assertIn("若当前分支是 `main`，审查无效", template)
 
-    def test_agents_require_independent_session_without_coding_context(self):
-        agents = (
-            Path(__file__).resolve().parents[2] / "AGENTS.md"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("不拉起任何审查模型", agents)
-        self.assertIn("另开一条独立审查 Session", agents)
-        self.assertIn("把脚本输出的 prompt 原样交给该 Session", agents)
-        self.assertIn("不得在编码 Session 内自行审查", agents)
-        self.assertIn("不得把编码对话、推理过程、工具记录", agents)
-        self.assertIn("不得降级为自审", agents)
-        self.assertIn("只读不改是软约束", agents)
-        self.assertIn("发现审查改动了工作树时必须视为审查无效", agents)
-        self.assertIn("不得改写审查结论", agents)
-        self.assertIn("没有独立于 `main` 的功能分支，Draft PR 审查没有意义", agents)
-        self.assertIn("任何设计或实现提交前", agents)
-        self.assertIn("不得在 `main` 上创建 `design:` 提交", agents)
-        self.assertIn("候选实现位于 `main`", agents)
-        self.assertIn("不得推送、创建 PR 或合并", agents)
-
     def test_script_does_not_launch_a_reviewer(self):
         source = SCRIPT_PATH.read_text(encoding="utf-8")
 

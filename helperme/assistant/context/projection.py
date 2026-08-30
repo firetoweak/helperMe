@@ -266,31 +266,54 @@ def _externalized_meta(content: object) -> dict[str, object] | None:
     payload: object = json.loads(content) if isinstance(content, str) else content
     if not isinstance(payload, dict):
         return None
-    externalized = payload.get("externalized")
-    if isinstance(externalized, dict):
-        artifact_id = externalized.get("artifact_id")
-        if is_valid_artifact_id(artifact_id):
-            return externalized
 
-    # 只读兼容旧 Journal 中已经提交的执行时外置结果。
-    data = payload.get("data")
-    if isinstance(data, dict):
-        artifact_id = data.get("artifact_id")
-        if data.get("externalized") is True and is_valid_artifact_id(artifact_id):
-            return data
-    value = payload.get("value")
-    if isinstance(value, dict):
-        artifact_id = value.get("artifact_id")
-        if value.get("externalized") is True and is_valid_artifact_id(artifact_id):
-            return value
-        nested_data = value.get("data")
-        if isinstance(nested_data, dict):
-            artifact_id = nested_data.get("artifact_id")
-            if nested_data.get("externalized") is True and is_valid_artifact_id(
-                artifact_id
-            ):
-                return nested_data
+    projected_fields = {
+        "status",
+        "value",
+        "error_type",
+        "error_message",
+        "externalized",
+        "error",
+        "hint",
+    }
+    if set(payload) == projected_fields:
+        meta = payload["externalized"]
+        if _is_externalized_meta(meta):
+            return meta
+
+    outcome_fields = {"status", "value", "error_type", "error_message"}
+    if set(payload) == outcome_fields:
+        meta = _journaled_externalized_meta(payload["value"])
+        if meta is not None:
+            return meta
     return None
+
+
+def _is_externalized_meta(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == {"artifact_id", "size_chars", "preview"}
+        and is_valid_artifact_id(value["artifact_id"])
+        and type(value["size_chars"]) is int
+        and value["size_chars"] >= 0
+        and type(value["preview"]) is str
+    )
+
+
+def _journaled_externalized_meta(value: object) -> dict[str, object] | None:
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {"externalized", "artifact_id", "size_chars", "preview"}
+        or value["externalized"] is not True
+    ):
+        return None
+    meta = {
+        "artifact_id": value["artifact_id"],
+        "size_chars": value["size_chars"],
+        "preview": value["preview"],
+    }
+    return meta if _is_externalized_meta(meta) else None
 
 
 def parse_tool_result_meta(content: object) -> tuple[bool, str | None]:

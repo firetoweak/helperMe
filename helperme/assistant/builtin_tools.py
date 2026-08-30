@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -28,10 +27,7 @@ class BuiltinToolRunner:
 
     async def execute(self, name: str, arguments: Mapping[str, object]) -> object:
         return runtime_tool_result(
-            await self._executor.execute(
-                name,
-                json.dumps(dict(arguments), ensure_ascii=False),
-            )
+            await self._executor.execute_parsed(name, arguments)
         )
 
     def names(self) -> tuple[str, ...]:
