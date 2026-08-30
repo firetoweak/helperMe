@@ -23,11 +23,15 @@ class LocalEnvironmentProvider:
         command_executor: EnvironmentCommandExecutor,
         environment_id: str = "local",
         *,
-        shell_name: str = "powershell",
-        shell_path: str = "powershell.exe",
+        shell_name: str,
+        shell_path: str,
     ) -> None:
         if not environment_id or not environment_id.strip():
             raise ValueError("environment_id 不能为空")
+        if not shell_name or not shell_name.strip():
+            raise ValueError("shell_name 不能为空")
+        if not shell_path or not shell_path.strip():
+            raise ValueError("shell_path 不能为空")
         self.environment_id = environment_id
         self.shell_name = shell_name
         self.shell_path = shell_path
@@ -54,6 +58,26 @@ class LocalEnvironmentProvider:
                 command_executor=self.command_executor,
             ),
         )
+
+
+def create_local_environment_provider() -> LocalEnvironmentProvider:
+    if os.name == "nt":
+        from helperme.sandbox.local.powershell import PowerShellCommandRunner
+
+        runner = PowerShellCommandRunner()
+        shell_name = "powershell"
+    elif os.name == "posix":
+        from helperme.sandbox.local.bash import BashCommandRunner
+
+        runner = BashCommandRunner()
+        shell_name = "bash"
+    else:
+        raise RuntimeError(f"不支持的本地操作系统: {os.name}")
+    return LocalEnvironmentProvider(
+        runner,
+        shell_name=shell_name,
+        shell_path=runner.executable,
+    )
 
 
 def discover_host_roots() -> tuple[RootBinding, ...]:

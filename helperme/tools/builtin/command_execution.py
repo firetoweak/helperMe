@@ -30,7 +30,7 @@ class ExecuteCommandInput(BaseModel):
         default=None,
         description="命令启动目录；省略时使用当前 Environment cwd，相对路径也基于它",
     )
-    command: str = Field(description="要执行的完整 PowerShell 命令字符串")
+    command: str = Field(description="要交给当前 Environment Shell 执行的完整命令字符串")
     workspace_effect: Literal["read_only", "may_write"] = Field(
         default="may_write",
         description=(

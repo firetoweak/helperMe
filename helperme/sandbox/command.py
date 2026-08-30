@@ -36,6 +36,42 @@ class CapturedOutput:
         }
 
 
+class BoundedTextCapture:
+    """Incrementally retain bounded head/tail text for command output."""
+
+    def __init__(self, limit: CaptureLimit) -> None:
+        self._limit = limit
+        self._head = ""
+        self._tail = ""
+        self._total_chars = 0
+
+    def feed(self, text: str) -> None:
+        self._total_chars += len(text)
+        remaining_head = self._limit.head_chars - len(self._head)
+        if remaining_head > 0:
+            self._head += text[:remaining_head]
+            text = text[remaining_head:]
+
+        tail_chars = self._limit.max_chars - self._limit.head_chars
+        if tail_chars > 0 and text:
+            self._tail = (self._tail + text)[-tail_chars:]
+
+    def finish(self) -> CapturedOutput:
+        truncated = self._total_chars > self._limit.max_chars
+        omitted_chars = max(0, self._total_chars - self._limit.max_chars)
+        if truncated:
+            marker = f"\n... [截断 {omitted_chars} 字符] ...\n"
+            content = self._head + marker + self._tail
+        else:
+            content = self._head + self._tail
+        return CapturedOutput(
+            content=content,
+            total_chars=self._total_chars,
+            truncated=truncated,
+            omitted_chars=omitted_chars,
+        )
+
+
 @dataclass(frozen=True)
 class CommandResult:
     exit_code: int | None
