@@ -13,6 +13,7 @@ from helperme.llm.types import (
 __all__ = [
     "InvalidLLMResponse",
     "LLMApi",
+    "LLMAuthenticationError",
     "LLMCallResult",
     "LLMContextLengthError",
     "LLMProviderError",
@@ -31,6 +32,10 @@ class LLMContextLengthError(RuntimeError):
 
 
 class LLMProviderError(RuntimeError):
+    pass
+
+
+class LLMAuthenticationError(LLMProviderError):
     pass
 
 

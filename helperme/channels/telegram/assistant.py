@@ -5,6 +5,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, Update
 
+from helperme.assistant.failures import assistant_failure_message
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import InitialConfigCreated, load_app_config
@@ -139,12 +140,37 @@ async def run_telegram_assistant() -> None:
             ) -> None:
                 await channel.accept(event_update.update_id, message)
 
-            await dispatcher.start_polling(
-                bot,
-                allowed_updates=["message"],
-                handle_as_tasks=False,
-                close_bot_session=False,
+            polling = asyncio.create_task(
+                dispatcher.start_polling(
+                    bot,
+                    allowed_updates=["message"],
+                    handle_as_tasks=False,
+                    close_bot_session=False,
+                ),
+                name="telegram-polling",
             )
+            failure = asyncio.create_task(
+                app.scheduler.wait_failure(),
+                name="assistant-failure",
+            )
+            try:
+                done, _ = await asyncio.wait(
+                    (polling, failure),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if failure in done:
+                    error = failure.result()
+                    message = assistant_failure_message(error)
+                    if message is None:
+                        raise error
+                    await channel.send(f"运行失败：{message}\nHelperMe 已停止。")
+                    return
+                await polling
+            finally:
+                for task in (polling, failure):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(polling, failure, return_exceptions=True)
 
 
 def main() -> None:

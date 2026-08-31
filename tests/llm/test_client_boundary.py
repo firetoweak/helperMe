@@ -1,8 +1,13 @@
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import httpx2
+from openai import AuthenticationError
+
+from helperme.llm.api import LLMAuthenticationError
 from helperme.llm.client import LLMClient
+from helperme.llm.config import ModelConfig
 from helperme.llm.types import InvalidLLMResponse
 
 
@@ -79,6 +84,45 @@ class LLMClientUsageBoundaryTest(unittest.IsolatedAsyncioTestCase):
 
 
 class LLMClientRequestTest(unittest.IsolatedAsyncioTestCase):
+    async def test_authentication_failure_has_a_specific_error(self):
+        client = object.__new__(LLMClient)
+        request = httpx2.Request("POST", "https://provider.example/chat")
+        response = httpx2.Response(401, request=request)
+
+        async def create(*_args):
+            raise AuthenticationError(
+                "invalid api key",
+                response=response,
+                body=None,
+            )
+
+        client.completions_create = create
+
+        with self.assertRaisesRegex(
+            LLMAuthenticationError,
+            "invalid api key",
+        ):
+            await client.chat([], "model")
+
+    def test_enables_sdk_transient_retries(self):
+        config = ModelConfig(
+            name="model",
+            base_url="https://provider.example/v1",
+            api_key="key",
+            enable_thinking=False,
+        )
+
+        with patch("helperme.llm.client.httpx.AsyncClient") as http_client:
+            with patch("helperme.llm.client.AsyncOpenAI") as openai_client:
+                LLMClient(config)
+
+        openai_client.assert_called_once_with(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            http_client=http_client.return_value,
+            max_retries=2,
+        )
+
     async def test_passes_thinking_switch_to_provider(self):
         client = object.__new__(LLMClient)
         client._enable_thinking = True

@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 
 from helperme.assistant.decision import decision_from_llm
 from helperme.assistant.runner import SessionScheduler
+from helperme.llm.api import LLMProviderError
 from helperme.llm.types import LLMResponse, ToolCall
 from helperme.runtime import (
     AgentRuntime,
@@ -49,6 +50,41 @@ class ScriptedDecisionMaker:
 
 
 class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_background_failure_is_observable_without_another_wake(self):
+        failure = LLMProviderError("provider rejected request")
+
+        async def fail(_frame):
+            raise failure
+
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker((fail,)),
+            {},
+            SequentialIds(),
+        )
+        scheduler = SessionScheduler(runtime)
+        await runtime.create_session("session")
+        await runtime.receive_user_message(
+            "session",
+            "hello",
+            delivery_id="user-1",
+        )
+
+        try:
+            await scheduler.wake("session")
+            observed = await asyncio.wait_for(
+                scheduler.wait_failure(),
+                timeout=1,
+            )
+
+            self.assertIs(observed, failure)
+            self.assertEqual(
+                (await runtime.state("session")).status,
+                RuntimeStatus.RUNNABLE,
+            )
+        finally:
+            await scheduler.close()
+
     def test_decision_from_llm_maps_text_and_tool_calls(self):
         decision = decision_from_llm(
             LLMResponse(

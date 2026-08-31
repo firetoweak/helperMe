@@ -11,6 +11,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import SessionView
 from helperme.assistant.toolsets import ToolsetLoadError
+from helperme.assistant.failures import assistant_failure_message
 from helperme.bootstrap import bootstrap_assistant
 from helperme.mcp.console import McpCommandError, McpConsoleAdapter
 from helperme.mcp.errors import McpInputError
@@ -130,13 +131,32 @@ async def run_runtime_console() -> None:
         print("Ctrl+C 或 Ctrl+D 退出。")
 
         reader = asyncio.create_task(read_console_input(input_queue, session))
+        failure = asyncio.create_task(
+            app.scheduler.wait_failure(),
+            name="assistant-failure",
+        )
         try:
             separate_turns = False
             while True:
                 if separate_turns:
                     print(f"\n{_INPUT_SEPARATOR}", flush=True)
                     separate_turns = False
-                user_message = await input_queue.get()
+                next_input = asyncio.create_task(input_queue.get())
+                done, _ = await asyncio.wait(
+                    (next_input, failure),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if failure in done:
+                    if not next_input.done():
+                        next_input.cancel()
+                        await asyncio.gather(next_input, return_exceptions=True)
+                    error = failure.result()
+                    message = assistant_failure_message(error)
+                    if message is None:
+                        raise error
+                    print(f"\n运行失败：{message}\nHelperMe 已停止。")
+                    return
+                user_message = next_input.result()
                 if user_message is None:
                     print("\n已退出。")
                     return
@@ -220,6 +240,9 @@ async def run_runtime_console() -> None:
                     delivery_id=f"user-{uuid4().hex}",
                 )
         finally:
+            if not failure.done():
+                failure.cancel()
+                await asyncio.gather(failure, return_exceptions=True)
             reader.cancel()
             try:
                 await reader

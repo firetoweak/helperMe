@@ -47,6 +47,7 @@ class SessionScheduler:
         self._tasks: dict[str, asyncio.Task[bool]] = {}
         self._pending_wakes: set[str] = set()
         self._failure: BaseException | None = None
+        self._failure_event = asyncio.Event()
         runtime.dispatcher.connect(self.wake, self._record_failure)
 
     async def wake(self, session_id: str) -> None:
@@ -98,6 +99,12 @@ class SessionScheduler:
     def _record_failure(self, error: BaseException) -> None:
         if self._failure is None:
             self._failure = error
+            self._failure_event.set()
+
+    async def wait_failure(self) -> BaseException:
+        await self._failure_event.wait()
+        assert self._failure is not None
+        return self._failure
 
     async def close(self) -> None:
         await self._runtime.dispatcher.close()

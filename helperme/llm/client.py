@@ -10,11 +10,14 @@ from openai import (
     APIStatusError,
     APITimeoutError,
     AsyncOpenAI,
+    AuthenticationError,
     OpenAIError,
+    PermissionDeniedError,
     RateLimitError,
 )
 
 from helperme.llm.api import (
+    LLMAuthenticationError,
     LLMContextLengthError,
     LLMProviderError,
     LLMTransientError,
@@ -62,7 +65,7 @@ class LLMClient:
             base_url=config.base_url,
             api_key=config.api_key,
             http_client=http_client,
-            max_retries=0,
+            max_retries=2,
         )
 
     async def __aenter__(self) -> "LLMClient":
@@ -81,6 +84,14 @@ class LLMClient:
             error = str(exc)
             if is_context_limit_error(error):
                 raise LLMContextLengthError(error) from exc
+            if isinstance(
+                exc,
+                (AuthenticationError, PermissionDeniedError),
+            ) or (
+                isinstance(exc, APIStatusError)
+                and exc.status_code in {401, 403}
+            ):
+                raise LLMAuthenticationError(error) from exc
             if isinstance(
                 exc,
                 (APIConnectionError, APITimeoutError, RateLimitError),
