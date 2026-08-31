@@ -4,7 +4,6 @@ import codecs
 import asyncio
 import os
 import shutil
-import subprocess
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -16,6 +15,7 @@ from helperme.sandbox.command import (
     CommandStartError,
     ShellNotFoundError,
 )
+from helperme.sandbox.local.windows_job import WindowsJob
 
 
 DEFAULT_ENV_NAMES = (
@@ -117,9 +117,10 @@ class PowerShellCommandRunner:
             "$OutputEncoding=[Console]::OutputEncoding;"
             + command
         )
-        creationflags = (
-            subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-        )
+        try:
+            job = WindowsJob.create()
+        except OSError as exc:
+            raise CommandStartError(str(exc)) from exc
         started = time.perf_counter()
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -128,18 +129,30 @@ class PowerShellCommandRunner:
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                utf8_command,
+                "$null=[Console]::In.Read();" + utf8_command,
                 cwd=cwd,
                 env=child_env,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=creationflags,
             )
         except OSError as exc:
+            job.close()
             raise CommandStartError(str(exc)) from exc
+        except BaseException:
+            job.close()
+            raise
+        assert proc.stdin is not None
         assert proc.stdout is not None
         assert proc.stderr is not None
+
+        try:
+            job.assign(proc.pid)
+        except OSError as exc:
+            proc.kill()
+            await proc.wait()
+            job.close()
+            raise CommandStartError(str(exc)) from exc
 
         stdout_capture = BoundedTextCapture(self.capture_limit)
         stderr_capture = BoundedTextCapture(self.capture_limit)
@@ -155,39 +168,19 @@ class PowerShellCommandRunner:
         )
 
         async def terminate_and_drain() -> None:
-            if proc.returncode is None:
-                if os.name == "nt":
-                    try:
-                        killer = await asyncio.create_subprocess_exec(
-                            "taskkill",
-                            "/PID",
-                            str(proc.pid),
-                            "/T",
-                            "/F",
-                            stdin=asyncio.subprocess.DEVNULL,
-                            stdout=asyncio.subprocess.DEVNULL,
-                            stderr=asyncio.subprocess.DEVNULL,
-                        )
-                        await killer.wait()
-                    except OSError:
-                        pass
-                if proc.returncode is None:
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        pass
-                await proc.wait()
+            job.close()
+            await proc.wait()
             await asyncio.gather(*readers)
 
         timed_out = False
         try:
+            proc.stdin.write(b"\n")
+            await proc.stdin.drain()
+            proc.stdin.close()
             try:
                 await asyncio.wait_for(proc.wait(), timeout_seconds)
             except TimeoutError:
                 timed_out = True
-                await terminate_and_drain()
-            else:
-                await asyncio.gather(*readers)
         except BaseException:
             cleanup = asyncio.create_task(terminate_and_drain())
             try:
@@ -195,6 +188,8 @@ class PowerShellCommandRunner:
             except asyncio.CancelledError:
                 await cleanup
             raise
+        else:
+            await terminate_and_drain()
 
         return CommandResult(
             exit_code=None if timed_out else proc.returncode,

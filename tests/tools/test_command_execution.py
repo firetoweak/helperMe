@@ -360,6 +360,31 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(2.5)
             self.assertFalse(marker.exists())
 
+    async def test_normal_completion_terminates_background_process_tree(self):
+        runner = PowerShellCommandRunner()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "child-finished.txt"
+            script = root / "child.ps1"
+            script.write_text(
+                "Start-Sleep -Seconds 2\n"
+                f"Set-Content -LiteralPath '{marker}' -Value done\n",
+                encoding="utf-8",
+            )
+
+            result = await runner.run(
+                "Start-Process powershell.exe "
+                f"-ArgumentList '-NoProfile','-File','{script}' "
+                "-WindowStyle Hidden",
+                root,
+                10,
+            )
+            await asyncio.sleep(2.5)
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertFalse(result.timed_out)
+            self.assertFalse(marker.exists())
+
     async def test_missing_powershell_is_an_expected_boundary_error(self):
         runner = PowerShellCommandRunner(
             executable="missing-powershell-for-helperme-test.exe"
