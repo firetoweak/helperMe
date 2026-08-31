@@ -154,7 +154,6 @@ class JournalBackedLlmDecisionMaker:
         journal,
         llm: LLMApi,
         model: str,
-        tool_schemas: list[dict[str, object]] | None = None,
         system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
         projector: ModelContextProjector | None = None,
         surface: ToolSurface | None = None,
@@ -166,7 +165,6 @@ class JournalBackedLlmDecisionMaker:
         self._journal = journal
         self._llm = llm
         self._model = model
-        self._tool_schemas = [] if tool_schemas is None else tool_schemas
         self._system_prompt = system_prompt
         self._projector = ModelContextProjector() if projector is None else projector
         self._surface = surface
@@ -185,7 +183,7 @@ class JournalBackedLlmDecisionMaker:
                 frame.state,
             )
         else:
-            schemas = list(self._tool_schemas)
+            schemas = []
         if self._skill_tools is not None:
             schemas = [*schemas, *self._skill_tools.schemas()]
         if self._management is not None:

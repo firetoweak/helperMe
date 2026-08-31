@@ -34,7 +34,6 @@ from helperme.skills.summarizer import LlmSkillDiffSummarizer
 @dataclass(frozen=True, slots=True)
 class AssistantAssembly:
     bindings: dict[str, ToolBinding]
-    model_tools: list[dict[str, object]]
     projector: ModelContextProjector
     builtin_tools: BuiltinToolRunner
     surface: ToolSurface
@@ -135,7 +134,6 @@ async def build_assistant_assembly(
         gateway=gateway,
         settings=settings,
     )
-    model_tools = [*builtin_tools.schemas, READ_ARTIFACT_SCHEMA]
     return AssistantAssembly(
         bindings={
             **bind_executor_tools(builtin_tools, gateway, settings),
@@ -145,7 +143,6 @@ async def build_assistant_assembly(
             **skill_tools.bindings(),
             **management.bindings(),
         },
-        model_tools=model_tools,
         projector=projector,
         builtin_tools=builtin_tools,
         surface=surface,
