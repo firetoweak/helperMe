@@ -18,7 +18,7 @@ async def resume_session(
     runtime: AgentRuntime,
     surface: ToolSurface,
     session_id: str,
-    management: ManagementSurface | None = None,
+    management: ManagementSurface,
 ) -> CanonicalState:
     """Select an existing Session and rebuild Host projections."""
 
@@ -26,8 +26,7 @@ async def resume_session(
         raise SessionNotFoundError(session_id)
     events = await runtime.snapshot(session_id)
     await surface.rehydrate(session_id, events)
-    if management is not None:
-        await management.rehydrate(session_id, events)
+    await management.rehydrate(session_id, events)
     return await runtime.state(session_id)
 
 
@@ -38,7 +37,7 @@ class SessionScheduler:
         self,
         runtime: AgentRuntime,
         *,
-        control: AssistantControlPlane | None = None,
+        control: AssistantControlPlane,
         notify: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> None:
         self._runtime = runtime
@@ -71,7 +70,7 @@ class SessionScheduler:
 
     async def _advance_once(self, session_id: str) -> bool:
         advance = await self._runtime.advance(session_id)
-        if advance.step is not None and self._control is not None:
+        if advance.step is not None:
             result = await self._control.after_committed_step(
                 session_id,
                 advance.step,

@@ -12,6 +12,7 @@ from helperme.assistant.control import AssistantControlPlane
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.delivery import deliver_binding
+from helperme.assistant.toolsets import ToolSurface
 from tests.session_scheduler import settle_session
 from helperme.llm.types import (
     LLMCallResult,
@@ -72,6 +73,34 @@ class FailingApprovalHandler(ApprovalHandler):
         raise RuntimeError("approval execution failed")
 
 
+class EmptySkillTools:
+    def schemas(self):
+        return []
+
+
+class OpenControlManagement:
+    def schemas(self, _session_id, _state):
+        return []
+
+    def control_names(self, _session_id, _state):
+        return frozenset({"propose_test_control"})
+
+    def catalog_instruction(self, _session_id, _state):
+        return "test management"
+
+
+def _decision_maker(journal, llm, control):
+    return JournalBackedLlmDecisionMaker(
+        journal,
+        llm,
+        "test-model",
+        surface=ToolSurface(),
+        skill_tools=EmptySkillTools(),
+        control=control,
+        management=OpenControlManagement(),
+    )
+
+
 class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
     async def test_assembly_offers_mcp_and_skill_controls_outside_runtime(self):
         with TemporaryDirectory() as directory:
@@ -94,6 +123,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
                 assembly = await build_assistant_assembly(
                     config,
                     lambda _text: None,
+                    MemoryJournal(),
                 )
 
         names = assembly.control.names()
@@ -119,6 +149,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
                 "test_installed_skill",
             }.issubset(assembly.bindings)
         )
+        await assembly.scheduler.close()
 
     async def test_proposal_runs_only_after_step_commit_then_waits_for_yes(self):
         journal = MemoryJournal()
@@ -150,12 +181,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         delivered: list[str] = []
         runtime = AgentRuntime(
             journal,
-            JournalBackedLlmDecisionMaker(
-                journal,
-                ControlLlm(),
-                "test-model",
-                control=control,
-            ),
+            _decision_maker(journal, ControlLlm(), control),
             deliver_binding(delivered.append),
         )
         await runtime.receive_user_message(
@@ -217,12 +243,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         control = AssistantControlPlane((spec,), (handler,))
         runtime = AgentRuntime(
             journal,
-            JournalBackedLlmDecisionMaker(
-                journal,
-                ControlLlm(),
-                "test-model",
-                control=control,
-            ),
+            _decision_maker(journal, ControlLlm(), control),
             deliver_binding(lambda _text: None),
         )
         await runtime.receive_user_message(

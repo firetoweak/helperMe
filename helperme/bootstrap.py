@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from helperme.assistant.assembly import build_assistant_assembly
-from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.runner import SessionScheduler
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import (
@@ -17,7 +16,7 @@ from helperme.config import (
 )
 from helperme.llm.client import LLMClient
 from helperme.paths import runtime_data_root
-from helperme.runtime import AgentRuntime, SqliteJournal
+from helperme.runtime import SqliteJournal
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,44 +47,21 @@ async def bootstrap_assistant(
     effective_config = config
     journal_path = runtime_data_root() / "journal.sqlite"
     journal = SqliteJournal(journal_path)
-    assembly = await build_assistant_assembly(effective_config, sink)
-    runtime = AgentRuntime(
+    assembly = await build_assistant_assembly(
+        effective_config,
+        sink,
         journal,
-        JournalBackedLlmDecisionMaker(
-            journal,
-            effective_config.llm,
-            effective_config.model_name,
-            surface=assembly.surface,
-            skill_tools=assembly.skill_tools,
-            projector=assembly.projector,
-            control=assembly.control,
-            management=assembly.management,
-            context_usage_sink=context_usage_sink,
-        ),
-        assembly.bindings,
-    )
-    assembly.surface.attach(runtime)
-    scheduler = SessionScheduler(
-        runtime,
-        control=assembly.control,
-        notify=sink,
-    )
-    sessions = AssistantSessions(
-        runtime,
-        assembly.surface,
-        scheduler,
-        control=assembly.control,
-        management=assembly.management,
+        context_usage_sink=context_usage_sink,
     )
     async with effective_config.llm, assembly.mcp.client_manager:
         try:
             yield BootstrappedAssistant(
                 config=effective_config,
-                sessions=sessions,
-                scheduler=scheduler,
+                sessions=assembly.sessions,
+                scheduler=assembly.scheduler,
                 journal_path=journal_path,
                 mcp_service=assembly.mcp.service,
                 skill_service=assembly.skills.service,
             )
         finally:
-            await scheduler.close()
+            await assembly.scheduler.close()

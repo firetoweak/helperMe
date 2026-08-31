@@ -66,8 +66,8 @@ class AssistantSessions:
         surface: ToolSurface,
         scheduler: SessionScheduler,
         *,
-        control: AssistantControlPlane | None = None,
-        management: ManagementSurface | None = None,
+        control: AssistantControlPlane,
+        management: ManagementSurface,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
@@ -83,11 +83,7 @@ class AssistantSessions:
     ) -> SessionView:
         return session_view(
             state,
-            control_approval=(
-                None
-                if self._control is None
-                else self._control.pending_view(state.session_id)
-            ),
+            control_approval=self._control.pending_view(state.session_id),
             control_message=control_message,
         )
 
@@ -117,8 +113,6 @@ class AssistantSessions:
         *,
         approved: bool,
     ) -> str:
-        if self._control is None:
-            raise ValueError("Assistant 未装配对话控制面")
         return await self._control.resolve(session_id, approved=approved)
 
     async def receive_user_message(

@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from helperme.runtime import AgentRuntime, MemoryJournal, RuntimeStatus
+from helperme.runtime import MemoryJournal, RuntimeStatus
 from helperme.assistant.assembly import build_assistant_assembly
-from helperme.assistant.decision import JournalBackedLlmDecisionMaker
-from tests.session_scheduler import settle_session
+from tests.session_scheduler import SettlingScheduler
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.client import LLMClient
 
@@ -19,36 +18,33 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
             LLMClient(app_config.model),
         )
         delivered: list[str] = []
-        assembly = await build_assistant_assembly(config, delivered.append)
         journal = MemoryJournal()
-        runtime = AgentRuntime(
+        assembly = await build_assistant_assembly(
+            config,
+            delivered.append,
             journal,
-            JournalBackedLlmDecisionMaker(
-                journal,
-                config.llm,
-                config.model_name,
-                surface=assembly.surface,
-                skill_tools=assembly.skill_tools,
-                projector=assembly.projector,
-            ),
-            assembly.bindings,
+            scheduler_factory=SettlingScheduler,
         )
-        assembly.surface.attach(runtime)
         session_id = "live-session"
-        async with config.llm, assembly.mcp.client_manager:
-            await runtime.receive_user_message(
-                session_id,
-                "只用一句话回答：1+1 等于几。不要调用工具。",
-                delivery_id="live-1",
-            )
-            result = await asyncio.wait_for(
-                settle_session(runtime, session_id),
-                timeout=180,
-            )
+        try:
+            async with config.llm, assembly.mcp.client_manager:
+                await assembly.sessions.create(session_id)
+                await assembly.sessions.receive_user_message(
+                    session_id,
+                    "只用一句话回答：1+1 等于几。不要调用工具。",
+                    delivery_id="live-1",
+                )
+                await asyncio.wait_for(
+                    assembly.scheduler.join(),
+                    timeout=180,
+                )
+                state = await assembly.runtime.state(session_id)
+        finally:
+            await assembly.scheduler.close()
         events = await journal.snapshot(session_id)
         kinds = [event.payload.__class__.__name__ for event in events]
         self.assertIn("UserMessageReceived", kinds)
         self.assertIn("StepCommitted", kinds)
         self.assertTrue(delivered, kinds)
-        self.assertEqual(result.state.status, RuntimeStatus.WAITING)
-        self.assertEqual(result.state.waiting_for, ("user_message",))
+        self.assertEqual(state.status, RuntimeStatus.WAITING)
+        self.assertEqual(state.waiting_for, ("user_message",))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from helperme.assistant.artifacts import (
@@ -13,32 +14,40 @@ from helperme.assistant.context.projection import (
     ModelContextSettings,
 )
 from helperme.assistant.control import AssistantControlPlane
+from helperme.assistant.decision import (
+    JournalBackedLlmDecisionMaker,
+    bind_executor_tools,
+)
+from helperme.assistant.runner import SessionScheduler
+from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.toolsets import ToolSurface, load_toolset_binding
-from helperme.runtime import ToolBinding
+from helperme.runtime import AgentRuntime, ToolBinding
 from helperme.assistant.builtin_tools import (
     BuiltinToolRunner,
     build_builtin_tools,
 )
-from helperme.assistant.decision import bind_executor_tools
 from helperme.assistant.mcp import McpToolsetAdapter
 from helperme.assistant.management import ManagementDomain, ManagementSurface
 from helperme.assistant.skills import SkillToolAdapter
 from helperme.config import AssistantConfig
 from helperme.paths import HelperMeHome, runtime_data_root
-from helperme.mcp.composition import build_mcp
-from helperme.skills.composition import build_skills
+from helperme.mcp.composition import McpAssembly, build_mcp
+from helperme.skills.composition import SkillAssembly, build_skills
 from helperme.skills.runtime import LOAD_SKILL, READ_SKILL_RESOURCE
 from helperme.skills.summarizer import LlmSkillDiffSummarizer
 
 
 @dataclass(frozen=True, slots=True)
 class AssistantAssembly:
+    runtime: AgentRuntime
+    scheduler: SessionScheduler
+    sessions: AssistantSessions
     bindings: dict[str, ToolBinding]
     projector: ModelContextProjector
     builtin_tools: BuiltinToolRunner
     surface: ToolSurface
-    mcp: object
-    skills: object
+    mcp: McpAssembly
+    skills: SkillAssembly
     skill_tools: SkillToolAdapter
     control: AssistantControlPlane
     management: ManagementSurface
@@ -54,6 +63,10 @@ def _model_context_settings(config: AssistantConfig) -> ModelContextSettings:
 async def build_assistant_assembly(
     config: AssistantConfig,
     sink,
+    journal,
+    *,
+    context_usage_sink: Callable[[str, int, int], None] | None = None,
+    scheduler_factory=SessionScheduler,
 ) -> AssistantAssembly:
     builtin_tools = await build_builtin_tools(config)
     settings = _model_context_settings(config)
@@ -134,15 +147,47 @@ async def build_assistant_assembly(
         gateway=gateway,
         settings=settings,
     )
+    bindings = {
+        **bind_executor_tools(builtin_tools, gateway, settings),
+        **read_artifact_binding(gateway),
+        **deliver_binding(sink),
+        **load_toolset_binding(surface),
+        **skill_tools.bindings(),
+        **management.bindings(),
+    }
+    runtime = AgentRuntime(
+        journal,
+        JournalBackedLlmDecisionMaker(
+            journal,
+            config.llm,
+            config.model_name,
+            surface=surface,
+            skill_tools=skill_tools,
+            projector=projector,
+            control=control,
+            management=management,
+            context_usage_sink=context_usage_sink,
+        ),
+        bindings,
+    )
+    surface.attach(runtime)
+    scheduler = scheduler_factory(
+        runtime,
+        control=control,
+        notify=sink,
+    )
+    sessions = AssistantSessions(
+        runtime,
+        surface,
+        scheduler,
+        control=control,
+        management=management,
+    )
     return AssistantAssembly(
-        bindings={
-            **bind_executor_tools(builtin_tools, gateway, settings),
-            **read_artifact_binding(gateway),
-            **deliver_binding(sink),
-            **load_toolset_binding(surface),
-            **skill_tools.bindings(),
-            **management.bindings(),
-        },
+        runtime=runtime,
+        scheduler=scheduler,
+        sessions=sessions,
+        bindings=bindings,
         projector=projector,
         builtin_tools=builtin_tools,
         surface=surface,

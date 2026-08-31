@@ -154,12 +154,13 @@ class JournalBackedLlmDecisionMaker:
         journal,
         llm: LLMApi,
         model: str,
+        *,
+        surface: ToolSurface,
+        skill_tools: SkillToolAdapter,
+        control: AssistantControlPlane,
+        management: ManagementSurface,
         system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
         projector: ModelContextProjector | None = None,
-        surface: ToolSurface | None = None,
-        skill_tools: SkillToolAdapter | None = None,
-        control: AssistantControlPlane | None = None,
-        management: ManagementSurface | None = None,
         context_usage_sink: Callable[[str, int, int], None] | None = None,
     ) -> None:
         self._journal = journal
@@ -177,39 +178,25 @@ class JournalBackedLlmDecisionMaker:
         self,
         frame: DecisionFrame,
     ) -> tuple[list[dict[str, object]], frozenset[str]]:
-        if self._surface is not None:
-            schemas = self._surface.schemas(
-                frame.state.session_id,
-                frame.state,
-            )
-        else:
-            schemas = []
-        if self._skill_tools is not None:
-            schemas = [*schemas, *self._skill_tools.schemas()]
-        if self._management is not None:
-            schemas = [
-                *schemas,
-                *self._management.schemas(frame.state.session_id, frame.state),
-            ]
-        offered_control_names = frozenset()
-        if self._control is not None:
-            allowed_control_names = (
-                None
-                if self._management is None
-                else self._management.control_names(
-                    frame.state.session_id,
-                    frame.state,
-                )
-            )
-            control_schemas = self._control.schemas(
-                frame.state.session_id,
-                allowed_control_names,
-            )
-            offered_control_names = _tool_names(control_schemas)
-            schemas = [
-                *schemas,
-                *control_schemas,
-            ]
+        schemas = self._surface.schemas(
+            frame.state.session_id,
+            frame.state,
+        )
+        schemas = [*schemas, *self._skill_tools.schemas()]
+        schemas = [
+            *schemas,
+            *self._management.schemas(frame.state.session_id, frame.state),
+        ]
+        allowed_control_names = self._management.control_names(
+            frame.state.session_id,
+            frame.state,
+        )
+        control_schemas = self._control.schemas(
+            frame.state.session_id,
+            allowed_control_names,
+        )
+        offered_control_names = _tool_names(control_schemas)
+        schemas = [*schemas, *control_schemas]
         return deepcopy(schemas), offered_control_names
 
     def _decision_from_response(
@@ -241,8 +228,6 @@ class JournalBackedLlmDecisionMaker:
                     "invalid_tool_arguments",
                     f"tool {call.name} arguments must be a JSON object",
                 )
-            if self._control is None:
-                raise RuntimeError("control call accepted without control plane")
             try:
                 self._control.stage(frame, call.name, arguments)
             except ControlArgumentsError as exc:
@@ -268,13 +253,9 @@ class JournalBackedLlmDecisionMaker:
         # Host-owned context is captured before the first await. Journal facts
         # are bounded by the frame position, freezing this Step's visible world.
         prompt = self._system_prompt
-        catalog = (
-            self._surface.catalog_instruction(
-                frame.state.session_id,
-                frame.state,
-            )
-            if self._surface is not None
-            else None
+        catalog = self._surface.catalog_instruction(
+            frame.state.session_id,
+            frame.state,
         )
         schemas, control_names = self._schemas(frame)
         allowed_tool_names = _tool_names(schemas)
@@ -284,14 +265,12 @@ class JournalBackedLlmDecisionMaker:
             for event in journal_tail
             if event.sequence <= frame.observed_journal_position
         )
-        if catalog is not None:
-            prompt = f"{prompt}\n\n{catalog}"
-        if self._management is not None:
-            management_catalog = self._management.catalog_instruction(
-                frame.state.session_id,
-                frame.state,
-            )
-            prompt = f"{prompt}\n\n{management_catalog}"
+        prompt = f"{prompt}\n\n{catalog}"
+        management_catalog = self._management.catalog_instruction(
+            frame.state.session_id,
+            frame.state,
+        )
+        prompt = f"{prompt}\n\n{management_catalog}"
         prepared = self._projector.prepare(
             events,
             frame.state.visible_event_ids,

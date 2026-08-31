@@ -6,12 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from helperme.assistant.assembly import build_assistant_assembly
-from helperme.assistant.decision import JournalBackedLlmDecisionMaker
-from tests.session_scheduler import settle_session
+from tests.session_scheduler import SettlingScheduler
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.client import LLMClient
 from helperme.runtime import (
-    AgentRuntime,
     CommandOutcomeReceived,
     InvokeTool,
     RuntimeStatus,
@@ -59,46 +57,43 @@ async def main() -> None:
         LLMClient(app_config.model),
     )
     delivered: list[str] = []
-    assembly = await build_assistant_assembly(config, delivered.append)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     journal_path = workspace / ".runtime" / f"stress-{run_id}.sqlite"
     journal_path.parent.mkdir(parents=True, exist_ok=True)
     journal = SqliteJournal(journal_path)
-    runtime = AgentRuntime(
+    assembly = await build_assistant_assembly(
+        config,
+        delivered.append,
         journal,
-        JournalBackedLlmDecisionMaker(
-            journal,
-            config.llm,
-            config.model_name,
-            surface=assembly.surface,
-            skill_tools=assembly.skill_tools,
-            projector=assembly.projector,
-        ),
-        assembly.bindings,
+        scheduler_factory=SettlingScheduler,
     )
-    assembly.surface.attach(runtime)
+    runtime = assembly.runtime
     session_id = f"final-stress-{run_id}"
 
-    async with config.llm, assembly.mcp.client_manager:
-        created = await runtime.create_session(session_id)
-        if not created:
-            raise AssertionError("stress session was not created")
-        for index, task in enumerate(TASKS, start=1):
-            await runtime.receive_user_message(
-                session_id,
-                task,
-                delivery_id=f"stress-user-{index}",
-            )
-            result = await asyncio.wait_for(
-                settle_session(runtime, session_id),
-                timeout=300,
-            )
-            if result.state.status is not RuntimeStatus.WAITING:
-                raise AssertionError(f"task {index} stopped in {result.state.status}")
-            if result.state.waiting_for != ("user_message",):
-                raise AssertionError(
-                    f"task {index} waits for {result.state.waiting_for}"
+    try:
+        async with config.llm, assembly.mcp.client_manager:
+            created = await assembly.sessions.create(session_id)
+            if not created:
+                raise AssertionError("stress session was not created")
+            for index, task in enumerate(TASKS, start=1):
+                await assembly.sessions.receive_user_message(
+                    session_id,
+                    task,
+                    delivery_id=f"stress-user-{index}",
                 )
+                await asyncio.wait_for(
+                    assembly.scheduler.join(),
+                    timeout=300,
+                )
+                state = await runtime.state(session_id)
+                if state.status is not RuntimeStatus.WAITING:
+                    raise AssertionError(f"task {index} stopped in {state.status}")
+                if state.waiting_for != ("user_message",):
+                    raise AssertionError(
+                        f"task {index} waits for {state.waiting_for}"
+                    )
+    finally:
+        await assembly.scheduler.close()
 
     metrics = json.loads(
         (workspace / "output" / "metrics.json").read_text(encoding="utf-8")

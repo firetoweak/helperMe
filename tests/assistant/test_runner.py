@@ -4,6 +4,7 @@ import asyncio
 import unittest
 from collections.abc import Awaitable, Callable
 
+from helperme.assistant.control import AssistantControlPlane
 from helperme.assistant.decision import decision_from_llm
 from helperme.assistant.runner import SessionScheduler
 from helperme.llm.api import LLMProviderError
@@ -62,7 +63,10 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SessionScheduler(runtime)
+        scheduler = SessionScheduler(
+            runtime,
+            control=AssistantControlPlane((), ()),
+        )
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -248,7 +252,10 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
                     second_finished.set()
 
         runtime.advance = tracked_advance
-        scheduler = SessionScheduler(runtime)
+        scheduler = SessionScheduler(
+            runtime,
+            control=AssistantControlPlane((), ()),
+        )
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -306,7 +313,10 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
                 super()._start(session_id)
 
         runtime.advance = tracked_advance
-        scheduler = ActivationCountingScheduler(runtime)
+        scheduler = ActivationCountingScheduler(
+            runtime,
+            control=AssistantControlPlane((), ()),
+        )
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -345,7 +355,10 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("scheduler must not read state after advance")
 
         runtime.state = forbidden_state
-        scheduler = SessionScheduler(runtime)
+        scheduler = SessionScheduler(
+            runtime,
+            control=AssistantControlPlane((), ()),
+        )
         try:
             should_continue = await scheduler._advance_once("session")
             self.assertFalse(should_continue)

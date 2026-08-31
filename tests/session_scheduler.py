@@ -10,6 +10,17 @@ from helperme.runtime.model import CanonicalState
 
 
 class SettlingScheduler(SessionScheduler):
+    def __init__(self, *args, control=None, **kwargs) -> None:
+        super().__init__(
+            *args,
+            control=(
+                AssistantControlPlane((), ())
+                if control is None
+                else control
+            ),
+            **kwargs,
+        )
+
     async def join(self) -> None:
         while True:
             await asyncio.sleep(0)

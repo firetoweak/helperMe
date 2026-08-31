@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from helperme.assistant.artifacts import MemoryArtifactGateway
+from helperme.assistant.context.projection import ModelContextSettings
+from helperme.assistant.management import ManagementSurface
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import AssistantSessions
@@ -38,7 +41,17 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             surface = ToolSurface()
         surface.attach(runtime)
         return (
-            AssistantSessions(runtime, surface, scheduler),
+            AssistantSessions(
+                runtime,
+                surface,
+                scheduler,
+                control=scheduler._control,
+                management=ManagementSurface(
+                    (),
+                    MemoryArtifactGateway(),
+                    ModelContextSettings(),
+                ),
+            ),
             surface,
         )
 

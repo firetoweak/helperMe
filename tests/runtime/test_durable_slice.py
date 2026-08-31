@@ -4,6 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from helperme.assistant.artifacts import MemoryArtifactGateway
+from helperme.assistant.context.projection import ModelContextSettings
+from helperme.assistant.management import ManagementSurface
 from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.toolsets import ToolSurface
 from helperme.runtime import (
@@ -185,7 +188,17 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
             restored_scheduler = RecordingScheduler(restored)
             surface = ToolSurface()
             surface.attach(restored)
-            sessions = AssistantSessions(restored, surface, restored_scheduler)
+            sessions = AssistantSessions(
+                restored,
+                surface,
+                restored_scheduler,
+                control=restored_scheduler._control,
+                management=ManagementSurface(
+                    (),
+                    MemoryArtifactGateway(),
+                    ModelContextSettings(),
+                ),
+            )
             try:
                 view = await sessions.resume("session")
                 state = await restored.state("session")

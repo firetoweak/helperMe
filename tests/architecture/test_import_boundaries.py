@@ -17,6 +17,12 @@ SANDBOX_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "sandbox"
 CHANNELS_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "channels"
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "helperme" / "config.py"
 BOOTSTRAP_PATH = Path(__file__).resolve().parents[2] / "helperme" / "bootstrap.py"
+LIVE_RUNTIME_PATH = Path(__file__).resolve().parents[1] / "live" / "test_runtime_live.py"
+STRESS_RUNTIME_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "benchmarks"
+    / "final_session_stress_live.py"
+)
 
 
 def _imported_roots(path: Path) -> set[str]:
@@ -156,6 +162,13 @@ class LayerImportBoundaryTest(unittest.TestCase):
             "helperme.llm.client",
             _imported_modules(BOOTSTRAP_PATH),
         )
+
+    def test_all_runnable_entry_points_use_the_authoritative_assembly(self):
+        for path in (BOOTSTRAP_PATH, LIVE_RUNTIME_PATH, STRESS_RUNTIME_PATH):
+            source = path.read_text(encoding="utf-8")
+            self.assertIn("build_assistant_assembly(", source, path)
+            self.assertNotIn("JournalBackedLlmDecisionMaker(", source, path)
+            self.assertNotIn("AgentRuntime(", source, path)
 
     def test_channels_do_not_import_runtime_or_infrastructure_layers(self):
         offenders: list[str] = []
