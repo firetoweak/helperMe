@@ -467,6 +467,17 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(notice)
+
+        replayed = await control.after_committed_step(
+            "control-session",
+            SimpleNamespace(
+                trigger_event_id="trigger-1",
+                decision_cursor=1,
+                basis_state_version="basis-1",
+            ),
+        )
+
+        self.assertIsNone(replayed)
         self.assertEqual(len(control.schemas("control-session")), 1)
 
     async def test_proposal_action_must_match_its_operation(self):

@@ -22,10 +22,7 @@ from helperme.assistant.runner import SessionScheduler
 from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.toolsets import ToolSurface, load_toolset_binding
 from helperme.runtime import AgentRuntime, ToolBinding
-from helperme.assistant.builtin_tools import (
-    BuiltinToolRunner,
-    build_builtin_tools,
-)
+from helperme.assistant.builtin_tools import build_builtin_tools
 from helperme.assistant.mcp import McpToolsetAdapter
 from helperme.assistant.management import ManagementDomain, ManagementSurface
 from helperme.assistant.skills import SkillToolAdapter
@@ -43,14 +40,10 @@ class AssistantAssembly:
     scheduler: SessionScheduler
     sessions: AssistantSessions
     bindings: dict[str, ToolBinding]
-    projector: ModelContextProjector
-    builtin_tools: BuiltinToolRunner
     surface: ToolSurface
     mcp: McpAssembly
     skills: SkillAssembly
-    skill_tools: SkillToolAdapter
     control: AssistantControlPlane
-    management: ManagementSurface
 
 
 def _model_context_settings(config: AssistantConfig) -> ModelContextSettings:
@@ -162,12 +155,8 @@ async def build_assistant_assembly(
         scheduler=scheduler,
         sessions=sessions,
         bindings=bindings,
-        projector=projector,
-        builtin_tools=builtin_tools,
         surface=surface,
         mcp=mcp,
         skills=skills,
-        skill_tools=skill_tools,
         control=control,
-        management=management,
     )

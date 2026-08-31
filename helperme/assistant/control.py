@@ -58,12 +58,11 @@ class AssistantControlPlane:
         self._operations = {operation.name: operation for operation in operations}
         if len(self._operations) != len(operations):
             raise ValueError("对话控制工具名称重复")
-        actions = {operation.action for operation in operations}
-        if len(actions) != len(operations):
-            raise ValueError("控制审批 action 重复")
         self._approval_operations = {
             operation.action: operation for operation in operations
         }
+        if len(self._approval_operations) != len(operations):
+            raise ValueError("控制审批 action 重复")
         self._staged: dict[str, _StagedCall] = {}
         self._pending: dict[str, ControlApprovalRequest] = {}
         self._active_sessions: set[str] = set()
@@ -76,7 +75,6 @@ class AssistantControlPlane:
         if (
             session_id in self._active_sessions
             or session_id in self._pending
-            or session_id in self._staged
         ):
             return []
         names = self.names() if allowed_names is None else allowed_names
@@ -93,6 +91,13 @@ class AssistantControlPlane:
         return frozenset(self._operations)
 
     def begin_decision(self, session_id: str) -> None:
+        """丢弃上一轮未提交的暂存。
+
+        Step 未提交时重试会复用同一个 frame，旧暂存的 key 因此与新 Step 的 key
+        完全相同，`after_committed_step()` 无法靠 key 区分新旧。清理只能发生在
+        本轮 stage 之前。
+        """
+
         self._staged.pop(session_id, None)
 
     def stage(
@@ -169,10 +174,9 @@ class AssistantControlPlane:
         request = self._pending.get(session_id)
         if request is None:
             raise ValueError("当前 Session 没有待确认的控制操作")
-        if not approved:
-            del self._pending[session_id]
-            return f"已取消控制操作：{request.action}"
         del self._pending[session_id]
+        if not approved:
+            return f"已取消控制操作：{request.action}"
         operation = self._approval_operations[request.action]
         execution = await operation.approval_handler.execute(
             request.payload,
