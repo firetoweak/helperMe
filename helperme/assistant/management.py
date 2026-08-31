@@ -6,7 +6,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from helperme.assistant.artifacts import ArtifactGateway
-from helperme.assistant.context.projection import ModelContextSettings, externalize_payload
+from helperme.assistant.context.projection import (
+    ModelContextSettings,
+    externalize_tool_result,
+)
 from helperme.runtime import (
     CommandOutcomeReceived,
     Event,
@@ -157,13 +160,12 @@ class ManagementToolAdapter:
             result = await spec.handler(input_data)
             if type(result) is not dict:
                 raise TypeError("管理诊断工具返回值不符合契约")
-            payload, _artifact_id = externalize_payload(
+            return externalize_tool_result(
                 result,
-                self._gateway.for_session(context.session_id),
-                max_chars=self._settings.size_externalize_chars,
-                preview_chars=self._settings.preview_chars,
+                context.session_id,
+                self._gateway,
+                self._settings,
             )
-            return payload
 
         return handler
 

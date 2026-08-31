@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from helperme.assistant.artifacts import ArtifactGateway
 from helperme.assistant.context.projection import (
     ModelContextSettings,
-    externalize_payload,
+    externalize_tool_result,
 )
 from helperme.runtime import ToolBinding
 from helperme.runtime.dispatcher import AttemptContext
@@ -44,8 +44,6 @@ class SkillToolAdapter:
         ) -> object:
             catalog_specs = self._catalog.tool_specs()
             specs = {spec.name: spec for spec in catalog_specs}
-            if len(specs) != len(catalog_specs):
-                raise ValueError("Skill tool catalog 包含重复 name")
             spec = specs.get(name)
             if spec is None:
                 return {
@@ -64,12 +62,11 @@ class SkillToolAdapter:
                     "error": "skill arguments validation failed",
                 }
             result = runtime_tool_result(await spec.handler(payload))
-            body, _artifact_id = externalize_payload(
+            return externalize_tool_result(
                 result,
-                self._gateway.for_session(context.session_id),
-                max_chars=self._settings.size_externalize_chars,
-                preview_chars=self._settings.preview_chars,
+                context.session_id,
+                self._gateway,
+                self._settings,
             )
-            return body
 
         return handler

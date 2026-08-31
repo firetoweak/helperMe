@@ -14,7 +14,7 @@ from helperme.assistant.delivery import DELIVER_TOOL_NAME, ensure_deliver
 from helperme.assistant.context.projection import (
     ModelContextProjector,
     ModelContextSettings,
-    externalize_payload,
+    externalize_tool_result,
 )
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.assistant.toolsets import ToolSurface
@@ -137,13 +137,12 @@ def _executor_handler(
         arguments: Mapping[str, object],
     ) -> object:
         result = await runner.execute(name, arguments)
-        payload, _artifact_id = externalize_payload(
+        return externalize_tool_result(
             result,
-            gateway.for_session(context.session_id),
-            max_chars=settings.size_externalize_chars,
-            preview_chars=settings.preview_chars,
+            context.session_id,
+            gateway,
+            settings,
         )
-        return payload
 
     return handler
 

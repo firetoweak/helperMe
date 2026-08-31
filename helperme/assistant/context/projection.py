@@ -383,6 +383,21 @@ def externalize_payload(
     )
 
 
+def externalize_tool_result(
+    payload: object,
+    session_id: str,
+    gateway: ArtifactGateway,
+    settings: ModelContextSettings,
+) -> object:
+    externalized, _artifact_id = externalize_payload(
+        payload,
+        gateway.for_session(session_id),
+        max_chars=settings.size_externalize_chars,
+        preview_chars=settings.preview_chars,
+    )
+    return externalized
+
+
 class ModelContextProjector:
     """产品层 Model Context：保护窗 + 体积外置 + Level 1 脱水 + 预算。
 

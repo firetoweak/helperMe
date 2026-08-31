@@ -9,7 +9,7 @@ from typing import Protocol
 from helperme.assistant.artifacts import ArtifactGateway
 from helperme.assistant.context.projection import (
     ModelContextSettings,
-    externalize_payload,
+    externalize_tool_result,
 )
 from helperme.runtime import (
     AgentRuntime,
@@ -531,12 +531,11 @@ def _loaded_handler(
         result = await tool.execute(arguments)
         if gateway is None:
             return result
-        payload, _artifact_id = externalize_payload(
+        return externalize_tool_result(
             result,
-            gateway.for_session(context.session_id),
-            max_chars=settings.size_externalize_chars,
-            preview_chars=settings.preview_chars,
+            context.session_id,
+            gateway,
+            settings,
         )
-        return payload
 
     return handler
