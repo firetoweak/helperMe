@@ -275,7 +275,3 @@ class SkillConsoleAdapterTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("demo [disabled]", listing)
             self.assertIn("校验通过", test)
             self.assertIn("下一个 Step", enable)
-
-
-if __name__ == "__main__":
-    unittest.main()

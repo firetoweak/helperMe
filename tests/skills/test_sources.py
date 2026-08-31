@@ -208,7 +208,3 @@ class SkillInstallProposalBoundaryTest(unittest.IsolatedAsyncioTestCase):
                 source_kind="url",
                 locator="https://example.test/SKILL.md",
             ))
-
-
-if __name__ == "__main__":
-    unittest.main()

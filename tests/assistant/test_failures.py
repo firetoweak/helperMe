@@ -33,7 +33,3 @@ class ModelFailureMessageTest(unittest.TestCase):
 
     def test_unknown_internal_error_is_not_presented_as_model_failure(self):
         self.assertIsNone(assistant_failure_message(AssertionError("bug")))
-
-
-if __name__ == "__main__":
-    unittest.main()

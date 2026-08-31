@@ -236,9 +236,6 @@ class ToolSurface:
     def attach(self, runtime: AgentRuntime) -> None:
         self._runtime = runtime
 
-    def reset(self, session_id: str) -> None:
-        self._loaded.pop(session_id, None)
-
     def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
         items: list[ToolsetDescriptor] = []
         seen: set[str] = set()

@@ -157,7 +157,3 @@ def _session_view(**overrides) -> SessionView:
     }
     values.update(overrides)
     return SessionView(**values)
-
-
-if __name__ == "__main__":
-    unittest.main()

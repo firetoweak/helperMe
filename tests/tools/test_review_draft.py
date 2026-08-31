@@ -208,7 +208,3 @@ class ReviewDraftTest(unittest.TestCase):
         self.assertIn("冻结输入", prompt)
         self.assertIn("只读不改是软约束", prompt)
         self.assertIn("design: narrow review", prompt)
-
-
-if __name__ == "__main__":
-    unittest.main()

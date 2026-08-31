@@ -336,7 +336,3 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "proposal action 不匹配"):
             await control.after_committed_step(SESSION_ID, _step())
         self.assertEqual(len(control.schemas(SESSION_ID)), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()

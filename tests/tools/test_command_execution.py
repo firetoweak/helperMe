@@ -196,7 +196,7 @@ class PowerShellDiscoveryTest(unittest.TestCase):
 
         self.assertEqual(runner.executable, "C:/PowerShell/7/pwsh.exe")
 
-    def test_falls_back_to_windows_powershell(self):
+    def test_uses_windows_powershell_when_version_7_is_unavailable(self):
         with patch(
             "helperme.sandbox.local.powershell.shutil.which",
             side_effect=lambda name: {
@@ -313,6 +313,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_terminates_child_process_tree(self):
         runner = PowerShellCommandRunner()
+        executable = str(runner.executable).replace("'", "''")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             marker = root / "child-finished.txt"
@@ -324,7 +325,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
             )
 
             result = await runner.run(
-                f"& powershell.exe -NoProfile -File '{script}'",
+                f"& '{executable}' -NoProfile -File '{script}'",
                 root,
                 0.2,
             )
@@ -335,6 +336,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_task_cancellation_terminates_child_process_tree(self):
         runner = PowerShellCommandRunner()
+        executable = str(runner.executable).replace("'", "''")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             marker = root / "child-finished.txt"
@@ -346,7 +348,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
             )
             task = asyncio.create_task(
                 runner.run(
-                    f"& powershell.exe -NoProfile -File '{script}'",
+                    f"& '{executable}' -NoProfile -File '{script}'",
                     root,
                     10,
                 )
@@ -362,6 +364,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_normal_completion_terminates_background_process_tree(self):
         runner = PowerShellCommandRunner()
+        executable = str(runner.executable).replace("'", "''")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             marker = root / "child-finished.txt"
@@ -373,7 +376,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
             )
 
             result = await runner.run(
-                "Start-Process powershell.exe "
+                f"Start-Process -FilePath '{executable}' "
                 f"-ArgumentList '-NoProfile','-File','{script}' "
                 "-WindowStyle Hidden",
                 root,
@@ -411,7 +414,7 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
             )),
             cwd=self.workspace_root,
             shell_name="powershell",
-            shell_path="powershell.exe",
+            shell_path=POWERSHELL,
             execution_attachment=ExecutionAttachment("local-test", runner),
         )
         registry = ToolRegistry()
@@ -565,7 +568,3 @@ class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
                 "command": "ok",
                 "workspace_effect": "unknown",
             })
-
-
-if __name__ == "__main__":
-    unittest.main()

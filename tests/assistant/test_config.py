@@ -140,11 +140,11 @@ class AppConfigTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
 
-    def test_rejects_obsolete_or_unknown_fields(self):
+    def test_rejects_unknown_fields(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
             data = self._data()
-            data["runtime"]["max_goal_turns"] = 8
+            data["runtime"]["unexpected"] = 8
             self._write_config(path, data)
 
             with self.assertRaises(ValueError):
@@ -158,16 +158,6 @@ class AppConfigTest(unittest.TestCase):
             self._write_config(path, data)
 
             with self.assertRaisesRegex(ValueError, "enable_thinking"):
-                load_app_config(path)
-
-    def test_rejects_removed_max_steps_field(self):
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "config.json"
-            data = self._data()
-            data["runtime"]["max_steps"] = 10
-            self._write_config(path, data)
-
-            with self.assertRaises(ValueError):
                 load_app_config(path)
 
     def test_rejects_budget_ratio_at_closed_upper_bound(self):
@@ -197,7 +187,3 @@ class AppConfigTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "必须是映射"):
                 load_app_config(path)
-
-
-if __name__ == "__main__":
-    unittest.main()

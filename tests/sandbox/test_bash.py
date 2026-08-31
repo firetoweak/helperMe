@@ -202,7 +202,3 @@ class BashCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(FileNotFoundError, "未找到 Shell"):
             await runner.run("printf ok", Path.cwd(), 10)
-
-
-if __name__ == "__main__":
-    unittest.main()

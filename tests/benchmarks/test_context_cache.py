@@ -61,7 +61,3 @@ class ContextCacheVariantTest(unittest.TestCase):
             variants["batch"][1].messages[0]["content"],
             full,
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

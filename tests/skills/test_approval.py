@@ -193,8 +193,3 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertTrue(spec.control_boundary)
             self.assertTrue(spec.exclusive_batch)
-
-
-if __name__ == "__main__":
-    unittest.main()
-    create_skill_enable_proposal_spec,

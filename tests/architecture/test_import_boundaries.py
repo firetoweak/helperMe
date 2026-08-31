@@ -6,29 +6,15 @@ import unittest
 
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "runtime"
-REMOVED_HOST_ROOT = Path(__file__).resolve().parents[2] / "host"
 ASSISTANT_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "assistant"
 LLM_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "llm"
 MCP_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "mcp"
-PLUGINS_ROOT = Path(__file__).resolve().parents[2] / "plugins"
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "skills"
 TOOLS_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "tools"
 SANDBOX_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "sandbox"
 CHANNELS_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "channels"
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "helperme" / "config.py"
 BOOTSTRAP_PATH = Path(__file__).resolve().parents[2] / "helperme" / "bootstrap.py"
-
-
-def _imported_roots(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    roots: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                roots.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            roots.add(node.module.split(".")[0])
-    return roots
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -51,14 +37,12 @@ def _imports_any(modules: set[str], prefixes: set[str]) -> set[str]:
 
 
 class LayerImportBoundaryTest(unittest.TestCase):
-    def test_skills_do_not_import_runtime_assistant_or_removed_plugin_layer(self):
+    def test_skills_do_not_import_runtime_or_assistant(self):
         offenders: list[str] = []
         for path in sorted(SKILLS_ROOT.rglob("*.py")):
             modules = _imported_modules(path)
             leaked = sorted(
-                (_imported_roots(path)
-                & {"adapters", "agent_runtime", "core", "host", "plugins"})
-                | _imports_any(
+                _imports_any(
                     modules,
                     {"helperme.assistant", "helperme.runtime"},
                 )
@@ -69,17 +53,12 @@ class LayerImportBoundaryTest(unittest.TestCase):
                 )
         self.assertEqual(offenders, [])
 
-    def test_removed_plugin_source_tree_is_not_reintroduced(self):
-        self.assertFalse(PLUGINS_ROOT.exists())
-
-    def test_mcp_does_not_import_runtime_assistant_or_removed_plugin_layer(self):
+    def test_mcp_does_not_import_runtime_or_assistant(self):
         offenders: list[str] = []
         for path in sorted(MCP_ROOT.rglob("*.py")):
             modules = _imported_modules(path)
             leaked = sorted(
-                (_imported_roots(path)
-                & {"adapters", "agent_runtime", "core", "host", "plugins"})
-                | _imports_any(
+                _imports_any(
                     modules,
                     {"helperme.assistant", "helperme.runtime"},
                 )
@@ -99,9 +78,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
         for path in sorted(LLM_ROOT.rglob("*.py")):
             modules = _imported_modules(path)
             leaked = sorted(
-                (_imported_roots(path)
-                & {"adapters", "agent_runtime", "core", "host", "plugins", "tools"})
-                | _imports_any(
+                _imports_any(
                     modules,
                     {
                         "helperme.assistant",
@@ -116,19 +93,6 @@ class LayerImportBoundaryTest(unittest.TestCase):
             if leaked:
                 offenders.append(
                     f"{path.relative_to(LLM_ROOT)}: {', '.join(leaked)}"
-                )
-        self.assertEqual(offenders, [])
-
-    def test_removed_host_source_tree_is_not_reintroduced(self):
-        self.assertEqual(sorted(REMOVED_HOST_ROOT.rglob("*.py")), [])
-
-    def test_assistant_does_not_import_removed_layers(self):
-        offenders: list[str] = []
-        for path in sorted(ASSISTANT_ROOT.rglob("*.py")):
-            leaked = sorted(_imported_roots(path) & {"adapters", "core"})
-            if leaked:
-                offenders.append(
-                    f"{path.relative_to(ASSISTANT_ROOT)}: {', '.join(leaked)}"
                 )
         self.assertEqual(offenders, [])
 
@@ -167,11 +131,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
         }
         for path in sorted(CHANNELS_ROOT.rglob("*.py")):
             modules = _imported_modules(path)
-            leaked = sorted(
-                (_imported_roots(path)
-                & {"adapters", "agent_runtime", "core", "host", "plugins", "tools"})
-                | _imports_any(modules, forbidden)
-            )
+            leaked = sorted(_imports_any(modules, forbidden))
             if leaked:
                 offenders.append(
                     f"{path.relative_to(CHANNELS_ROOT)}: {', '.join(leaked)}"
@@ -221,11 +181,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
         }
         for path in sorted(TOOLS_ROOT.rglob("*.py")):
             modules = _imported_modules(path)
-            leaked = sorted(
-                (_imported_roots(path)
-                & {"adapters", "agent_runtime", "core", "host", "plugins", "tools"})
-                | _imports_any(modules, forbidden)
-            )
+            leaked = sorted(_imports_any(modules, forbidden))
             if leaked:
                 offenders.append(
                     f"{path.relative_to(TOOLS_ROOT)}: {', '.join(leaked)}"
@@ -252,8 +208,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
         for path in sorted(RUNTIME_ROOT.rglob("*.py")):
             modules = _imported_modules(path)
             leaked = sorted(
-                (_imported_roots(path) & {"core", "tools", "plugins", "host", "adapters"})
-                | {
+                {
                     module
                     for module in modules
                     if module == "helperme"
@@ -285,11 +240,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
         }
         for path in SANDBOX_ROOT.rglob("*.py"):
             modules = _imported_modules(path)
-            leaked = sorted(
-                (_imported_roots(path)
-                & {"core", "agent_runtime", "adapters", "host", "plugins", "tools"})
-                | _imports_any(modules, forbidden)
-            )
+            leaked = sorted(_imports_any(modules, forbidden))
             if leaked:
                 offenders.append(
                     f"{path.relative_to(SANDBOX_ROOT)}: {', '.join(leaked)}"

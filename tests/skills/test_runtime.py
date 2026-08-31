@@ -79,7 +79,3 @@ class SkillRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(stale["code"], "SKILL_CATALOG_STALE")
         self.assertEqual(self.runtime.tool_specs(), [])
-
-
-if __name__ == "__main__":
-    unittest.main()

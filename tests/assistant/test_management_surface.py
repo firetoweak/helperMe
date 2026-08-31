@@ -241,7 +241,3 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 _names(restored.schemas("management-session")),
                 {LOAD_MANAGEMENT_TOOLS},
             )
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -55,6 +55,7 @@ _EXPECTED_SDK_ERRORS = (
     anyio.BrokenResourceError,
     anyio.ClosedResourceError,
 )
+MCP_PROTOCOL_VERSION = "2026-07-28"
 
 
 def _is_expected_sdk_error(exc: BaseException) -> bool:
@@ -481,7 +482,7 @@ class _SdkConnectionOwner:
         client = await stack.enter_async_context(
             Client(
                 transport,
-                mode="auto",
+                mode=MCP_PROTOCOL_VERSION,
                 read_timeout_seconds=read_timeout,
             )
         )

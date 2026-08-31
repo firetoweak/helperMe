@@ -19,7 +19,7 @@ SOURCE = SkillSourceRef(
 
 
 async def run() -> dict:
-    temporary = Path(tempfile.mkdtemp(prefix="helperme-phase6d-remote-"))
+    temporary = Path(tempfile.mkdtemp(prefix="helperme-remote-skill-"))
     try:
         workspace = HelperMeHome(temporary / ".helperme")
         workspace.initialize()

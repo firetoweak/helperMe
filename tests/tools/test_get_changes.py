@@ -37,7 +37,7 @@ class GetChangesToolTest(unittest.IsolatedAsyncioTestCase):
             )),
             cwd=self.root,
             shell_name="powershell",
-            shell_path="powershell.exe",
+            shell_path="pwsh.exe",
             execution_attachment=ExecutionAttachment(
                 "local-test",
                 object(),  # get_changes 只读取本地 Git，不执行用户命令。
@@ -158,7 +158,3 @@ class GetChangesToolTest(unittest.IsolatedAsyncioTestCase):
                 "UNTRACKED_CONTENT_NOT_INCLUDED",
             ],
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

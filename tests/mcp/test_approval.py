@@ -402,7 +402,3 @@ class McpRecoveryConsoleTest(unittest.IsolatedAsyncioTestCase):
         service.test_and_enable.assert_awaited_once_with("demo")
         self.assertIn("测试并启用成功", reply)
         self.assertIn("/mcp reload", reply)
-
-
-if __name__ == "__main__":
-    unittest.main()

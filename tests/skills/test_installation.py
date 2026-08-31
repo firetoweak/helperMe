@@ -19,7 +19,7 @@ class FailingRegistry:
 
 
 class SkillRegistryTest(unittest.IsolatedAsyncioTestCase):
-    async def test_rejects_legacy_envelope_and_incomplete_record(self):
+    async def test_requires_current_version_and_complete_record(self):
         with tempfile.TemporaryDirectory() as directory:
             registry = SkillRegistry(Path(directory) / "skills")
             record = SkillRecord(
@@ -31,7 +31,10 @@ class SkillRegistryTest(unittest.IsolatedAsyncioTestCase):
             ).to_dict()
             registry.root.mkdir(parents=True)
 
-            registry.path.write_text(json.dumps([record]), encoding="utf-8")
+            registry.path.write_text(
+                json.dumps({"version": 0, "skills": [record]}),
+                encoding="utf-8",
+            )
             with self.assertRaises(ValueError):
                 await registry.list_skills()
 
@@ -152,7 +155,3 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
                 await installer.install(source)
 
             self.assertEqual(installed.read_bytes(), original)
-
-
-if __name__ == "__main__":
-    unittest.main()

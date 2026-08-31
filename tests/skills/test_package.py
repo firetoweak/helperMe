@@ -124,7 +124,3 @@ class LocalSkillPackageReaderTest(unittest.TestCase):
             with self.subTest(path=path):
                 with self.assertRaises(SkillPackageError):
                     validate_relative_skill_path(path)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -233,24 +233,6 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[1], {LOAD_TOOLSET, "demo_ping"})
         self.assertEqual(echoes[0]["data"]["echo"], "hi")
 
-    async def test_reset_session_hides_loaded_tools_again(self):
-        surface = ToolSurface(providers=(FakeEchoProvider(),))
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            ScriptedDecisionMaker(()),
-            load_toolset_binding(surface),
-            SequentialIds(),
-        )
-        surface.attach(runtime)
-        loaded = await surface.load(self.SESSION_ID, "demo")
-        self.assertTrue(loaded["ok"])
-        self.assertIn("demo_ping", _schema_names(surface.schemas(self.SESSION_ID)))
-        surface.reset(self.SESSION_ID)
-        self.assertEqual(
-            _schema_names(surface.schemas(self.SESSION_ID)),
-            {LOAD_TOOLSET},
-        )
-
     async def test_loaded_toolset_cache_can_be_rehydrated_from_journal(self):
         events = await self._committed_load_events()
         surface = ToolSurface(providers=(FakeEchoProvider(),))

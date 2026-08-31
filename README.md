@@ -39,7 +39,7 @@ MCP Toolsets and Skills are progressively loaded. The model begins with small ca
 
 ## Quick Start
 
-helperMe currently targets **Python 3.10+** and is developed and tested primarily on **Windows with PowerShell**.
+helperMe currently targets **Python 3.11+** and is developed and tested primarily on **Windows**. It prefers PowerShell 7 and uses Windows PowerShell 5 when version 7 is unavailable.
 
 ```powershell
 python -m venv .venv
@@ -140,13 +140,18 @@ helperMe does not maintain its own web search implementation or browser driver. 
 
 ## Tests
 
-Run the architecture boundary tests with:
+Run the test suite with:
 
 ```powershell
-python -m unittest tests.architecture.test_import_boundaries tests.architecture.test_runtime_boundaries
+python -m pytest
 ```
 
-The repository also contains unit, integration, benchmark, and live tests grouped by subsystem. Tests under `tests/live` call the model endpoint configured in `~/.helperme/config.json` and may incur provider charges; run them deliberately rather than through broad test discovery.
+Tests under `tests/live` call the configured model endpoint and may incur provider charges. They are skipped unless explicitly enabled:
+
+```powershell
+$env:HELPERME_RUN_LIVE_TESTS = "1"
+python -m pytest tests/live
+```
 
 ## Further Reading
 

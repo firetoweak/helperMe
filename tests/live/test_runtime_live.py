@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import unittest
 
 from helperme.runtime import MemoryJournal, RuntimeStatus
@@ -19,6 +20,10 @@ async def build_live_assistant(config, sink, journal):
     )
 
 
+@unittest.skipUnless(
+    os.environ.get("HELPERME_RUN_LIVE_TESTS") == "1",
+    "设置 HELPERME_RUN_LIVE_TESTS=1 后显式运行 live 测试",
+)
 class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_step_calls_real_model_and_delivers(self):
         app_config = load_app_config()

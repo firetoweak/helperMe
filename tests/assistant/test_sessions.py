@@ -71,9 +71,10 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
         self,
     ):
         delivered: list[str] = []
+        journal = MemoryJournal()
         surface = ToolSurface(providers=(FakeEchoProvider(),))
         runtime = AgentRuntime(
-            MemoryJournal(),
+            journal,
             ScriptedDecisionMaker(
                 (
                     lambda _frame: ModelDecision(
@@ -104,18 +105,27 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             delivery_id="load-1",
         )
         await settle_session(runtime, self.SESSION_ID)
-        surface.reset(self.SESSION_ID)
-        self.assertEqual(
-            _schema_names(surface.schemas(self.SESSION_ID)),
-            {LOAD_TOOLSET},
-        )
 
-        scheduler = RecordingScheduler(runtime)
-        sessions, _surface = self._sessions(runtime, scheduler, surface)
+        restored_surface = ToolSurface(providers=(FakeEchoProvider(),))
+        restored_runtime = AgentRuntime(
+            journal,
+            ScriptedDecisionMaker(()),
+            {
+                **load_toolset_binding(restored_surface),
+                **deliver_binding(delivered.append),
+            },
+            SequentialIds(),
+        )
+        scheduler = RecordingScheduler(restored_runtime)
+        sessions, _surface = self._sessions(
+            restored_runtime,
+            scheduler,
+            restored_surface,
+        )
         try:
             view = await sessions.resume(self.SESSION_ID)
             self.assertEqual(
-                _schema_names(surface.schemas(self.SESSION_ID)),
+                _schema_names(restored_surface.schemas(self.SESSION_ID)),
                 {LOAD_TOOLSET, "demo_ping"},
             )
             self.assertFalse(view.should_wake)

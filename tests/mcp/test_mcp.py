@@ -191,7 +191,7 @@ class McpSdkBoundaryTest(unittest.IsolatedAsyncioTestCase):
 
 
 class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
-    async def test_registry_rejects_legacy_envelope_and_missing_fields(self):
+    async def test_registry_requires_current_version_and_complete_records(self):
         with TemporaryDirectory() as directory:
             workspace = HelperMeHome(Path(directory) / ".helperme")
             workspace.initialize()
@@ -199,7 +199,7 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             record = _stdio_record("demo").to_dict()
 
             registry.path.write_text(
-                json.dumps([record]),
+                json.dumps({"version": 0, "servers": [record]}),
                 encoding="utf-8",
             )
             with self.assertRaises(ValueError):
@@ -213,7 +213,7 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await registry.list_servers()
 
-    async def test_secret_store_rejects_legacy_and_non_string_values(self):
+    async def test_secret_store_requires_current_version_and_string_values(self):
         with TemporaryDirectory() as directory:
             workspace = HelperMeHome(Path(directory) / ".helperme")
             workspace.initialize()
@@ -222,7 +222,10 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             secret_root.mkdir(parents=True)
             path = secret_root / "demo.json"
 
-            path.write_text('{"values":{"TOKEN":"value"}}', encoding="utf-8")
+            path.write_text(
+                '{"version":0,"values":{"TOKEN":"value"}}',
+                encoding="utf-8",
+            )
             with self.assertRaises(ValueError):
                 secrets.snapshot_namespace("demo")
 
@@ -960,7 +963,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
 
 
 class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
-    async def test_v2_stdio_reuses_state_across_toolset_loads(self):
+    async def test_stdio_reuses_state_across_toolset_loads(self):
         with TemporaryDirectory() as directory:
             workspace = HelperMeHome(Path(directory) / ".helperme")
             workspace.initialize()
@@ -1151,10 +1154,10 @@ class McpRealStreamableHttpIntegrationTest(
         self.assertEqual(ttl, 3.0)
 
 
-class McpRealStdioCompatibilityIntegrationTest(
+class McpRealStdioWorkingDirectoryIntegrationTest(
     unittest.IsolatedAsyncioTestCase
 ):
-    async def test_v2_stdio_preserves_explicit_working_directory(self):
+    async def test_stdio_preserves_explicit_working_directory(self):
         with TemporaryDirectory() as directory:
             workspace = HelperMeHome(Path(directory) / ".helperme")
             workspace.initialize()
@@ -1201,45 +1204,3 @@ class McpRealStdioCompatibilityIntegrationTest(
                 )
             finally:
                 await manager.aclose()
-
-    async def test_v2_client_falls_back_to_legacy_initialize(self):
-        with TemporaryDirectory() as directory:
-            workspace = HelperMeHome(Path(directory) / ".helperme")
-            workspace.initialize()
-            registry = McpRegistry.from_home(workspace)
-            secrets = McpSecretStore.from_home(workspace)
-            manager = McpClientManager(
-                secrets,
-                runtime_root=_runtime_root(workspace),
-            )
-            service = McpApplicationService(registry, secrets, manager)
-            fixture = (
-                Path(__file__).parents[1]
-                / "fixtures"
-                / "mcp_legacy_stdio_server.py"
-            )
-            await service.upsert_server(
-                server_id="legacy_stdio",
-                display_name="Legacy stdio",
-                transport="stdio",
-                transport_config={
-                    "command": sys.executable,
-                    "args": [str(fixture)],
-                },
-                enabled=True,
-            )
-            try:
-                specs = await service.toolset_provider.tool_specs(
-                    "mcp:legacy_stdio"
-                )
-                self.assertEqual(specs, ())
-                self.assertEqual(
-                    manager.runtime_state("legacy_stdio").negotiated_version,
-                    "2025-11-25",
-                )
-            finally:
-                await manager.aclose()
-
-
-if __name__ == "__main__":
-    unittest.main()

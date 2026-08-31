@@ -10,6 +10,7 @@
 - 接入成熟外部协议或生态前，先查官方文档和主流维护库，明确现成能力、协议陷阱与采用/不采用理由；默认只写本项目特有的窄适配，不自行重造传输、重试、解析、路由等基础设施。
 - 接入 Channel 时必须分别定义 Access、Conversation、Delivery、Reply route 四种 identity。凭证不作 identity；进程重启不新建对话，更换服务账号不复用旧 Session；所有输入按 delivery 顺序成为 UserMessage Event 并唤醒 Session。见 [Channel 接入契约](架构/Channel接入契约.md)。
 - 保持简单、高内聚、低耦合；只为已经出现的真实需求增加抽象。
+- 新设计生效时直接采用当前契约并删除被替代的旧路径。不得为旧设计保留向后兼容层、双轨实现、fallback、兜底或缓解性分支；需要迁移的现有代码、测试、配置和持久数据必须在同一变更中完成迁移或明确删除。当前明确支持的平台、协议和外部环境可以有确定的适配路径，不视为旧设计兼容。
 - Runtime 内核是 `helperme/runtime`：Event 持久、State 归约、Step 决策、Command 副作用。LLM 在 `helperme/llm`，执行环境边界在 `helperme/sandbox/`，工具契约在 `helperme/tools/`；它们都不进 Runtime。
 - 内部相信契约：内部契约违规与未预期异常必须原样暴露；只在 CLI、LLM、MCP、文件系统等外部输入边界捕获已知、预期且能够处理的错误。禁止用宽泛异常捕获把 bug 降级成业务失败、能力不可用或继续运行。
 - 源码、Agent 状态、用户任务数据分离，并由各自的生命周期管理。

@@ -33,7 +33,7 @@ class EnvironmentPathContractTest(unittest.TestCase):
             )),
             cwd=cwd or root,
             shell_name="powershell",
-            shell_path="powershell.exe",
+            shell_path="pwsh.exe",
             execution_attachment=ExecutionAttachment("local-test", object()),
         )
 
@@ -157,7 +157,3 @@ class EnvironmentPathContractTest(unittest.TestCase):
             restored = EnvironmentSelection.from_dict(selection.to_dict())
 
             self.assertEqual(restored, selection)
-
-
-if __name__ == "__main__":
-    unittest.main()

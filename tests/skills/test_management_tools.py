@@ -36,7 +36,3 @@ class SkillManagementToolsTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(inspected["code"], "SKILL_INSPECTED")
             self.assertEqual(tested["code"], "SKILL_TEST_PASSED")
             self.assertFalse(tested["data"]["enabled"])
-
-
-if __name__ == "__main__":
-    unittest.main()

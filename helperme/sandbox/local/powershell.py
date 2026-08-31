@@ -82,9 +82,8 @@ class PowerShellCommandRunner:
             raise ValueError("PowerShell executable 不能为空")
         if executable is None:
             for candidate in ("pwsh.exe", "powershell.exe"):
-                resolved = shutil.which(candidate)
-                if resolved is not None:
-                    executable = resolved
+                executable = shutil.which(candidate)
+                if executable is not None:
                     break
             else:
                 raise ShellNotFoundError(

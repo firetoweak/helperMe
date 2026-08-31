@@ -282,9 +282,6 @@ class ManagementSurface:
             self._loaded.pop(session_id, None)
         return activations
 
-    def reset(self, session_id: str) -> None:
-        self._loaded.pop(session_id, None)
-
     async def _load_handler(
         self,
         context: AttemptContext,

@@ -142,6 +142,3 @@ class LLMClientRequestTest(unittest.IsolatedAsyncioTestCase):
             tool_choice=None,
             extra_body={"enable_thinking": True},
         )
-
-if __name__ == "__main__":
-    unittest.main()
