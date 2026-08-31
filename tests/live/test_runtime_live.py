@@ -10,6 +10,15 @@ from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.client import LLMClient
 
 
+async def build_live_assistant(config, sink, journal):
+    return await build_assistant_assembly(
+        config,
+        sink,
+        journal,
+        scheduler_factory=SettlingScheduler,
+    )
+
+
 class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_step_calls_real_model_and_delivers(self):
         app_config = load_app_config()
@@ -19,12 +28,7 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
         )
         delivered: list[str] = []
         journal = MemoryJournal()
-        assembly = await build_assistant_assembly(
-            config,
-            delivered.append,
-            journal,
-            scheduler_factory=SettlingScheduler,
-        )
+        assembly = await build_live_assistant(config, delivered.append, journal)
         session_id = "live-session"
         try:
             async with config.llm, assembly.mcp.client_manager:
