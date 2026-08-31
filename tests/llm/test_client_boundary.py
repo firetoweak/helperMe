@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock
 
 from helperme.llm.client import LLMClient
 from helperme.llm.types import InvalidLLMResponse
@@ -75,6 +76,28 @@ class LLMClientUsageBoundaryTest(unittest.IsolatedAsyncioTestCase):
         result = await self.client.chat([], "model")
 
         self.assertEqual(result.usage.cached_input_tokens, 0)
+
+
+class LLMClientRequestTest(unittest.IsolatedAsyncioTestCase):
+    async def test_passes_thinking_switch_to_provider(self):
+        client = object.__new__(LLMClient)
+        client._enable_thinking = True
+        create = AsyncMock(return_value=object())
+        client.client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create),
+            )
+        )
+
+        await client.completions_create("model", [], None)
+
+        create.assert_awaited_once_with(
+            model="model",
+            messages=[],
+            tools=None,
+            tool_choice=None,
+            extra_body={"enable_thinking": True},
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ class AppConfigTest(unittest.TestCase):
                 "name": "model",
                 "base_url": "https://example.test/v1",
                 "api_key": "key",
+                "enable_thinking": True,
             },
             "workspace": {"root": ".", "full_access": False},
             "runtime": {
@@ -67,6 +68,7 @@ class AppConfigTest(unittest.TestCase):
                 config = load_app_config()
 
         self.assertEqual(config.model.name, "model")
+        self.assertTrue(config.model.enable_thinking)
         self.assertTrue(0 < config.runtime.input_budget_ratio < 1)
         self.assertIsInstance(config.workspace.root, Path)
         self.assertIsNone(config.channels.telegram)
@@ -146,6 +148,16 @@ class AppConfigTest(unittest.TestCase):
             self._write_config(path, data)
 
             with self.assertRaises(ValueError):
+                load_app_config(path)
+
+    def test_rejects_non_boolean_enable_thinking(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            data = self._data()
+            data["model"]["enable_thinking"] = 1
+            self._write_config(path, data)
+
+            with self.assertRaisesRegex(ValueError, "enable_thinking"):
                 load_app_config(path)
 
     def test_rejects_removed_max_steps_field(self):

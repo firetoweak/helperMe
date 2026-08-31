@@ -18,6 +18,7 @@ INITIAL_CONFIG = {
         "name": "your-model-name",
         "base_url": "https://your-model-endpoint.example/v1",
         "api_key": "your-api-key",
+        "enable_thinking": True,
     },
     "workspace": {
         "root": "D:/work/agent",
@@ -117,14 +118,20 @@ def _parse_model_config(data: dict) -> ModelConfig:
     model = data["model"]
     if not isinstance(model, dict):
         raise ValueError("模型配置必须包含 model 映射")
-    if set(model) != {"name", "base_url", "api_key"}:
-        raise ValueError("模型配置字段必须是 name/base_url/api_key")
+    if set(model) != {"name", "base_url", "api_key", "enable_thinking"}:
+        raise ValueError(
+            "模型配置字段必须是 name/base_url/api_key/enable_thinking"
+        )
     values = {}
     for field in ("name", "base_url", "api_key"):
         value = model[field]
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"模型配置 model.{field} 不能为空")
         values[field] = value.strip()
+    enable_thinking = model["enable_thinking"]
+    if type(enable_thinking) is not bool:
+        raise ValueError("模型配置 model.enable_thinking 必须是布尔值")
+    values["enable_thinking"] = enable_thinking
     return ModelConfig(**values)
 
 

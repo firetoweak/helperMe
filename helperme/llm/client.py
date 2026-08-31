@@ -48,6 +48,7 @@ def is_context_limit_error(error: str) -> bool:
 
 class LLMClient:
     def __init__(self, config: ModelConfig):
+        self._enable_thinking = config.enable_thinking
         http_client = httpx.AsyncClient(
             trust_env=False,
             timeout=httpx.Timeout(
@@ -138,6 +139,7 @@ class LLMClient:
             messages=messages,
             tools=tools,
             tool_choice="auto" if tools else None,
+            extra_body={"enable_thinking": self._enable_thinking},
         )
 
     def _parse_response(self, response: Any) -> LLMResponse:

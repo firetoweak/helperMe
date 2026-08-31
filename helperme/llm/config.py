@@ -10,6 +10,7 @@ class ModelConfig:
     name: str
     base_url: str
     api_key: str
+    enable_thinking: bool
 
     def __post_init__(self) -> None:
         for field, value in (
@@ -19,3 +20,5 @@ class ModelConfig:
         ):
             if type(value) is not str or not value:
                 raise ValueError(f"{field} must be a non-empty str")
+        if type(self.enable_thinking) is not bool:
+            raise ValueError("enable_thinking must be a bool")
