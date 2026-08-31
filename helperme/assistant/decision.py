@@ -252,6 +252,7 @@ class JournalBackedLlmDecisionMaker:
     async def decide(self, frame: DecisionFrame) -> RecordedDecision:
         # Host-owned context is captured before the first await. Journal facts
         # are bounded by the frame position, freezing this Step's visible world.
+        self._control.begin_decision(frame.state.session_id)
         prompt = self._system_prompt
         catalog = self._surface.catalog_instruction(
             frame.state.session_id,

@@ -82,48 +82,21 @@ async def build_assistant_assembly(
             config.model_name,
         ),
     )
-    control = AssistantControlPlane(
-        specs=(
-            mcp.install_proposal_spec,
-            mcp.recovery_proposal_spec,
-            mcp.update_proposal_spec,
-            skills.install_proposal_spec,
-            skills.enable_proposal_spec,
-            skills.update_proposal_spec,
-            skills.repair_proposal_spec,
-        ),
-        handlers=(
-            mcp.install_approval_handler,
-            mcp.recovery_approval_handler,
-            mcp.update_approval_handler,
-            skills.install_approval_handler,
-            skills.enable_approval_handler,
-            skills.update_approval_handler,
-            skills.repair_approval_handler,
-        ),
-    )
+    operations = (*mcp.control_operations, *skills.control_operations)
+    control = AssistantControlPlane(operations)
     management = ManagementSurface(
         (
             ManagementDomain(
                 "mcp",
                 "MCP Server 的发现、诊断、安装、更新与修复",
                 mcp.management_specs,
-                (
-                    mcp.install_proposal_spec.name,
-                    mcp.recovery_proposal_spec.name,
-                    mcp.update_proposal_spec.name,
-                ),
+                mcp.control_operations,
             ),
             ManagementDomain(
                 "skill",
                 "Skill 的发现、检查、安装、启用、更新与修复",
                 skills.management_specs,
-                (
-                    skills.install_proposal_spec.name,
-                    skills.enable_proposal_spec.name,
-                    skills.update_proposal_spec.name,
-                    skills.repair_proposal_spec.name,
-                ),
+                skills.control_operations,
             ),
         ),
         gateway,
@@ -143,6 +116,7 @@ async def build_assistant_assembly(
             LOAD_SKILL,
             READ_SKILL_RESOURCE,
             *management.names(),
+            *(operation.name for operation in operations),
         ),
         gateway=gateway,
         settings=settings,

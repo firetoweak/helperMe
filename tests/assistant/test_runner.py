@@ -65,7 +65,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         )
         scheduler = SessionScheduler(
             runtime,
-            control=AssistantControlPlane((), ()),
+            control=AssistantControlPlane(()),
         )
         await runtime.create_session("session")
         await runtime.receive_user_message(
@@ -254,7 +254,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         runtime.advance = tracked_advance
         scheduler = SessionScheduler(
             runtime,
-            control=AssistantControlPlane((), ()),
+            control=AssistantControlPlane(()),
         )
         await runtime.create_session("session")
         await runtime.receive_user_message(
@@ -315,7 +315,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         runtime.advance = tracked_advance
         scheduler = ActivationCountingScheduler(
             runtime,
-            control=AssistantControlPlane((), ()),
+            control=AssistantControlPlane(()),
         )
         await runtime.create_session("session")
         await runtime.receive_user_message(
@@ -357,7 +357,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         runtime.state = forbidden_state
         scheduler = SessionScheduler(
             runtime,
-            control=AssistantControlPlane((), ()),
+            control=AssistantControlPlane(()),
         )
         try:
             should_continue = await scheduler._advance_once("session")

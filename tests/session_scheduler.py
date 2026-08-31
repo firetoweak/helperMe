@@ -14,7 +14,7 @@ class SettlingScheduler(SessionScheduler):
         super().__init__(
             *args,
             control=(
-                AssistantControlPlane((), ())
+                AssistantControlPlane(())
                 if control is None
                 else control
             ),

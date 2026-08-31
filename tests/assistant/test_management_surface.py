@@ -17,6 +17,7 @@ from helperme.assistant.context.projection import ModelContextSettings
 from tests.session_scheduler import settle_session
 from helperme.runtime import AgentRuntime, InvokeTool, MemoryJournal, ModelDecision
 from helperme.runtime.state import DecisionFrame
+from helperme.tools.control import ControlApprovalExecution, ControlOperation
 from helperme.tools.spec import PydanticParameters, ToolSpec
 
 
@@ -34,6 +35,29 @@ def _spec(name: str) -> ToolSpec:
         f"{name} description",
         PydanticParameters(EmptyInput),
         _diagnose,
+    )
+
+
+class _ApprovalHandler:
+    def __init__(self, action: str) -> None:
+        self.action = action
+
+    async def execute(self, _payload) -> ControlApprovalExecution:
+        return ControlApprovalExecution(True, "done")
+
+
+def _operation(domain: str, name: str) -> ControlOperation:
+    return ControlOperation(
+        domain,
+        ToolSpec(
+            name,
+            f"{name} description",
+            PydanticParameters(EmptyInput),
+            _diagnose,
+            control_boundary=True,
+            exclusive_batch=True,
+        ),
+        _ApprovalHandler(f"{domain}.{name}"),
     )
 
 
@@ -80,13 +104,13 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                     "mcp",
                     "mcp management",
                     (_spec("diagnose_mcp"),),
-                    ("propose_mcp_repair",),
+                    (_operation("mcp", "propose_mcp_repair"),),
                 ),
                 ManagementDomain(
                     "skill",
                     "skill management",
                     (_spec("diagnose_skill"),),
-                    ("propose_skill_repair",),
+                    (_operation("skill", "propose_skill_repair"),),
                 ),
             )
             management = ManagementSurface(
@@ -153,7 +177,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                     "mcp",
                     "mcp management",
                     (_spec("diagnose_mcp"),),
-                    ("propose_mcp_repair",),
+                    (_operation("mcp", "propose_mcp_repair"),),
                 ),
             )
             management = ManagementSurface(

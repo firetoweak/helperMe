@@ -17,6 +17,7 @@ from helperme.mcp.approval import (
     create_mcp_update_proposal_spec,
 )
 from helperme.mcp.management_tools import create_mcp_management_specs
+from helperme.tools.control import ControlOperation
 from helperme.tools.spec import ToolSpec
 
 
@@ -24,13 +25,8 @@ from helperme.tools.spec import ToolSpec
 class McpAssembly:
     service: McpApplicationService
     client_manager: McpClientManager
-    install_proposal_spec: ToolSpec
-    install_approval_handler: McpInstallApprovalHandler
     management_specs: tuple[ToolSpec, ...]
-    recovery_proposal_spec: ToolSpec
-    recovery_approval_handler: McpRecoveryApprovalHandler
-    update_proposal_spec: ToolSpec
-    update_approval_handler: McpUpdateApprovalHandler
+    control_operations: tuple[ControlOperation, ...]
 
     @property
     def toolset_provider(self):
@@ -59,14 +55,26 @@ def build_mcp(
         manager,
         content_service=content,
     )
+    control_operations = (
+        ControlOperation(
+            "mcp",
+            create_mcp_install_proposal_spec(service),
+            McpInstallApprovalHandler(service),
+        ),
+        ControlOperation(
+            "mcp",
+            create_mcp_recovery_proposal_spec(service),
+            McpRecoveryApprovalHandler(service),
+        ),
+        ControlOperation(
+            "mcp",
+            create_mcp_update_proposal_spec(service),
+            McpUpdateApprovalHandler(service),
+        ),
+    )
     return McpAssembly(
         service=service,
         client_manager=manager,
-        install_proposal_spec=create_mcp_install_proposal_spec(service),
-        install_approval_handler=McpInstallApprovalHandler(service),
         management_specs=create_mcp_management_specs(service),
-        recovery_proposal_spec=create_mcp_recovery_proposal_spec(service),
-        recovery_approval_handler=McpRecoveryApprovalHandler(service),
-        update_proposal_spec=create_mcp_update_proposal_spec(service),
-        update_approval_handler=McpUpdateApprovalHandler(service),
+        control_operations=control_operations,
     )

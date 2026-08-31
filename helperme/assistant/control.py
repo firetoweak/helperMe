@@ -4,31 +4,21 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Mapping, Sequence
 
 from helperme.runtime.model import Step
 from helperme.runtime.state import DecisionFrame
 from helperme.tools.control import (
-    ControlApprovalExecution,
     ControlApprovalRequest,
+    ControlOperation,
 )
-from helperme.tools.spec import ToolArgumentsError, ToolSpec
+from helperme.tools.spec import ToolArgumentsError
 
 
 class ControlArgumentsError(ValueError):
     def __init__(self, details: object) -> None:
         super().__init__("control arguments validation failed")
         self.details = details
-
-
-class ControlApprovalHandler(Protocol):
-    action: str
-
-    async def execute(
-        self,
-        payload: Mapping[str, Any],
-    ) -> ControlApprovalExecution:
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +43,8 @@ class _DecisionKey:
 
 @dataclass(frozen=True, slots=True)
 class _StagedCall:
-    spec: ToolSpec
+    key: _DecisionKey
+    operation: ControlOperation
     input_data: object
 
 
@@ -62,20 +53,18 @@ class AssistantControlPlane:
 
     def __init__(
         self,
-        specs: Sequence[ToolSpec],
-        handlers: Sequence[ControlApprovalHandler],
+        operations: Sequence[ControlOperation],
     ) -> None:
-        if any(not spec.control_boundary for spec in specs):
-            raise ValueError("对话控制工具必须声明 control_boundary")
-        if any(not spec.exclusive_batch for spec in specs):
-            raise ValueError("对话控制工具必须声明 exclusive_batch")
-        self._specs = {spec.name: spec for spec in specs}
-        if len(self._specs) != len(specs):
+        self._operations = {operation.name: operation for operation in operations}
+        if len(self._operations) != len(operations):
             raise ValueError("对话控制工具名称重复")
-        self._handlers = {handler.action: handler for handler in handlers}
-        if len(self._handlers) != len(handlers):
+        actions = {operation.action for operation in operations}
+        if len(actions) != len(operations):
             raise ValueError("控制审批 action 重复")
-        self._staged: dict[_DecisionKey, _StagedCall] = {}
+        self._approval_operations = {
+            operation.action: operation for operation in operations
+        }
+        self._staged: dict[str, _StagedCall] = {}
         self._pending: dict[str, ControlApprovalRequest] = {}
         self._active_sessions: set[str] = set()
 
@@ -87,21 +76,24 @@ class AssistantControlPlane:
         if (
             session_id in self._active_sessions
             or session_id in self._pending
-            or any(key.session_id == session_id for key in self._staged)
+            or session_id in self._staged
         ):
             return []
         names = self.names() if allowed_names is None else allowed_names
-        unknown = names.difference(self._specs)
+        unknown = names.difference(self._operations)
         if unknown:
             raise ValueError(f"未知控制工具: {sorted(unknown)}")
         return [
-            spec.to_openai_tool()
-            for name, spec in self._specs.items()
+            operation.proposal_spec.to_openai_tool()
+            for name, operation in self._operations.items()
             if name in names
         ]
 
     def names(self) -> frozenset[str]:
-        return frozenset(self._specs)
+        return frozenset(self._operations)
+
+    def begin_decision(self, session_id: str) -> None:
+        self._staged.pop(session_id, None)
 
     def stage(
         self,
@@ -109,9 +101,11 @@ class AssistantControlPlane:
         name: str,
         arguments: Mapping[str, object],
     ) -> None:
-        spec = self._specs[name]
+        operation = self._operations[name]
         try:
-            input_data = spec.parameters.validate(dict(arguments))
+            input_data = operation.proposal_spec.parameters.validate(
+                dict(arguments)
+            )
         except ToolArgumentsError as exc:
             raise ControlArgumentsError(exc.details) from exc
         key = _DecisionKey(
@@ -120,7 +114,11 @@ class AssistantControlPlane:
             frame.decision_cursor,
             frame.basis_state_version,
         )
-        self._staged[key] = _StagedCall(spec, input_data)
+        self._staged[frame.state.session_id] = _StagedCall(
+            key,
+            operation,
+            input_data,
+        )
 
     async def after_committed_step(
         self,
@@ -133,17 +131,20 @@ class AssistantControlPlane:
             step.decision_cursor,
             step.basis_state_version,
         )
-        staged = self._staged.pop(key, None)
-        if staged is None:
+        staged = self._staged.pop(session_id, None)
+        if staged is None or staged.key != key:
             return None
         self._active_sessions.add(session_id)
         try:
-            result = await staged.spec.handler(staged.input_data)
+            result = await staged.operation.proposal_spec.handler(staged.input_data)
         finally:
             self._active_sessions.remove(session_id)
         if isinstance(result, ControlApprovalRequest):
-            if result.action not in self._handlers:
-                raise KeyError(result.action)
+            if result.action != staged.operation.action:
+                raise ValueError(
+                    f"控制 proposal action 不匹配: {result.action!r} != "
+                    f"{staged.operation.action!r}"
+                )
             self._pending[session_id] = result
             return ControlNotice(self._approval_message(result))
         if type(result) is not dict:
@@ -172,7 +173,8 @@ class AssistantControlPlane:
             del self._pending[session_id]
             return f"已取消控制操作：{request.action}"
         del self._pending[session_id]
-        execution = await self._handlers[request.action].execute(
+        operation = self._approval_operations[request.action]
+        execution = await operation.approval_handler.execute(
             request.payload,
         )
         return execution.message

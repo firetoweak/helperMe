@@ -17,6 +17,7 @@ from helperme.runtime import (
 )
 from helperme.runtime.dispatcher import AttemptContext
 from helperme.runtime.model import DecisionState
+from helperme.tools.control import ControlOperation
 from helperme.tools.spec import ToolArgumentsError, ToolSpec
 
 
@@ -28,7 +29,7 @@ class ManagementDomain:
     id: str
     description: str
     diagnostic_specs: tuple[ToolSpec, ...]
-    control_names: tuple[str, ...]
+    control_operations: tuple[ControlOperation, ...]
 
     def __post_init__(self) -> None:
         if type(self.id) is not str or not self.id:
@@ -37,10 +38,14 @@ class ManagementDomain:
             raise ValueError("management domain description must be a non-empty str")
         if type(self.diagnostic_specs) is not tuple:
             raise TypeError("management diagnostic specs must be tuple")
-        if type(self.control_names) is not tuple or any(
-            type(name) is not str or not name for name in self.control_names
-        ):
-            raise TypeError("management control names must be non-empty strings")
+        if type(self.control_operations) is not tuple:
+            raise TypeError("management control operations must be tuple")
+        if any(operation.domain != self.id for operation in self.control_operations):
+            raise ValueError("control operation domain does not match management domain")
+
+    @property
+    def control_names(self) -> tuple[str, ...]:
+        return tuple(operation.name for operation in self.control_operations)
 
 
 @dataclass(frozen=True, slots=True)

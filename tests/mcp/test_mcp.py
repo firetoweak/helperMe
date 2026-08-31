@@ -401,8 +401,12 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
                 {"list_mcp_servers", "test_mcp_server"},
             )
             self.assertEqual(
-                mcp.recovery_proposal_spec.name,
-                "propose_mcp_recovery",
+                {operation.name for operation in mcp.control_operations},
+                {
+                    "propose_mcp_install",
+                    "propose_mcp_recovery",
+                    "propose_mcp_update",
+                },
             )
 
     async def test_http_non_localhost_requires_https(self):

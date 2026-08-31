@@ -4,11 +4,14 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict
 
+from helperme.assistant.artifacts import MemoryArtifactStore
 from helperme.assistant.control import AssistantControlPlane
+from helperme.assistant.context.projection import ModelContextProjector
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.delivery import deliver_binding
@@ -22,10 +25,17 @@ from helperme.llm.types import (
 )
 from helperme.config import AssistantConfig
 from helperme.paths import HelperMeHome
-from helperme.runtime import AgentRuntime, MemoryJournal, StepCommitted
+from helperme.runtime import (
+    AgentRuntime,
+    LeaseLostError,
+    MemoryJournal,
+    RuntimeStatus,
+    StepCommitted,
+)
 from helperme.tools.control import (
     ControlApprovalExecution,
     ControlApprovalRequest,
+    ControlOperation,
 )
 from helperme.tools.spec import PydanticParameters, ToolSpec
 
@@ -89,7 +99,7 @@ class OpenControlManagement:
         return "test management"
 
 
-def _decision_maker(journal, llm, control):
+def _decision_maker(journal, llm, control, *, projector=None):
     return JournalBackedLlmDecisionMaker(
         journal,
         llm,
@@ -98,10 +108,171 @@ def _decision_maker(journal, llm, control):
         skill_tools=EmptySkillTools(),
         control=control,
         management=OpenControlManagement(),
+        projector=projector,
     )
 
 
+class RetryAfterLeaseLossLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, _messages, _model, *, tools=None):
+        self.calls += 1
+        names = {tool["function"]["name"] for tool in tools}
+        if "propose_test_control" not in names:
+            raise AssertionError("stale stage hid control schema on retry")
+        calls = ()
+        if self.calls == 1:
+            calls = (
+                ToolCall(
+                    "control-1",
+                    "propose_test_control",
+                    '{"value":"frozen"}',
+                ),
+            )
+        return LLMCallResult(
+            LLMResponse(content="done", calls=calls),
+            LLMUsage(input_tokens=1, output_tokens=1),
+        )
+
+
+class LeaseLosingJournal(MemoryJournal):
+    def __init__(self) -> None:
+        super().__init__()
+        self._lose_once = True
+
+    async def commit_step(self, lease, draft):
+        if self._lose_once:
+            self._lose_once = False
+            raise LeaseLostError(lease.token)
+        return await super().commit_step(lease, draft)
+
+
+class CommitFailingJournal(MemoryJournal):
+    def __init__(self) -> None:
+        super().__init__()
+        self._fail_once = True
+
+    async def commit_step(self, lease, draft):
+        if self._fail_once:
+            self._fail_once = False
+            raise RuntimeError("commit failed")
+        return await super().commit_step(lease, draft)
+
+
+class SaveFailingStore(MemoryArtifactStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self._fail_once = True
+
+    def save(self, content):
+        if self._fail_once:
+            self._fail_once = False
+            raise RuntimeError("decision evidence save failed")
+        return super().save(content)
+
+
+class SaveFailingGateway:
+    def __init__(self) -> None:
+        self.store = SaveFailingStore()
+
+    def for_session(self, _session_id):
+        return self.store
+
+
 class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _control_that_must_not_run() -> AssistantControlPlane:
+        async def propose(_input: ProposalInput):
+            raise AssertionError("stale proposal must not execute")
+
+        spec = ToolSpec(
+            "propose_test_control",
+            "提交测试控制方案。",
+            PydanticParameters(ProposalInput),
+            propose,
+            control_boundary=True,
+            exclusive_batch=True,
+        )
+        return AssistantControlPlane(
+            (ControlOperation("test", spec, ApprovalHandler()),)
+        )
+
+    async def test_decision_failure_stage_is_cleared_before_retry(self):
+        control = self._control_that_must_not_run()
+        journal = MemoryJournal()
+        llm = RetryAfterLeaseLossLlm()
+        projector = ModelContextProjector(gateway=SaveFailingGateway())
+        runtime = AgentRuntime(
+            journal,
+            _decision_maker(
+                journal,
+                llm,
+                control,
+                projector=projector,
+            ),
+            deliver_binding(lambda _text: None),
+        )
+        await runtime.receive_user_message(
+            "control-session",
+            "安装它",
+            delivery_id="user-1",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "evidence save failed"):
+            await runtime.advance("control-session")
+        await settle_session(runtime, "control-session", control=control)
+
+        self.assertIsNone(control.pending_view("control-session"))
+        self.assertEqual(len(control.schemas("control-session")), 1)
+
+    async def test_step_commit_failure_stage_is_cleared_before_retry(self):
+        control = self._control_that_must_not_run()
+        journal = CommitFailingJournal()
+        llm = RetryAfterLeaseLossLlm()
+        runtime = AgentRuntime(
+            journal,
+            _decision_maker(journal, llm, control),
+            deliver_binding(lambda _text: None),
+        )
+        await runtime.receive_user_message(
+            "control-session",
+            "安装它",
+            delivery_id="user-1",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "commit failed"):
+            await runtime.advance("control-session")
+        await settle_session(runtime, "control-session", control=control)
+
+        self.assertIsNone(control.pending_view("control-session"))
+        self.assertEqual(len(control.schemas("control-session")), 1)
+
+    async def test_lease_lost_stage_is_cleared_before_retry(self):
+        control = self._control_that_must_not_run()
+        journal = LeaseLosingJournal()
+        llm = RetryAfterLeaseLossLlm()
+        runtime = AgentRuntime(
+            journal,
+            _decision_maker(journal, llm, control),
+            deliver_binding(lambda _text: None),
+        )
+        await runtime.receive_user_message(
+            "control-session",
+            "安装它",
+            delivery_id="user-1",
+        )
+
+        first = await runtime.advance("control-session")
+        self.assertIsNone(first.step)
+        self.assertIs(first.status, RuntimeStatus.RUNNABLE)
+
+        await settle_session(runtime, "control-session", control=control)
+
+        self.assertGreaterEqual(llm.calls, 2)
+        self.assertIsNone(control.pending_view("control-session"))
+        self.assertEqual(len(control.schemas("control-session")), 1)
+
     async def test_assembly_offers_mcp_and_skill_controls_outside_runtime(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -140,6 +311,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertTrue(names.isdisjoint(assembly.bindings))
+        self.assertTrue(names.issubset(assembly.surface._reserved))
         self.assertTrue(
             {
                 "list_mcp_servers",
@@ -177,7 +349,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             exclusive_batch=True,
         )
         handler = ApprovalHandler()
-        control = AssistantControlPlane((spec,), (handler,))
+        control = AssistantControlPlane((ControlOperation("test", spec, handler),))
         delivered: list[str] = []
         runtime = AgentRuntime(
             journal,
@@ -240,7 +412,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             exclusive_batch=True,
         )
         handler = FailingApprovalHandler()
-        control = AssistantControlPlane((spec,), (handler,))
+        control = AssistantControlPlane((ControlOperation("test", spec, handler),))
         runtime = AgentRuntime(
             journal,
             _decision_maker(journal, ControlLlm(), control),
@@ -261,6 +433,82 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             await control.resolve("control-session", approved=True)
 
         self.assertIsNone(control.pending_view("control-session"))
+
+    async def test_unmatched_committed_step_clears_staged_call(self):
+        async def propose(_input: ProposalInput):
+            return {"ok": True}
+
+        spec = ToolSpec(
+            "propose_test_control",
+            "提交测试控制方案。",
+            PydanticParameters(ProposalInput),
+            propose,
+            control_boundary=True,
+            exclusive_batch=True,
+        )
+        control = AssistantControlPlane(
+            (ControlOperation("test", spec, ApprovalHandler()),)
+        )
+        frame = SimpleNamespace(
+            state=SimpleNamespace(session_id="control-session"),
+            trigger_event=SimpleNamespace(event_id="trigger-1"),
+            decision_cursor=1,
+            basis_state_version="basis-1",
+        )
+        control.stage(frame, spec.name, {"value": "frozen"})
+
+        notice = await control.after_committed_step(
+            "control-session",
+            SimpleNamespace(
+                trigger_event_id="trigger-2",
+                decision_cursor=2,
+                basis_state_version="basis-2",
+            ),
+        )
+
+        self.assertIsNone(notice)
+        self.assertEqual(len(control.schemas("control-session")), 1)
+
+    async def test_proposal_action_must_match_its_operation(self):
+        async def propose(_input: ProposalInput):
+            return ControlApprovalRequest(
+                id="approval-1",
+                action="test.wrong",
+                payload={},
+                summary="bad",
+                risk="bad",
+            )
+
+        spec = ToolSpec(
+            "propose_test_control",
+            "提交测试控制方案。",
+            PydanticParameters(ProposalInput),
+            propose,
+            control_boundary=True,
+            exclusive_batch=True,
+        )
+        control = AssistantControlPlane(
+            (ControlOperation("test", spec, ApprovalHandler()),)
+        )
+        frame = SimpleNamespace(
+            state=SimpleNamespace(session_id="control-session"),
+            trigger_event=SimpleNamespace(event_id="trigger-1"),
+            decision_cursor=1,
+            basis_state_version="basis-1",
+        )
+        control.stage(frame, spec.name, {"value": "frozen"})
+
+        with self.assertRaisesRegex(ValueError, "proposal action 不匹配"):
+            await control.after_committed_step(
+                "control-session",
+                SimpleNamespace(
+                    trigger_event_id="trigger-1",
+                    decision_cursor=1,
+                    basis_state_version="basis-1",
+                ),
+            )
+
+        self.assertEqual(len(control.schemas("control-session")), 1)
 
 
 if __name__ == "__main__":

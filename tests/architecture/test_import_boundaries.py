@@ -204,7 +204,10 @@ class LayerImportBoundaryTest(unittest.TestCase):
                 "helperme.tools.control",
                 "helperme.tools.spec",
             },
-            "management.py": {"helperme.tools.spec"},
+            "management.py": {
+                "helperme.tools.control",
+                "helperme.tools.spec",
+            },
         }
         offenders: list[str] = []
         for path in sorted(ASSISTANT_ROOT.rglob("*.py")):

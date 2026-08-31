@@ -17,21 +17,15 @@ from helperme.skills.approval import (
 )
 from helperme.skills.management_tools import create_skill_management_specs
 from helperme.skills.runtime import SkillToolCatalog
+from helperme.tools.control import ControlOperation
 from helperme.tools.spec import ToolSpec
 
 
 @dataclass(frozen=True)
 class SkillAssembly:
     service: SkillApplicationService
-    install_proposal_spec: ToolSpec
-    install_approval_handler: SkillInstallApprovalHandler
     management_specs: tuple[ToolSpec, ...]
-    enable_proposal_spec: ToolSpec
-    enable_approval_handler: SkillEnableApprovalHandler
-    update_proposal_spec: ToolSpec
-    update_approval_handler: SkillUpdateApprovalHandler
-    repair_proposal_spec: ToolSpec
-    repair_approval_handler: SkillRepairApprovalHandler
+    control_operations: tuple[ControlOperation, ...]
 
     @property
     def tool_catalog(self) -> SkillToolCatalog:
@@ -47,15 +41,30 @@ def build_skills(
         home,
         diff_summarizer=diff_summarizer,
     )
+    control_operations = (
+        ControlOperation(
+            "skill",
+            create_skill_install_proposal_spec(service),
+            SkillInstallApprovalHandler(service),
+        ),
+        ControlOperation(
+            "skill",
+            create_skill_enable_proposal_spec(service),
+            SkillEnableApprovalHandler(service),
+        ),
+        ControlOperation(
+            "skill",
+            create_skill_update_proposal_spec(service),
+            SkillUpdateApprovalHandler(service),
+        ),
+        ControlOperation(
+            "skill",
+            create_skill_repair_proposal_spec(service),
+            SkillRepairApprovalHandler(service),
+        ),
+    )
     return SkillAssembly(
         service=service,
-        install_proposal_spec=create_skill_install_proposal_spec(service),
-        install_approval_handler=SkillInstallApprovalHandler(service),
         management_specs=create_skill_management_specs(service),
-        enable_proposal_spec=create_skill_enable_proposal_spec(service),
-        enable_approval_handler=SkillEnableApprovalHandler(service),
-        update_proposal_spec=create_skill_update_proposal_spec(service),
-        update_approval_handler=SkillUpdateApprovalHandler(service),
-        repair_proposal_spec=create_skill_repair_proposal_spec(service),
-        repair_approval_handler=SkillRepairApprovalHandler(service),
+        control_operations=control_operations,
     )
