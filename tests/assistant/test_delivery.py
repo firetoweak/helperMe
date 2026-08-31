@@ -4,23 +4,15 @@ import unittest
 
 from helperme.assistant.delivery import (
     DELIVER_TOOL_NAME,
-    DeliveringDecisionMaker,
     deliver_binding,
     ensure_deliver,
 )
 from helperme.runtime import (
-    AgentRuntime,
     Command,
-    CommandOutcomeReceived,
     InvokeTool,
     LifecycleIntent,
-    MemoryJournal,
     ModelDecision,
-    OutcomeStatus,
-    RuntimeStatus,
 )
-from tests.assistant.test_runner import ScriptedDecisionMaker, SequentialIds
-from tests.session_scheduler import settle_session
 
 
 class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
@@ -56,62 +48,3 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
             ).command_requests,
             (),
         )
-
-    async def test_content_is_delivered_and_session_stays_open(self):
-        delivered: list[str] = []
-        model = ScriptedDecisionMaker(
-            (lambda _frame: ModelDecision(content="hello there"),)
-        )
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            DeliveringDecisionMaker(model),
-            deliver_binding(delivered.append),
-            SequentialIds(),
-        )
-        await runtime.create_session(self.SESSION_ID)
-        await runtime.receive_user_message(
-            self.SESSION_ID,
-            "hi",
-            delivery_id="ask-1",
-        )
-
-        result = await settle_session(runtime, self.SESSION_ID)
-        events = await runtime.snapshot(self.SESSION_ID)
-        outcomes = [
-            event.payload
-            for event in events
-            if isinstance(event.payload, CommandOutcomeReceived)
-        ]
-
-        self.assertEqual(delivered, ["hello there"])
-        self.assertEqual(outcomes[0].outcome.status, OutcomeStatus.SUCCEEDED)
-        self.assertEqual(result.state.status, RuntimeStatus.WAITING)
-        self.assertEqual(result.state.waiting_for, ("user_message",))
-
-    async def test_complete_intent_does_not_auto_finalize_chat_session(self):
-        delivered: list[str] = []
-        model = ScriptedDecisionMaker(
-            (
-                lambda _frame: ModelDecision(
-                    content="finished",
-                    lifecycle_intent=LifecycleIntent.COMPLETE,
-                ),
-            )
-        )
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            DeliveringDecisionMaker(model),
-            deliver_binding(delivered.append),
-            SequentialIds(),
-        )
-        await runtime.create_session(self.SESSION_ID)
-        await runtime.receive_user_message(
-            self.SESSION_ID,
-            "wrap up",
-            delivery_id="ask-1",
-        )
-
-        result = await settle_session(runtime, self.SESSION_ID)
-
-        self.assertEqual(delivered, ["finished"])
-        self.assertEqual(result.state.status, RuntimeStatus.WAITING)

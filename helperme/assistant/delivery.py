@@ -9,8 +9,6 @@ from helperme.runtime.model import (
     InvokeTool,
     ModelDecision,
 )
-from helperme.runtime.state import DecisionFrame
-from helperme.runtime.step import DecisionMaker
 
 
 DELIVER_TOOL_NAME = "deliver"
@@ -39,14 +37,6 @@ def ensure_deliver(decision: ModelDecision) -> ModelDecision:
         command_requests=decision.command_requests
         + (InvokeTool(DELIVER_TOOL_NAME, (("text", text),)),),
     )
-
-
-class DeliveringDecisionMaker:
-    def __init__(self, inner: DecisionMaker) -> None:
-        self._inner = inner
-
-    async def decide(self, frame: DecisionFrame) -> ModelDecision:
-        return ensure_deliver(await self._inner.decide(frame))
 
 
 async def emit_delivery(sink: DeliverySink, text: str) -> None:
