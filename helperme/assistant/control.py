@@ -171,10 +171,10 @@ class AssistantControlPlane:
         if not approved:
             del self._pending[session_id]
             return f"已取消控制操作：{request.action}"
+        del self._pending[session_id]
         execution = await self._handlers[request.action].execute(
             request.payload,
         )
-        del self._pending[session_id]
         return execution.message
 
     @staticmethod

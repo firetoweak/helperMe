@@ -66,6 +66,12 @@ class ApprovalHandler:
         return ControlApprovalExecution(True, "安装完成")
 
 
+class FailingApprovalHandler(ApprovalHandler):
+    async def execute(self, payload):
+        self.payloads.append(payload)
+        raise RuntimeError("approval execution failed")
+
+
 class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
     async def test_assembly_offers_mcp_and_skill_controls_outside_runtime(self):
         with TemporaryDirectory() as directory:
@@ -185,6 +191,54 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(message, "安装完成")
         self.assertEqual(dict(handler.payloads[0]), {"value": "frozen"})
+        self.assertIsNone(control.pending_view("control-session"))
+
+    async def test_approval_is_consumed_before_execution_failure(self):
+        journal = MemoryJournal()
+
+        async def propose(input_data: ProposalInput):
+            return ControlApprovalRequest(
+                id="approval-1",
+                action="test.install",
+                payload={"value": input_data.value},
+                summary="安装 frozen",
+                risk="测试风险",
+            )
+
+        spec = ToolSpec(
+            "propose_test_control",
+            "提交测试控制方案。",
+            PydanticParameters(ProposalInput),
+            propose,
+            control_boundary=True,
+            exclusive_batch=True,
+        )
+        handler = FailingApprovalHandler()
+        control = AssistantControlPlane((spec,), (handler,))
+        runtime = AgentRuntime(
+            journal,
+            JournalBackedLlmDecisionMaker(
+                journal,
+                ControlLlm(),
+                "test-model",
+                control=control,
+            ),
+            deliver_binding(lambda _text: None),
+        )
+        await runtime.receive_user_message(
+            "control-session",
+            "安装它",
+            delivery_id="user-1",
+        )
+        await settle_session(
+            runtime,
+            "control-session",
+            control=control,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "approval execution failed"):
+            await control.resolve("control-session", approved=True)
+
         self.assertIsNone(control.pending_view("control-session"))
 
 

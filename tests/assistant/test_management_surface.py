@@ -145,6 +145,79 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 frozenset({"propose_mcp_repair"}),
             )
 
+    async def test_failed_load_outcome_does_not_create_activation(self):
+        with TemporaryDirectory() as directory:
+            gateway = FileArtifactGateway(Path(directory))
+            domains = (
+                ManagementDomain(
+                    "mcp",
+                    "mcp management",
+                    (_spec("diagnose_mcp"),),
+                    ("propose_mcp_repair",),
+                ),
+            )
+            management = ManagementSurface(
+                domains,
+                gateway,
+                ModelContextSettings(),
+            )
+
+            class MissingDomainDecisionMaker:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                async def decide(self, _frame: DecisionFrame) -> ModelDecision:
+                    self.calls += 1
+                    if self.calls == 1:
+                        return ModelDecision(
+                            command_requests=(
+                                InvokeTool(
+                                    LOAD_MANAGEMENT_TOOLS,
+                                    (("domain", "missing"),),
+                                ),
+                            ),
+                        )
+                    return ModelDecision(
+                        command_requests=(
+                            InvokeTool(
+                                DELIVER_TOOL_NAME,
+                                (("text", "done"),),
+                            ),
+                        ),
+                    )
+
+            runtime = AgentRuntime(
+                MemoryJournal(),
+                MissingDomainDecisionMaker(),
+                {
+                    **management.bindings(),
+                    **deliver_binding(lambda _text: None),
+                },
+            )
+            await runtime.receive_user_message(
+                "management-session",
+                "load missing",
+                delivery_id="missing-1",
+            )
+            await settle_session(runtime, "management-session")
+
+            restored = ManagementSurface(
+                domains,
+                gateway,
+                ModelContextSettings(),
+            )
+            self.assertEqual(
+                await restored.rehydrate(
+                    "management-session",
+                    await runtime.snapshot("management-session"),
+                ),
+                (),
+            )
+            self.assertEqual(
+                _names(restored.schemas("management-session")),
+                {LOAD_MANAGEMENT_TOOLS},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

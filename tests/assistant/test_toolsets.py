@@ -273,6 +273,65 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             {LOAD_TOOLSET, "demo_ping"},
         )
 
+    async def test_failed_load_outcome_does_not_break_rehydrate(self):
+        delivered: list[str] = []
+        surface = ToolSurface(providers=(FakeEchoProvider(),))
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker(
+                (
+                    lambda _frame: ModelDecision(
+                        content="missing",
+                        command_requests=(
+                            InvokeTool(
+                                LOAD_TOOLSET,
+                                (("toolset_id", "missing"),),
+                            ),
+                        ),
+                    ),
+                    lambda _frame: ModelDecision(
+                        command_requests=(
+                            InvokeTool(
+                                DELIVER_TOOL_NAME,
+                                (("text", "done"),),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            {
+                **load_toolset_binding(surface),
+                **deliver_binding(delivered.append),
+            },
+            SequentialIds(),
+        )
+        surface.attach(runtime)
+        await runtime.receive_user_message(
+            self.SESSION_ID,
+            "load missing",
+            delivery_id="missing-1",
+        )
+        await settle_session(runtime, self.SESSION_ID)
+
+        restored = ToolSurface(providers=(FakeEchoProvider(),))
+        restored_runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker(()),
+            load_toolset_binding(restored),
+            SequentialIds(),
+        )
+        restored.attach(restored_runtime)
+        activations = await restored.rehydrate(
+            self.SESSION_ID,
+            await runtime.snapshot(self.SESSION_ID),
+        )
+
+        self.assertEqual(activations, ())
+        self.assertEqual(
+            _schema_names(restored.schemas(self.SESSION_ID)),
+            {LOAD_TOOLSET},
+        )
+
     async def test_rehydrate_rejects_silent_toolset_revision_upgrade(self):
         events = await self._committed_load_events()
         surface = ToolSurface(providers=(FakeEchoProvider(revision=2),))

@@ -169,6 +169,10 @@ def project_toolset_activations(
         value = payload.outcome.value
         if not isinstance(value, Mapping):
             raise ValueError("load_toolset outcome 必须是 object")
+        if "ok" not in value or type(value["ok"]) is not bool:
+            raise ValueError("load_toolset outcome ok 无效")
+        if value["ok"] is False:
+            continue
         if set(value) != {"ok", "code", "data"}:
             raise ValueError("load_toolset outcome 字段不匹配")
         data = value["data"]

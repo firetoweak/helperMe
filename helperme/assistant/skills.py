@@ -59,7 +59,7 @@ class SkillToolAdapter:
             except ToolArgumentsError as exc:
                 return {
                     "ok": False,
-                    "code": "INVALID_ARGUMENT",
+                    "code": "VALIDATION_ERROR",
                     "data": {"details": exc.details},
                     "error": "skill arguments validation failed",
                 }

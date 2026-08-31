@@ -207,6 +207,20 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
         reads = _outcomes_named(events, READ_SKILL_RESOURCE)
         self.assertEqual(reads[0]["data"]["content"], "cdef")
 
+    async def test_tool_spec_validation_uses_validation_error_code(self):
+        binding = self.adapter.bindings()[LOAD_SKILL]
+
+        result = await binding.handler(
+            type(
+                "Context",
+                (),
+                {"session_id": self.SESSION_ID},
+            )(),
+            {},
+        )
+
+        self.assertEqual(result["code"], "VALIDATION_ERROR")
+
 
 def _outcomes_named(events, name: str) -> list[object]:
     names: dict[str, str] = {}
