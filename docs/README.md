@@ -7,7 +7,7 @@
 | 文档 | 用途 |
 |---|---|
 | [自主 Agent 学习计划](自主Agent学习计划.md) | 行动依据，含 Rule 同步区 |
-| [计划](计划.md) | 从第 2 章起：Level 2、长任务（Kanban + Audit）、Automation、SubAgent、Memory |
+| [计划](计划.md) | 从第 2 章起：Level 2、长任务（Kanban + 判定）、SubAgent、Memory |
 | [项目架构方向](项目架构方向.md) | 长期原则与窄端口，不是逐条军令 |
 | [架构总览](架构/总览.md) | 当前分层、目录与边界 |
 
