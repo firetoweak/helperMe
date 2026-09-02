@@ -140,7 +140,7 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 **self.adapter.bindings(),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
@@ -193,7 +193,7 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 **self.adapter.bindings(),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )

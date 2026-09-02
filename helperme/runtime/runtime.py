@@ -11,10 +11,10 @@ from helperme.runtime.dispatcher import Dispatcher, ToolBinding
 from helperme.runtime.events import (
     CommandAuthorized,
     CommandRejected,
+    DomainFactCommitted,
     Event,
     EventDraft,
     DeliveryIdentity,
-    EventPayload,
     TerminationRequested,
     UserMessageReceived,
 )
@@ -120,8 +120,10 @@ class AgentRuntime:
     async def _append_external(
         self,
         session_id: str,
-        payload: UserMessageReceived,
+        payload: UserMessageReceived | DomainFactCommitted,
         delivery: DeliveryIdentity,
+        *,
+        causation_id: str | None = None,
     ) -> Event:
         result = await self._journal.accept_delivery(
             EventDraft(
@@ -129,26 +131,34 @@ class AgentRuntime:
                 session_id=session_id,
                 payload=payload,
                 occurred_at=datetime.now(timezone.utc),
+                causation_id=causation_id,
                 delivery=delivery,
             )
         )
         return result.event
 
-    async def record_fact(
+    async def receive_domain_fact(
         self,
         session_id: str,
-        payload: EventPayload,
+        fact_type: str,
+        data: object,
         *,
+        delivery_id: str,
+        source: str,
+        requests_decision: bool = False,
         causation_id: str | None = None,
     ) -> Event:
-        return await self._journal.append(
-            EventDraft(
-                event_id=self._id_factory("event"),
-                session_id=session_id,
-                payload=payload,
-                occurred_at=datetime.now(timezone.utc),
-                causation_id=causation_id,
-            )
+        """Accept a non-human external fact for an already selected Session."""
+
+        return await self._append_external(
+            session_id,
+            DomainFactCommitted(
+                fact_type,
+                data,
+                requests_decision=requests_decision,
+            ),
+            DeliveryIdentity(source, delivery_id),
+            causation_id=causation_id,
         )
 
     async def snapshot(self, session_id: str) -> tuple[Event, ...]:

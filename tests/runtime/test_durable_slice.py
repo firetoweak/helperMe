@@ -63,6 +63,44 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(duplicate.event_id, event.event_id)
             self.assertEqual(len(await restarted.snapshot("session")), 1)
 
+    async def test_domain_fact_delivery_deduplicates_across_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.sqlite"
+            first = SqliteJournal(path)
+            await first.create_session("session")
+            runtime = AgentRuntime(
+                first,
+                ScriptedDecisionMaker(()),
+                {},
+                SequentialIds(),
+            )
+            event = await runtime.receive_domain_fact(
+                "session",
+                "automation.fired",
+                {"scheduled_for": "2026-09-02T09:00:00Z"},
+                delivery_id="policy-1:2026-09-02T09:00:00Z",
+                source="automation",
+                requests_decision=True,
+            )
+
+            restarted = AgentRuntime(
+                SqliteJournal(path),
+                ScriptedDecisionMaker(()),
+                {},
+                SequentialIds(),
+            )
+            duplicate = await restarted.receive_domain_fact(
+                "session",
+                "automation.fired",
+                {"scheduled_for": "2026-09-02T09:00:00Z"},
+                delivery_id="policy-1:2026-09-02T09:00:00Z",
+                source="automation",
+                requests_decision=True,
+            )
+
+            self.assertEqual(duplicate.event_id, event.event_id)
+            self.assertEqual(len(await restarted.snapshot("session")), 1)
+
     async def test_step_and_command_outcome_survive_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.sqlite"

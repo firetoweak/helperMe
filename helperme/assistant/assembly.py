@@ -20,6 +20,7 @@ from helperme.assistant.decision import (
 )
 from helperme.assistant.runner import SessionScheduler
 from helperme.assistant.sessions import AssistantSessions
+from helperme.assistant.subagent import DELEGATE, REPORT, SubAgentHost
 from helperme.assistant.toolsets import ToolSurface, load_toolset_binding
 from helperme.runtime import AgentRuntime, ToolBinding
 from helperme.assistant.builtin_tools import build_builtin_tools
@@ -44,6 +45,7 @@ class AssistantAssembly:
     mcp: McpAssembly
     skills: SkillAssembly
     control: AssistantControlPlane
+    subagents: SubAgentHost
 
 
 def _model_context_settings(config: AssistantConfig) -> ModelContextSettings:
@@ -96,6 +98,7 @@ async def build_assistant_assembly(
         settings,
     )
     skill_tools = SkillToolAdapter(skills, gateway, settings)
+    subagents = SubAgentHost()
     surface = ToolSurface(
         providers=(McpToolsetAdapter(mcp),),
         base_schemas=[
@@ -108,6 +111,8 @@ async def build_assistant_assembly(
             DELIVER_TOOL_NAME,
             LOAD_SKILL,
             READ_SKILL_RESOURCE,
+            DELEGATE,
+            REPORT,
             *management.names(),
             *(operation.name for operation in operations),
         ),
@@ -117,10 +122,11 @@ async def build_assistant_assembly(
     bindings = {
         **bind_executor_tools(builtin_tools, gateway, settings),
         **read_artifact_binding(gateway),
-        **deliver_binding(sink),
+        **deliver_binding(subagents.routed_sink(sink)),
         **load_toolset_binding(surface),
         **skill_tools.bindings(),
         **management.bindings(),
+        **subagents.bindings(),
     }
     runtime = AgentRuntime(
         journal,
@@ -134,6 +140,7 @@ async def build_assistant_assembly(
             control=control,
             management=management,
             context_usage_sink=context_usage_sink,
+            subagents=subagents,
         ),
         bindings,
     )
@@ -141,14 +148,20 @@ async def build_assistant_assembly(
     scheduler = scheduler_factory(
         runtime,
         control=control,
-        notify=sink,
+        # 失败与控制面提示同样是子 Session 的对外输出，一样不外露：
+        # 用户该看到的是父转述后的判断，不是一条不知来处的裸错误。
+        notify=subagents.routed_sink(sink),
+        on_quiesced=subagents.on_quiesced,
+        on_failed=subagents.on_failed,
     )
+    subagents.attach(runtime, scheduler)
     sessions = AssistantSessions(
         runtime,
         surface,
         scheduler,
         control=control,
         management=management,
+        subagents=subagents,
     )
     return AssistantAssembly(
         runtime=runtime,
@@ -159,4 +172,5 @@ async def build_assistant_assembly(
         mcp=mcp,
         skills=skills,
         control=control,
+        subagents=subagents,
     )

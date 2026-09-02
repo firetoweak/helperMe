@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from helperme.assistant.control import AssistantControlPlane
+from helperme.assistant.failures import assistant_failure_message
 from helperme.assistant.management import ManagementSurface
 from helperme.assistant.toolsets import ToolSurface
 from helperme.runtime import AgentRuntime, RuntimeStatus
@@ -38,11 +39,17 @@ class SessionScheduler:
         runtime: AgentRuntime,
         *,
         control: AssistantControlPlane,
-        notify: Callable[[str], Awaitable[None] | None] | None = None,
+        notify: Callable[[str, str], Awaitable[None] | None] | None = None,
+        on_quiesced: (
+            Callable[[str, CanonicalState], Awaitable[None] | None] | None
+        ) = None,
+        on_failed: Callable[[str, str], Awaitable[None] | None] | None = None,
     ) -> None:
         self._runtime = runtime
         self._control = control
         self._notify = notify
+        self._on_quiesced = on_quiesced
+        self._on_failed = on_failed
         self._tasks: dict[str, asyncio.Task[bool]] = {}
         self._pending_wakes: set[str] = set()
         self._failure: BaseException | None = None
@@ -69,17 +76,55 @@ class SessionScheduler:
         )
 
     async def _advance_once(self, session_id: str) -> bool:
-        advance = await self._runtime.advance(session_id)
+        try:
+            advance = await self._runtime.advance(session_id)
+        except Exception as error:
+            message = assistant_failure_message(error)
+            if message is None:
+                raise
+            # 已识别的模型失败只停这条 Session：它仍是 RUNNABLE，
+            # 下一条外部事实会从同一个 trigger 重试。
+            await self._emit(session_id, f"运行失败：{message}")
+            await self._failed(session_id, message)
+            return False
         if advance.step is not None:
             result = await self._control.after_committed_step(
                 session_id,
                 advance.step,
             )
-            if result is not None and self._notify is not None:
-                notified = self._notify(result.message)
-                if isinstance(notified, Awaitable):
-                    await notified
+            if result is not None:
+                await self._emit(session_id, result.message)
+        if advance.status is not RuntimeStatus.RUNNABLE:
+            await self._quiesced(session_id)
         return advance.status is RuntimeStatus.RUNNABLE
+
+    async def _emit(self, session_id: str, message: str) -> None:
+        if self._notify is None:
+            return
+        notified = self._notify(session_id, message)
+        if isinstance(notified, Awaitable):
+            await notified
+
+    async def _quiesced(self, session_id: str) -> None:
+        """本次推进没有留下待办。订阅者自己判断这是否算一件事做完了。"""
+
+        if self._on_quiesced is None:
+            return
+        observed = self._on_quiesced(
+            session_id,
+            await self._runtime.state(session_id),
+        )
+        if isinstance(observed, Awaitable):
+            await observed
+
+    async def _failed(self, session_id: str, message: str) -> None:
+        """推进因已识别的失败停下。与静止是两件事，订阅者分开处理。"""
+
+        if self._on_failed is None:
+            return
+        observed = self._on_failed(session_id, message)
+        if isinstance(observed, Awaitable):
+            await observed
 
     def _task_done(self, session_id: str, task: asyncio.Task[bool]) -> None:
         if self._tasks.get(session_id) is not task:

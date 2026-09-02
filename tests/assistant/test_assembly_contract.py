@@ -82,7 +82,11 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                         input_budget_ratio=0.75,
                         llm=llm,
                     )
-                    assembly = await factory(config, lambda _text: None, journal)
+                    assembly = await factory(
+                        config,
+                        lambda _session_id, _text: None,
+                        journal,
+                    )
                     session_id = f"entry-{index}"
                     try:
                         decision = assembly.runtime.step_runner._decision_maker
@@ -101,6 +105,7 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                             *decision._skill_tools.schemas(),
                             *decision._management.schemas(session_id, state),
                             *assembly.control.schemas(session_id, allowed_control),
+                            *assembly.subagents.schemas(session_id),
                         ]
                         expected_prompt = (
                             f"{DEFAULT_ASSISTANT_PROMPT}\n\n"
@@ -147,3 +152,59 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                         await assembly.scheduler.close()
 
         self.assertEqual(requests[1:], requests[:1] * 2)
+
+
+class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
+    async def test_session_endings_are_wired_to_the_subagent_host(self):
+        """静止、失败、对外输出三条线都要落到 SubAgentHost。
+
+        漏接 on_failed，子 Session 撞上模型失败就既不静止也不回收，父会拿着
+        一个永不归零的 pending_children 一直等下去。
+        """
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            home = HelperMeHome(root / ".helperme")
+            delivered: list[tuple[str, str]] = []
+            with (
+                patch(
+                    "helperme.assistant.assembly.HelperMeHome.default",
+                    return_value=home,
+                ),
+                patch(
+                    "helperme.assistant.assembly.runtime_data_root",
+                    return_value=root / "runtime",
+                ),
+            ):
+                assembly = await build_assistant_assembly(
+                    AssistantConfig(
+                        model_name="test-model",
+                        workspace_root=workspace,
+                        full_access=False,
+                        model_context_limit=200_000,
+                        input_budget_ratio=0.75,
+                        llm=CapturingLlm(),
+                    ),
+                    lambda session_id, text: delivered.append((session_id, text)),
+                    MemoryJournal(),
+                )
+                try:
+                    scheduler = assembly.scheduler
+                    self.assertEqual(
+                        scheduler._on_quiesced,
+                        assembly.subagents.on_quiesced,
+                    )
+                    self.assertEqual(
+                        scheduler._on_failed,
+                        assembly.subagents.on_failed,
+                    )
+
+                    assembly.subagents._parents["parent/sub-1"] = "parent"
+                    await scheduler._emit("parent/sub-1", "运行失败：上游 500")
+                    await scheduler._emit("parent", "父转述后的判断")
+
+                    self.assertEqual(delivered, [("parent", "父转述后的判断")])
+                finally:
+                    await assembly.scheduler.close()

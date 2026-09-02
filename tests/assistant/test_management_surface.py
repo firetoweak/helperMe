@@ -125,7 +125,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 decisions,
                 {
                     **management.bindings(),
-                    **deliver_binding(delivered.append),
+                    **deliver_binding(lambda _session_id, text: delivered.append(text)),
                 },
             )
             await runtime.receive_user_message(
@@ -215,7 +215,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 MissingDomainDecisionMaker(),
                 {
                     **management.bindings(),
-                    **deliver_binding(lambda _text: None),
+                    **deliver_binding(lambda _session_id, _text: None),
                 },
             )
             await runtime.receive_user_message(

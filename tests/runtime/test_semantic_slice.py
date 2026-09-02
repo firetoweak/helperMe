@@ -7,6 +7,7 @@ from helperme.runtime import (
     AgentRuntime,
     CommandOutcomeReceived,
     CommandPhase,
+    DomainFactCommitted,
     InvokeTool,
     MemoryJournal,
     ModelDecision,
@@ -71,6 +72,144 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         state = await runtime.state("session")
         self.assertEqual(len(model.frames), 2)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
+        await scheduler.close()
+
+    async def test_domain_fact_requesting_decision_becomes_next_trigger(self):
+        model = ScriptedDecisionMaker(
+            (lambda _frame: ModelDecision(content="noted"),)
+        )
+        runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
+        await runtime.create_session("session")
+        await runtime.receive_domain_fact(
+            "session",
+            "subagent.report",
+            {"child_session_id": "child-1"},
+            delivery_id="report-1",
+            source="subagent",
+            requests_decision=True,
+        )
+
+        self.assertEqual(
+            (await runtime.state("session")).status,
+            RuntimeStatus.RUNNABLE,
+        )
+        await runtime.advance("session")
+
+        self.assertEqual(len(model.frames), 1)
+        self.assertEqual(
+            model.frames[0].trigger_event.payload.fact_type,
+            "subagent.report",
+        )
+
+    async def test_domain_fact_without_decision_request_stays_quiet(self):
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker(()),
+            {},
+            SequentialIds(),
+        )
+        await runtime.create_session("session")
+        await runtime.receive_domain_fact(
+            "session",
+            "subagent.progress",
+            {"note": "still running"},
+            delivery_id="progress-1",
+            source="subagent",
+        )
+
+        state = await runtime.state("session")
+        self.assertEqual(state.status, RuntimeStatus.WAITING)
+        self.assertIsNone(state.next_trigger_event_id)
+
+    async def test_later_domain_fact_waits_for_in_flight_attempt(self):
+        tool = RecordingTool("work")
+        model = ScriptedDecisionMaker(
+            (
+                lambda _frame: ModelDecision(
+                    command_requests=(InvokeTool("work"),),
+                ),
+                lambda _frame: ModelDecision(content="stopped"),
+            )
+        )
+        runtime = runtime_for(tool, model)
+        await runtime.create_session("session")
+        await runtime.receive_user_message(
+            "session",
+            "go",
+            delivery_id="user-1",
+        )
+        await runtime.advance("session")
+        await asyncio.wait_for(tool.started.wait(), timeout=1)
+        await runtime.receive_domain_fact(
+            "session",
+            "subagent.report",
+            {"summary": "done"},
+            delivery_id="report-1",
+            source="subagent",
+            requests_decision=True,
+        )
+
+        state = await runtime.state("session")
+        self.assertEqual(len(model.frames), 1)
+        self.assertEqual(state.status, RuntimeStatus.WAITING)
+        self.assertIsNone(state.next_trigger_event_id)
+        self.assertTrue(any(item.startswith("command:") for item in state.waiting_for))
+
+        tool.release.set()
+        while runtime.dispatcher.active_count:
+            await asyncio.sleep(0)
+        await runtime.advance("session")
+
+        self.assertEqual(len(model.frames), 2)
+        self.assertEqual(
+            model.frames[1].trigger_event.payload.fact_type,
+            "subagent.report",
+        )
+
+    async def test_later_domain_fact_suppresses_outcome_follow_up_step(self):
+        tool = RecordingTool("work")
+        model = ScriptedDecisionMaker(
+            (
+                lambda _frame: ModelDecision(
+                    command_requests=(InvokeTool("work"),),
+                ),
+                lambda _frame: ModelDecision(content="ack"),
+            )
+        )
+        runtime = runtime_for(tool, model)
+        scheduler = SettlingScheduler(runtime)
+        await runtime.create_session("session")
+        await runtime.receive_user_message(
+            "session",
+            "go",
+            delivery_id="user-1",
+        )
+        await scheduler.wake("session")
+        await asyncio.wait_for(tool.started.wait(), timeout=1)
+        await runtime.receive_domain_fact(
+            "session",
+            "subagent.report",
+            {"summary": "done"},
+            delivery_id="report-1",
+            source="subagent",
+            requests_decision=True,
+        )
+        await scheduler.wake("session")
+        tool.release.set()
+        await scheduler.join()
+
+        self.assertEqual(len(model.frames), 2)
+        self.assertEqual(
+            model.frames[1].trigger_event.payload.fact_type,
+            "subagent.report",
+        )
+        kinds = [
+            type(event.payload).__name__
+            for event in await runtime.snapshot("session")
+        ]
+        self.assertEqual(kinds.count("StepCommitted"), 2)
+        self.assertEqual(kinds.count("CommandOutcomeReceived"), 1)
+        self.assertEqual(kinds.count(DomainFactCommitted.__name__), 1)
         await scheduler.close()
 
     async def test_later_user_message_waits_for_in_flight_attempt(self):

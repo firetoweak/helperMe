@@ -21,6 +21,7 @@ from helperme.assistant.delivery import DELIVER_TOOL_NAME
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.runtime.events import (
     CommandOutcomeReceived,
+    DomainFactCommitted,
     Event,
     StepCommitted,
     UserMessageReceived,
@@ -176,6 +177,24 @@ def _translate_visible_events(
             items.append(
                 _Projected(
                     {"role": "user", "content": payload.content},
+                    "user",
+                )
+            )
+            continue
+        if isinstance(payload, DomainFactCommitted):
+            # 协议只有四种 role，事实只能进 user，但必须自报身份。
+            items.append(
+                _Projected(
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "fact": payload.fact_type,
+                                "data": jsonable(payload.data),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
                     "user",
                 )
             )

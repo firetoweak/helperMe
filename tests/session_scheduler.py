@@ -64,7 +64,7 @@ async def settle_session(
     scheduler = SettlingScheduler(
         runtime,
         control=control,
-        notify=messages.append,
+        notify=lambda _session_id, message: messages.append(message),
     )
     try:
         await scheduler.wake(session_id)

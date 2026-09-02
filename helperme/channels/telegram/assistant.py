@@ -120,7 +120,7 @@ async def run_telegram_assistant() -> None:
 
         channel: TelegramChannel | None = None
 
-        async def send(text: str) -> None:
+        async def send(_session_id: str, text: str) -> None:
             assert channel is not None
             await channel.send(text)
 

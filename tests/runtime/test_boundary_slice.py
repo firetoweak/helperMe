@@ -15,6 +15,7 @@ from helperme.runtime import (
     DecisionFrame,
     DeliveryIdentity,
     DispatchAttemptStarted,
+    DomainFactCommitted,
     EventDraft,
     InvokeTool,
     MemoryJournal,
@@ -456,3 +457,38 @@ class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
                     await runtime.grant_command(self.SESSION_ID, "missing")
                 with self.assertRaises(KeyError):
                     await runtime.reject_command(self.SESSION_ID, "missing")
+
+    async def test_domain_fact_requires_delivery_across_journals(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        journals = (
+            ("memory", MemoryJournal()),
+            ("sqlite", SqliteJournal(Path(temporary.name) / "fact.db")),
+        )
+
+        for name, journal in journals:
+            with self.subTest(journal=name):
+                with self.assertRaises(ValueError):
+                    await journal.append(
+                        EventDraft(
+                            event_id=f"bare-fact-{name}",
+                            session_id=self.SESSION_ID,
+                            payload=DomainFactCommitted("probe", {"a": 1}),
+                            occurred_at=NOW,
+                        )
+                    )
+                accepted = await journal.accept_delivery(
+                    EventDraft(
+                        event_id=f"delivered-fact-{name}",
+                        session_id=self.SESSION_ID,
+                        payload=DomainFactCommitted("probe", {"a": 1}),
+                        occurred_at=NOW,
+                        delivery=DeliveryIdentity("probe", "probe-1"),
+                    )
+                )
+
+                self.assertTrue(accepted.inserted)
+                self.assertEqual(
+                    accepted.event.delivery,
+                    DeliveryIdentity("probe", "probe-1"),
+                )

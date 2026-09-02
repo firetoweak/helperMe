@@ -13,6 +13,7 @@ from helperme.runtime import (
     LifecycleIntent,
     ModelDecision,
 )
+from helperme.runtime.dispatcher import AttemptContext
 
 
 class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
@@ -29,8 +30,22 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_deliver_is_non_deciding_command(self):
-        binding = deliver_binding(lambda _text: None)[DELIVER_TOOL_NAME]
+        binding = deliver_binding(lambda _session_id, _text: None)[DELIVER_TOOL_NAME]
         self.assertFalse(binding.decision_on_outcome)
+
+    async def test_deliver_routes_its_session_id_to_the_sink(self):
+        routed: list[tuple[str, str]] = []
+        binding = deliver_binding(
+            lambda session_id, text: routed.append((session_id, text))
+        )[DELIVER_TOOL_NAME]
+
+        result = await binding.handler(
+            AttemptContext(self.SESSION_ID, "command-1", "attempt-1", 1),
+            {"text": "hello"},
+        )
+
+        self.assertEqual(result, "hello")
+        self.assertEqual(routed, [(self.SESSION_ID, "hello")])
 
     def test_ensure_deliver_appends_invoke_once(self):
         mapped = ensure_deliver(ModelDecision(content="  hello  "))

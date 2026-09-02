@@ -291,6 +291,14 @@ class _StateBuilder:
         self.visible_event_ids.append(event.event_id)
 
 
+def _is_external_decision_fact(payload: object) -> bool:
+    """External arrival that can become the next decision trigger."""
+
+    if isinstance(payload, UserMessageReceived):
+        return True
+    return isinstance(payload, DomainFactCommitted) and payload.requests_decision
+
+
 class StateProjector:
     def project(
         self,
@@ -327,7 +335,7 @@ class StateProjector:
             step_event = step_events.get(event.event_id)
             if step_event is not None:
                 step = step_event.payload.step
-                if isinstance(event.payload, UserMessageReceived):
+                if _is_external_decision_fact(event.payload):
                     self._include_waited_follow_up_events(
                         decision,
                         events,
@@ -366,8 +374,8 @@ class StateProjector:
                 issuing_observed,
             ):
                 continue
-            if isinstance(event.payload, UserMessageReceived) and (
-                self._user_message_blocked_by_in_flight(
+            if _is_external_decision_fact(event.payload) and (
+                self._blocked_by_in_flight(
                     event,
                     operational,
                     issuing_observed,
@@ -375,7 +383,7 @@ class StateProjector:
             ):
                 break
             next_trigger = event
-            if isinstance(event.payload, UserMessageReceived):
+            if _is_external_decision_fact(event.payload):
                 self._include_waited_follow_up_events(
                     decision,
                     events,
@@ -511,10 +519,8 @@ class StateProjector:
         issuing_observed: dict[str, int],
     ) -> bool:
         payload = event.payload
-        if isinstance(payload, UserMessageReceived):
+        if _is_external_decision_fact(payload):
             return True
-        if isinstance(payload, DomainFactCommitted):
-            return payload.requests_decision
         if isinstance(payload, CommandRejected):
             return not state.commands[payload.command_id].abandoned
         if isinstance(payload, CommandOutcomeReceived):
@@ -528,7 +534,7 @@ class StateProjector:
                 return False
             observed = issuing_observed[command_state.issued_by_event_id]
             if any(
-                isinstance(item.payload, UserMessageReceived)
+                _is_external_decision_fact(item.payload)
                 and item.sequence > observed
                 for item in events
             ):
@@ -537,7 +543,7 @@ class StateProjector:
         return False
 
     @staticmethod
-    def _user_message_blocked_by_in_flight(
+    def _blocked_by_in_flight(
         message: Event,
         operational: _StateBuilder,
         issuing_observed: dict[str, int],

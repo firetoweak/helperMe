@@ -14,7 +14,8 @@ from helperme.runtime.model import (
 DELIVER_TOOL_NAME = "deliver"
 
 
-DeliverySink = Callable[[str], Awaitable[None] | None]
+DeliverySink = Callable[[str, str], Awaitable[None] | None]
+"""Route one Session's output. The Host decides where each Session lands."""
 
 
 def ensure_deliver(decision: ModelDecision) -> ModelDecision:
@@ -39,21 +40,21 @@ def ensure_deliver(decision: ModelDecision) -> ModelDecision:
     )
 
 
-async def emit_delivery(sink: DeliverySink, text: str) -> None:
-    emitted = sink(text)
+async def emit_delivery(sink: DeliverySink, session_id: str, text: str) -> None:
+    emitted = sink(session_id, text)
     if isawaitable(emitted):
         await emitted
 
 
 def deliver_binding(sink: DeliverySink) -> dict[str, ToolBinding]:
     async def handler(
-        _context: AttemptContext,
+        context: AttemptContext,
         arguments: Mapping[str, object],
     ) -> str:
         text = arguments.get("text")
         if type(text) is not str or not text:
             raise ValueError("deliver text must be a non-empty str")
-        await emit_delivery(sink, text)
+        await emit_delivery(sink, context.session_id, text)
         return text
 
     return {

@@ -127,7 +127,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             decisions,
             {
                 **load_toolset_binding(surface),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
@@ -197,7 +197,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             ScriptedDecisionMaker((first, second, third)),
             {
                 **load_toolset_binding(surface),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
@@ -283,7 +283,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 **load_toolset_binding(surface),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )

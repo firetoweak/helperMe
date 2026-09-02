@@ -93,7 +93,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 **load_toolset_binding(surface),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
@@ -112,7 +112,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             ScriptedDecisionMaker(()),
             {
                 **load_toolset_binding(restored_surface),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )

@@ -31,7 +31,7 @@ class BootstrappedAssistant:
 
 @asynccontextmanager
 async def bootstrap_assistant(
-    sink: Callable[[str], None],
+    sink: Callable[[str, str], None],
     *,
     config: AssistantConfig | None = None,
     app_config: AppConfig | None = None,

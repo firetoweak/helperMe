@@ -189,7 +189,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         runtime = AgentRuntime(
             journal,
             _decision_maker(journal, llm, control, projector=projector),
-            deliver_binding(lambda _text: None),
+            deliver_binding(lambda _session_id, _text: None),
         )
         await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
 
@@ -243,7 +243,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         runtime = AgentRuntime(
             journal,
             _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(delivered.append),
+            deliver_binding(lambda _session_id, text: delivered.append(text)),
         )
         await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
 
@@ -280,7 +280,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         runtime = AgentRuntime(
             journal,
             _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(lambda _text: None),
+            deliver_binding(lambda _session_id, _text: None),
         )
         await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
         await settle_session(runtime, SESSION_ID, control=control)

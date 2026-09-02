@@ -50,9 +50,22 @@ class ScriptedDecisionMaker:
         return decision
 
 
+class _PerSessionDecisions:
+    def __init__(self, failing_session_id: str, error: BaseException) -> None:
+        self._failing_session_id = failing_session_id
+        self._error = error
+        self.frames: list[DecisionFrame] = []
+
+    async def decide(self, frame: DecisionFrame) -> ModelDecision:
+        self.frames.append(frame)
+        if frame.trigger_event.session_id == self._failing_session_id:
+            raise self._error
+        return ModelDecision(content="ok")
+
+
 class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
-    async def test_background_failure_is_observable_without_another_wake(self):
-        failure = LLMProviderError("provider rejected request")
+    async def test_unexpected_failure_is_observable_without_another_wake(self):
+        failure = ValueError("host bug")
 
         async def fail(_frame):
             raise failure
@@ -85,6 +98,47 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 (await runtime.state("session")).status,
                 RuntimeStatus.RUNNABLE,
+            )
+        finally:
+            await scheduler.close()
+
+    async def test_recognised_model_failure_stops_only_that_session(self):
+        failure = LLMProviderError("provider rejected request")
+        model = _PerSessionDecisions("failing", failure)
+        runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
+        notified: list[tuple[str, str]] = []
+        scheduler = SettlingScheduler(
+            runtime,
+            notify=lambda session_id, message: notified.append(
+                (session_id, message)
+            ),
+        )
+        for session_id in ("failing", "healthy"):
+            await runtime.create_session(session_id)
+            await runtime.receive_user_message(
+                session_id,
+                "hello",
+                delivery_id=f"user-{session_id}",
+            )
+
+        try:
+            await scheduler.wake("failing")
+            await scheduler.wake("healthy")
+            await scheduler.join()
+
+            self.assertEqual(len(notified), 1)
+            reported_session_id, reported = notified[0]
+            self.assertEqual(reported_session_id, "failing")
+            self.assertIn("provider rejected request", reported)
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(scheduler.wait_failure(), timeout=0.05)
+            self.assertEqual(
+                (await runtime.state("failing")).status,
+                RuntimeStatus.RUNNABLE,
+            )
+            self.assertEqual(
+                (await runtime.state("healthy")).status,
+                RuntimeStatus.WAITING,
             )
         finally:
             await scheduler.close()

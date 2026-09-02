@@ -19,6 +19,7 @@ from helperme.assistant.context.projection import (
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
+from helperme.assistant.subagent import SubAgentHost
 from helperme.runtime import (
     InvokeTool,
     ModelDecision,
@@ -93,20 +94,22 @@ def _invoke_requests(
     return tuple(requests)
 
 
+def _schema_name(schema: Mapping[str, object]) -> str:
+    if set(schema) != {"type", "function"} or schema["type"] != "function":
+        raise ValueError("tool schema envelope is invalid")
+    function = schema["function"]
+    if not isinstance(function, Mapping):
+        raise TypeError("tool schema function must be an object")
+    name = function["name"]
+    if type(name) is not str or not name:
+        raise ValueError("tool schema name must be a non-empty str")
+    return name
+
+
 def _tool_names(
     schemas: Sequence[dict[str, object]],
 ) -> frozenset[str]:
-    names: list[str] = []
-    for schema in schemas:
-        if set(schema) != {"type", "function"} or schema["type"] != "function":
-            raise ValueError("tool schema envelope is invalid")
-        function = schema["function"]
-        if not isinstance(function, Mapping):
-            raise TypeError("tool schema function must be an object")
-        name = function["name"]
-        if type(name) is not str or not name:
-            raise ValueError("tool schema name must be a non-empty str")
-        names.append(name)
+    names = [_schema_name(schema) for schema in schemas]
     if len(names) != len(set(names)):
         raise ValueError("tool schemas contain duplicate names")
     return frozenset(names)
@@ -161,6 +164,7 @@ class JournalBackedLlmDecisionMaker:
         system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
         projector: ModelContextProjector | None = None,
         context_usage_sink: Callable[[str, int, int], None] | None = None,
+        subagents: SubAgentHost | None = None,
     ) -> None:
         self._journal = journal
         self._llm = llm
@@ -172,6 +176,7 @@ class JournalBackedLlmDecisionMaker:
         self._control = control
         self._management = management
         self._context_usage_sink = context_usage_sink
+        self._subagents = subagents
 
     def _schemas(
         self,
@@ -196,7 +201,32 @@ class JournalBackedLlmDecisionMaker:
         )
         offered_control_names = _tool_names(control_schemas)
         schemas = [*schemas, *control_schemas]
+        if self._subagents is not None:
+            session_id = frame.state.session_id
+            schemas = [*schemas, *self._subagents.schemas(session_id)]
+            allowed = self._subagents.tool_names(session_id)
+            if allowed is not None:
+                schemas = [
+                    schema
+                    for schema in schemas
+                    if _schema_name(schema) in allowed
+                ]
+                offered_control_names = offered_control_names & allowed
         return deepcopy(schemas), offered_control_names
+
+    def _prompt_for(self, frame: DecisionFrame) -> str:
+        session_id = frame.state.session_id
+        if self._subagents is not None:
+            override = self._subagents.system_prompt(session_id)
+            if override is not None:
+                # 子 Session 不加载 Toolset、不碰管理面，两份目录都不适用。
+                return override
+        catalog = self._surface.catalog_instruction(session_id, frame.state)
+        management_catalog = self._management.catalog_instruction(
+            session_id,
+            frame.state,
+        )
+        return f"{self._system_prompt}\n\n{catalog}\n\n{management_catalog}"
 
     def _decision_from_response(
         self,
@@ -252,11 +282,7 @@ class JournalBackedLlmDecisionMaker:
         # Host-owned context is captured before the first await. Journal facts
         # are bounded by the frame position, freezing this Step's visible world.
         self._control.begin_decision(frame.state.session_id)
-        prompt = self._system_prompt
-        catalog = self._surface.catalog_instruction(
-            frame.state.session_id,
-            frame.state,
-        )
+        prompt = self._prompt_for(frame)
         schemas, control_names = self._schemas(frame)
         allowed_tool_names = _tool_names(schemas)
         journal_tail = await self._journal.snapshot(frame.state.session_id)
@@ -265,12 +291,6 @@ class JournalBackedLlmDecisionMaker:
             for event in journal_tail
             if event.sequence <= frame.observed_journal_position
         )
-        prompt = f"{prompt}\n\n{catalog}"
-        management_catalog = self._management.catalog_instruction(
-            frame.state.session_id,
-            frame.state,
-        )
-        prompt = f"{prompt}\n\n{management_catalog}"
         prepared = self._projector.prepare(
             events,
             frame.state.visible_event_ids,

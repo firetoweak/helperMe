@@ -13,6 +13,7 @@ from helperme.runtime.events import (
     CommandRejected,
     DeliveryIdentity,
     DispatchAttemptStarted,
+    DomainFactCommitted,
     Event,
     EventDraft,
     RuntimeCompleted,
@@ -249,6 +250,7 @@ class MemoryJournal:
             (
                 UserMessageReceived,
                 TerminationRequested,
+                DomainFactCommitted,
             ),
         )
         if is_external != (event.delivery is not None):
@@ -933,6 +935,8 @@ class MemoryJournal:
     def _validate_generic_append(draft: EventDraft) -> None:
         if draft.delivery is not None:
             raise ValueError("delivery events must use accept_delivery")
+        if isinstance(draft.payload, DomainFactCommitted):
+            raise ValueError("domain fact requires delivery identity")
         if isinstance(
             draft.payload,
             (
@@ -954,7 +958,7 @@ class MemoryJournal:
     def _validate_external_delivery(draft: EventDraft) -> None:
         if not isinstance(
             draft.payload,
-            UserMessageReceived,
+            (UserMessageReceived, DomainFactCommitted),
         ):
             raise ValueError("delivery payload is not an external event")
 

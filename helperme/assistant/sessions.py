@@ -13,6 +13,7 @@ from helperme.assistant.runner import (
 )
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
+from helperme.assistant.subagent import SubAgentHost
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState, CommandPhase
 
@@ -68,12 +69,14 @@ class AssistantSessions:
         *,
         control: AssistantControlPlane,
         management: ManagementSurface,
+        subagents: SubAgentHost | None = None,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
         self._scheduler = scheduler
         self._control = control
         self._management = management
+        self._subagents = subagents
 
     def _view(
         self,
@@ -100,6 +103,8 @@ class AssistantSessions:
             session_id,
             self._management,
         )
+        if self._subagents is not None:
+            await self._subagents.rehydrate(session_id)
         if self._view(state).should_wake:
             await self._scheduler.wake(session_id)
         return self._view(state)

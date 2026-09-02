@@ -102,7 +102,7 @@ def _print_runtime_status(view: SessionView) -> None:
 
 
 async def run_runtime_console() -> None:
-    def sink(text: str) -> None:
+    def sink(_session_id: str, text: str) -> None:
         print(f"\n助手：{text}")
 
     context_meter = _ContextMeter()

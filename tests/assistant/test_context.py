@@ -119,12 +119,44 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
                 "sys",
             )
 
+    async def test_domain_fact_is_projected_as_labelled_user_message(self):
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker((lambda _frame: ModelDecision(content="noted"),)),
+            {},
+            SequentialIds(),
+        )
+        await runtime.receive_domain_fact(
+            self.SESSION,
+            "subagent.report",
+            {"child_session_id": "child-1", "summary": "done"},
+            delivery_id="report-1",
+            source="subagent",
+            requests_decision=True,
+        )
+        await settle_session(runtime, self.SESSION)
+        events = await runtime._journal.snapshot(self.SESSION)
+
+        messages = project_chat_messages(
+            events,
+            tuple(event.event_id for event in events),
+            "sys",
+        )
+        user_messages = [
+            message for message in messages if message["role"] == "user"
+        ]
+
+        self.assertEqual(len(user_messages), 1)
+        fact = json.loads(user_messages[0]["content"])
+        self.assertEqual(fact["fact"], "subagent.report")
+        self.assertEqual(fact["data"]["summary"], "done")
+
     async def _history(self, scripts, tools, users: tuple[str, ...]):
         delivered: list[str] = []
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(scripts),
-            {**tools, **deliver_binding(delivered.append)},
+            {**tools, **deliver_binding(lambda _session_id, text: delivered.append(text))},
             SequentialIds(),
         )
         for index, text in enumerate(users, start=1):
@@ -324,7 +356,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 "ping": ToolBinding(ping),
-                **deliver_binding(delivered.append),
+                **deliver_binding(lambda _session_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
