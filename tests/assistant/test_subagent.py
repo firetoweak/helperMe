@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from types import SimpleNamespace
 
-from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
+from helperme.assistant.control import AssistantControlPlane
+from helperme.assistant.decision import JournalBackedLlmDecisionMaker
+from helperme.assistant.delivery import deliver_binding
 from helperme.assistant.subagent import (
     DELEGATE,
     READONLY_TOOL_NAMES,
@@ -13,10 +16,12 @@ from helperme.assistant.subagent import (
     SubAgentHost,
     project_delegations,
     project_parent,
+    project_pending,
     project_reclaimed,
     project_report,
 )
 from helperme.llm.api import LLMProviderError
+from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage
 from helperme.runtime import (
     AgentRuntime,
     DomainFactCommitted,
@@ -42,6 +47,67 @@ def _facts(events, fact_type: str):
         if isinstance(event.payload, DomainFactCommitted)
         and event.payload.fact_type == fact_type
     ]
+
+
+def _pending(events) -> frozenset[str]:
+    """父已委派但还没交回结论的子 Session。
+
+    就地写出定义而不是调用生产函数：这些用例守的是不变量，换实现不该改测试。
+    """
+
+    return frozenset(project_delegations(events)) - project_reclaimed(events)
+
+
+class _RecordingLlm:
+    """记下每次决策实际发给模型的 system 提示。
+
+    「还差谁」投影得再准，没拼进提示模型也看不见，所以断言落在这里而不是
+    投影的返回值上。
+    """
+
+    def __init__(self) -> None:
+        self.system_prompts: list[str] = []
+
+    async def chat(self, messages, _model, *, tools=None):
+        self.system_prompts.append(messages[0]["content"])
+        return LLMCallResult(
+            LLMResponse(content="ok", calls=()),
+            LLMUsage(input_tokens=1, output_tokens=1),
+        )
+
+
+class _NoToolsets:
+    def schemas(self, _session_id, _state):
+        return []
+
+    def catalog_instruction(self, _session_id, _state):
+        return "没有 Toolset"
+
+
+class _NoManagement:
+    def schemas(self, _session_id, _state):
+        return []
+
+    def control_names(self, _session_id, _state):
+        return frozenset()
+
+    def catalog_instruction(self, _session_id, _state):
+        return "没有管理面"
+
+
+class _NoSkillTools:
+    def schemas(self):
+        return []
+
+
+def _visible_to(events, frame: DecisionFrame):
+    """一次决策实际看得见的事实，口径与 `decide()` 的 frame 边界一致。"""
+
+    return tuple(
+        event
+        for event in events
+        if event.sequence <= frame.observed_journal_position
+    )
 
 
 class _Interleaving:
@@ -268,11 +334,86 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
                 set(children),
             )
             self.assertEqual(project_reclaimed(parent_events), frozenset(children))
-            # 先回来的那条说明还差一个，父据此知道结论不齐；最后一条归零。
-            self.assertEqual(
-                [report.data["pending_children"] for report in reports],
-                [1, 0],
-            )
+            # 全部交回之后，父不再欠任何一条结论。
+            self.assertEqual(_pending(parent_events), frozenset())
+        finally:
+            await scheduler.close()
+
+    async def test_parent_never_sees_an_empty_pending_set_too_early(self):
+        """还有子没交回结论时，父那一帧看到的待回收集合不能是空的。
+
+        「还差人没回来」由父在决策时从自己已冻结的事实里投影，而
+        `project_delegations` 读的是 delegate 的 Outcome。Outcome 在
+        `_delegate` handler 返回之后才提交，handler 里却已经唤醒了子。一个
+        极快的子若在兄弟的 Outcome 落库前就回收，父就会看到一个空集合，并
+        据此提前作答。
+        """
+
+        host, model, runtime, scheduler = self._build(
+            parent_scripts=(
+                lambda _frame: ModelDecision(
+                    command_requests=(
+                        InvokeTool(DELEGATE, (("task", "查 A"),)),
+                        InvokeTool(DELEGATE, (("task", "查 B"),)),
+                        InvokeTool(DELEGATE, (("task", "查 C"),)),
+                    ),
+                ),
+                lambda _frame: ModelDecision(content="收到一条"),
+                lambda _frame: ModelDecision(content="又收到一条"),
+                lambda _frame: ModelDecision(content="都收到了"),
+            ),
+            child_scripts=(
+                lambda frame: ModelDecision(
+                    command_requests=(
+                        InvokeTool(
+                            REPORT,
+                            (
+                                (
+                                    "summary",
+                                    f"结论来自 {frame.trigger_event.session_id}",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            interleave=True,
+        )
+        await runtime.create_session(self.PARENT)
+        await runtime.receive_user_message(
+            self.PARENT,
+            "同时查 A B C",
+            delivery_id="user-1",
+        )
+
+        try:
+            await scheduler.wake(self.PARENT)
+            await scheduler.join()
+
+            parent_events = await runtime.snapshot(self.PARENT)
+            delegated = frozenset(project_delegations(parent_events))
+            self.assertEqual(len(delegated), 3)
+
+            for index, frame in enumerate(model.parent_frames):
+                visible = _visible_to(parent_events, frame)
+                reclaimed = project_reclaimed(visible)
+                if not reclaimed:
+                    # 一条结论都还没回来，这一帧本来就不欠什么。
+                    continue
+                with self.subTest(decision=index):
+                    # 已经有结论回来时，三个子的 delegate Outcome 都必须可见，
+                    # 否则「还差谁」会漏掉尚未落库的兄弟。
+                    self.assertEqual(
+                        frozenset(project_delegations(visible)),
+                        delegated,
+                        "有子已交回结论，但兄弟的 delegate Outcome 还没落库",
+                    )
+                    if reclaimed != delegated:
+                        self.assertNotEqual(
+                            _pending(visible),
+                            frozenset(),
+                            "父在还有子没交回结论时看到了空的待回收集合",
+                        )
         finally:
             await scheduler.close()
 
@@ -309,12 +450,12 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             self.assertIs(report.data["reported"], False)
             self.assertIsNone(report.data["summary"])
             self.assertIn("上游返回 500", report.data["failure"])
-            # 失败也是终局：父不会拿着一个永不归零的计数干等。
-            self.assertEqual(report.data["pending_children"], 0)
+            # 失败也是终局：父不会拿着一个永不归零的待回收集合干等。
             self.assertEqual(
                 project_reclaimed(parent_events),
                 frozenset(project_delegations(parent_events)),
             )
+            self.assertEqual(_pending(parent_events), frozenset())
             # 父被叫醒并做了下一步判断。
             self.assertEqual(len(model.parent_frames), 2)
             # 子那条裸错误没有冒到用户面前，用户该看到的是父的转述。
@@ -598,6 +739,148 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             await restarted_scheduler.close()
 
 
+class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
+    """父在结论不齐时该被约束，齐了就不该再被约束。"""
+
+    PARENT = "parent-session"
+
+    @staticmethod
+    def _decision_maker(runtime, llm, host):
+        # runtime 自己就有 snapshot(session_id)，直接当 journal 用。
+        return JournalBackedLlmDecisionMaker(
+            runtime,
+            llm,
+            "test-model",
+            surface=_NoToolsets(),
+            skill_tools=_NoSkillTools(),
+            control=AssistantControlPlane(()),
+            management=_NoManagement(),
+            subagents=host,
+        )
+
+    def _frame(self, position: int):
+        return SimpleNamespace(
+            state=SimpleNamespace(
+                session_id=self.PARENT,
+                visible_event_ids=(),
+            ),
+            trigger_event=SimpleNamespace(event_id="trigger-1"),
+            decision_cursor=1,
+            basis_state_version="basis-1",
+            observed_journal_position=position,
+        )
+
+    async def _delegated_parent(self):
+        """跑完一轮委派，交出父 Journal 与宿主。"""
+
+        host = SubAgentHost()
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            _ParentChildDecisions(
+                (
+                    lambda _frame: ModelDecision(
+                        command_requests=(
+                            InvokeTool(DELEGATE, (("task", "查 A"),)),
+                        ),
+                    ),
+                    lambda _frame: ModelDecision(content="收到"),
+                ),
+                (
+                    lambda _frame: ModelDecision(
+                        command_requests=(
+                            InvokeTool(REPORT, (("summary", "A 没问题"),)),
+                        ),
+                    ),
+                ),
+            ),
+            dict(host.bindings()),
+            SequentialIds(),
+        )
+        scheduler = SettlingScheduler(runtime, on_quiesced=host.on_quiesced)
+        host.attach(runtime, scheduler)
+        await runtime.create_session(self.PARENT)
+        await runtime.receive_user_message(
+            self.PARENT,
+            "查 A",
+            delivery_id="user-1",
+        )
+        try:
+            await scheduler.wake(self.PARENT)
+            await scheduler.join()
+        finally:
+            await scheduler.close()
+        return host, runtime, await runtime.snapshot(self.PARENT)
+
+    async def test_pending_child_reaches_the_prompt_and_leaves_when_reclaimed(self):
+        """同一份 Journal，两个冻结位置，得到两份不同的提示。
+
+        位置取自 frame 而不是「现在」：结论已经回来了，但重放一次早先的决策，
+        那次决策看到的世界里子还没回来，提示必须照旧带上约束。
+        """
+
+        host, runtime, parent_events = await self._delegated_parent()
+        first_report = next(
+            event
+            for event in parent_events
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == REPORT_FACT
+        )
+        before = first_report.sequence - 1
+        after = parent_events[-1].sequence
+
+        visible_before = _visible_to(parent_events, self._frame(before))
+        self.assertNotEqual(project_pending(visible_before), frozenset())
+        self.assertEqual(project_pending(parent_events), frozenset())
+
+        instruction = host.pending_instruction(visible_before)
+        self.assertIsNotNone(instruction)
+        self.assertIsNone(host.pending_instruction(parent_events))
+
+        llm = _RecordingLlm()
+        maker = self._decision_maker(runtime, llm, host)
+        await maker.decide(self._frame(before))
+        await maker.decide(self._frame(after))
+
+        self.assertEqual(len(llm.system_prompts), 2)
+        self.assertIn(instruction, llm.system_prompts[0])
+        self.assertNotIn(instruction, llm.system_prompts[1])
+
+    async def test_instruction_never_names_a_count(self):
+        """约束不带数字，父逐条收结论也不会换掉一份 system 提示。
+
+        没有行为依赖「还差几个」的大小，而带上它会让提示每收到一条结论就变
+        一次，整段 prefix 缓存跟着失效。
+        """
+
+        host, _runtime, parent_events = await self._delegated_parent()
+        first_report = next(
+            event
+            for event in parent_events
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == REPORT_FACT
+        )
+        visible = _visible_to(parent_events, self._frame(first_report.sequence - 1))
+
+        instruction = host.pending_instruction(visible)
+        self.assertIsNotNone(instruction)
+        self.assertFalse([char for char in instruction if char.isdigit()])
+
+    async def test_report_fact_does_not_carry_a_pending_count(self):
+        """「还差谁」不冻进事实。
+
+        冻进去就要求两个并行的子在父维度串行读写，才能各自算对自己那一条。
+        """
+
+        _host, _runtime, parent_events = await self._delegated_parent()
+        reports = _facts(parent_events, REPORT_FACT)
+
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(
+            set(reports[0].data),
+            {"child_session_id", "reported", "summary", "failure"},
+        )
+
+
 class SubAgentPolicyTest(unittest.IsolatedAsyncioTestCase):
     def test_readonly_names_exclude_every_writing_tool(self):
         for name in (
@@ -621,3 +904,8 @@ class SubAgentPolicyTest(unittest.IsolatedAsyncioTestCase):
 
     def test_session_without_any_report_projects_to_none(self):
         self.assertIsNone(project_report(()))
+
+    def test_nothing_delegated_means_nothing_pending(self):
+        host = SubAgentHost()
+        self.assertEqual(project_pending(()), frozenset())
+        self.assertIsNone(host.pending_instruction(()))

@@ -7,7 +7,6 @@ Journal 与判定。父子关系只存在于 Assistant 侧，用因果事实表�
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping, Sequence
 
 from helperme.assistant.context.prompt import SUBAGENT_PROMPT
@@ -66,8 +65,7 @@ DELEGATE_SCHEMA: dict[str, object] = {
             "本次调用只返回“已创建”，结论稍后作为一条事实送回。"
             "多件互不依赖的任务可以在同一次决策里各发一次 delegate，"
             "子 Agent 之间并行推进。"
-            "结论一条条回来，每条带 pending_children 表示还有几个子 Agent 没回；"
-            "它不为 0 说明结论还没齐，此时不要给出最终答复。"
+            "结论一条条回来，不是一次性交齐。结论齐全前不要给出最终答复。"
             "回来的也可能是失败：failure 非空表示该子 Agent 没能跑完，"
             "字段里是失败原因，由你判断重派、换做法还是如实告诉用户。"
         ),
@@ -165,6 +163,12 @@ def project_parent(events: Sequence[Event]) -> str | None:
     return None
 
 
+def project_pending(events: Sequence[Event]) -> frozenset[str]:
+    """父已委派但还没交回结论的子 Session。"""
+
+    return frozenset(project_delegations(events)) - project_reclaimed(events)
+
+
 def project_reclaimed(events: Sequence[Event]) -> frozenset[str]:
     """父 Session 已经收到过结论的那些子 Session。"""
 
@@ -225,7 +229,6 @@ class SubAgentHost:
         self._runtime: AgentRuntime | None = None
         self._scheduler = None
         self._parents: dict[str, str] = {}
-        self._reclaim_locks: dict[str, asyncio.Lock] = {}
 
     def attach(self, runtime: AgentRuntime, scheduler) -> None:
         self._runtime = runtime
@@ -244,6 +247,20 @@ class SubAgentHost:
 
     def system_prompt(self, session_id: str) -> str | None:
         return SUBAGENT_PROMPT if self.is_subagent(session_id) else None
+
+    def pending_instruction(self, events: Sequence[Event]) -> str | None:
+        """父还有子 Agent 没回来时，约束它不要提前作答。
+
+        只说「还没齐」不说「还差几个」：没有行为依赖这个数的大小，而带上它会
+        让系统提示每收到一条结论就变一次，白扔掉整段 prefix 缓存。
+        """
+
+        if not project_pending(events):
+            return None
+        return (
+            "还有已委派的子 Agent 没有交回结论。结论齐全前不要给出最终答复，"
+            "也不要把已回来的部分当作全部依据。"
+        )
 
     def schemas(self, session_id: str) -> list[dict[str, object]]:
         if self.is_subagent(session_id):
@@ -316,7 +333,7 @@ class SubAgentHost:
     async def on_failed(self, session_id: str, message: str) -> None:
         """子 Session 撞上已识别的失败，也是一种终局。
 
-        失败不会让它静止，不回收父就一直等，`pending_children` 永远不归零。
+        失败不会让它静止，不回收父就一直等，待回收集合永远清不空。
         失败原文原样交给父：父是 Judge，重试还是换路由它判断，这里不改写、
         不降级成「无产出」。
         """
@@ -339,46 +356,26 @@ class SubAgentHost:
         summary: str | None,
         failure: str | None,
     ) -> None:
-        """把一个子 Session 的终局交回父。一个子最多回收一次。"""
+        """把一个子 Session 的终局交回父。一个子最多回收一次。
 
-        runtime = self._require_runtime()
-        # 并行委派的子会各自终局。不串行化，它们会在对方写入回收事实前读到
-        # 同一份父 Journal，各自都以为还有人没回来，父就永远等不到 0。
-        lock = self._reclaim_locks.setdefault(parent_session_id, asyncio.Lock())
-        async with lock:
-            await runtime.receive_domain_fact(
-                parent_session_id,
-                REPORT_FACT,
-                {
-                    "child_session_id": session_id,
-                    "reported": summary is not None,
-                    "summary": summary,
-                    "failure": failure,
-                    "pending_children": await self._pending_children(
-                        parent_session_id,
-                        session_id,
-                    ),
-                },
-                delivery_id=f"{session_id}:report",
-                source=FACT_SOURCE,
-                requests_decision=True,
-            )
-        await self._require_scheduler().wake(parent_session_id)
-
-    async def _pending_children(
-        self,
-        parent_session_id: str,
-        reclaiming: str,
-    ) -> int:
-        """父还有几个子没交回结论，不含正在回收的这个。
-
-        父不会等子凑齐才被唤醒，每条结论都单独叫醒它一次。少了这个数，父只
-        能自己数委派过几个、收到过几条，容易在结论不全时就下判断。
+        回收事实只记这个子自己的终局。「还差谁」是派生值，由父在决策时从自己
+        已冻结的事实里投影；冻进事实就要求两个并行的子在父维度串行读写。
         """
 
-        events = await self._require_runtime().snapshot(parent_session_id)
-        delegated = set(project_delegations(events))
-        return len(delegated - project_reclaimed(events) - {reclaiming})
+        await self._require_runtime().receive_domain_fact(
+            parent_session_id,
+            REPORT_FACT,
+            {
+                "child_session_id": session_id,
+                "reported": summary is not None,
+                "summary": summary,
+                "failure": failure,
+            },
+            delivery_id=f"{session_id}:report",
+            source=FACT_SOURCE,
+            requests_decision=True,
+        )
+        await self._require_scheduler().wake(parent_session_id)
 
     async def _delegate(
         self,

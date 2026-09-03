@@ -159,7 +159,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
         """静止、失败、对外输出三条线都要落到 SubAgentHost。
 
         漏接 on_failed，子 Session 撞上模型失败就既不静止也不回收，父会拿着
-        一个永不归零的 pending_children 一直等下去。
+        一个永远清不空的待回收集合一直等下去。
         """
 
         with TemporaryDirectory() as directory:

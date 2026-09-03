@@ -291,6 +291,12 @@ class JournalBackedLlmDecisionMaker:
             for event in journal_tail
             if event.sequence <= frame.observed_journal_position
         )
+        if self._subagents is not None:
+            # 「还差谁」读的是这一帧已冻结的事实，与决策看到的世界同一口径，
+            # 重放才是确定的。
+            pending = self._subagents.pending_instruction(events)
+            if pending is not None:
+                prompt = f"{prompt}\n\n{pending}"
         prepared = self._projector.prepare(
             events,
             frame.state.visible_event_ids,
