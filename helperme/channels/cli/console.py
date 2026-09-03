@@ -48,11 +48,19 @@ class _ContextMeter:
         self._session_id = ""
         self._used = 0
         self._limit = 0
+        self._subagent_active = False
 
-    def select(self, session_id: str, limit: int) -> None:
+    def select(
+        self,
+        session_id: str,
+        limit: int,
+        *,
+        subagent_active: bool = False,
+    ) -> None:
         self._session_id = session_id
         self._used = 0
         self._limit = limit
+        self._subagent_active = subagent_active
 
     def update(self, session_id: str, used: int, limit: int) -> None:
         if session_id != self._session_id:
@@ -60,8 +68,15 @@ class _ContextMeter:
         self._used = used
         self._limit = limit
 
+    def update_subagent_activity(self, session_id: str, active: bool) -> None:
+        if session_id == self._session_id:
+            self._subagent_active = active
+
     def render(self) -> str:
-        return f"上下文 {_compact_tokens(self._used)}/{_compact_tokens(self._limit)}"
+        context = f"上下文 {_compact_tokens(self._used)}/{_compact_tokens(self._limit)}"
+        if self._subagent_active:
+            return f"{context}  ·  子 Agent 工作中"
+        return context
 
 
 async def read_console_input(
@@ -112,14 +127,19 @@ async def run_runtime_console() -> None:
     async with bootstrap_assistant(
         sink,
         context_usage_sink=context_meter.update,
+        subagent_activity_sink=context_meter.update_subagent_activity,
     ) as app:
         config = app.config
         sessions = app.sessions
         mcp_console = McpConsoleAdapter(app.mcp_service)
         skill_console = SkillConsoleAdapter(app.skill_service)
         session_id = f"session-{uuid4().hex}"
-        await sessions.create(session_id)
-        context_meter.select(session_id, config.model_context_limit)
+        view = await sessions.create(session_id)
+        context_meter.select(
+            session_id,
+            config.model_context_limit,
+            subagent_active=view.has_active_subagents,
+        )
         input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         access = "整台电脑" if config.full_access else "配置的 Workspace"
         print(f"HelperMe 已启动。model={config.model_name}")
@@ -165,8 +185,12 @@ async def run_runtime_console() -> None:
                 separate_turns = True
                 if user_message == "/new":
                     session_id = f"session-{uuid4().hex}"
-                    await sessions.create(session_id)
-                    context_meter.select(session_id, config.model_context_limit)
+                    view = await sessions.create(session_id)
+                    context_meter.select(
+                        session_id,
+                        config.model_context_limit,
+                        subagent_active=view.has_active_subagents,
+                    )
                     print(f"\n新 Session 已创建：{session_id}")
                     continue
                 if user_message == "/resume" or user_message.startswith("/resume "):
@@ -184,7 +208,11 @@ async def run_runtime_console() -> None:
                         print(f"\nSession 恢复失败：{exc.code}: {exc.message}")
                         continue
                     session_id = target_session_id
-                    context_meter.select(session_id, config.model_context_limit)
+                    context_meter.select(
+                        session_id,
+                        config.model_context_limit,
+                        subagent_active=view.has_active_subagents,
+                    )
                     print(f"\n已恢复 Session：{session_id}")
                     _print_runtime_status(view)
                     continue

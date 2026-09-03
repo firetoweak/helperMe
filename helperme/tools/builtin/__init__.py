@@ -8,9 +8,6 @@ from helperme.tools.builtin.file_write import create_file_write_specs
 from helperme.tools.builtin.get_changes import create_get_changes_specs
 from helperme.tools.spec import ToolSpec
 
-# demo 是无状态内建工具，通过导入副作用注册。
-import helperme.tools.builtin.demo  # noqa: F401
-
 
 def create_environment_tool_specs(
     binding: EnvironmentBinding,

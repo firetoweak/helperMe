@@ -42,6 +42,18 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
         meter.update("session-1", 12_345, 200_000)
         self.assertEqual(meter.render(), "上下文 12.3k/200k")
 
+        meter.update_subagent_activity("another-session", True)
+        self.assertEqual(meter.render(), "上下文 12.3k/200k")
+
+        meter.update_subagent_activity("session-1", True)
+        self.assertEqual(
+            meter.render(),
+            "上下文 12.3k/200k  ·  子 Agent 工作中",
+        )
+
+        meter.update_subagent_activity("session-1", False)
+        self.assertEqual(meter.render(), "上下文 12.3k/200k")
+
     async def test_reader_continuously_collects_complete_lines(self):
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         session = AsyncMock()

@@ -17,7 +17,7 @@ Canonical State 由 Journal 重放得到：
 | `COMPLETED`  | 有界 Host 已显式完成 finalization |
 | `TERMINATED` | 有界 Host 已显式终止 finalization |
 
-CLI / Telegram Session 是持续对话，永不因普通回答自动终态化。`COMPLETED / TERMINATED` 只供未来有界后台任务或 SubAgent Host 显式使用。
+CLI / Telegram Session 是持续对话，永不因普通回答自动终态化。`COMPLETED / TERMINATED` 目前没有消费者：已实现的 [SubAgent](SubAgent.md) 也不用它们，子 Session 交回结论后停在 `WAITING`，「最多回收一次」由投递幂等保证而非终态。两个状态留给未来明确有界的后台任务。
 
 所有 Channel 文本统一为有序 `UserMessageReceived`。运行中到达的新消息不会抢占或取消冻结中的 Step，也不另建 Interrupt Event；它改写的是下一次决策从哪来。当前 Step 已签发的 Attempt 先跑完并记账，旧 `decision_on_outcome` 组不再单独要 Step。见 [Runtime 状态推进模型](Runtime状态推进模型.md) 第 6 节。
 

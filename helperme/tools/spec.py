@@ -13,6 +13,7 @@ from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
+from pydantic.json_schema import GenerateJsonSchema
 
 # ---------------------------------------------------------------------------
 # 参数描述与运行时校验必须来自同一个契约。
@@ -35,12 +36,50 @@ class ToolParameters(Protocol):
         ...
 
 
+class _NoAutoTitles(GenerateJsonSchema):
+    """不给字段自动补 title。
+
+    自动 title 只是把字段名换个大小写，而 property key 就在模型眼前。显式写的
+    `Field(title=...)` 不走这条路，仍会留在 schema 里。
+    """
+
+    def field_title_should_be_set(self, schema: Any) -> bool:
+        return False
+
+
+def _drop_class_metadata(schema: dict[str, Any]) -> None:
+    """类名和 class docstring 是写给代码读者的，不进模型上下文。
+
+    参数对象要对模型说的话属于 `ToolSpec.description`，那一份是必填的；两处都
+    说等于每次请求付两遍。只清对象自身和 `$defs` 里嵌套模型的这一层，字段级的
+    title 由 `_NoAutoTitles` 负责，剩下的都是作者显式写的。
+    """
+
+    for node in (schema, *_definitions(schema)):
+        node.pop("title", None)
+        node.pop("description", None)
+
+
+def _definitions(schema: Mapping[str, Any]) -> list[dict[str, Any]]:
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, Mapping):
+        return []
+    return [
+        definition
+        for definition in definitions.values()
+        if isinstance(definition, dict)
+    ]
+
+
 @dataclass(frozen=True)
 class PydanticParameters:
     input_model: type[BaseModel]
 
     def schema(self) -> Mapping[str, Any]:
-        schema = self.input_model.model_json_schema()
+        schema = self.input_model.model_json_schema(
+            schema_generator=_NoAutoTitles,
+        )
+        _drop_class_metadata(schema)
         schema["additionalProperties"] = False
         return schema
 

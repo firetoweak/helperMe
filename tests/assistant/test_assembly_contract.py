@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from copy import deepcopy
@@ -168,6 +169,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             home = HelperMeHome(root / ".helperme")
             delivered: list[tuple[str, str]] = []
+            activity: list[tuple[str, bool]] = []
             with (
                 patch(
                     "helperme.assistant.assembly.HelperMeHome.default",
@@ -189,6 +191,11 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     lambda session_id, text: delivered.append((session_id, text)),
                     MemoryJournal(),
+                    subagent_activity_sink=(
+                        lambda session_id, active: activity.append(
+                            (session_id, active)
+                        )
+                    ),
                 )
                 try:
                     scheduler = assembly.scheduler
@@ -205,6 +212,11 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     await scheduler._emit("parent/sub-1", "运行失败：上游 500")
                     await scheduler._emit("parent", "父转述后的判断")
 
+                    assembly.subagents._visible_pending["parent"] = {"parent/sub-1"}
+                    assembly.subagents._publish_activity("parent")
+                    await asyncio.sleep(0)
+
                     self.assertEqual(delivered, [("parent", "父转述后的判断")])
+                    self.assertEqual(activity, [("parent", True)])
                 finally:
                     await assembly.scheduler.close()

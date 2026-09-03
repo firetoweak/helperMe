@@ -13,7 +13,7 @@ from helperme.assistant.runner import (
 )
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
-from helperme.assistant.subagent import SubAgentHost
+from helperme.assistant.subagent import SubAgentHost, project_pending
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState, CommandPhase
 
@@ -25,6 +25,7 @@ class SessionView:
     pending_authorization_ids: tuple[str, ...]
     terminal: bool
     should_wake: bool
+    has_active_subagents: bool = False
     control_approval: ControlApprovalView | None = None
     control_message: str | None = None
 
@@ -34,6 +35,7 @@ def session_view(
     *,
     control_approval: ControlApprovalView | None = None,
     control_message: str | None = None,
+    has_active_subagents: bool = False,
 ) -> SessionView:
     terminal = state.status in {
         RuntimeStatus.COMPLETED,
@@ -53,6 +55,7 @@ def session_view(
                 )
             )
         ),
+        has_active_subagents=has_active_subagents,
         control_approval=control_approval,
         control_message=control_message,
     )
@@ -83,11 +86,13 @@ class AssistantSessions:
         state: CanonicalState,
         *,
         control_message: str | None = None,
+        has_active_subagents: bool = False,
     ) -> SessionView:
         return session_view(
             state,
             control_approval=self._control.pending_view(state.session_id),
             control_message=control_message,
+            has_active_subagents=has_active_subagents,
         )
 
     async def create(self, session_id: str) -> SessionView:
@@ -103,14 +108,27 @@ class AssistantSessions:
             session_id,
             self._management,
         )
+        pending_subagents: tuple[str, ...] = ()
         if self._subagents is not None:
-            await self._subagents.rehydrate(session_id)
+            pending_subagents = await self._subagents.rehydrate(session_id)
         if self._view(state).should_wake:
             await self._scheduler.wake(session_id)
-        return self._view(state)
+        return self._view(
+            state,
+            has_active_subagents=bool(pending_subagents),
+        )
 
     async def view(self, session_id: str) -> SessionView:
-        return self._view(await self._runtime.state(session_id))
+        state = await self._runtime.state(session_id)
+        has_active_subagents = False
+        if self._subagents is not None:
+            has_active_subagents = bool(
+                project_pending(await self._runtime.snapshot(session_id))
+            )
+        return self._view(
+            state,
+            has_active_subagents=has_active_subagents,
+        )
 
     async def resolve_control(
         self,

@@ -165,9 +165,14 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         child_scripts,
         *,
         delivered=None,
+        activity=None,
         interleave=False,
     ):
-        host = SubAgentHost()
+        host = SubAgentHost(
+            None
+            if activity is None
+            else lambda session_id, active: activity.append((session_id, active))
+        )
         model = _ParentChildDecisions(parent_scripts, child_scripts)
         bindings = dict(host.bindings())
         if delivered is not None:
@@ -207,6 +212,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_single_delegation_returns_its_report_to_the_parent(self):
         delivered: list[tuple[str, str]] = []
+        activity: list[tuple[str, bool]] = []
         host, model, runtime, scheduler = self._build(
             parent_scripts=(
                 lambda _frame: ModelDecision(
@@ -227,6 +233,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             delivered=delivered,
+            activity=activity,
         )
         await runtime.create_session(self.PARENT)
         await runtime.receive_user_message(
@@ -238,6 +245,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         try:
             await scheduler.wake(self.PARENT)
             await scheduler.join()
+            await asyncio.sleep(0)
 
             parent_events = await runtime.snapshot(self.PARENT)
             reports = _facts(parent_events, REPORT_FACT)
@@ -270,6 +278,8 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
                 (await runtime.state(self.PARENT)).status,
                 RuntimeStatus.WAITING,
             )
+            self.assertEqual(activity[0], (self.PARENT, True))
+            self.assertEqual(activity[-1], (self.PARENT, False))
         finally:
             await scheduler.close()
 

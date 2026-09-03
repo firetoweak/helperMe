@@ -7,7 +7,8 @@ Journal 与判定。父子关系只存在于 Assistant 侧，用因果事实表�
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import asyncio
+from collections.abc import Callable, Mapping, Sequence
 
 from helperme.assistant.context.prompt import SUBAGENT_PROMPT
 from helperme.assistant.delivery import DeliverySink, emit_delivery
@@ -32,6 +33,8 @@ TASK_FACT = "subagent.task"
 REPORT_FACT = "subagent.report"
 
 FACT_SOURCE = "subagent"
+
+SubAgentActivitySink = Callable[[str, bool], None]
 
 
 READONLY_TOOL_NAMES = frozenset(
@@ -225,10 +228,16 @@ def project_report(events: Sequence[Event]) -> str | None:
 class SubAgentHost:
     """委派、回收，以及子 Session 的策略边界。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        activity_sink: SubAgentActivitySink | None = None,
+    ) -> None:
         self._runtime: AgentRuntime | None = None
         self._scheduler = None
         self._parents: dict[str, str] = {}
+        # 仅供显示刷新；执行判断始终从 Journal 投影。
+        self._visible_pending: dict[str, set[str]] = {}
+        self._activity_sink = activity_sink
 
     def attach(self, runtime: AgentRuntime, scheduler) -> None:
         self._runtime = runtime
@@ -239,6 +248,19 @@ class SubAgentHost:
 
     def parent_of(self, session_id: str) -> str | None:
         return self._parents.get(session_id)
+
+    def _publish_activity(self, parent_session_id: str) -> None:
+        """异步刷新显示；不进入委派与回收的执行闭环。"""
+
+        if self._activity_sink is not None:
+            asyncio.get_running_loop().call_soon(self._emit_activity, parent_session_id)
+
+    def _emit_activity(self, parent_session_id: str) -> None:
+        assert self._activity_sink is not None
+        self._activity_sink(
+            parent_session_id,
+            bool(self._visible_pending.get(parent_session_id)),
+        )
 
     def tool_names(self, session_id: str) -> frozenset[str] | None:
         """本 Session 允许出现的工具名；None 表示不设限。"""
@@ -303,8 +325,10 @@ class SubAgentHost:
             self._parents[child_session_id] = session_id
             if child_session_id not in reclaimed:
                 pending.append(child_session_id)
+        self._visible_pending[session_id] = set(pending)
         for child_session_id in pending:
             await self._require_scheduler().wake(child_session_id)
+        self._publish_activity(session_id)
         return tuple(pending)
 
     async def on_quiesced(
@@ -375,6 +399,9 @@ class SubAgentHost:
             source=FACT_SOURCE,
             requests_decision=True,
         )
+        visible_pending = self._visible_pending.setdefault(parent_session_id, set())
+        visible_pending.discard(session_id)
+        self._publish_activity(parent_session_id)
         await self._require_scheduler().wake(parent_session_id)
 
     async def _delegate(
@@ -413,6 +440,10 @@ class SubAgentHost:
             source=FACT_SOURCE,
             requests_decision=True,
         )
+        self._visible_pending.setdefault(context.session_id, set()).add(
+            child_session_id
+        )
+        self._publish_activity(context.session_id)
         await self._require_scheduler().wake(child_session_id)
         return {
             "ok": True,

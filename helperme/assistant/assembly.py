@@ -61,6 +61,7 @@ async def build_assistant_assembly(
     journal,
     *,
     context_usage_sink: Callable[[str, int, int], None] | None = None,
+    subagent_activity_sink: Callable[[str, bool], None] | None = None,
     scheduler_factory=SessionScheduler,
 ) -> AssistantAssembly:
     builtin_tools = await build_builtin_tools(config)
@@ -98,7 +99,7 @@ async def build_assistant_assembly(
         settings,
     )
     skill_tools = SkillToolAdapter(skills, gateway, settings)
-    subagents = SubAgentHost()
+    subagents = SubAgentHost(subagent_activity_sink)
     surface = ToolSurface(
         providers=(McpToolsetAdapter(mcp),),
         base_schemas=[

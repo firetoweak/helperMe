@@ -36,6 +36,7 @@ async def bootstrap_assistant(
     config: AssistantConfig | None = None,
     app_config: AppConfig | None = None,
     context_usage_sink: Callable[[str, int, int], None] | None = None,
+    subagent_activity_sink: Callable[[str, bool], None] | None = None,
 ) -> AsyncIterator[BootstrappedAssistant]:
     assert config is None or app_config is None
     if config is None:
@@ -52,6 +53,7 @@ async def bootstrap_assistant(
         sink,
         journal,
         context_usage_sink=context_usage_sink,
+        subagent_activity_sink=subagent_activity_sink,
     )
     async with effective_config.llm, assembly.mcp.client_manager:
         try:

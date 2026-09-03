@@ -182,7 +182,7 @@ Outcome 照常写入。改的只是「要不要为这组 Outcome **再开一轮*
 
 普通 CLI / Telegram Session 不自动进入终态。模型的 `LifecycleIntent.complete/terminate` 只是声明；Channel 不调用 `finalize()`，完成一次输出后仍回到 `WAITING(user_message)`。
 
-终态仅保留给明确有界的后台任务或 SubAgent Session，由它们的 Host 在边界外完成 Judge/Policy 后显式调用。Finalization Barrier 只验证机械条件，不判断目标是否真的完成。终态表示逻辑关闭，不负责删除 Journal 数据。
+终态仅保留给明确有界的后台任务，由它们的 Host 在边界外完成 Judge/Policy 后显式调用。目前没有这样的 Host：已实现的 [SubAgent](SubAgent.md) 子 Session 也是普通 Session，交回结论后停在 `WAITING`，「最多回收一次」由投递幂等而非终态保证；`LifecycleIntent` 至今没有生产调用点。Finalization Barrier 只验证机械条件，不判断目标是否真的完成。终态表示逻辑关闭，不负责删除 Journal 数据。
 
 ## 8. 持久化与幂等
 
