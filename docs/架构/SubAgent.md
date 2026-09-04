@@ -2,6 +2,8 @@
 
 > SubAgent 是一次性的异步函数式 Session：父 Agent 传入任务，子 Agent 独立执行并通过 `report` 返回结果，之后不能继续交互。
 
+当前父子 Session 在同一进程中协作式并发；已经确认的独立进程与独立 Journal 目标见[多活跃会话](多活跃会话.md)。
+
 领域代码：`helperme/assistant/subagent.py`。子 Session 是普通独立 Session：同一套 `create / advance / recover`，自己的 Journal 与判定。父子关系只存在于 Assistant 侧，用因果事实表达，Runtime 不增加 `parent_session_id` 或 `agent_type`。
 
 ## 为什么要有它

@@ -32,7 +32,7 @@ Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`
 | `helperme/assistant/artifacts.py` | 按 Session 隔离的 Artifact Store 与 `read_artifact` Binding |
 | `helperme/assistant/delivery.py` | 将模型正文转换为可靠投递 Command，并装配 `deliver` Binding |
 | `helperme/assistant/completion/` | 完成标准、独立 Judge 与专用 Prompt |
-| `helperme/assistant/runner.py` | Event wake、跨 Session 并行激活、单 Session single-flight |
+| `helperme/assistant/runner.py` | Event wake、跨 Session 协作式激活、单 Session single-flight |
 | `helperme/assistant/sessions.py` | 给定 identity 后的 Session 应用操作与 Channel View |
 | `helperme/assistant/assembly.py` | Assistant 能力装配 |
 | `helperme/assistant/builtin_tools.py` | 当前 Sandbox/环境与内置工具装配 |
@@ -59,4 +59,4 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 配置
 
-`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置只包含 model_context_limit 与 input_budget_ratio，不读取 Step 次数预算。Assistant Scheduler 每次激活最多执行一个 Step，仍为 `RUNNABLE` 时再次激活；不同 Session 不经过全局执行队列，默认并行。
+`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置只包含 model_context_limit 与 input_budget_ratio，不读取 Step 次数预算。当前 Assistant Scheduler 每次激活最多执行一个 Step，仍为 `RUNNABLE` 时再次激活；不同 Session 在同一事件循环中协作式并发。已确认的进程隔离目标见[多活跃会话](多活跃会话.md)。

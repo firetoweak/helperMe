@@ -64,7 +64,7 @@ Dispatcher 执行 Command  │
 Outcome Event ───────────┘ wake
 ```
 
-Scheduler 只是 Event 与异步推进任务之间的激活器，不决定不同 Session 的执行顺序。不同 Session 默认并行；同一 Session 的重复唤醒会合并，并且同一时刻最多只有一个推进任务。
+当前 Scheduler 只是 Event 与同一事件循环中异步推进任务之间的激活器，不决定不同 Session 的执行顺序。不同 Session 协作式并发；同一 Session 的重复唤醒会合并，并且同一时刻最多只有一个推进任务。已确认的目标结构将每个活跃 Session 放入独立进程，见[多活跃会话](多活跃会话.md)。
 
 这形成三个边界：
 

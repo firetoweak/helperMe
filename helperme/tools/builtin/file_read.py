@@ -148,6 +148,81 @@ def _matches_glob(path: str, pattern: str) -> bool:
     return PurePosixPath(f"/{path}").match(f"/{pattern}")
 
 
+def _scan_glob(
+    resolver: WorkspacePathResolver,
+    raw: GlobInput,
+    resolved_search: ResolvedEnvironmentPath,
+    pattern: str,
+) -> dict[str, Any]:
+    search_root = resolved_search.native_path
+    matches = []
+    skipped = 0
+    inaccessible: list[Path] = []
+    for candidate in _walk_entries(
+        search_root,
+        raw.max_depth,
+        inaccessible,
+    ):
+        try:
+            resolved_candidate = resolver.resolve(str(candidate))
+            absolute_candidate = resolved_candidate.native_path
+        except EnvironmentInputError:
+            continue
+        try:
+            if not absolute_candidate.exists():
+                continue
+            candidate_kind = "dir" if absolute_candidate.is_dir() else "file"
+        except OSError:
+            if len(inaccessible) < MAX_GLOB_INACCESSIBLE_PATHS:
+                inaccessible.append(absolute_candidate)
+            continue
+        if raw.kind != "any" and candidate_kind != raw.kind:
+            continue
+
+        relative_search_path = candidate.relative_to(search_root).as_posix()
+        if not _matches_glob(relative_search_path, pattern):
+            continue
+
+        if skipped < raw.offset:
+            skipped += 1
+            continue
+        matches.append({
+            **resolved_candidate.result_fields(),
+            "path": resolved_candidate.workspace_membership.display_path,
+            "kind": candidate_kind,
+        })
+        if len(matches) > raw.max_results:
+            break
+
+    truncated = len(matches) > raw.max_results
+    page = matches[:raw.max_results]
+    inaccessible_paths = [
+        resolver.resolve(str(path)).workspace_membership.display_path
+        for path in inaccessible[:MAX_GLOB_INACCESSIBLE_PATHS]
+    ]
+    complete = not inaccessible
+    return {
+        "ok": True,
+        "code": "GLOB_COMPLETED" if complete else "GLOB_PARTIAL",
+        "pattern": raw.pattern,
+        "path": raw.path,
+        **resolved_search.result_fields(),
+        "matches": page,
+        "complete": complete,
+        "inaccessible_paths": inaccessible_paths,
+        "inaccessible_paths_truncated": (
+            len(inaccessible) > MAX_GLOB_INACCESSIBLE_PATHS
+        ),
+        "truncated": truncated,
+        "next_offset": raw.offset + len(page) if truncated else None,
+        "hint": (
+            "结果不完整；检查 inaccessible_paths，并在需要完整结论时缩小 path。"
+            if not complete
+            else None
+        ),
+    }
+
+
 def create_file_read_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
     resolver = binding.resolver
 
@@ -159,7 +234,6 @@ def create_file_read_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
             if err:
                 return err
             assert resolved_search is not None
-            search_root = resolved_search.native_path
 
             pattern = raw.pattern.replace("\\", "/")
             pattern_path = Path(pattern)
@@ -180,74 +254,13 @@ def create_file_read_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
                 **resolved_search.result_fields(),
             }
 
-        matches = []
-        skipped = 0
-        inaccessible: list[Path] = []
-        for candidate in _walk_entries(
-            search_root,
-            raw.max_depth,
-            inaccessible,
-        ):
-            try:
-                resolved_candidate = resolver.resolve(str(candidate))
-                absolute_candidate = resolved_candidate.native_path
-            except EnvironmentInputError:
-                continue
-            try:
-                if not absolute_candidate.exists():
-                    continue
-                candidate_kind = (
-                    "dir" if absolute_candidate.is_dir() else "file"
-                )
-            except OSError:
-                if len(inaccessible) < MAX_GLOB_INACCESSIBLE_PATHS:
-                    inaccessible.append(absolute_candidate)
-                continue
-            if raw.kind != "any" and candidate_kind != raw.kind:
-                continue
-
-            relative_search_path = candidate.relative_to(search_root).as_posix()
-            if not _matches_glob(relative_search_path, pattern):
-                continue
-
-            if skipped < raw.offset:
-                skipped += 1
-                continue
-            matches.append({
-                **resolved_candidate.result_fields(),
-                "path": resolved_candidate.workspace_membership.display_path,
-                "kind": candidate_kind,
-            })
-            if len(matches) > raw.max_results:
-                break
-
-        truncated = len(matches) > raw.max_results
-        page = matches[:raw.max_results]
-        inaccessible_paths = [
-            resolver.resolve(str(path)).workspace_membership.display_path
-            for path in inaccessible[:MAX_GLOB_INACCESSIBLE_PATHS]
-        ]
-        complete = not inaccessible
-        return {
-            "ok": True,
-            "code": "GLOB_COMPLETED" if complete else "GLOB_PARTIAL",
-            "pattern": raw.pattern,
-            "path": raw.path,
-            **resolved_search.result_fields(),
-            "matches": page,
-            "complete": complete,
-            "inaccessible_paths": inaccessible_paths,
-            "inaccessible_paths_truncated": (
-                len(inaccessible) > MAX_GLOB_INACCESSIBLE_PATHS
-            ),
-            "truncated": truncated,
-            "next_offset": raw.offset + len(page) if truncated else None,
-            "hint": (
-                "结果不完整；检查 inaccessible_paths，并在需要完整结论时缩小 path。"
-                if not complete
-                else None
-            ),
-        }
+        return await asyncio.to_thread(
+            _scan_glob,
+            resolver,
+            raw,
+            resolved_search,
+            pattern,
+        )
 
     async def grep(raw: GrepInput) -> dict[str, Any]:
         if not raw.query.strip():

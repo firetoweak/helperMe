@@ -290,6 +290,9 @@ class AgentRuntime:
             finally:
                 if not operation.done():
                     await _cancel_task(operation)
+                elif not operation.cancelled():
+                    # heartbeat 与提交同时失败时，也要取走提交任务的异常。
+                    operation.exception()
                 await _stop_heartbeat(heartbeat)
             step = step_event.payload.step
             dispatch = await self.dispatcher.start_pending(session_id)

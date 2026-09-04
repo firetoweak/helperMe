@@ -1049,6 +1049,44 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await manager.aclose()
 
+    async def test_client_negotiates_with_legacy_server(self):
+        with TemporaryDirectory() as directory:
+            workspace = HelperMeHome(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_home(workspace)
+            secrets = McpSecretStore.from_home(workspace)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
+            service = McpApplicationService(registry, secrets, manager)
+            fixture = (
+                Path(__file__).parents[1]
+                / "fixtures"
+                / "mcp_legacy_stdio_server.py"
+            )
+            await service.upsert_server(
+                server_id="legacy_stdio",
+                display_name="Legacy stdio",
+                transport="stdio",
+                transport_config={
+                    "command": sys.executable,
+                    "args": [str(fixture)],
+                },
+                enabled=True,
+            )
+            try:
+                specs = await service.toolset_provider.tool_specs(
+                    "mcp:legacy_stdio"
+                )
+                self.assertEqual(specs, ())
+                self.assertEqual(
+                    manager.runtime_state("legacy_stdio").negotiated_version,
+                    "2025-11-25",
+                )
+            finally:
+                await manager.aclose()
+
 
 class McpRealStreamableHttpIntegrationTest(
     unittest.IsolatedAsyncioTestCase
@@ -1112,10 +1150,6 @@ class McpRealStreamableHttpIntegrationTest(
                 self.assertEqual(
                     result["data"]["mcp"]["structured_content"]["value"],
                     "hello-http",
-                )
-                self.assertEqual(
-                    manager.runtime_state("real_http").negotiated_version,
-                    "2026-07-28",
                 )
             finally:
                 await manager.aclose()
