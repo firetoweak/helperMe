@@ -1,162 +1,52 @@
 # helperMe
 
-**A personal AI assistant whose behavior stays understandable as its capabilities grow.**
-
-`helperMe` began with a recurring frustration: existing Agent assistants could do impressive work, but adapting them often meant changing one thing and disturbing several others. When a change did not take effect, it was difficult to tell whether the problem was in the prompt, the model, a tool, or the runtime. I could use those systems, but I did not truly own them.
-
-This project explores a different goal: build an assistant for one person that can be understood, changed, verified, and continually shaped by that person. It is not a general-purpose Agent framework for unknown users.
-
-> Capabilities may keep growing, but the system should remain small enough for one person to understand and control.
+事件为唯一事实、状态可完整重放的个人通用助手
 
 > [!WARNING]
-> This repository is under active development. Future updates may introduce destructive changes to APIs, configuration, storage formats, or persisted data without a backward-compatible migration path. Back up any data you need before updating.
+> 项目仍在积极开发中。接口、配置、存储格式和已有数据都可能发生不兼容变更，升级前请自行备份需要保留的数据。
 
-## What It Feels Like to Use
+## 一个由事实驱动的 Agent Runtime
 
-Start the console and give the assistant a task. It can inspect and modify files, run commands, and load external capabilities while keeping every important action in a durable execution history.
-
-- Type a new instruction while it is working; it is durably appended to the same Session and becomes a later Step trigger.
-- Exit and later resume a Session from its Journal-backed state.
-- Connect MCP Servers without placing every external tool in the model context up front.
-- Install and enable Skills, then let the model read their instructions only when needed.
-- Keep workspace access, permissions, model decisions, and external side effects behind separate boundaries.
-
-The result is a durable execution Session rather than a disposable chat connection: it can be inspected, interrupted, resumed, and extended without hiding how it advances.
-
-## Why helperMe Is Different
-
-### Traceable by construction
-
-User messages, model decisions, tool outcomes, and explicit lifecycle requests are recorded as Events. Runtime State is deterministically rebuilt from those facts, so important behavior has an observable origin.
-
-### Long-running work is durable
-
-A Session is a durable Event stream that can continue across multiple model Steps and be resumed after the process exits.
-
-### Capabilities enter context only when needed
-
-MCP Toolsets and Skills are progressively loaded. The model begins with small catalogs and loading entry points; a concrete capability becomes available only after its loading result has been committed. This keeps context growth explicit and recoverable.
-
-## Quick Start
-
-helperMe currently targets **Python 3.11+** and is developed and tested primarily on **Windows**. It prefers PowerShell 7 and uses Windows PowerShell 5 when version 7 is unavailable.
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-On the first launch, helperMe creates `~/.helperme/config.json` and asks you to edit it before restarting. No configuration setup command is required. Fill in the OpenAI-compatible Chat Completions endpoint, the workspace the assistant may access, and any enabled Channels:
-
-```json
-{
-  "model": {
-    "name": "your-model-name",
-    "base_url": "https://your-model-endpoint.example/v1",
-    "api_key": "your-api-key"
-  },
-  "workspace": {
-    "root": "D:/work/agent",
-    "full_access": true
-  },
-  "runtime": {
-    "model_context_limit": 200000,
-    "input_budget_ratio": 0.9
-  },
-  "channels": {}
-}
-```
-
-Set `HELPERME_CONFIG` only when the complete configuration file should live at a non-default path. To use Telegram, fill in the bot token and leave `allowed_chat_id` as `null`, then run `python telegram_chat.py` and send `/start` to the bot. It reports the chat ID without accepting tasks; write that ID into the configuration and restart to enable the assistant.
-
-Then start the console:
-
-```powershell
-python console_chat.py
-```
-
-The main console commands are:
-
-| Command | Purpose |
-|---|---|
-| `/new` | Create a new Session |
-| `/resume <session_id>` | Resume a Session from the Journal |
-| `/mcp` | Inspect and manage MCP Servers |
-| `/skill` | Inspect and manage Skills |
-
-Typing normal text while the Agent is running appends another ordered `UserMessageReceived` to the current Session. `Ctrl+C` or `Ctrl+D` exits the program.
-
-## Current Status
-
-helperMe is a personal learning project under active development. Its architecture is deliberate, but its interfaces and storage formats should not yet be treated as stable public APIs.
-
-Implemented today:
-
-- Event / State / Step / Command Runtime with deterministic reduction.
-- SQLite-backed Journal and recoverable Sessions.
-- OpenAI-compatible Chat Completions model interface.
-- File, command, Workspace, and permission boundaries.
-- MCP discovery, management, resources, prompts, and on-demand Toolset loading.
-- Skill installation, inspection, enabling, updating, and on-demand reading.
-- Completion judgment and a Finalization Barrier for terminal states.
-
-Planned, not yet implemented:
-
-- SubAgent collaboration.
-- Automation and scheduled execution.
-- Long-term Memory.
-
-The implementation order and current learning goals are tracked in the [Implementation Plan](docs/计划.md) and [Autonomous Agent Learning Plan](docs/自主Agent学习计划.md).
-
-## Architecture in One Loop
-
-```mermaid
-flowchart LR
-    Event["Event<br/>durable fact"] -->|reduce| State["State<br/>current truth"]
-    State --> Step["Step<br/>one model decision"]
-    Step --> Commit["Decision + Commands<br/>atomic commit"]
-    Commit --> Event
-    Commit --> Command["Command<br/>external side effect"]
-    Command --> Dispatcher["Dispatcher"]
-    Dispatcher --> Outcome["Outcome"]
-    Outcome --> Event
-    Event -. project .-> Views["Context / Trace"]
-```
-
-The Journal is the sole durable execution truth. Runtime reduces facts, schedules Commands, enforces invariants, and finalizes terminal states. The model, an explicit Judge, or the user makes semantic decisions; those decisions return to the Journal as traceable facts.
+HelperMe 的核心是一条可持久化、可恢复、可追溯的执行循环：
 
 ```text
 Event → State → Step → Command → Outcome → Event
 ```
 
-Runtime does not know about MCP, Skills, plugins, or other product capabilities. Each kind of change enters through a narrow boundary aligned with its own reason to change. Architectural tests enforce those dependency boundaries rather than leaving them as conventions.
+运行中发生的一切都先成为 Journal 中不可原地修改的 Event。State 不是另一份可变数据，而是这些事实的确定性归约结果。模型每次只推进一个 Step；需要影响外部世界时提交 Command，执行结果作为新的 Event 回到下一轮决策。
 
-For the complete model, see the [Architecture Overview](docs/架构/总览.md) and [Runtime State Advancement Model](docs/架构/Runtime状态推进模型.md).
+**Journal 是唯一的执行事实源。** 模型上下文、摘要和诊断视图都只是投影，可以丢弃和重建，不能反过来改写事实。
 
-## Web and Browser Capabilities
+这套设计直接带来四个能力：
 
-helperMe does not maintain its own web search implementation or browser driver. These capabilities can be connected through MCP and loaded on demand. Current recommendations are [Tavily MCP](https://github.com/tavily-ai/tavily-mcp) for search and content extraction, and [Playwright MCP](https://github.com/microsoft/playwright-mcp) for browser interaction. Neither is a hard dependency.
+- **完整重放**：整条 Event 流可以从头归约，能在任意历史切面重建当时的 State；恢复不依赖进程内缓存。
+- **因果追溯**：一次决策看到了哪些事实、发出了哪些 Command、得到了什么 Outcome，都能沿 Journal 还原，不靠日志猜测。
+- **诚实恢复**：进程重启后只从已提交事实继续。已经开始却没有结果的外部操作保持“未知”，不会被伪装成未执行或盲目重试。
+- **投影可重建**：模型上下文、Trace 和未来的摘要都可以随时重新生成，优化或损坏投影不会改变真实执行历史。
 
-## Tests
+**Runtime 不替模型理解世界。** 它只负责归约、调度、不变量和安全边界；目标是否满足、事实意味着什么、下一步做什么，始终交给模型、显式 Judge 或用户判断。
 
-Run the test suite with:
+MCP、Skill、SubAgent 等能力也不会侵入 Runtime。它们各自通过窄边界接入，并按需进入模型上下文，使助手不断增长时，基础执行内核仍然保持稳定和可理解。
+
+完整设计见[架构总览](docs/架构/总览.md)和[Runtime](docs/架构/Runtime.md)。
+
+## 运行
+
+需要 Python 3.11 或更高版本，目前主要在 Windows 上开发和测试。
 
 ```powershell
-python -m pytest
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python console_chat.py
 ```
 
-Tests under `tests/live` call the configured model endpoint and may incur provider charges. They are skipped unless explicitly enabled:
+首次启动会创建 `~/.helperme/config.json`。按提示填写模型接口和工作区后重新启动，完整配置见 [config.example.json](config.example.json)。
 
-```powershell
-$env:HELPERME_RUN_LIVE_TESTS = "1"
-python -m pytest tests/live
-```
+## 文档
 
-## Further Reading
-
-- [Documentation Index](docs/README.md)
-- [Architecture Direction](docs/项目架构方向.md)
-- [Architecture Overview](docs/架构/总览.md)
-- [Runtime State Advancement Model](docs/架构/Runtime状态推进模型.md)
-- [Implementation Plan](docs/计划.md)
+- [文档索引](docs/README.md)
+- [项目架构方向](docs/项目架构方向.md)
+- [架构总览](docs/架构/总览.md)
+- [Runtime](docs/架构/Runtime.md)
+- [计划](docs/计划.md)

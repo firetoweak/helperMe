@@ -16,7 +16,7 @@
 
 **返回值有三种，不是一种。** 父拿到的永远是同一条 `subagent.report` 事实，但它表达三件不同的事：子成功交回结论（`reported=true`，`summary` 有值）；子撞上已识别的失败（`failure` 非空，装 `assistant_failure_message` 的原文）；子静止了但从没调用 `report`（`reported=false`，两个字段都空）。第三种是诚实的「无产出」，不能和失败混为一谈——父是 Judge，重派、换做法还是如实告诉用户，由它读了原因再定。
 
-**「一次性」是投递幂等的性质，不是生命周期的性质。** 子 Session 不会被关闭。它没有 `COMPLETED / TERMINATED`，也不过 Finalization Barrier（见 [Runtime 状态推进模型](Runtime状态推进模型.md) 第 7 节），交回结论后就一直停在 `WAITING(user_message)`。真正保证「最多回收一次」的是回收事实的 `delivery_id = f"{child_session_id}:report"`：同一个子第二次回收会被 Journal 的投递幂等吞掉。代价是失败的子即使又被推进并再次静止，第二条终局也不会被看见。
+**「一次性」是投递幂等的性质，不是生命周期的性质。** 子 Session 不会被关闭。它没有 `COMPLETED / TERMINATED`，也不过 Finalization Barrier（见 [Runtime 的“状态与终态”](Runtime.md#状态与终态)），交回结论后就一直停在 `WAITING(user_message)`。真正保证「最多回收一次」的是回收事实的 `delivery_id = f"{child_session_id}:report"`：同一个子第二次回收会被 Journal 的投递幂等吞掉。代价是失败的子即使又被推进并再次静止，第二条终局也不会被看见。
 
 **「传入任务」不是参数传递，是一条事实。** 任务以 `subagent.task` 进入子自己的 Journal，不伪装成用户消息。子因此知道另一端没有人，`report` 是唯一出口。父也没有追问的通道，所以任务描述必须自包含——`delegate` 的参数说明里写明「它看不到当前对话，所需背景必须写在这里」。这是这个接口的真实代价：上下文只能前置。
 
