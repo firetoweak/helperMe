@@ -337,3 +337,59 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(report.data["reported"], False)
         self.assertIn("intentional worker crash", report.data["failure"])
         self.assertIn("Traceback", report.data["failure"])
+
+    async def test_parent_reclaim_stops_child_and_does_not_resume_it(self):
+        from helperme.runtime import DomainFactCommitted
+        from helperme.assistant.subagent import REPORT_FACT, RETURN_FACT, TASK_FACT
+
+        await self.host.create("parent")
+        await self.host._route(
+            "create_child",
+            "child",
+            dict(
+                fact_type=TASK_FACT,
+                data={"task": "read something", "parent_session_id": "parent"},
+                source="subagent",
+                delivery_id="task",
+                requests_decision=True,
+            ),
+        )
+        await until(lambda: list(self.root.glob("blocked-*")))
+        await self.host._route(
+            "reclaim_child",
+            "child",
+            {"parent_session_id": "parent", "reason": "stop"},
+        )
+        await until(lambda: "child" not in self.host.workers)
+        await until(lambda: not self.host.watchers or "child" not in self.host.workers)
+        self.assertTrue(self.host.failures.empty())
+
+        child_events = await SqliteJournal(self.store.require("child")).snapshot(
+            "child"
+        )
+        returned = next(
+            event.payload
+            for event in child_events
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == RETURN_FACT
+        )
+        self.assertIs(returned.data["cancelled"], True)
+        self.assertEqual(returned.data["reason"], "stop")
+
+        parent_events = await SqliteJournal(self.store.require("parent")).snapshot(
+            "parent"
+        )
+        report = next(
+            event.payload
+            for event in parent_events
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == REPORT_FACT
+        )
+        self.assertIs(report.requests_decision, False)
+        self.assertIs(report.data["cancelled"], True)
+        self.assertEqual(project_reclaimed(parent_events), frozenset({"child"}))
+
+        await asyncio.wait_for(self.host.resume("parent"), 30)
+        await until(lambda: not self.host.workers and not self.host.watchers)
+        self.assertNotIn("child", self.host.workers)
+        self.assertTrue(self.host.failures.empty())

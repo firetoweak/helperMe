@@ -58,6 +58,8 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                 if parent is not None:
                     assembly.subagents._parents[session_id] = parent
                 await assembly.subagents.refresh_activity(session_id)
+                if await assembly.subagents.note_returned(session_id):
+                    return None
                 await assembly.scheduler.wake(session_id)
                 result = None
             elif operation == "create":

@@ -12,7 +12,11 @@ from helperme.runtime.events import DeliveryIdentity, DomainFactCommitted, Event
 
 
 class SessionStore:
-    """Identity to directory mapping; only Workers open existing Journals."""
+    """Identity to directory mapping.
+
+    Workers open existing Journals. Host may open one only when that Session
+    has no Worker, to persist a parent-initiated return.
+    """
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
