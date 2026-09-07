@@ -166,7 +166,7 @@ PRAGMA user_version = 4;
 
 
 class SqliteJournal:
-    """SQLite-backed Journal for one host and one shared database file."""
+    """Durable event Journal; each Session Worker owns its database file."""
 
     def __init__(
         self,
@@ -185,6 +185,54 @@ class SqliteJournal:
     @property
     def path(self) -> str:
         return self._path
+
+    async def prepare_recovery(
+        self, session_id: str, *, discard_unfinished: bool
+    ) -> None:
+        """Called by a new exclusive Worker, before constructing any projections.
+
+        The caller owns the policy for discarding unfinished read-only operations.
+        Sequence positions are never reused: committed decision boundaries stay valid.
+        """
+
+        def recover(connection: sqlite3.Connection) -> None:
+            identities = connection.execute(
+                "SELECT session_id FROM sessions"
+            ).fetchall()
+            if [row["session_id"] for row in identities] != [session_id]:
+                raise ValueError("Session Journal identity mismatch")
+            connection.execute(
+                "UPDATE step_claims SET expires_at = 0 WHERE session_id = ?",
+                (session_id,),
+            )
+            if not discard_unfinished:
+                return
+            attempts = connection.execute(
+                """SELECT attempts.attempt_id, attempts.command_id,
+                          attempts.dispatch_event_id, events.causation_id
+                   FROM attempts JOIN events ON events.event_id = attempts.dispatch_event_id
+                   JOIN commands ON commands.command_id = attempts.command_id
+                   WHERE commands.session_id = ? AND attempts.terminal_event_id IS NULL""",
+                (session_id,),
+            ).fetchall()
+            for attempt in attempts:
+                connection.execute(
+                    "DELETE FROM attempts WHERE attempt_id = ?",
+                    (attempt["attempt_id"],),
+                )
+                connection.execute(
+                    "DELETE FROM events WHERE event_id = ?",
+                    (attempt["dispatch_event_id"],),
+                )
+                connection.execute(
+                    "UPDATE commands SET dispatch_eligible_event_id = ? WHERE command_id = ? AND abandoned = 0",
+                    (attempt["causation_id"], attempt["command_id"]),
+                )
+            connection.execute(
+                "DELETE FROM checkpoints WHERE session_id = ?", (session_id,)
+            )
+
+        await self._write(recover)
 
     async def create_session(self, session_id: str) -> bool:
         self._validate_session_id(session_id)
@@ -911,7 +959,6 @@ class SqliteJournal:
                 AND token = ?
                 AND owner_id = ?
                 AND generation = ?
-                AND expires_at > ?
             """,
             (
                 now + lease_seconds,
@@ -923,7 +970,6 @@ class SqliteJournal:
                 lease.token,
                 lease.owner_id,
                 lease.generation,
-                now,
             ),
         )
         return cursor.rowcount == 1
@@ -966,7 +1012,6 @@ class SqliteJournal:
             or claim["token"] != lease.token
             or claim["owner_id"] != lease.owner_id
             or claim["generation"] != lease.generation
-            or claim["expires_at"] <= self._clock()
             or self._request_from_row(claim) != lease.request
         ):
             raise LeaseLostError(lease.token)
@@ -1125,10 +1170,10 @@ class SqliteJournal:
             UPDATE attempts SET claim_expires_at = ?
             WHERE attempt_id = ?
                 AND claim_token = ?
-                AND claim_expires_at > ?
+                AND claim_expires_at != 0
                 AND terminal_event_id IS NULL
             """,
-            (now + lease_seconds, attempt_id, claim_token, now),
+            (now + lease_seconds, attempt_id, claim_token),
         )
         return cursor.rowcount == 1
 

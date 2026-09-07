@@ -60,15 +60,20 @@ async def build_assistant_assembly(
     sink,
     journal,
     *,
+    session_id: str,
     context_usage_sink: Callable[[str, int, int], None] | None = None,
     subagent_activity_sink: Callable[[str, bool], None] | None = None,
     scheduler_factory=SessionScheduler,
+    session_transport=None,
+    home: HelperMeHome | None = None,
 ) -> AssistantAssembly:
     builtin_tools = await build_builtin_tools(config)
     settings = _model_context_settings(config)
-    gateway = FileArtifactGateway(runtime_data_root())
+    gateway = FileArtifactGateway(
+        runtime_data_root() if home is None else home.runtime_sessions_root
+    )
     projector = ModelContextProjector(gateway=gateway, settings=settings)
-    home = HelperMeHome.default()
+    home = HelperMeHome.default() if home is None else home
     home.initialize()
     mcp = build_mcp(home)
     skills = build_skills(
@@ -148,6 +153,7 @@ async def build_assistant_assembly(
     surface.attach(runtime)
     scheduler = scheduler_factory(
         runtime,
+        session_id,
         control=control,
         # 失败与控制面提示同样是子 Session 的对外输出，一样不外露：
         # 用户该看到的是父转述后的判断，不是一条不知来处的裸错误。
@@ -155,7 +161,7 @@ async def build_assistant_assembly(
         on_quiesced=subagents.on_quiesced,
         on_failed=subagents.on_failed,
     )
-    subagents.attach(runtime, scheduler)
+    subagents.attach(runtime, session_transport)
     sessions = AssistantSessions(
         runtime,
         surface,

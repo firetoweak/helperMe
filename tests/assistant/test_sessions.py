@@ -57,7 +57,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_resume_rejects_unknown_session(self):
         runtime = AgentRuntime(MemoryJournal(), ScriptedDecisionMaker(()), {})
-        scheduler = RecordingScheduler(runtime)
+        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
         sessions, _surface = self._sessions(runtime, scheduler)
         try:
             with self.assertRaises(SessionNotFoundError):
@@ -116,7 +116,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             },
             SequentialIds(),
         )
-        scheduler = RecordingScheduler(restored_runtime)
+        scheduler = RecordingScheduler(restored_runtime, self.SESSION_ID)
         sessions, _surface = self._sessions(
             restored_runtime,
             scheduler,
@@ -147,7 +147,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             "hello",
             delivery_id="user-1",
         )
-        scheduler = RecordingScheduler(runtime)
+        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
         sessions, _surface = self._sessions(runtime, scheduler)
         try:
             view = await sessions.resume(self.SESSION_ID)
@@ -189,7 +189,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.commands[0].phase, CommandPhase.PENDING)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
 
-        scheduler = RecordingScheduler(runtime)
+        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
         sessions, _surface = self._sessions(runtime, scheduler)
         try:
             view = await sessions.resume(self.SESSION_ID)
@@ -215,7 +215,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             {"explode": ToolBinding(_explode)},
             SequentialIds(),
         )
-        scheduler = RecordingScheduler(runtime)
+        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
         sessions, _surface = self._sessions(runtime, scheduler)
         await sessions.create(self.SESSION_ID)
         try:
@@ -265,7 +265,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             RuntimeStatus.COMPLETED,
         )
 
-        scheduler = RecordingScheduler(runtime)
+        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
         sessions, _surface = self._sessions(runtime, scheduler)
         try:
             view = await sessions.resume(self.SESSION_ID)
@@ -277,7 +277,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_resume_does_not_wake_idle_session(self):
         runtime = AgentRuntime(MemoryJournal(), ScriptedDecisionMaker(()), {})
-        scheduler = RecordingScheduler(runtime)
+        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
         sessions, _surface = self._sessions(runtime, scheduler)
         try:
             await sessions.create(self.SESSION_ID)

@@ -477,11 +477,13 @@ class StateProjector:
     @staticmethod
     def _validate_session(session_id: str, events: tuple[Event, ...]) -> None:
         event_ids: set[str] = set()
-        for expected_sequence, event in enumerate(events, start=1):
+        previous_sequence = 0
+        for event in events:
             if event.session_id != session_id:
                 raise ValueError(f"event belongs to another session: {event.event_id}")
-            if event.sequence != expected_sequence:
+            if event.sequence <= previous_sequence:
                 raise ValueError(f"invalid event sequence: {event.event_id}")
+            previous_sequence = event.sequence
             if event.schema_version != EVENT_SCHEMA_VERSION:
                 raise ValueError(
                     f"unsupported event schema version: {event.schema_version}"

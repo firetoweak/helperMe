@@ -50,19 +50,6 @@ class ScriptedDecisionMaker:
         return decision
 
 
-class _PerSessionDecisions:
-    def __init__(self, failing_session_id: str, error: BaseException) -> None:
-        self._failing_session_id = failing_session_id
-        self._error = error
-        self.frames: list[DecisionFrame] = []
-
-    async def decide(self, frame: DecisionFrame) -> ModelDecision:
-        self.frames.append(frame)
-        if frame.trigger_event.session_id == self._failing_session_id:
-            raise self._error
-        return ModelDecision(content="ok")
-
-
 class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
     async def test_unexpected_failure_is_observable_without_another_wake(self):
         failure = ValueError("host bug")
@@ -78,6 +65,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         )
         scheduler = SessionScheduler(
             runtime,
+            "session",
             control=AssistantControlPlane(()),
         )
         await runtime.create_session("session")
@@ -102,44 +90,54 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
-    async def test_recognised_model_failure_stops_only_that_session(self):
+    async def test_wake_before_done_callback_preserves_original_failure(self):
+        failure = ValueError("host bug")
+        runtime = AgentRuntime(MemoryJournal(), ScriptedDecisionMaker(()), {})
+        scheduler = SessionScheduler(
+            runtime, "session", control=AssistantControlPlane(())
+        )
+
+        async def fail_then_wake(session_id):
+            # Queue wake before asyncio schedules the task's completion callback.
+            asyncio.create_task(scheduler.wake(session_id))
+            raise failure
+
+        runtime.advance = fail_then_wake
+        try:
+            await scheduler.wake("session")
+            observed = await asyncio.wait_for(scheduler.wait_failure(), timeout=1)
+            self.assertIs(observed, failure)
+            self.assertTrue(scheduler.idle)
+        finally:
+            await scheduler.close()
+
+    async def test_recognised_model_failure_can_retry_on_next_wake(self):
         failure = LLMProviderError("provider rejected request")
-        model = _PerSessionDecisions("failing", failure)
+
+        async def fail(_frame):
+            raise failure
+
+        model = ScriptedDecisionMaker((fail, lambda _frame: ModelDecision(content="ok")))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        notified: list[tuple[str, str]] = []
+        notified = []
         scheduler = SettlingScheduler(
             runtime,
-            notify=lambda session_id, message: notified.append(
-                (session_id, message)
-            ),
+            "session",
+            notify=lambda session_id, message: notified.append((session_id, message)),
         )
-        for session_id in ("failing", "healthy"):
-            await runtime.create_session(session_id)
-            await runtime.receive_user_message(
-                session_id,
-                "hello",
-                delivery_id=f"user-{session_id}",
-            )
-
+        await runtime.create_session("session")
+        await runtime.receive_user_message("session", "hello", delivery_id="user-1")
         try:
-            await scheduler.wake("failing")
-            await scheduler.wake("healthy")
+            await scheduler.wake("session")
             await scheduler.join()
-
             self.assertEqual(len(notified), 1)
-            reported_session_id, reported = notified[0]
-            self.assertEqual(reported_session_id, "failing")
-            self.assertIn("provider rejected request", reported)
-            with self.assertRaises(asyncio.TimeoutError):
-                await asyncio.wait_for(scheduler.wait_failure(), timeout=0.05)
-            self.assertEqual(
-                (await runtime.state("failing")).status,
-                RuntimeStatus.RUNNABLE,
-            )
-            self.assertEqual(
-                (await runtime.state("healthy")).status,
-                RuntimeStatus.WAITING,
-            )
+            self.assertEqual(notified[0][0], "session")
+            self.assertIn("provider rejected request", notified[0][1])
+            self.assertIsNone(scheduler._failure)
+            self.assertEqual((await runtime.state("session")).status, RuntimeStatus.RUNNABLE)
+            await scheduler.wake("session")
+            await scheduler.join()
+            self.assertEqual((await runtime.state("session")).status, RuntimeStatus.WAITING)
         finally:
             await scheduler.close()
 
@@ -163,7 +161,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
     async def test_user_event_wakes_one_step_and_session_remains_open(self):
         model = ScriptedDecisionMaker((lambda _frame: ModelDecision(content="done"),))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
 
         try:
@@ -197,7 +195,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
 
         try:
@@ -227,51 +225,16 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
-    async def test_independent_sessions_advance_concurrently(self):
-        first_started = asyncio.Event()
-        release_first = asyncio.Event()
-        second_finished = asyncio.Event()
-
-        async def decide(frame):
-            if frame.state.session_id == "session-a":
-                first_started.set()
-                await release_first.wait()
-            else:
-                second_finished.set()
-            return ModelDecision(content=frame.state.session_id)
-
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            ScriptedDecisionMaker((decide, decide)),
-            {},
-            SequentialIds(),
-        )
-        scheduler = SettlingScheduler(runtime)
-        await runtime.create_session("session-a")
-        await runtime.create_session("session-b")
-        await runtime.receive_user_message(
-            "session-a",
-            "one",
-            delivery_id="user-a",
-        )
-        await runtime.receive_user_message(
-            "session-b",
-            "two",
-            delivery_id="user-b",
-        )
-
+    async def test_wake_rejects_another_session(self):
+        model = ScriptedDecisionMaker(())
+        runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
+        scheduler = SettlingScheduler(runtime, "session")
         try:
-            await scheduler.wake("session-a")
-            await asyncio.wait_for(first_started.wait(), timeout=1)
-            await scheduler.wake("session-b")
-            await asyncio.wait_for(second_finished.wait(), timeout=1)
-            release_first.set()
-            await asyncio.wait_for(scheduler.join(), timeout=1)
-
-            self.assertEqual(len((await runtime.state("session-a")).steps), 1)
-            self.assertEqual(len((await runtime.state("session-b")).steps), 1)
+            with self.assertRaises(AssertionError):
+                await scheduler.wake("another-session")
+            self.assertTrue(scheduler.idle)
+            self.assertEqual(model.frames, [])
         finally:
-            release_first.set()
             await scheduler.close()
 
     async def test_same_session_wakes_never_overlap_advance(self):
@@ -308,6 +271,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         runtime.advance = tracked_advance
         scheduler = SessionScheduler(
             runtime,
+            "session",
             control=AssistantControlPlane(()),
         )
         await runtime.create_session("session")
@@ -320,7 +284,8 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         try:
             await scheduler.wake("session")
             await asyncio.wait_for(first_started.wait(), timeout=1)
-            await scheduler.wake("session")
+            for _ in range(10):
+                await scheduler.wake("session")
             await asyncio.sleep(0)
             self.assertEqual(maximum_active, 1)
 
@@ -362,13 +327,14 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
                 super().__init__(*args, **kwargs)
                 self.activations = 0
 
-            def _start(self, session_id):
+            def _start(self):
                 self.activations += 1
-                super()._start(session_id)
+                super()._start()
 
         runtime.advance = tracked_advance
         scheduler = ActivationCountingScheduler(
             runtime,
+            "session",
             control=AssistantControlPlane(()),
         )
         await runtime.create_session("session")
@@ -411,10 +377,11 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         runtime.state = forbidden_state
         scheduler = SessionScheduler(
             runtime,
+            "session",
             control=AssistantControlPlane(()),
         )
         try:
-            should_continue = await scheduler._advance_once("session")
+            should_continue = await scheduler._advance_once()
             self.assertFalse(should_continue)
         finally:
             await scheduler.close()

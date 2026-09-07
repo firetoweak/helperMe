@@ -379,7 +379,6 @@ class MemoryJournal:
             now = self._clock()
             if (
                 not self._same_step_lease_identity(current, lease)
-                or current.expires_at <= now
             ):
                 return False
             self._step_claims[lease.request.session_id] = replace(
@@ -525,7 +524,7 @@ class MemoryJournal:
         async with self._lock:
             current = self._attempt_leases.get(attempt_id)
             now = self._clock()
-            if current is None or current[0] != claim_token or current[1] <= now:
+            if current is None or current[0] != claim_token:
                 return False
             self._attempt_leases[attempt_id] = (
                 claim_token,
@@ -861,7 +860,6 @@ class MemoryJournal:
         current = self._step_claims.get(lease.request.session_id)
         if (
             not self._same_step_lease_identity(current, lease)
-            or current.expires_at <= self._clock()
         ):
             raise LeaseLostError(lease.token)
         payload = draft.payload

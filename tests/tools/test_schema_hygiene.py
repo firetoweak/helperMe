@@ -154,6 +154,7 @@ class ExposedToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                     ),
                     lambda _session_id, _text: None,
                     MemoryJournal(),
+                    session_id=session_id,
                 )
                 try:
                     decision = assembly.runtime.step_runner._decision_maker

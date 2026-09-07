@@ -111,8 +111,12 @@ class AssistantSessions:
         pending_subagents: tuple[str, ...] = ()
         if self._subagents is not None:
             pending_subagents = await self._subagents.rehydrate(session_id)
+        if self._subagents is not None and self._subagents.has_returned(session_id):
+            return self._view(state)
         if self._view(state).should_wake:
             await self._scheduler.wake(session_id)
+        elif self._subagents is not None:
+            await self._subagents.on_quiesced(session_id, state)
         return self._view(
             state,
             has_active_subagents=bool(pending_subagents),

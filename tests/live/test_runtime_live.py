@@ -11,11 +11,12 @@ from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.client import LLMClient
 
 
-async def build_live_assistant(config, sink, journal):
+async def build_live_assistant(config, sink, journal, session_id):
     return await build_assistant_assembly(
         config,
         sink,
         journal,
+        session_id=session_id,
         scheduler_factory=SettlingScheduler,
     )
 
@@ -33,8 +34,8 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
         )
         delivered: list[str] = []
         journal = MemoryJournal()
-        assembly = await build_live_assistant(config, delivered.append, journal)
         session_id = "live-session"
+        assembly = await build_live_assistant(config, delivered.append, journal, session_id)
         try:
             async with config.llm, assembly.mcp.client_manager:
                 await assembly.sessions.create(session_id)

@@ -53,7 +53,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             },
             SequentialIds(),
         )
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -177,7 +177,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = runtime_for(tool, model)
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -266,7 +266,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = runtime_for(tool, model)
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -443,7 +443,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = runtime_for(tool, model)
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -491,7 +491,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = runtime_for(tool, model)
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -583,7 +583,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -622,7 +622,7 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
             {"explode": ToolBinding(explode)},
             SequentialIds(),
         )
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",

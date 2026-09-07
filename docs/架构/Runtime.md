@@ -24,7 +24,7 @@ Session identity 由 Channel 或 SubAgent Host 选择。Runtime 只持久化并�
 
 ### Event
 
-Event 是已经发生并被接纳的事实，包括外部输入、模型决策、授权结果、工具派发与执行结果。Event 一经提交不可原地修改。
+Event 是已经发生并被接纳的事实，包括外部输入、模型决策、授权结果、工具派发与执行结果。Event 一经提交不可原地修改；当前只读 SubAgent 恢复时删除未完成 Attempt 是明确接受的历史完整性例外，见[多活跃会话](多活跃会话.md#已确认取舍只读-subagent-回退重试)。
 
 Journal 中的 Event 是唯一执行事实。系统可以从有序 Event 完整重放任意历史切面的 State，并追溯一次决策所依据的事实及其产生的外部结果。
 
@@ -64,7 +64,7 @@ Dispatcher 执行 Command  │
 Outcome Event ───────────┘ wake
 ```
 
-当前 Scheduler 只是 Event 与同一事件循环中异步推进任务之间的激活器，不决定不同 Session 的执行顺序。不同 Session 协作式并发；同一 Session 的重复唤醒会合并，并且同一时刻最多只有一个推进任务。已确认的目标结构将每个活跃 Session 放入独立进程，见[多活跃会话](多活跃会话.md)。
+每个活跃 Session 有独立进程与 Journal。Worker 内的 Scheduler 只激活自己的 Session，重复唤醒会合并，同一时刻最多只有一个推进任务；跨 Session 的唤醒与投递经 Host Supervisor 路由。见[多活跃会话](多活跃会话.md)。
 
 这形成三个边界：
 
@@ -99,7 +99,7 @@ Command 是 Step 提交时冻结的副作用请求。Dispatcher 只执行已经�
 
 同一 Step 可以签发多个并行 Command。Journal 保留结果真实到达的顺序；需要模型继续判断时，等这一组全部结束后只触发一个后续 Step。无需继续决策的投递或加载操作仍然记录结果，但不会单独唤醒模型。
 
-工具边界负责把已知外部错误转换为确定结果。未预期异常原样暴露。如果 Attempt 已经开始，进程却在 Outcome 提交前退出，该操作保持未知：Runtime 不把它伪装成未执行，也不会在恢复时盲目重试。
+工具边界负责把已知外部错误转换为确定结果。未预期异常原样暴露。如果 Attempt 已经开始，进程却在 Outcome 提交前退出，该操作通常保持未知，不在恢复时盲目重试。当前只读 SubAgent 是明确例外：恢复前删除未完成 Attempt 并重新执行，接受丢失这段历史。子 Session 的未知异常另由 Assistant 在 Worker 退出前写入回收事实，见[SubAgent](SubAgent.md)；Runtime 不把它改写成 Outcome。
 
 恢复已有 Session 时，系统只从 Journal 重建 State 和可丢弃的 Host 投影；只有重建后的 State 本身允许继续决策，才会重新唤醒。具体领域如果需要查询、补偿或人工处置未知操作，应建立自己的窄协议，而不是依赖通用恢复状态机。
 
@@ -146,4 +146,5 @@ Checkpoint 只用于加速重放，必须携带足够的版本信息；投影规
 | Command 执行 | `helperme/runtime/dispatcher.py` |
 | Session 激活 | `helperme/assistant/runner.py` |
 | Session 应用服务 | `helperme/assistant/sessions.py` |
+| Session 进程与路由 | `helperme/assistant/supervisor.py`、`helperme/assistant/worker.py` |
 | Channel | `helperme/channels/` |

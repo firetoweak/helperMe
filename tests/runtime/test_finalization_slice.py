@@ -28,7 +28,7 @@ class ExplicitFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -58,7 +58,7 @@ class ExplicitFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",
@@ -92,7 +92,7 @@ class ExplicitFinalizationSliceTest(unittest.IsolatedAsyncioTestCase):
             {},
             SequentialIds(),
         )
-        scheduler = SettlingScheduler(runtime)
+        scheduler = SettlingScheduler(runtime, "session")
         await runtime.create_session("session")
         await runtime.receive_user_message(
             "session",

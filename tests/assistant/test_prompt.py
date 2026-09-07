@@ -158,6 +158,7 @@ class PromptVocabularyTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 lambda _session_id, _text: None,
                 MemoryJournal(),
+                session_id="parent/sub-vocabulary",
             )
 
     async def asyncTearDown(self) -> None:

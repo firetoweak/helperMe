@@ -9,6 +9,7 @@ from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.delivery import deliver_binding
 from helperme.assistant.subagent import (
     DELEGATE,
+    FACT_SOURCE,
     READONLY_TOOL_NAMES,
     REPORT,
     REPORT_FACT,
@@ -26,6 +27,7 @@ from helperme.runtime import (
     AgentRuntime,
     DomainFactCommitted,
     InvokeTool,
+    LeaseLostError,
     MemoryJournal,
     ModelDecision,
     RuntimeStatus,
@@ -104,9 +106,7 @@ def _visible_to(events, frame: DecisionFrame):
     """一次决策实际看得见的事实，口径与 `decide()` 的 frame 边界一致。"""
 
     return tuple(
-        event
-        for event in events
-        if event.sequence <= frame.observed_journal_position
+        event for event in events if event.sequence <= frame.observed_journal_position
     )
 
 
@@ -156,6 +156,64 @@ class _ParentChildDecisions:
         return script(frame)
 
 
+class LocalSessionRouter:
+    """Route protocol tests to one scheduler per identity.
+
+    Only these unit tests share an in-memory Runtime. Worker integration tests
+    cover process and Journal isolation.
+    """
+
+    def __init__(self, runtime, **callbacks):
+        self.runtime = runtime
+        self.callbacks = callbacks
+        self.schedulers = {}
+        self.failure = None
+
+    def record_failure(self, error):
+        self.failure = error
+
+    async def wake(self, session_id):
+        if session_id not in self.schedulers:
+            self.schedulers[session_id] = SettlingScheduler(
+                self.runtime, session_id, **self.callbacks
+            )
+            self.runtime.dispatcher.connect(self.wake, self.record_failure)
+        await self.schedulers[session_id].wake(session_id)
+
+    async def join(self):
+        while True:
+            await asyncio.gather(*(
+                scheduler.join() for scheduler in tuple(self.schedulers.values())
+            ))
+            if self.failure is not None:
+                raise self.failure
+            if all(scheduler.idle for scheduler in self.schedulers.values()):
+                return
+
+    async def close(self):
+        await self.runtime.dispatcher.close()
+        for scheduler in self.schedulers.values():
+            await scheduler.close()
+
+
+def local_transport(runtime, scheduler, host):
+    """Test-only routing: production always routes between Worker processes."""
+
+    async def route(operation, session_id, arguments):
+        if operation == "create_child":
+            await runtime.create_session(session_id)
+            host._parents[session_id] = arguments["data"]["parent_session_id"]
+            await runtime.receive_domain_fact(session_id, **arguments)
+        elif operation == "fact":
+            await runtime.receive_domain_fact(session_id, **arguments)
+            await host.refresh_activity(session_id)
+        elif operation != "resume":
+            raise AssertionError(operation)
+        await scheduler.wake(session_id)
+
+    return route
+
+
 class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
     PARENT = "parent-session"
 
@@ -179,9 +237,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             bindings.update(
                 deliver_binding(
                     host.routed_sink(
-                        lambda session_id, text: delivered.append(
-                            (session_id, text)
-                        )
+                        lambda session_id, text: delivered.append((session_id, text))
                     )
                 )
             )
@@ -191,7 +247,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             bindings,
             SequentialIds(),
         )
-        scheduler = SettlingScheduler(
+        scheduler = LocalSessionRouter(
             runtime,
             notify=(
                 host.routed_sink(
@@ -203,7 +259,12 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             on_quiesced=host.on_quiesced,
             on_failed=host.on_failed,
         )
-        host.attach(_Interleaving(runtime) if interleave else runtime, scheduler)
+        host.attach(
+            _Interleaving(runtime) if interleave else runtime,
+            local_transport(
+                _Interleaving(runtime) if interleave else runtime, scheduler, host
+            ),
+        )
         return host, model, runtime, scheduler
 
     async def _child_session_id(self, runtime) -> str:
@@ -435,9 +496,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         host, model, runtime, scheduler = self._build(
             parent_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(DELEGATE, (("task", "查清 A"),)),
-                    ),
+                    command_requests=(InvokeTool(DELEGATE, (("task", "查清 A"),)),),
                 ),
                 lambda _frame: ModelDecision(content="子 Agent 没跑完，我换个做法"),
             ),
@@ -473,6 +532,56 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
+    async def test_unexpected_child_failure_is_reclaimed_with_original_exception(
+        self,
+    ):
+        host, _model, runtime, scheduler = self._build(
+            parent_scripts=(lambda _frame: ModelDecision(content="换路"),),
+            child_scripts=(),
+        )
+        await runtime.create_session(self.PARENT)
+        await runtime.create_session("child")
+        await runtime.receive_domain_fact(
+            "child",
+            TASK_FACT,
+            {"task": "查 A", "parent_session_id": self.PARENT},
+            delivery_id="task",
+            source=FACT_SOURCE,
+            requests_decision=True,
+        )
+        try:
+            from helperme.assistant.subagent import record_unexpected_return
+
+            self.assertIsNone(
+                await record_unexpected_return(
+                    runtime._journal, "child", LeaseLostError("stale")
+                )
+            )
+            self.assertEqual(
+                _facts(await runtime.snapshot(self.PARENT), REPORT_FACT), []
+            )
+
+            try:
+                raise RuntimeError("disk vanished")
+            except RuntimeError as error:
+                parent, arguments = await record_unexpected_return(
+                    runtime._journal, "child", error
+                )
+                await host._transport("fact", parent, arguments)
+            reports = _facts(await runtime.snapshot(self.PARENT), REPORT_FACT)
+            self.assertEqual(len(reports), 1)
+            self.assertIs(reports[0].data["reported"], False)
+            self.assertIsNone(reports[0].data["summary"])
+            self.assertIn("RuntimeError", reports[0].data["failure"])
+            self.assertIn("disk vanished", reports[0].data["failure"])
+            self.assertIn("Traceback", reports[0].data["failure"])
+            self.assertEqual(
+                project_reclaimed(await runtime.snapshot(self.PARENT)),
+                frozenset({"child"}),
+            )
+        finally:
+            await scheduler.close()
+
     async def test_parent_failure_still_reaches_the_user(self):
         def _boom(_frame):
             raise LLMProviderError("上游返回 500")
@@ -496,7 +605,9 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(session_id, self.PARENT)
             self.assertIn("上游返回 500", text)
             # 父没有父，回收无处可去。
-            self.assertEqual(_facts(await runtime.snapshot(self.PARENT), REPORT_FACT), [])
+            self.assertEqual(
+                _facts(await runtime.snapshot(self.PARENT), REPORT_FACT), []
+            )
         finally:
             await scheduler.close()
 
@@ -504,9 +615,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         host, model, runtime, scheduler = self._build(
             parent_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(DELEGATE, (("task", "看一眼 B"),)),
-                    ),
+                    command_requests=(InvokeTool(DELEGATE, (("task", "看一眼 B"),)),),
                 ),
                 lambda _frame: ModelDecision(content="子 Agent 没有产出"),
             ),
@@ -535,9 +644,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         host, _model, runtime, scheduler = self._build(
             parent_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(DELEGATE, (("task", "查 C"),)),
-                    ),
+                    command_requests=(InvokeTool(DELEGATE, (("task", "查 C"),)),),
                 ),
                 lambda _frame: ModelDecision(content="好"),
             ),
@@ -576,17 +683,13 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         host, _model, runtime, scheduler = self._build(
             parent_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(DELEGATE, (("task", "查 D"),)),
-                    ),
+                    command_requests=(InvokeTool(DELEGATE, (("task", "查 D"),)),),
                 ),
                 lambda _frame: ModelDecision(content="好"),
             ),
             child_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(REPORT, (("summary", "D 正常"),)),
-                    ),
+                    command_requests=(InvokeTool(REPORT, (("summary", "D 正常"),)),),
                 ),
             ),
         )
@@ -619,22 +722,17 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
-
     async def test_children_are_recognised_again_after_restart(self):
         host, _model, runtime, scheduler = self._build(
             parent_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(DELEGATE, (("task", "查 E"),)),
-                    ),
+                    command_requests=(InvokeTool(DELEGATE, (("task", "查 E"),)),),
                 ),
                 lambda _frame: ModelDecision(content="好"),
             ),
             child_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(REPORT, (("summary", "E 正常"),)),
-                    ),
+                    command_requests=(InvokeTool(REPORT, (("summary", "E 正常"),)),),
                 ),
             ),
         )
@@ -653,11 +751,13 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         events = await runtime.snapshot(self.PARENT)
 
         restarted = SubAgentHost()
-        restarted_scheduler = SettlingScheduler(
+        restarted_scheduler = LocalSessionRouter(
             runtime,
             on_quiesced=restarted.on_quiesced,
         )
-        restarted.attach(runtime, restarted_scheduler)
+        restarted.attach(
+            runtime, local_transport(runtime, restarted_scheduler, restarted)
+        )
         try:
             self.assertFalse(restarted.is_subagent(child_session_id))
             pending = await restarted.rehydrate(self.PARENT)
@@ -699,17 +799,13 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         host, _model, runtime, scheduler = self._build(
             parent_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(DELEGATE, (("task", "查 F"),)),
-                    ),
+                    command_requests=(InvokeTool(DELEGATE, (("task", "查 F"),)),),
                 ),
                 lambda _frame: ModelDecision(content="好"),
             ),
             child_scripts=(
                 lambda _frame: ModelDecision(
-                    command_requests=(
-                        InvokeTool(REPORT, (("summary", "F 正常"),)),
-                    ),
+                    command_requests=(InvokeTool(REPORT, (("summary", "F 正常"),)),),
                 ),
             ),
         )
@@ -727,11 +823,13 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         child_session_id = await self._child_session_id(runtime)
 
         restarted = SubAgentHost()
-        restarted_scheduler = SettlingScheduler(
+        restarted_scheduler = LocalSessionRouter(
             runtime,
             on_quiesced=restarted.on_quiesced,
         )
-        restarted.attach(runtime, restarted_scheduler)
+        restarted.attach(
+            runtime, local_transport(runtime, restarted_scheduler, restarted)
+        )
         try:
             pending = await restarted.rehydrate(child_session_id)
 
@@ -789,9 +887,7 @@ class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
             _ParentChildDecisions(
                 (
                     lambda _frame: ModelDecision(
-                        command_requests=(
-                            InvokeTool(DELEGATE, (("task", "查 A"),)),
-                        ),
+                        command_requests=(InvokeTool(DELEGATE, (("task", "查 A"),)),),
                     ),
                     lambda _frame: ModelDecision(content="收到"),
                 ),
@@ -806,8 +902,8 @@ class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
             dict(host.bindings()),
             SequentialIds(),
         )
-        scheduler = SettlingScheduler(runtime, on_quiesced=host.on_quiesced)
-        host.attach(runtime, scheduler)
+        scheduler = LocalSessionRouter(runtime, on_quiesced=host.on_quiesced)
+        host.attach(runtime, local_transport(runtime, scheduler, host))
         await runtime.create_session(self.PARENT)
         await runtime.receive_user_message(
             self.PARENT,

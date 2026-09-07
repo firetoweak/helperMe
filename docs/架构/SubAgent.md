@@ -2,7 +2,7 @@
 
 > SubAgent 是一次性的异步函数式 Session：父 Agent 传入任务，子 Agent 独立执行并通过 `report` 返回结果，之后不能继续交互。
 
-当前父子 Session 在同一进程中协作式并发；已经确认的独立进程与独立 Journal 目标见[多活跃会话](多活跃会话.md)。
+当前父子 Session 在独立进程与独立 Journal 中推进；实现边界见[多活跃会话](多活跃会话.md)。
 
 领域代码：`helperme/assistant/subagent.py`。子 Session 是普通独立 Session：同一套 `create / advance / recover`，自己的 Journal 与判定。父子关系只存在于 Assistant 侧，用因果事实表达，Runtime 不增加 `parent_session_id` 或 `agent_type`。
 
@@ -16,7 +16,9 @@
 
 上面那句是准确的接口描述，但「函数」这个类比有三处不覆盖，而这三处正是实现里最容易出错的地方。
 
-**返回值有三种，不是一种。** 父拿到的永远是同一条 `subagent.report` 事实，但它表达三件不同的事：子成功交回结论（`reported=true`，`summary` 有值）；子撞上已识别的失败（`failure` 非空，装 `assistant_failure_message` 的原文）；子静止了但从没调用 `report`（`reported=false`，两个字段都空）。第三种是诚实的「无产出」，不能和失败混为一谈——父是 Judge，重派、换做法还是如实告诉用户，由它读了原因再定。
+**返回值有三种，不是一种。** 父拿到的永远是同一条 `subagent.report` 事实，但它表达三件不同的事：子成功交回结论（`reported=true`，`summary` 有值）；子没跑完（`failure` 非空）；子静止了但从没调用 `report`（`reported=false`，两个字段都空）。第三种是诚实的「无产出」，不能和失败混为一谈。
+
+`failure` 有两种来源，形状相同：已识别的模型失败装 `assistant_failure_message` 的原文；未知异常装 `ProcessFailure` 的类型、消息和 traceback，不改写成友好句。父是 Judge，重派、换做法还是如实告诉用户，由它读了原因再定。未知异常仍会结束子 Worker，并由 Host 把同一份原始失败亮给 Channel；report 只是补一条父能看见的机械终局，不是把异常降级成普通 Outcome，也不自动重试。
 
 **「一次性」是投递幂等的性质，不是生命周期的性质。** 子 Session 不会被关闭。它没有 `COMPLETED / TERMINATED`，也不过 Finalization Barrier（见 [Runtime 的“状态与终态”](Runtime.md#状态与终态)），交回结论后就一直停在 `WAITING(user_message)`。真正保证「最多回收一次」的是回收事实的 `delivery_id = f"{child_session_id}:report"`：同一个子第二次回收会被 Journal 的投递幂等吞掉。代价是失败的子即使又被推进并再次静止，第二条终局也不会被看见。
 
@@ -32,19 +34,19 @@
   → 父继续，不阻塞
 
 子独立推进 …
-  → report(summary) 或 已识别失败
-  → 子静止
-
-Host 观察到静止
-  → subagent.report 进父 Journal（requests_decision）
+  → report(summary)、已识别失败，或未知异常
+  → 子 Journal 先写入 subagent.return
+  → Host 投递 subagent.report 进父 Journal（requests_decision）
   → 唤醒父
 ```
+
+未知异常走同一条回收形状，但子 Worker 保存回传内容后，通过单向生命周期信号交给 Host 投递，自己带着原始失败退出；不等待父确认。已识别的模型失败回收后子可以静止离开。
 
 委派必须异步。`delegate` 的 Outcome 只是「子 Session 已创建」，结论经外部事实入口回到父。同步版本把一条可能活很久的独立生命线塞进一个 Attempt 的生命周期，进程一崩就得到一个「未知副作用」，而它明明完好地躺在子的 Journal 里。
 
 子 id 从委派命令派生（`{parent}/sub-{command_id}`），重放同一条命令不会造出第二个子 Session。
 
-回收的挂点是 Scheduler 的静止信号。子 Session 是**没有人的 Session**：父落到 `WAITING(user_message)` 合理，因为真的有人会再说话；子落到同样状态则没人会来。由此得到纯机械的判据，不问模型做完没有，只看它还有没有事做：
+回收的挂点有两处：Scheduler 的静止 / 已识别失败，以及 Worker 在未知异常退出前的 `record_unexpected_return`。子 Worker 只读写自己的 Journal，通过 Host 请求创建子会话或向父投递；不会直接操作另一条 Session 的 Runtime。子 Session 是**没有人的 Session**：父落到 `WAITING(user_message)` 合理，因为真的有人会再说话；子落到同样状态则没人会来。由此得到纯机械的判据，不问模型做完没有，只看它还有没有事做：
 
 | `waiting_for` | 含义 |
 |---|---|
@@ -52,7 +54,11 @@ Host 观察到静止
 | 含 `authorization:` | 卡在授权，不是完成 |
 | 含 `command:` | 还在跑，继续等 |
 
-Scheduler 因此报告两种终局：静止（`on_quiesced`）与已识别的失败（`on_failed`）。两者语义不同，不合并成一个信号——Scheduler 只诚实说出发生了什么，是否算「一件事做完了」由订阅者判断。漏接 `on_failed`，失败的子就既不静止也不回收，父会拿着一个永远清不空的待回收集合干等。
+Scheduler 报告两种终局：静止（`on_quiesced`）与已识别的失败（`on_failed`）。未知异常不进 Scheduler 的 `on_failed`——那会把它降级成普通失败。子 Worker 的外层异常边界覆盖配置、装配、客户端进入及运行阶段：先通过 `record_unexpected_return` 写入 `subagent.return`，再单向交给 Host 投递 `subagent.report`。它不依赖 Worker 的 IPC 接收循环，也不在异常路径等待回复；Host 释放死掉的 Worker 后继续投递，原始失败独立暴露。`LeaseLostError` 是接管，不是这条生命线失败，不回收。
+
+漏接这些终局，父会拿着一个永远清不空的待回收集合干等。通知父「这条路断了」不是把未知异常变成 Runtime Outcome，也不是自动重试；已开始的 Attempt 仍是 `unknown`，Worker 照死，Host 照亮 `ProcessFailure`。进程被直接杀掉、没走到这段回收时，恢复仍按[多活跃会话](多活跃会话.md)的只读回退处理。
+
+异常回传不要求完整 Assistant 已装配。新建子 Session 时，`subagent.task` 与 Journal 一起原子建立，保证首次初始化失败也能找回父身份。持久化完成即确认创建，由 Host 异步启动子 Worker；子初始化失败不会卡住父的 delegate Attempt，而是经 report 回传。Journal 无法读取或写入时不伪造回传事实；回传本身再失败则同时保留原异常与回传异常。
 
 ## 结论不齐时的约束
 
@@ -74,7 +80,9 @@ Scheduler 因此报告两种终局：静止（`on_quiesced`）与已识别的失
 
 **单写者是委派树内的不变量，不是全局不变量。** 分界在于并行由谁制造：父决定开几个子，这个并行是 Agent 造的，用户没参与，Agent 必须为它负责；用户同时开两条顶层 Session 是在开两个完整任务，写冲突是用户的选择，Agent 不替他兜底。`get_changes` 的契约因此不需要改——它本就只报告工作区快照、明确不做变更归因；需要约束的只是子 Session 的工具白名单。
 
-这道边界是**安全性质**，所以进程内的父子缓存 `_parents` 必须能从 Journal 认回来，否则重启后子 Session 就没有只读限制了。两个方向都要认：恢复父时从它的 `delegate` Outcome 找出子并唤醒未回收的那些，恢复子时从它自己的 `subagent.task` 事实找回父。只做前者的话，直接 `/resume` 一个子 Session 就绕过了整道边界。
+只读子 Session 中断后会删除未完成 Attempt 并重新执行；这段历史不再可追溯，是已接受的设计缺陷，详见[多活跃会话](多活跃会话.md)。已形成的 `subagent.return` 则保留，恢复时只重投，不重新调用模型。
+
+这道边界是**安全性质**，所以进程内的父子缓存 `_parents` 必须能从 Journal 认回来，否则重启后子 Session 就没有只读限制了。两个方向都要认：恢复父时从它的 `delegate` Outcome 找出子，并经 Host 请求恢复未回收的那些，恢复子时从它自己的 `subagent.task` 事实找回父。只做前者的话，直接 `/resume` 一个子 Session 就绕过了整道边界。
 
 子 Session 换用独立的 System Prompt（`SUBAGENT_PROMPT`）：它没有 Toolset 目录也不碰管理面，两份 catalog 都不拼。
 

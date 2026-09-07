@@ -9,20 +9,26 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from helperme.assistant.context.prompt import SUBAGENT_PROMPT
 from helperme.assistant.delivery import DeliverySink, emit_delivery
+from helperme.assistant.ipc import ProcessFailure
 from helperme.runtime import (
     AgentRuntime,
     CommandOutcomeReceived,
     DomainFactCommitted,
     Event,
     InvokeTool,
+    LeaseLostError,
     OutcomeStatus,
     StepCommitted,
     ToolBinding,
 )
 from helperme.runtime.dispatcher import AttemptContext
+from helperme.runtime.events import DeliveryIdentity, EventDraft
+from helperme.runtime.journal.api import Journal
 from helperme.runtime.model import CanonicalState
 
 
@@ -31,8 +37,55 @@ REPORT = "report"
 
 TASK_FACT = "subagent.task"
 REPORT_FACT = "subagent.report"
+RETURN_FACT = "subagent.return"
 
 FACT_SOURCE = "subagent"
+
+
+async def record_unexpected_return(journal: Journal, session_id: str, error: Exception):
+    """Persist the failure without needing an assembled Assistant or an IPC reader."""
+    if isinstance(error, LeaseLostError):
+        return None
+    events = await journal.snapshot(session_id)
+    parent = project_parent(events)
+    if parent is None:
+        return None
+    returned = next(
+        (
+            event
+            for event in events
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == RETURN_FACT
+        ),
+        None,
+    )
+    if returned is None:
+        result = await journal.accept_delivery(
+            EventDraft(
+                event_id=f"event_{uuid4().hex}",
+                session_id=session_id,
+                payload=DomainFactCommitted(
+                    RETURN_FACT,
+                    {
+                        "child_session_id": session_id,
+                        "reported": False,
+                        "summary": None,
+                        "failure": ProcessFailure.capture(error).render(),
+                    },
+                ),
+                occurred_at=datetime.now(timezone.utc),
+                delivery=DeliveryIdentity(FACT_SOURCE, f"{session_id}:return"),
+            )
+        )
+        returned = result.event
+    return parent, dict(
+        fact_type=REPORT_FACT,
+        data=dict(returned.payload.data),
+        delivery_id=f"{session_id}:report",
+        source=FACT_SOURCE,
+        requests_decision=True,
+    )
+
 
 SubAgentActivitySink = Callable[[str, bool], None]
 
@@ -233,18 +286,22 @@ class SubAgentHost:
         activity_sink: SubAgentActivitySink | None = None,
     ) -> None:
         self._runtime: AgentRuntime | None = None
-        self._scheduler = None
+        self._transport = None
         self._parents: dict[str, str] = {}
+        self._returned: set[str] = set()
         # 仅供显示刷新；执行判断始终从 Journal 投影。
         self._visible_pending: dict[str, set[str]] = {}
         self._activity_sink = activity_sink
 
-    def attach(self, runtime: AgentRuntime, scheduler) -> None:
+    def attach(self, runtime: AgentRuntime, transport) -> None:
         self._runtime = runtime
-        self._scheduler = scheduler
+        self._transport = transport
 
     def is_subagent(self, session_id: str) -> bool:
         return session_id in self._parents
+
+    def has_returned(self, session_id: str) -> bool:
+        return session_id in self._returned
 
     def parent_of(self, session_id: str) -> str | None:
         return self._parents.get(session_id)
@@ -261,6 +318,12 @@ class SubAgentHost:
             parent_session_id,
             bool(self._visible_pending.get(parent_session_id)),
         )
+
+    async def refresh_activity(self, session_id: str) -> None:
+        events = await self._require_runtime().snapshot(session_id)
+        if project_parent(events) is None:
+            self._visible_pending[session_id] = set(project_pending(events))
+            self._publish_activity(session_id)
 
     def tool_names(self, session_id: str) -> frozenset[str] | None:
         """本 Session 允许出现的工具名；None 表示不设限。"""
@@ -318,6 +381,23 @@ class SubAgentHost:
         parent_session_id = project_parent(events)
         if parent_session_id is not None:
             self._parents[session_id] = parent_session_id
+            for event in events:
+                if (
+                    isinstance(event.payload, DomainFactCommitted)
+                    and event.payload.fact_type == RETURN_FACT
+                ):
+                    self._returned.add(session_id)
+                    await self._transport(
+                        "fact",
+                        parent_session_id,
+                        dict(
+                            fact_type=REPORT_FACT,
+                            data=dict(event.payload.data),
+                            delivery_id=f"{session_id}:report",
+                            source=FACT_SOURCE,
+                            requests_decision=True,
+                        ),
+                    )
             return ()
         reclaimed = project_reclaimed(events)
         pending: list[str] = []
@@ -327,7 +407,7 @@ class SubAgentHost:
                 pending.append(child_session_id)
         self._visible_pending[session_id] = set(pending)
         for child_session_id in pending:
-            await self._require_scheduler().wake(child_session_id)
+            await self._transport("resume", child_session_id, {})
         self._publish_activity(session_id)
         return tuple(pending)
 
@@ -362,7 +442,10 @@ class SubAgentHost:
         不降级成「无产出」。
         """
 
-        parent_session_id = self._parents.get(session_id)
+        await self._reclaim_failure(session_id, message)
+
+    async def _reclaim_failure(self, session_id: str, message: str) -> None:
+        parent_session_id = await self._resolve_parent(session_id)
         if parent_session_id is None:
             return
         await self._reclaim(
@@ -371,6 +454,17 @@ class SubAgentHost:
             summary=None,
             failure=message,
         )
+
+    async def _resolve_parent(self, session_id: str) -> str | None:
+        parent_session_id = self._parents.get(session_id)
+        if parent_session_id is not None:
+            return parent_session_id
+        parent_session_id = project_parent(
+            await self._require_runtime().snapshot(session_id)
+        )
+        if parent_session_id is not None:
+            self._parents[session_id] = parent_session_id
+        return parent_session_id
 
     async def _reclaim(
         self,
@@ -386,23 +480,42 @@ class SubAgentHost:
         已冻结的事实里投影；冻进事实就要求两个并行的子在父维度串行读写。
         """
 
-        await self._require_runtime().receive_domain_fact(
-            parent_session_id,
-            REPORT_FACT,
-            {
-                "child_session_id": session_id,
-                "reported": summary is not None,
-                "summary": summary,
-                "failure": failure,
-            },
-            delivery_id=f"{session_id}:report",
-            source=FACT_SOURCE,
-            requests_decision=True,
+        data = {
+            "child_session_id": session_id,
+            "reported": summary is not None,
+            "summary": summary,
+            "failure": failure,
+        }
+        events = await self._require_runtime().snapshot(session_id)
+        returned = next(
+            (
+                event
+                for event in events
+                if isinstance(event.payload, DomainFactCommitted)
+                and event.payload.fact_type == RETURN_FACT
+            ),
+            None,
         )
-        visible_pending = self._visible_pending.setdefault(parent_session_id, set())
-        visible_pending.discard(session_id)
-        self._publish_activity(parent_session_id)
-        await self._require_scheduler().wake(parent_session_id)
+        if returned is None:
+            returned = await self._require_runtime().receive_domain_fact(
+                session_id,
+                RETURN_FACT,
+                data,
+                delivery_id=f"{session_id}:return",
+                source=FACT_SOURCE,
+            )
+        await self._transport(
+            "fact",
+            parent_session_id,
+            dict(
+                fact_type=REPORT_FACT,
+                data=dict(returned.payload.data),
+                delivery_id=f"{session_id}:report",
+                source=FACT_SOURCE,
+                requests_decision=True,
+            ),
+        )
+        self._returned.add(session_id)
 
     async def _delegate(
         self,
@@ -424,27 +537,22 @@ class SubAgentHost:
                 "data": {"session_id": context.session_id},
                 "error": "子 Agent 不能再委派",
             }
-        runtime = self._require_runtime()
-        # 从委派命令派生，重放同一条命令不会造出第二个子 Session。
         child_session_id = f"{context.session_id}/sub-{context.command_id}"
-        await runtime.create_session(child_session_id)
-        self._parents[child_session_id] = context.session_id
-        await runtime.receive_domain_fact(
+        await self._transport(
+            "create_child",
             child_session_id,
-            TASK_FACT,
-            {
-                "task": task.strip(),
-                "parent_session_id": context.session_id,
-            },
-            delivery_id=f"{context.command_id}:task",
-            source=FACT_SOURCE,
-            requests_decision=True,
+            dict(
+                fact_type=TASK_FACT,
+                data={"task": task.strip(), "parent_session_id": context.session_id},
+                delivery_id=f"{context.command_id}:task",
+                source=FACT_SOURCE,
+                requests_decision=True,
+            ),
         )
         self._visible_pending.setdefault(context.session_id, set()).add(
             child_session_id
         )
         self._publish_activity(context.session_id)
-        await self._require_scheduler().wake(child_session_id)
         return {
             "ok": True,
             "code": "DELEGATED",
@@ -474,8 +582,3 @@ class SubAgentHost:
         if self._runtime is None:
             raise RuntimeError("SubAgentHost 尚未绑定 Runtime")
         return self._runtime
-
-    def _require_scheduler(self):
-        if self._scheduler is None:
-            raise RuntimeError("SubAgentHost 尚未绑定 Scheduler")
-        return self._scheduler

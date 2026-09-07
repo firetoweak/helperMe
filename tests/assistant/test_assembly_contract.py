@@ -83,12 +83,13 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                         input_budget_ratio=0.75,
                         llm=llm,
                     )
+                    session_id = f"entry-{index}"
                     assembly = await factory(
                         config,
                         lambda _session_id, _text: None,
                         journal,
+                        session_id=session_id,
                     )
-                    session_id = f"entry-{index}"
                     try:
                         decision = assembly.runtime.step_runner._decision_maker
                         await assembly.runtime.receive_user_message(
@@ -191,6 +192,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     lambda session_id, text: delivered.append((session_id, text)),
                     MemoryJournal(),
+                    session_id="session",
                     subagent_activity_sink=(
                         lambda session_id, active: activity.append(
                             (session_id, active)

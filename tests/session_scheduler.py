@@ -27,12 +27,12 @@ class SettlingScheduler(SessionScheduler):
             if self._failure is not None:
                 raise self._failure
             tasks = (
-                *self._tasks.values(),
+                *((self._task,) if self._task is not None else ()),
                 *self._runtime.dispatcher._tasks.values(),
             )
             if not tasks:
                 await asyncio.sleep(0)
-                if not self._tasks and not self._runtime.dispatcher._tasks:
+                if self._task is None and not self._runtime.dispatcher._tasks:
                     return
                 continue
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -63,6 +63,7 @@ async def settle_session(
     messages: list[str] = []
     scheduler = SettlingScheduler(
         runtime,
+        session_id,
         control=control,
         notify=lambda _session_id, message: messages.append(message),
     )

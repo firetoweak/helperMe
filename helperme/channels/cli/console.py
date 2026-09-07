@@ -9,9 +9,9 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from helperme.assistant.runner import SessionNotFoundError
+from helperme.assistant.ipc import WorkerFailed
 from helperme.assistant.sessions import SessionView
 from helperme.assistant.toolsets import ToolsetLoadError
-from helperme.assistant.failures import assistant_failure_message
 from helperme.bootstrap import bootstrap_assistant
 from helperme.mcp.console import McpCommandError, McpConsoleAdapter
 from helperme.mcp.errors import McpInputError
@@ -137,12 +137,12 @@ async def run_runtime_console() -> None:
         view = await sessions.create(session_id)
         context_meter.select(
             session_id,
-            config.model_context_limit,
+            config.runtime.model_context_limit,
             subagent_active=view.has_active_subagents,
         )
         input_queue: asyncio.Queue[str | None] = asyncio.Queue()
-        access = "整台电脑" if config.full_access else "配置的 Workspace"
-        print(f"HelperMe 已启动。model={config.model_name}")
+        access = "整台电脑" if config.workspace.full_access else "配置的 Workspace"
+        print(f"HelperMe 已启动。model={config.model.name}")
         print(f"工作区：{access}")
         print(f"当前对话：{session_id}")
         print("/new 新对话    /resume <id> 恢复")
@@ -152,121 +152,122 @@ async def run_runtime_console() -> None:
 
         reader = asyncio.create_task(read_console_input(input_queue, session))
         failure = asyncio.create_task(
-            app.scheduler.wait_failure(),
+            app.sessions.wait_failure(),
             name="assistant-failure",
         )
         try:
             separate_turns = False
             while True:
-                if separate_turns:
-                    print(f"\n{_INPUT_SEPARATOR}", flush=True)
-                    separate_turns = False
-                next_input = asyncio.create_task(input_queue.get())
-                done, _ = await asyncio.wait(
-                    (next_input, failure),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if failure in done:
-                    if not next_input.done():
-                        next_input.cancel()
-                        await asyncio.gather(next_input, return_exceptions=True)
-                    error = failure.result()
-                    message = assistant_failure_message(error)
-                    if message is None:
-                        raise error
-                    print(f"\n运行失败：{message}\nHelperMe 已停止。")
-                    return
-                user_message = next_input.result()
-                if user_message is None:
-                    print("\n已退出。")
-                    return
-                if not user_message:
-                    continue
-                separate_turns = True
-                if user_message == "/new":
-                    session_id = f"session-{uuid4().hex}"
-                    view = await sessions.create(session_id)
-                    context_meter.select(
-                        session_id,
-                        config.model_context_limit,
-                        subagent_active=view.has_active_subagents,
+                try:
+                    if separate_turns:
+                        print(f"\n{_INPUT_SEPARATOR}", flush=True)
+                        separate_turns = False
+                    next_input = asyncio.create_task(input_queue.get())
+                    done, _ = await asyncio.wait(
+                        (next_input, failure),
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
-                    print(f"\n新 Session 已创建：{session_id}")
-                    continue
-                if user_message == "/resume" or user_message.startswith("/resume "):
-                    parts = user_message.split(maxsplit=1)
-                    if len(parts) != 2 or not parts[1].strip():
-                        print("\n用法：/resume <session_id>")
+                    if failure in done:
+                        error = failure.result()
+                        print(f"\nSession 运行失败：{error}")
+                        failure = asyncio.create_task(app.sessions.wait_failure())
+                        if not next_input.done():
+                            next_input.cancel()
+                            await asyncio.gather(next_input, return_exceptions=True)
+                            continue
+                    user_message = next_input.result()
+                    if user_message is None:
+                        print("\n已退出。")
+                        return
+                    if not user_message:
                         continue
-                    target_session_id = parts[1].strip()
+                    separate_turns = True
+                    if user_message == "/new":
+                        session_id = f"session-{uuid4().hex}"
+                        view = await sessions.create(session_id)
+                        context_meter.select(
+                            session_id,
+                            config.runtime.model_context_limit,
+                            subagent_active=view.has_active_subagents,
+                        )
+                        print(f"\n新 Session 已创建：{session_id}")
+                        continue
+                    if user_message == "/resume" or user_message.startswith("/resume "):
+                        parts = user_message.split(maxsplit=1)
+                        if len(parts) != 2 or not parts[1].strip():
+                            print("\n用法：/resume <session_id>")
+                            continue
+                        target_session_id = parts[1].strip()
+                        try:
+                            view = await sessions.resume(target_session_id)
+                        except SessionNotFoundError:
+                            print(f"\nSession 不存在：{target_session_id}")
+                            continue
+                        except ToolsetLoadError as exc:
+                            print(f"\nSession 恢复失败：{exc.code}: {exc.message}")
+                            continue
+                        session_id = target_session_id
+                        context_meter.select(
+                            session_id,
+                            config.runtime.model_context_limit,
+                            subagent_active=view.has_active_subagents,
+                        )
+                        print(f"\n已恢复 Session：{session_id}")
+                        _print_runtime_status(view)
+                        continue
                     try:
-                        view = await sessions.resume(target_session_id)
-                    except SessionNotFoundError:
-                        print(f"\nSession 不存在：{target_session_id}")
+                        mcp_reply = await mcp_console.execute_if_handled(user_message)
+                    except (McpCommandError, McpInputError) as exc:
+                        print(f"\nMCP：{exc}")
                         continue
-                    except ToolsetLoadError as exc:
-                        print(f"\nSession 恢复失败：{exc.code}: {exc.message}")
+                    if mcp_reply is not None:
+                        print(f"\nMCP：\n{mcp_reply}")
                         continue
-                    session_id = target_session_id
-                    context_meter.select(
+                    try:
+                        skill_reply = await skill_console.execute_if_handled(
+                            user_message,
+                        )
+                    except (SkillCommandError, SkillInputError) as exc:
+                        print(f"\nSkill：{exc}")
+                        continue
+                    if skill_reply is not None:
+                        print(f"\nSkill：\n{skill_reply}")
+                        continue
+                    view = await sessions.view(session_id)
+                    if view.control_approval is not None and user_message.lower() in {
+                        "yes",
+                        "y",
+                        "no",
+                        "n",
+                    }:
+                        message = await sessions.resolve_control(
+                            session_id,
+                            approved=user_message.lower() in {"yes", "y"},
+                        )
+                        print(f"\n控制面：{message}")
+                        _print_runtime_status(await sessions.view(session_id))
+                        continue
+                    if view.pending_authorization_ids and user_message.lower() in {
+                        "yes",
+                        "y",
+                        "no",
+                        "n",
+                    }:
+                        await sessions.resolve_authorizations(
+                            session_id,
+                            approved=user_message.lower() in {"yes", "y"},
+                        )
+                        continue
+                    if view.terminal:
+                        print("当前 Session 已结束，输入 /new。")
+                        continue
+                    await sessions.receive_user_message(
                         session_id,
-                        config.model_context_limit,
-                        subagent_active=view.has_active_subagents,
-                    )
-                    print(f"\n已恢复 Session：{session_id}")
-                    _print_runtime_status(view)
-                    continue
-                try:
-                    mcp_reply = await mcp_console.execute_if_handled(user_message)
-                except (McpCommandError, McpInputError) as exc:
-                    print(f"\nMCP：{exc}")
-                    continue
-                if mcp_reply is not None:
-                    print(f"\nMCP：\n{mcp_reply}")
-                    continue
-                try:
-                    skill_reply = await skill_console.execute_if_handled(
                         user_message,
+                        delivery_id=f"user-{uuid4().hex}",
                     )
-                except (SkillCommandError, SkillInputError) as exc:
-                    print(f"\nSkill：{exc}")
-                    continue
-                if skill_reply is not None:
-                    print(f"\nSkill：\n{skill_reply}")
-                    continue
-                view = await sessions.view(session_id)
-                if view.control_approval is not None and user_message.lower() in {
-                    "yes",
-                    "y",
-                    "no",
-                    "n",
-                }:
-                    message = await sessions.resolve_control(
-                        session_id,
-                        approved=user_message.lower() in {"yes", "y"},
-                    )
-                    print(f"\n控制面：{message}")
-                    _print_runtime_status(await sessions.view(session_id))
-                    continue
-                if view.pending_authorization_ids and user_message.lower() in {
-                    "yes",
-                    "y",
-                    "no",
-                    "n",
-                }:
-                    await sessions.resolve_authorizations(
-                        session_id,
-                        approved=user_message.lower() in {"yes", "y"},
-                    )
-                    continue
-                if view.terminal:
-                    print("当前 Session 已结束，输入 /new。")
-                    continue
-                await sessions.receive_user_message(
-                    session_id,
-                    user_message,
-                    delivery_id=f"user-{uuid4().hex}",
-                )
+                except WorkerFailed as error:
+                    print(f"\nSession 运行失败：{error}")
         finally:
             if not failure.done():
                 failure.cancel()

@@ -118,7 +118,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 {"echo": ToolBinding(_echo)},
                 SequentialIds(),
             )
-            scheduler = SettlingScheduler(runtime)
+            scheduler = SettlingScheduler(runtime, "session")
             await runtime.create_session("session")
             try:
                 await runtime.receive_user_message(
@@ -160,7 +160,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 {"explode": ToolBinding(_explode)},
                 SequentialIds(),
             )
-            scheduler = SettlingScheduler(runtime)
+            scheduler = SettlingScheduler(runtime, "session")
             await runtime.create_session("session")
             await runtime.receive_user_message(
                 "session",
@@ -204,7 +204,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 {"explode": ToolBinding(explode)},
                 SequentialIds(),
             )
-            scheduler = SettlingScheduler(runtime)
+            scheduler = SettlingScheduler(runtime, "session")
             await runtime.create_session("session")
             await runtime.receive_user_message(
                 "session",
@@ -223,7 +223,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                 {"explode": ToolBinding(explode)},
                 SequentialIds(),
             )
-            restored_scheduler = RecordingScheduler(restored)
+            restored_scheduler = RecordingScheduler(restored, "session")
             surface = ToolSurface()
             surface.attach(restored)
             sessions = AssistantSessions(

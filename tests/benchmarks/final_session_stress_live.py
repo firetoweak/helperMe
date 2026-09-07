@@ -43,11 +43,12 @@ output/phase1.md、output/final_report.md，并使用 grep 或 glob 做一次交
 )
 
 
-async def build_stress_assistant(config, sink, journal):
+async def build_stress_assistant(config, sink, journal, session_id):
     return await build_assistant_assembly(
         config,
         sink,
         journal,
+        session_id=session_id,
         scheduler_factory=SettlingScheduler,
     )
 
@@ -70,9 +71,9 @@ async def main() -> None:
     journal_path = workspace / ".runtime" / f"stress-{run_id}.sqlite"
     journal_path.parent.mkdir(parents=True, exist_ok=True)
     journal = SqliteJournal(journal_path)
-    assembly = await build_stress_assistant(config, delivered.append, journal)
-    runtime = assembly.runtime
     session_id = f"final-stress-{run_id}"
+    assembly = await build_stress_assistant(config, delivered.append, journal, session_id)
+    runtime = assembly.runtime
 
     try:
         async with config.llm, assembly.mcp.client_manager:
