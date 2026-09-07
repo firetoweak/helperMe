@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import threading
 
+from helperme.assistant.compact import compact_seed, TASK
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.ipc import PipePeer, ProcessFailure
 from helperme.assistant.subagent import project_parent, record_unexpected_return
@@ -37,7 +38,10 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
     events = await journal.snapshot(session_id)
     await journal.prepare_recovery(
         session_id,
-        discard_unfinished=project_parent(events) is not None,
+        discard_unfinished=(
+            project_parent(events) is not None
+            or (compact_seed(events) is not None and compact_seed(events)[0] == TASK)
+        ),
     )
     stop = asyncio.Event()
     active_requests = 0
@@ -52,6 +56,11 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
         active_requests += 1
         revision += 1
         try:
+            if operation == "compact_snapshot":
+                return await assembly.compact.snapshot(**arguments)
+            if operation == "compact_ready":
+                await assembly.scheduler.wake(session_id)
+                return None
             if operation == "fact":
                 await assembly.runtime.receive_domain_fact(session_id, **arguments)
                 parent = project_parent(await journal.snapshot(session_id))

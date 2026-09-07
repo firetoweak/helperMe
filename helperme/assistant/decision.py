@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import AbstractSet, Protocol
 
+from helperme.assistant.compact import CompactContext, PROMPT as COMPACT_PROMPT, SUBMIT
 from helperme.assistant.artifacts import ArtifactGateway
 from helperme.assistant.control import (
     AssistantControlPlane,
@@ -165,6 +166,7 @@ class JournalBackedLlmDecisionMaker:
         projector: ModelContextProjector | None = None,
         context_usage_sink: Callable[[str, int, int], None] | None = None,
         subagents: SubAgentHost | None = None,
+        compact: CompactContext | None = None,
     ) -> None:
         self._journal = journal
         self._llm = llm
@@ -177,54 +179,62 @@ class JournalBackedLlmDecisionMaker:
         self._management = management
         self._context_usage_sink = context_usage_sink
         self._subagents = subagents
+        self._compact = compact
 
-    def _schemas(
-        self,
-        frame: DecisionFrame,
-    ) -> tuple[list[dict[str, object]], frozenset[str]]:
+    def _schemas(self, frame: DecisionFrame):
+        return self.schemas_for(frame.state)
+
+    def schemas_for(self, state) -> tuple[list[dict[str, object]], frozenset[str]]:
+        if self._compact is not None and self._compact.is_reader:
+            return deepcopy(self._compact.schemas()), frozenset()
         schemas = self._surface.schemas(
-            frame.state.session_id,
-            frame.state,
+            state.session_id,
+            state,
         )
         schemas = [*schemas, *self._skill_tools.schemas()]
         schemas = [
             *schemas,
-            *self._management.schemas(frame.state.session_id, frame.state),
+            *self._management.schemas(state.session_id, state),
         ]
         allowed_control_names = self._management.control_names(
-            frame.state.session_id,
-            frame.state,
+            state.session_id,
+            state,
         )
         control_schemas = self._control.schemas(
-            frame.state.session_id,
+            state.session_id,
             allowed_control_names,
         )
         offered_control_names = _tool_names(control_schemas)
         schemas = [*schemas, *control_schemas]
         if self._subagents is not None:
-            session_id = frame.state.session_id
+            session_id = state.session_id
             schemas = [*schemas, *self._subagents.schemas(session_id)]
             allowed = self._subagents.tool_names(session_id)
             if allowed is not None:
                 schemas = [
-                    schema
-                    for schema in schemas
-                    if _schema_name(schema) in allowed
+                    schema for schema in schemas if _schema_name(schema) in allowed
                 ]
                 offered_control_names = offered_control_names & allowed
+        if self._compact is not None:
+            schemas = [*schemas, *self._compact.schemas()]
         return deepcopy(schemas), offered_control_names
 
     def _prompt_for(self, frame: DecisionFrame) -> str:
-        session_id = frame.state.session_id
+        return self.prompt_for(frame.state)
+
+    def prompt_for(self, state) -> str:
+        session_id = state.session_id
+        if self._compact is not None and self._compact.is_reader:
+            return COMPACT_PROMPT
         if self._subagents is not None:
             override = self._subagents.system_prompt(session_id)
             if override is not None:
                 # 子 Session 不加载 Toolset、不碰管理面，两份目录都不适用。
                 return override
-        catalog = self._surface.catalog_instruction(session_id, frame.state)
+        catalog = self._surface.catalog_instruction(session_id, state)
         management_catalog = self._management.catalog_instruction(
             session_id,
-            frame.state,
+            state,
         )
         return f"{self._system_prompt}\n\n{catalog}\n\n{management_catalog}"
 
@@ -297,12 +307,16 @@ class JournalBackedLlmDecisionMaker:
             pending = self._subagents.pending_instruction(events)
             if pending is not None:
                 prompt = f"{prompt}\n\n{pending}"
+        visible = frame.state.visible_event_ids
+        if self._compact is not None:
+            visible = self._compact.visible(events, visible)
         prepared = self._projector.prepare(
             events,
-            frame.state.visible_event_ids,
+            visible,
             frame.state.session_id,
             prompt,
             schemas,
+            prefix=None if self._compact is None else self._compact.prefix,
         )
         if self._context_usage_sink is not None:
             estimated = self._projector.budget.assess(
@@ -332,6 +346,18 @@ class JournalBackedLlmDecisionMaker:
                 schemas,
                 usage.input_tokens,
             )
+        if self._compact is not None and self._compact.is_reader:
+            if not result.response.calls:
+                raise InvalidLLMResponse(
+                    "compact_requires_tool", "use submit_handoff to finish"
+                )
+            if (
+                any(call.name == SUBMIT for call in result.response.calls)
+                and len(result.response.calls) != 1
+            ):
+                raise InvalidLLMResponse(
+                    "compact_submit_batch", "submit_handoff must be alone"
+                )
         decision = ensure_deliver(
             self._decision_from_response(
                 frame,

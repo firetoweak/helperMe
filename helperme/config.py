@@ -27,6 +27,7 @@ INITIAL_CONFIG = {
     "runtime": {
         "model_context_limit": 200000,
         "input_budget_ratio": 0.9,
+        "compact_threshold_ratio": 0.55,
     },
     "channels": {
         "telegram": {
@@ -53,6 +54,7 @@ class WorkspaceConfig:
 class RuntimeConfig:
     model_context_limit: int
     input_budget_ratio: float
+    compact_threshold_ratio: float = 0.55
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +84,11 @@ class AssistantConfig:
     model_context_limit: int
     input_budget_ratio: float
     llm: LLMApi
+    compact_threshold_ratio: float = 0.55
+
+    def __post_init__(self):
+        if not 0 < self.compact_threshold_ratio < 1:
+            raise ValueError("compact_threshold_ratio must be in (0, 1)")
 
 
 def _create_initial_config(path: Path) -> None:
@@ -119,9 +126,7 @@ def _parse_model_config(data: dict) -> ModelConfig:
     if not isinstance(model, dict):
         raise ValueError("模型配置必须包含 model 映射")
     if set(model) != {"name", "base_url", "api_key", "enable_thinking"}:
-        raise ValueError(
-            "模型配置字段必须是 name/base_url/api_key/enable_thinking"
-        )
+        raise ValueError("模型配置字段必须是 name/base_url/api_key/enable_thinking")
     values = {}
     for field in ("name", "base_url", "api_key"):
         value = model[field]
@@ -138,9 +143,7 @@ def _parse_model_config(data: dict) -> ModelConfig:
 def load_app_config(path: Path | None = None) -> AppConfig:
     data = _load_config_data(path)
     if set(data) != {"model", "workspace", "runtime", "channels"}:
-        raise ValueError(
-            "配置字段必须是 model/workspace/runtime/channels"
-        )
+        raise ValueError("配置字段必须是 model/workspace/runtime/channels")
     workspace = data["workspace"]
     if not isinstance(workspace, dict):
         raise ValueError("配置必须包含 workspace 映射")
@@ -159,24 +162,25 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     if set(runtime) != {
         "model_context_limit",
         "input_budget_ratio",
+        "compact_threshold_ratio",
     }:
         raise ValueError(
             "runtime 配置字段必须是 model_context_limit/"
-            "input_budget_ratio"
+            "input_budget_ratio/compact_threshold_ratio"
         )
     model_context_limit = runtime["model_context_limit"]
     if type(model_context_limit) is not int or model_context_limit < 1:
-        raise ValueError(
-            "配置 runtime.model_context_limit 必须是大于 0 的整数"
-        )
+        raise ValueError("配置 runtime.model_context_limit 必须是大于 0 的整数")
     input_budget_ratio = runtime["input_budget_ratio"]
+    if type(input_budget_ratio) not in (int, float) or not 0 < input_budget_ratio < 1:
+        raise ValueError("配置 runtime.input_budget_ratio 必须在 (0, 1) 范围内")
+
+    compact_threshold_ratio = runtime["compact_threshold_ratio"]
     if (
-        type(input_budget_ratio) not in (int, float)
-        or not 0 < input_budget_ratio < 1
+        type(compact_threshold_ratio) not in (int, float)
+        or not 0 < compact_threshold_ratio < 1
     ):
-        raise ValueError(
-            "配置 runtime.input_budget_ratio 必须在 (0, 1) 范围内"
-        )
+        raise ValueError("runtime.compact_threshold_ratio 必须在 (0, 1) 范围内")
 
     channels = data["channels"]
     if not isinstance(channels, dict):
@@ -189,20 +193,13 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         if not isinstance(telegram, dict):
             raise ValueError("channels.telegram 必须是映射")
         if set(telegram) != {"bot_token", "allowed_chat_id"}:
-            raise ValueError(
-                "channels.telegram 字段必须是 "
-                "bot_token/allowed_chat_id"
-            )
+            raise ValueError("channels.telegram 字段必须是 bot_token/allowed_chat_id")
         bot_token = telegram["bot_token"]
         if not isinstance(bot_token, str) or not bot_token.strip():
-            raise ValueError(
-                "配置 channels.telegram.bot_token 不能为空"
-            )
+            raise ValueError("配置 channels.telegram.bot_token 不能为空")
         allowed_chat_id = telegram["allowed_chat_id"]
         if allowed_chat_id is not None and type(allowed_chat_id) is not int:
-            raise ValueError(
-                "配置 channels.telegram.allowed_chat_id 必须是整数或 null"
-            )
+            raise ValueError("配置 channels.telegram.allowed_chat_id 必须是整数或 null")
         telegram_config = TelegramConfig(
             bot_token=bot_token.strip(),
             allowed_chat_id=allowed_chat_id,
@@ -217,6 +214,7 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         runtime=RuntimeConfig(
             model_context_limit=model_context_limit,
             input_budget_ratio=float(input_budget_ratio),
+            compact_threshold_ratio=float(compact_threshold_ratio),
         ),
         channels=ChannelsConfig(telegram=telegram_config),
     )
@@ -230,4 +228,5 @@ def assistant_config_from_app(app: AppConfig, llm: LLMApi) -> AssistantConfig:
         model_context_limit=app.runtime.model_context_limit,
         input_budget_ratio=app.runtime.input_budget_ratio,
         llm=llm,
+        compact_threshold_ratio=app.runtime.compact_threshold_ratio,
     )

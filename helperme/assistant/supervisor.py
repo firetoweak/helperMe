@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import multiprocessing
 import os
 
+from helperme.assistant.compact_host import CompactHost
 from helperme.assistant.delivery import emit_delivery
 from helperme.assistant.ipc import PipePeer, ProcessFailure, WorkerFailed
 from helperme.assistant.session_store import SessionStore
@@ -54,11 +55,19 @@ class HostSupervisor:
         self.failures: asyncio.Queue[WorkerFailed] = asyncio.Queue()
         self.reclaimed: set[str] = set()
         self.closed = False
+        self.compact = CompactHost(self)
         self.job = WindowsJob.create() if os.name == "nt" else None
 
     async def _route(self, operation, session_id, arguments):
+        if operation == "compact_boundary":
+            return await self.compact.boundary(session_id, arguments)
+        if operation == "compact_complete":
+            return await self.compact.complete(session_id, arguments)
         if operation == "output":
-            await emit_delivery(self.sink, session_id, arguments["text"])
+            if self.compact.store.reader_job(session_id) is not None:
+                return None
+            conversation, _ = self.compact.store.binding(session_id)
+            await emit_delivery(self.sink, conversation, arguments["text"])
             return None
         if operation == "create_child":
             # Identity is stable; an existing child is resumed, never replaced.
@@ -84,11 +93,21 @@ class HostSupervisor:
 
         async def signal(kind, *values):
             if kind == "usage":
-                if self.context_usage_sink is not None:
-                    self.context_usage_sink(*values)
+                if (
+                    self.context_usage_sink is not None
+                    and self.compact.store.reader_job(session_id) is None
+                ):
+                    self.context_usage_sink(
+                        self.compact.store.binding(values[0])[0], *values[1:]
+                    )
             elif kind == "activity":
-                if self.subagent_activity_sink is not None:
-                    self.subagent_activity_sink(*values)
+                if (
+                    self.subagent_activity_sink is not None
+                    and self.compact.store.reader_job(session_id) is None
+                ):
+                    self.subagent_activity_sink(
+                        self.compact.store.binding(values[0])[0], *values[1:]
+                    )
             elif kind == "idle":
                 worker.idle_revision = values[0]
                 await self._stop_idle(worker)
@@ -105,7 +124,9 @@ class HostSupervisor:
             else:
                 raise ValueError(f"Unknown Host signal: {kind}")
 
-        peer = PipePeer(local, self._route, signal)
+        peer = PipePeer(
+            local, self._route, signal, peer_alive=lambda: worker.process.is_alive()
+        )
         admitted = context.Event()
         process = context.Process(
             target=worker_main,
@@ -193,6 +214,7 @@ class HostSupervisor:
             worker.transition.set()
         # Release the dead Worker and its pending requests before waking the parent.
         if worker.failure is not None:
+            self.compact.store.fail(session_id, asdict(worker.failure.failure))
             self.failures.put_nowait(worker.failure)
         if worker.returned is not None and not self.closed:
             parent, arguments = worker.returned
@@ -247,6 +269,8 @@ class HostSupervisor:
         lock = self.locks.setdefault(session_id, asyncio.Lock())
         while True:
             async with lock:
+                if self.closed:
+                    raise RuntimeError("Host closed")
                 worker = self.workers.get(session_id)
                 if worker is None:
                     worker = await self._start(session_id)
@@ -268,23 +292,23 @@ class HostSupervisor:
         return await self.request("create", session_id, {})
 
     async def resume(self, session_id):
-        return await self.request("resume", session_id, {})
+        return await self.compact.application("resume", session_id, {})
 
     async def view(self, session_id):
-        return await self.request("view", session_id, {})
+        return await self.compact.application("view", session_id, {})
 
     async def receive_user_message(self, session_id, content, **kwargs):
-        await self.request(
+        await self.compact.application(
             "receive_user_message", session_id, dict(content=content, **kwargs)
         )
 
     async def resolve_authorizations(self, session_id, *, approved):
-        await self.request(
+        await self.compact.application(
             "resolve_authorizations", session_id, dict(approved=approved)
         )
 
     async def resolve_control(self, session_id, *, approved):
-        return await self.request(
+        return await self.compact.application(
             "resolve_control", session_id, dict(approved=approved)
         )
 

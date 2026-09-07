@@ -8,6 +8,7 @@ from helperme.assistant.artifacts import (
     FileArtifactGateway,
     read_artifact_binding,
 )
+from helperme.assistant.compact import CompactContext, CompactBoundary, READ, SUBMIT
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
 from helperme.assistant.context.projection import (
     ModelContextProjector,
@@ -46,6 +47,7 @@ class AssistantAssembly:
     skills: SkillAssembly
     control: AssistantControlPlane
     subagents: SubAgentHost
+    compact: CompactBoundary | None = None
 
 
 def _model_context_settings(config: AssistantConfig) -> ModelContextSettings:
@@ -119,11 +121,19 @@ async def build_assistant_assembly(
             READ_SKILL_RESOURCE,
             DELEGATE,
             REPORT,
+            READ,
+            SUBMIT,
             *management.names(),
             *(operation.name for operation in operations),
         ),
         gateway=gateway,
         settings=settings,
+    )
+    compact_context = CompactContext(
+        session_id,
+        await journal.snapshot(session_id),
+        projector,
+        session_transport,
     )
     bindings = {
         **bind_executor_tools(builtin_tools, gateway, settings),
@@ -133,23 +143,22 @@ async def build_assistant_assembly(
         **skill_tools.bindings(),
         **management.bindings(),
         **subagents.bindings(),
+        **compact_context.bindings(),
     }
-    runtime = AgentRuntime(
+    decision = JournalBackedLlmDecisionMaker(
         journal,
-        JournalBackedLlmDecisionMaker(
-            journal,
-            config.llm,
-            config.model_name,
-            surface=surface,
-            skill_tools=skill_tools,
-            projector=projector,
-            control=control,
-            management=management,
-            context_usage_sink=context_usage_sink,
-            subagents=subagents,
-        ),
-        bindings,
+        config.llm,
+        config.model_name,
+        surface=surface,
+        skill_tools=skill_tools,
+        projector=projector,
+        control=control,
+        management=management,
+        context_usage_sink=context_usage_sink,
+        subagents=subagents,
+        compact=compact_context,
     )
+    runtime = AgentRuntime(journal, decision, bindings)
     surface.attach(runtime)
     scheduler = scheduler_factory(
         runtime,
@@ -161,6 +170,14 @@ async def build_assistant_assembly(
         on_quiesced=subagents.on_quiesced,
         on_failed=subagents.on_failed,
     )
+    compact = None
+    if session_transport is not None:
+        compact = CompactBoundary(
+            runtime, decision, compact_context, config, control, session_transport
+        )
+        compact.scheduler = scheduler
+        scheduler.before_advance = compact.before_advance
+        scheduler.propagate_failures = compact_context.is_reader
     subagents.attach(runtime, session_transport)
     sessions = AssistantSessions(
         runtime,
@@ -174,6 +191,7 @@ async def build_assistant_assembly(
         runtime=runtime,
         scheduler=scheduler,
         sessions=sessions,
+        compact=compact,
         bindings=bindings,
         surface=surface,
         mcp=mcp,

@@ -1,15 +1,17 @@
 # Channel 接入契约
 
+[Compact](Compact.md) 已支持稳定 Conversation 到当前 Session 的绑定；Channel 使用稳定 identity，由 Host 在投递时解析当前 Session。
+
 Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 Access、Conversation、Delivery、Reply route 四种 identity，不实现模型决策或 Session 推进循环。
 
 | identity | 用途 |
 |---|---|
 | Access | 谁可以使用入口 |
-| Conversation | 选择稳定的 Session identity |
+| Conversation | 稳定对话 identity，由 Host 解析当前 Session |
 | Delivery | 幂等接纳一条外部消息 |
 | Reply route | 把输出送回正确会话 |
 
-凭证不是 Conversation identity。Telegram 当前使用 `bot_id + chat_id` 选择 Session；token 只用于访问。进程重启继续同一 Session，更换 Bot 不复用旧 Session。
+凭证不是 Conversation identity。Telegram 当前使用 `bot_id + chat_id` 选择稳定 Conversation；token 只用于访问。进程重启恢复该对话当前绑定的 Session，更换 Bot 不复用旧 Session。
 
 ## 输入
 
@@ -17,6 +19,7 @@ Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 
 
 ```text
 外部消息
+→ Host 解析当前 Session 并登记 Delivery 归属
 → accept_delivery(source, delivery_id)
 → UserMessageReceived
 → wake(session_id)
@@ -33,11 +36,11 @@ Assistant 文本通过产品拥有的 `deliver` Command 到达 Channel sink。�
 ## Session 操作
 
 - `/new`：生成新 identity 并幂等创建 Session；
-- `/resume <session_id>`：只选择已存在 Session、重建 Host 投影，并按当前 State 决定是否 wake；
+- `/resume <session_id>`：选择已存在 identity 对应的当前 Session、完成未发布的接续准备、重建 Host 投影，并按当前 State 决定是否 wake；
 - 不提供 `/stop`；
 - `Ctrl+C` / `Ctrl+D`：退出进程，不写 Runtime Event。
 
-普通 Channel 不请求 `finalize()`。一次回答结束后 Session 回到 `WAITING(user_message)`，后续文本继续追加到同一 Event 流。
+普通 Channel 不请求 `finalize()`。一次回答结束后 Session 回到 `WAITING(user_message)`，后续文本进入该对话当前绑定的 Session；compact 可以在两次模型决策之间更换 Session，用户入口和 Reply route 不变。
 
 ## 验收
 

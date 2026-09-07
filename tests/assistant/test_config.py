@@ -21,6 +21,7 @@ class AppConfigTest(unittest.TestCase):
             "runtime": {
                 "model_context_limit": 1000,
                 "input_budget_ratio": ratio,
+                "compact_threshold_ratio": 0.55,
             },
             "channels": {},
         }

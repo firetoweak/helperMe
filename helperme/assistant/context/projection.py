@@ -89,6 +89,7 @@ class PreparedModelContext:
     protection_start_index: int
     size_externalized_command_ids: tuple[str, ...]
     age_dehydrated_command_ids: tuple[str, ...]
+    source_sequences: tuple[int, ...] = ()
     projector_version: int = PROJECTOR_VERSION
 
 
@@ -97,6 +98,7 @@ class _Projected:
     message: dict[str, object]
     kind: str
     command_id: str | None = None
+    sequence: int = 0
 
 
 def jsonable(value: object) -> object:
@@ -178,6 +180,7 @@ def _translate_visible_events(
                 _Projected(
                     {"role": "user", "content": payload.content},
                     "user",
+                    sequence=event.sequence,
                 )
             )
             continue
@@ -196,6 +199,7 @@ def _translate_visible_events(
                         ),
                     },
                     "user",
+                    sequence=event.sequence,
                 )
             )
             continue
@@ -234,7 +238,7 @@ def _translate_visible_events(
             }
             if shown:
                 message["tool_calls"] = shown
-            items.append(_Projected(message, "assistant"))
+            items.append(_Projected(message, "assistant", sequence=event.sequence))
             continue
         if isinstance(payload, CommandOutcomeReceived):
             effect = commands[payload.command_id]
@@ -251,6 +255,7 @@ def _translate_visible_events(
                     },
                     "tool",
                     payload.command_id,
+                    event.sequence,
                 )
             )
     return _canonicalize_tool_result_runs(items, command_ranks)
@@ -322,8 +327,7 @@ def _is_externalized_meta(value: object) -> bool:
 def _journaled_externalized_meta(value: object) -> dict[str, object] | None:
     if (
         not isinstance(value, dict)
-        or set(value)
-        != {"externalized", "artifact_id", "size_chars", "preview"}
+        or set(value) != {"externalized", "artifact_id", "size_chars", "preview"}
         or value["externalized"] is not True
     ):
         return None
@@ -462,9 +466,14 @@ class ModelContextProjector:
         session_id: str,
         system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
         tools: list[dict[str, object]] | None = None,
+        *,
+        prefix: list[dict[str, object]] | None = None,
+        enforce_budget: bool = True,
     ) -> PreparedModelContext:
         items = [
-            _Projected(deepcopy(item.message), item.kind, item.command_id)
+            _Projected(
+                deepcopy(item.message), item.kind, item.command_id, item.sequence
+            )
             for item in _translate_visible_events(
                 events,
                 visible_event_ids,
@@ -480,15 +489,24 @@ class ModelContextProjector:
             store,
             protection_start,
         )
-        messages = [item.message for item in items]
+        messages = [
+            items[0].message,
+            *(prefix or []),
+            *(item.message for item in items[1:]),
+        ]
         assessment = self._budget.assess(
             messages,
             [] if tools is None else tools,
         )
-        if not assessment.allowed:
+        if enforce_budget and not assessment.allowed:
             raise ModelContextBudgetExceeded(assessment)
         return PreparedModelContext(
             messages=messages,
+            source_sequences=(
+                0,
+                *((0,) * len(prefix or [])),
+                *(item.sequence for item in items[1:]),
+            ),
             assessment=assessment,
             protection_start_index=protection_start,
             size_externalized_command_ids=tuple(size_ids),

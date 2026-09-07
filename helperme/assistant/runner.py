@@ -52,6 +52,9 @@ class SessionScheduler:
         self._notify = notify
         self._on_quiesced = on_quiesced
         self._on_failed = on_failed
+        self.before_advance = None
+        self.retired = False
+        self.propagate_failures = False
         self._task: asyncio.Task[bool] | None = None
         self._pending_wake = False
         self._failure: BaseException | None = None
@@ -62,6 +65,8 @@ class SessionScheduler:
     async def wake(self, session_id: str) -> None:
         assert session_id == self._session_id
         self.changed.set()
+        if self.retired:
+            return
         if self._failure is not None:
             raise self._failure
         task = self._task
@@ -81,9 +86,13 @@ class SessionScheduler:
 
     async def _advance_once(self) -> bool:
         session_id = self._session_id
+        if self.before_advance is not None and not await self.before_advance():
+            return False
         try:
             advance = await self._runtime.advance(session_id)
         except Exception as error:
+            if self.propagate_failures:
+                raise
             message = assistant_failure_message(error)
             if message is None:
                 raise
@@ -141,7 +150,7 @@ class SessionScheduler:
         error = task.exception()
         if error is not None:
             self._record_failure(error)
-        elif self._failure is None and (task.result() or pending_wake):
+        elif not self.retired and self._failure is None and (task.result() or pending_wake):
             self._start()
 
     def _record_failure(self, error: BaseException) -> None:

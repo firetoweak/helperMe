@@ -36,8 +36,9 @@ class WorkerFailed(RuntimeError):
 
 
 class PipePeer:
-    def __init__(self, connection, handler, signal) -> None:
+    def __init__(self, connection, handler, signal, *, peer_alive=None) -> None:
         self.connection = connection
+        self.peer_alive = peer_alive
         self.handler = handler
         self.signal = signal
         self.pending: dict[str, asyncio.Future] = {}
@@ -72,6 +73,11 @@ class PipePeer:
     def _receive(self):
         if self.connection.poll(0.1):
             return self.connection.recv()
+        # A process killed during spawn may leave an unclaimed duplicated pipe
+        # handle in the parent. Drain buffered messages, then use process death
+        # as EOF rather than waiting forever for that duplicate to close.
+        if self.peer_alive is not None and not self.peer_alive():
+            raise EOFError("peer process exited")
         return None
 
     async def run(self):
