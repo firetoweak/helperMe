@@ -36,6 +36,7 @@ async def bootstrap_assistant(
     app_config: AppConfig | None = None,
     context_usage_sink=None,
     subagent_activity_sink=None,
+    conversation_status_sink=None,
 ) -> AsyncIterator[BootstrappedAssistant]:
     config = load_app_config() if app_config is None else app_config
     home = HelperMeHome.default()
@@ -48,6 +49,7 @@ async def bootstrap_assistant(
         sink,
         context_usage_sink=context_usage_sink,
         subagent_activity_sink=subagent_activity_sink,
+        conversation_status_sink=conversation_status_sink,
     )
     # Channel management is product-level; session tools get their own clients.
     management_llm = LLMClient(config.model)

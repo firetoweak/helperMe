@@ -42,6 +42,7 @@ class HostSupervisor:
         *,
         context_usage_sink=None,
         subagent_activity_sink=None,
+        conversation_status_sink=None,
     ):
         self.store = store
         self.config_factory = config_factory
@@ -49,6 +50,7 @@ class HostSupervisor:
         self.sink = sink
         self.context_usage_sink = context_usage_sink
         self.subagent_activity_sink = subagent_activity_sink
+        self.conversation_status_sink = conversation_status_sink
         self.workers: dict[str, Worker] = {}
         self.watchers: set[asyncio.Task] = set()
         self.locks: dict[str, asyncio.Lock] = {}
@@ -215,6 +217,9 @@ class HostSupervisor:
         # Release the dead Worker and its pending requests before waking the parent.
         if worker.failure is not None:
             self.compact.store.fail(session_id, asdict(worker.failure.failure))
+            compact_job = self.compact.store.reader_job(session_id)
+            if compact_job is not None:
+                self.compact.notify_status(compact_job["source"])
             self.failures.put_nowait(worker.failure)
         if worker.returned is not None and not self.closed:
             parent, arguments = worker.returned
@@ -285,6 +290,9 @@ class HostSupervisor:
             worker.requests -= 1
             if not worker.exited.is_set():
                 await self._stop_idle(worker)
+
+    def conversation_status(self, session_id):
+        return self.compact.store.status(session_id)
 
     async def create(self, session_id):
         async with self.locks.setdefault(session_id, asyncio.Lock()):

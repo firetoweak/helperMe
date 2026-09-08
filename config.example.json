@@ -12,7 +12,7 @@
   "runtime": {
     "model_context_limit": 200000,
     "input_budget_ratio": 0.9,
-    "compact_threshold_ratio": 0.55
+    "compact_threshold_ratio": 0.8
   },
   "channels": {
     "telegram": {

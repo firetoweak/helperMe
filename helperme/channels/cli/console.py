@@ -8,8 +8,9 @@ from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from helperme.assistant.runner import SessionNotFoundError
+from helperme.assistant.compact_store import ConversationStatus
 from helperme.assistant.ipc import WorkerFailed
+from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import SessionView
 from helperme.assistant.toolsets import ToolsetLoadError
 from helperme.bootstrap import bootstrap_assistant
@@ -27,7 +28,7 @@ class _BottomAnchoredPromptSession(PromptSession[str]):
         prompt_layout = super()._create_layout()
         prompt = HSplit(
             [prompt_layout.container],
-            height=Dimension.exact(2),
+            height=Dimension.exact(3),
         )
         return Layout(
             HSplit([Window(), prompt]),
@@ -45,38 +46,58 @@ def _compact_tokens(tokens: int) -> str:
 
 class _ContextMeter:
     def __init__(self) -> None:
-        self._session_id = ""
+        self._conversation_id = ""
+        self._current_session_id = ""
+        self._compact_count = 0
+        self._compact_phase = None
         self._used = 0
         self._limit = 0
         self._subagent_active = False
 
     def select(
         self,
-        session_id: str,
+        status: ConversationStatus,
         limit: int,
         *,
         subagent_active: bool = False,
     ) -> None:
-        self._session_id = session_id
+        self._conversation_id = status.conversation_id
+        self._current_session_id = status.session_id
+        self._compact_count = status.compact_count
+        self._compact_phase = status.compact_phase
         self._used = 0
         self._limit = limit
         self._subagent_active = subagent_active
 
     def update(self, session_id: str, used: int, limit: int) -> None:
-        if session_id != self._session_id:
+        if session_id != self._conversation_id:
             return
         self._used = used
         self._limit = limit
 
     def update_subagent_activity(self, session_id: str, active: bool) -> None:
-        if session_id == self._session_id:
+        if session_id == self._conversation_id:
             self._subagent_active = active
+
+    def update_conversation_status(self, status: ConversationStatus) -> None:
+        if status.conversation_id != self._conversation_id:
+            return
+        if status.session_id != self._current_session_id:
+            self._used = 0
+            self._subagent_active = False
+        self._current_session_id = status.session_id
+        self._compact_count = status.compact_count
+        self._compact_phase = status.compact_phase
 
     def render(self) -> str:
         context = f"上下文 {_compact_tokens(self._used)}/{_compact_tokens(self._limit)}"
+        context += f"  ·  compact {self._compact_count} 次"
+        if self._compact_phase is not None:
+            phase = {"running": "整理中", "ready": "等待切换", "failed": "失败"}
+            context += f"  ·  compact {phase[self._compact_phase]}"
         if self._subagent_active:
-            return f"{context}  ·  子 Agent 工作中"
-        return context
+            context += "  ·  子 Agent 工作中"
+        return f"{context}\nSession ID：{self._current_session_id}"
 
 
 async def read_console_input(
@@ -128,6 +149,7 @@ async def run_runtime_console() -> None:
         sink,
         context_usage_sink=context_meter.update,
         subagent_activity_sink=context_meter.update_subagent_activity,
+        conversation_status_sink=context_meter.update_conversation_status,
     ) as app:
         config = app.config
         sessions = app.sessions
@@ -136,7 +158,7 @@ async def run_runtime_console() -> None:
         session_id = f"session-{uuid4().hex}"
         view = await sessions.create(session_id)
         context_meter.select(
-            session_id,
+            sessions.conversation_status(session_id),
             config.runtime.model_context_limit,
             subagent_active=view.has_active_subagents,
         )
@@ -186,7 +208,7 @@ async def run_runtime_console() -> None:
                         session_id = f"session-{uuid4().hex}"
                         view = await sessions.create(session_id)
                         context_meter.select(
-                            session_id,
+                            sessions.conversation_status(session_id),
                             config.runtime.model_context_limit,
                             subagent_active=view.has_active_subagents,
                         )
@@ -208,7 +230,7 @@ async def run_runtime_console() -> None:
                             continue
                         session_id = target_session_id
                         context_meter.select(
-                            session_id,
+                            sessions.conversation_status(session_id),
                             config.runtime.model_context_limit,
                             subagent_active=view.has_active_subagents,
                         )

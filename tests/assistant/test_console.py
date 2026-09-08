@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, call, patch
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.layout import HSplit, Window
 from prompt_toolkit.output import DummyOutput
+from helperme.assistant.compact_store import ConversationStatus
 
 from helperme.channels.cli.console import (
     _BottomAnchoredPromptSession,
@@ -19,7 +20,7 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
     def test_prompt_is_anchored_above_the_bottom_toolbar(self):
         with create_pipe_input() as console_input:
             session = _BottomAnchoredPromptSession(
-                bottom_toolbar=lambda: "上下文 0/200k",
+                bottom_toolbar=lambda: "上下文 0/200k  ·  compact 0 次\nSession ID：session-1",
                 input=console_input,
                 output=DummyOutput(),
             )
@@ -29,30 +30,44 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(root.children[0], Window)
             prompt = root.children[1]
             self.assertIsInstance(prompt, HSplit)
-            self.assertEqual(prompt.preferred_height(80, 24).min, 2)
-            self.assertEqual(prompt.preferred_height(80, 24).max, 2)
+            self.assertEqual(prompt.preferred_height(80, 24).min, 3)
+            self.assertEqual(prompt.preferred_height(80, 24).max, 3)
 
     def test_context_meter_tracks_only_the_selected_session(self):
         meter = _ContextMeter()
-        meter.select("session-1", 200_000)
+        meter.select(ConversationStatus("chat", "session-1", 0, None), 200_000)
+
+        def rendered(context):
+            return f"{context}  ·  compact 0 次\nSession ID：session-1"
 
         meter.update("another-session", 90_000, 200_000)
-        self.assertEqual(meter.render(), "上下文 0/200k")
+        self.assertEqual(meter.render(), rendered("上下文 0/200k"))
 
-        meter.update("session-1", 12_345, 200_000)
-        self.assertEqual(meter.render(), "上下文 12.3k/200k")
+        meter.update("chat", 12_345, 200_000)
+        self.assertEqual(meter.render(), rendered("上下文 12.3k/200k"))
 
         meter.update_subagent_activity("another-session", True)
-        self.assertEqual(meter.render(), "上下文 12.3k/200k")
+        self.assertEqual(meter.render(), rendered("上下文 12.3k/200k"))
 
-        meter.update_subagent_activity("session-1", True)
+        meter.update_subagent_activity("chat", True)
         self.assertEqual(
             meter.render(),
-            "上下文 12.3k/200k  ·  子 Agent 工作中",
+            "上下文 12.3k/200k  ·  compact 0 次  ·  子 Agent 工作中\nSession ID：session-1",
         )
 
-        meter.update_subagent_activity("session-1", False)
-        self.assertEqual(meter.render(), "上下文 12.3k/200k")
+        meter.update_subagent_activity("chat", False)
+        self.assertEqual(meter.render(), rendered("上下文 12.3k/200k"))
+
+        meter.update_conversation_status(ConversationStatus("other", "other", 9, "running"))
+        self.assertEqual(meter.render(), rendered("上下文 12.3k/200k"))
+        meter.update_conversation_status(ConversationStatus("chat", "session-1", 0, "running"))
+        self.assertIn("compact 整理中", meter.render())
+        meter.update_conversation_status(ConversationStatus("chat", "session-1", 0, "ready"))
+        self.assertIn("compact 等待切换", meter.render())
+        meter.update_conversation_status(ConversationStatus("chat", "session-2", 1, None))
+        self.assertEqual(meter.render(), "上下文 0/200k  ·  compact 1 次\nSession ID：session-2")
+        meter.update("chat", 2_000, 200_000)
+        self.assertIn("上下文 2k/200k", meter.render())
 
     async def test_reader_continuously_collects_complete_lines(self):
         queue: asyncio.Queue[str | None] = asyncio.Queue()

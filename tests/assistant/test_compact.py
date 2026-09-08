@@ -32,6 +32,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         self.home = HelperMeHome(self.root / "home")
         self.store = SessionStore(self.home.runtime_sessions_root)
         self.outputs = []
+        self.statuses = []
         self.host = self.new_host()
 
     def new_host(self):
@@ -40,6 +41,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
             partial(config_for, self.root),
             self.home,
             lambda sid, text: self.outputs.append((sid, text)),
+            conversation_status_sink=self.statuses.append,
         )
 
     async def asyncTearDown(self):
@@ -64,6 +66,10 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.host.failures.empty())
         self.assertEqual(len(self.outputs), 2)  # idle stays idle
         successor = self.host.compact.store.binding("chat")[1]
+        self.assertEqual(
+            [(s.session_id, s.compact_count, s.compact_phase) for s in self.statuses],
+            [("chat", 0, "running"), ("chat", 0, "ready"), (successor, 1, None)],
+        )
         old_events = await SqliteJournal(self.store.require("chat")).snapshot("chat")
         new_events = await SqliteJournal(self.store.require(successor)).snapshot(
             successor
@@ -76,6 +82,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         await self.host.receive_user_message("chat", "TAIL_KEEP", delivery_id="tail")
         await self.host.close()
         self.host = self.new_host()
+        self.assertEqual(self.host.conversation_status(successor), self.statuses[-1])
         await self.host.receive_user_message("chat", "继续", delivery_id="next")
         await until(lambda: len(self.outputs) == 3)
         await until(lambda: not self.host.workers and not self.host.watchers)
@@ -190,6 +197,8 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         job = self.host.compact.store.job("chat")
         self.assertIsNotNone(job["failure"])
         self.assertIsNone(job["summary"])
+        self.assertEqual(self.statuses[-1].compact_phase, "failed")
+        self.assertEqual(self.statuses[-1].compact_count, 0)
         self.assertEqual(self.host.compact.store.binding("chat")[1], "chat")
         from helperme.assistant.ipc import WorkerFailed
 
@@ -356,9 +365,18 @@ class CompactStoreTest(unittest.TestCase):
             store.publish("old", job["successor"])
             reopened = CompactStore(Path(directory))
             self.assertEqual(reopened.binding("old"), ("old", job["successor"]))
+            self.assertEqual(reopened.status("old").compact_count, 1)
             self.assertEqual(
                 reopened.reserve_delivery(
                     "old", "user", "one", job["successor"], "hello"
                 ),
                 ("old", True),
             )
+            second = reopened.start(job["successor"], 1, {})
+            reopened.finish(second["reader"], "second summary")
+            reopened.prepare(job["successor"], {"test": "second prepared"})
+            reopened.publish(job["successor"], second["successor"])
+            reopened.publish(job["successor"], second["successor"])
+            self.assertEqual(reopened.status("old").compact_count, 2)
+            self.assertEqual(reopened.status(second["successor"]), reopened.status("old"))
+            self.assertEqual(reopened.status("unrelated").compact_count, 0)

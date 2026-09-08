@@ -5,8 +5,17 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
+
+
+@dataclass(frozen=True)
+class ConversationStatus:
+    conversation_id: str
+    session_id: str
+    compact_count: int
+    compact_phase: str | None
 
 
 class CompactStore:
@@ -91,6 +100,25 @@ class CompactStore:
                 return
             db.execute("INSERT INTO conversations VALUES (?, ?)", (session, session))
             db.execute("INSERT INTO members VALUES (?, ?)", (session, session))
+
+    def status(self, session: str) -> ConversationStatus:
+        conversation, current = self.binding(session)
+        with closing(self.connect()) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM compactions c JOIN members m ON m.session=c.source "
+                "WHERE m.conversation=? AND c.published=1",
+                (conversation,),
+            ).fetchone()[0]
+        job = self.job(current)
+        phase = None
+        if job is not None:
+            if job["failure"] is not None:
+                phase = "failed"
+            elif job["summary"] is not None:
+                phase = "ready"
+            else:
+                phase = "running"
+        return ConversationStatus(conversation, current, count, phase)
 
     def job(self, source):
         with closing(self.connect()) as db:

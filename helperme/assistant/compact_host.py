@@ -38,6 +38,10 @@ class CompactHost:
         self.locks = {}
         self.activating = set()
 
+    def notify_status(self, session):
+        if self.host.conversation_status_sink is not None:
+            self.host.conversation_status_sink(self.store.status(session))
+
     def lock(self, session):
         conversation, _ = self.store.binding(session)
         return self.locks.setdefault(conversation, asyncio.Lock())
@@ -98,6 +102,7 @@ class CompactHost:
         successor = job["successor"]
         await self.ensure_seed(successor, json.loads(job["prepared"]), unpublished=True)
         self.store.publish(source, successor)
+        self.notify_status(source)
         self.activate(successor)
 
     async def boundary(self, source, arguments):
@@ -124,6 +129,7 @@ class CompactHost:
                         "artifact": snapshot["bundle"],
                     },
                 )
+                self.notify_status(source)
             if job["summary"] is None:
                 await self.ensure_reader(job)
                 return "wait" if arguments["over_budget"] else "continue"
@@ -194,6 +200,7 @@ class CompactHost:
         if job is None:
             raise ValueError("unknown compact reader")
         self.store.finish(reader, arguments["handoff"])
+        self.notify_status(job["source"])
         # Avoid waiting for a source which may itself be awaiting this IPC callback.
         source = job["source"]
 
