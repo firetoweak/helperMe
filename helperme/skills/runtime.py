@@ -78,8 +78,6 @@ class SkillToolCatalog:
                 key=lambda item: item.name,
             )
         )
-        if not records:
-            return []
         catalog = "\n".join(
             f"- {record.name}: {record.description}"
             for record in records
@@ -94,7 +92,7 @@ class SkillToolCatalog:
                 return _error_result(SkillRuntimeError(
                     "SKILL_NOT_FOUND",
                     f"Skill {input_data.skill_id} 不在当前 Session 目录中",
-                    hint="从 load_skill 工具描述中的当前目录选择有效 ID。",
+                    hint="从上下文中的当前技能目录选择有效 ID。",
                     data={"skill_id": input_data.skill_id},
                 ))
             try:
@@ -121,7 +119,7 @@ class SkillToolCatalog:
                 return _error_result(SkillRuntimeError(
                     "SKILL_NOT_FOUND",
                     f"Skill {input_data.skill_id} 不在当前 Session 目录中",
-                    hint="从 load_skill 工具描述中的当前目录选择有效 ID。",
+                    hint="从上下文中的当前技能目录选择有效 ID。",
                     data={"skill_id": input_data.skill_id},
                 ))
             try:
@@ -142,8 +140,7 @@ class SkillToolCatalog:
                     "读取一个适合当前任务的可复用详细指令包。"
                     "模型负责选择；本工具只按确定 ID 返回完整指令。"
                     "必须单独调用，不能与依赖其结果的工具同批执行。\n"
-                    "当前可用 Skill：\n"
-                    f"{catalog}"
+                    "当前技能目录由上下文消息提供。"
                 ),
                 parameters=PydanticParameters(LoadSkillInput),
                 handler=load_skill,

@@ -698,7 +698,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.status, RuntimeAvailability.UNAVAILABLE)
         descriptors = self.service.toolset_provider.descriptors()
         self.assertEqual(descriptors[0].id, "mcp:broken")
-        self.assertIn("最近失败", descriptors[0].description)
+        self.assertNotIn("最近失败", descriptors[0].description)
 
     async def test_revision_change_invalidates_client_cache(self):
         self.sessions["demo"] = FakeMcpSession(tools=[_tool("ping")])

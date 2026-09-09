@@ -41,7 +41,7 @@ class SkillRuntimeTest(unittest.IsolatedAsyncioTestCase):
         specs = {spec.name: spec for spec in self.runtime.tool_specs()}
 
         self.assertEqual(set(specs), {LOAD_SKILL, READ_SKILL_RESOURCE})
-        self.assertIn("demo: Demo workflow", specs[LOAD_SKILL].description)
+        self.assertNotIn("demo: Demo workflow", specs[LOAD_SKILL].description)
         self.assertTrue(specs[LOAD_SKILL].exclusive_batch)
 
         result = await specs[LOAD_SKILL].handler(LoadSkillInput(skill_id="demo"))
@@ -78,4 +78,5 @@ class SkillRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(stale["code"], "SKILL_CATALOG_STALE")
-        self.assertEqual(self.runtime.tool_specs(), [])
+        self.assertEqual([s.to_openai_tool() for s in self.runtime.tool_specs()],
+                         [s.to_openai_tool() for s in old_specs.values()])

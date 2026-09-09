@@ -268,15 +268,13 @@ class ToolSurface:
         descriptors = self.descriptors()
         if not descriptors:
             return "当前没有可加载的外部 Toolset。"
-        loaded = self._visible_loaded(session_id, decision_state)
         lines = [
             "可按需加载以下 Toolset。需要其中能力时，调用 load_toolset；"
             "加载后的工具从下一个 Step 开始可用。"
             "只能调用当前 Step tools 中实际暴露的精确名称：",
         ]
         for descriptor in descriptors:
-            mark = "（已加载）" if descriptor.id in loaded else ""
-            lines.append(f"- {descriptor.id}: {descriptor.description}{mark}")
+            lines.append(f"- {descriptor.id}: {descriptor.description}")
         return "\n".join(lines)
 
     async def load(

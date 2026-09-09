@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from helperme.runtime.json_values import thaw_value
+
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -101,14 +103,6 @@ class _Projected:
     sequence: int = 0
 
 
-def jsonable(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: jsonable(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [jsonable(item) for item in value]
-    return value
-
-
 def outcome_text(outcome: CommandOutcome) -> str:
     return _outcome_json(
         status=outcome.status.value,
@@ -133,7 +127,7 @@ def _outcome_json(
     return json.dumps(
         {
             "status": status,
-            "value": jsonable(value),
+            "value": thaw_value(value),
             "error_type": error_type,
             "error_message": error_message,
         },
@@ -185,23 +179,16 @@ def _translate_visible_events(
             )
             continue
         if isinstance(payload, DomainFactCommitted):
-            # 协议只有四种 role，事实只能进 user，但必须自报身份。
-            items.append(
-                _Projected(
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "fact": payload.fact_type,
-                                "data": jsonable(payload.data),
-                            },
-                            ensure_ascii=False,
-                        ),
-                    },
-                    "user",
-                    sequence=event.sequence,
-                )
+            # Protocol has four roles; identify application facts explicitly.
+            content = json.dumps(
+                {"fact": payload.fact_type, "data": thaw_value(payload.data)},
+                ensure_ascii=False,
             )
+            if payload.fact_type == "assistant.catalog":
+                content = "<capability_catalog>\n" + content + "\n</capability_catalog>"
+            items.append(_Projected(
+                {"role": "user", "content": content}, "user", sequence=event.sequence,
+            ))
             continue
         if isinstance(payload, StepCommitted):
             shown: list[dict[str, object]] = []
@@ -223,7 +210,7 @@ def _translate_visible_events(
                         "function": {
                             "name": effect.name,
                             "arguments": json.dumps(
-                                dict(effect.arguments),
+                                effect.argument_dict(),
                                 ensure_ascii=False,
                             ),
                         },
@@ -349,7 +336,7 @@ def parse_tool_result_meta(content: object) -> tuple[bool, str | None]:
 def _content_char_length(content: object) -> int:
     if isinstance(content, str):
         return len(content)
-    return len(json.dumps(jsonable(content), ensure_ascii=False))
+    return len(json.dumps(thaw_value(content), ensure_ascii=False))
 
 
 def _stub_content(
@@ -385,7 +372,7 @@ def externalize_payload(
     preview_chars: int,
 ) -> tuple[object, str | None]:
     """过大的工具返回值立刻外置；未超限则原样返回。"""
-    encoded = json.dumps(jsonable(payload), ensure_ascii=False)
+    encoded = json.dumps(thaw_value(payload), ensure_ascii=False)
     if len(encoded) <= max_chars:
         return payload, None
     complete_outcome = _outcome_json(
@@ -545,7 +532,7 @@ class ModelContextProjector:
                 content
                 if isinstance(content, str)
                 else json.dumps(
-                    jsonable(content),
+                    thaw_value(content),
                     ensure_ascii=False,
                 )
             )
@@ -628,7 +615,7 @@ class ModelContextProjector:
                     original = item.message["content"]
                     if not isinstance(original, str):
                         original = json.dumps(
-                            jsonable(original),
+                            thaw_value(original),
                             ensure_ascii=False,
                         )
                     artifact_id = self._save(

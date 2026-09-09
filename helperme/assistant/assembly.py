@@ -160,6 +160,7 @@ async def build_assistant_assembly(
     )
     runtime = AgentRuntime(journal, decision, bindings)
     surface.attach(runtime)
+    compact_context.runtime = runtime
     scheduler = scheduler_factory(
         runtime,
         session_id,
@@ -176,8 +177,17 @@ async def build_assistant_assembly(
             runtime, decision, compact_context, config, control, session_transport
         )
         compact.scheduler = scheduler
-        scheduler.before_advance = compact.before_advance
+
         scheduler.propagate_failures = compact_context.is_reader
+    from helperme.assistant.catalog import sync_catalog
+
+    async def before_advance():
+        if not compact_context.is_reader and not subagents.is_subagent(session_id):
+            if not (await runtime.state(session_id)).waiting_command_ids:
+                await sync_catalog(runtime, session_id, surface, skill_tools, management)
+        return True if compact is None else await compact.before_advance()
+
+    scheduler.before_advance = before_advance
     subagents.attach(runtime, session_transport)
     sessions = AssistantSessions(
         runtime,

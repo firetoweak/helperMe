@@ -5,7 +5,11 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import AbstractSet, Protocol
 
-from helperme.assistant.compact import CompactContext, PROMPT as COMPACT_PROMPT, SUBMIT
+from helperme.assistant.compact import (
+    CompactContext,
+    READ_SCHEMA,
+    SUBMIT,
+)
 from helperme.assistant.artifacts import ArtifactGateway
 from helperme.assistant.control import (
     AssistantControlPlane,
@@ -206,6 +210,8 @@ class JournalBackedLlmDecisionMaker:
         )
         offered_control_names = _tool_names(control_schemas)
         schemas = [*schemas, *control_schemas]
+        if self._compact is not None:
+            schemas = [*schemas, *self._compact.schemas()]
         if self._subagents is not None:
             session_id = state.session_id
             schemas = [*schemas, *self._subagents.schemas(session_id)]
@@ -215,9 +221,7 @@ class JournalBackedLlmDecisionMaker:
                     schema for schema in schemas if _schema_name(schema) in allowed
                 ]
                 offered_control_names = offered_control_names & allowed
-        if self._compact is not None:
-            schemas = [*schemas, *self._compact.schemas()]
-        return deepcopy(schemas), offered_control_names
+        return deepcopy(sorted(schemas, key=_schema_name)), offered_control_names
 
     def _prompt_for(self, frame: DecisionFrame) -> str:
         return self.prompt_for(frame.state)
@@ -225,18 +229,13 @@ class JournalBackedLlmDecisionMaker:
     def prompt_for(self, state) -> str:
         session_id = state.session_id
         if self._compact is not None and self._compact.is_reader:
-            return COMPACT_PROMPT
+            return self._compact.request["messages"][0]["content"]
         if self._subagents is not None:
             override = self._subagents.system_prompt(session_id)
             if override is not None:
                 # 子 Session 不加载 Toolset、不碰管理面，两份目录都不适用。
                 return override
-        catalog = self._surface.catalog_instruction(session_id, state)
-        management_catalog = self._management.catalog_instruction(
-            session_id,
-            state,
-        )
-        return f"{self._system_prompt}\n\n{catalog}\n\n{management_catalog}"
+        return self._system_prompt
 
     def _decision_from_response(
         self,
@@ -301,23 +300,20 @@ class JournalBackedLlmDecisionMaker:
             for event in journal_tail
             if event.sequence <= frame.observed_journal_position
         )
-        if self._subagents is not None:
-            # 「还差谁」读的是这一帧已冻结的事实，与决策看到的世界同一口径，
-            # 重放才是确定的。
-            pending = self._subagents.pending_instruction(events)
-            if pending is not None:
-                prompt = f"{prompt}\n\n{pending}"
         visible = frame.state.visible_event_ids
-        if self._compact is not None:
-            visible = self._compact.visible(events, visible)
-        prepared = self._projector.prepare(
-            events,
-            visible,
-            frame.state.session_id,
-            prompt,
-            schemas,
-            prefix=None if self._compact is None else self._compact.prefix,
-        )
+        if self._compact is not None and self._compact.is_reader:
+            prepared = await self._compact.prepare_reader(events, visible)
+        else:
+            if self._compact is not None:
+                visible = self._compact.visible(events, visible)
+            prepared = self._projector.prepare(
+                events,
+                visible,
+                frame.state.session_id,
+                prompt,
+                schemas,
+                prefix=None if self._compact is None else self._compact.prefix,
+            )
         if self._context_usage_sink is not None:
             estimated = self._projector.budget.assess(
                 prepared.messages,
@@ -328,9 +324,14 @@ class JournalBackedLlmDecisionMaker:
                 estimated,
                 self._projector.settings.context_limit,
             )
+        model = (
+            self._compact.request["model"]
+            if self._compact is not None and self._compact.is_reader
+            else self._model
+        )
         result = await self._llm.chat(
             prepared.messages,
-            self._model,
+            model,
             tools=schemas or None,
         )
         usage = result.usage
@@ -347,25 +348,34 @@ class JournalBackedLlmDecisionMaker:
                 usage.input_tokens,
             )
         if self._compact is not None and self._compact.is_reader:
-            if not result.response.calls:
-                raise InvalidLLMResponse(
-                    "compact_requires_tool", "use submit_handoff to finish"
+            calls = result.response.calls
+            if calls:
+                decision = self._decision_from_response(
+                    frame,
+                    result.response,
+                    {READ_SCHEMA["function"]["name"]} & allowed_tool_names,
+                    frozenset(),
                 )
-            if (
-                any(call.name == SUBMIT for call in result.response.calls)
-                and len(result.response.calls) != 1
-            ):
-                raise InvalidLLMResponse(
-                    "compact_submit_batch", "submit_handoff must be alone"
+            else:
+                if not result.response.content.strip():
+                    raise InvalidLLMResponse(
+                        "invalid_handoff", "handoff must be nonempty"
+                    )
+                decision = ModelDecision(
+                    content=result.response.content,
+                    command_requests=(
+                        InvokeTool(SUBMIT, (("handoff", result.response.content),)),
+                    ),
                 )
-        decision = ensure_deliver(
-            self._decision_from_response(
-                frame,
-                result.response,
-                allowed_tool_names,
-                control_names,
+        else:
+            decision = ensure_deliver(
+                self._decision_from_response(
+                    frame,
+                    result.response,
+                    allowed_tool_names,
+                    control_names,
+                )
             )
-        )
         manifest = {
             "schema": "decision-replay-manifest/v1",
             "decision_basis": {
@@ -377,7 +387,7 @@ class JournalBackedLlmDecisionMaker:
             },
             "request": {
                 "projector": "model-context/v1",
-                "model": self._model,
+                "model": model,
                 "messages": prepared.messages,
                 "tools": schemas or None,
             },

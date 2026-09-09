@@ -22,6 +22,8 @@ class AppConfigTest(unittest.TestCase):
                 "model_context_limit": 1000,
                 "input_budget_ratio": ratio,
                 "compact_threshold_ratio": 0.55,
+                "compact_max_calls": 8,
+                "compact_timeout_seconds": 300,
             },
             "channels": {},
         }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from helperme.runtime.json_values import thaw_value
 from hashlib import sha256
 
 from helperme.runtime.events import (
@@ -62,14 +62,6 @@ def _json_dumps(value: object) -> str:
     )
 
 
-def _thaw(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: _thaw(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_thaw(item) for item in value]
-    return value
-
-
 def _require_object(
     value: object,
     keys: set[str],
@@ -84,7 +76,7 @@ def _effect_to_data(effect: InvokeTool) -> dict[str, object]:
     return {
         "type": "invoke_tool",
         "name": effect.name,
-        "arguments": [[key, _thaw(value)] for key, value in effect.arguments],
+        "arguments": [[key, thaw_value(value)] for key, value in effect.arguments],
     }
 
 
@@ -102,7 +94,7 @@ def _effect_from_data(data: dict[str, object]) -> InvokeTool:
 def _outcome_to_data(outcome: CommandOutcome) -> dict[str, object]:
     return {
         "status": outcome.status.value,
-        "value": _thaw(outcome.value),
+        "value": thaw_value(outcome.value),
         "error_type": outcome.error_type,
         "error_message": outcome.error_message,
     }
@@ -261,7 +253,7 @@ def encode_payload(payload: EventPayload) -> tuple[str, str]:
         kind = _DOMAIN_FACT_COMMITTED
         data = {
             "fact_type": payload.fact_type,
-            "data": _thaw(payload.data),
+            "data": thaw_value(payload.data),
             "requests_decision": payload.requests_decision,
         }
     else:

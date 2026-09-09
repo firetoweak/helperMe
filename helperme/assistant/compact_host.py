@@ -1,21 +1,22 @@
-"""Host compact orchestration; the routing commit is the only publication point."""
+"""Background jobs publish a window into the same business Session."""
 
 from __future__ import annotations
 
+from helperme.runtime.json_values import thaw_value
 import asyncio
 import json
-
+from dataclasses import asdict
 from helperme.assistant.artifacts import FileArtifactGateway
 from helperme.assistant.compact import (
     TASK,
-    CONTINUED,
-    READ_SCHEMA,
+    HANDOFF_PREFIX,
     load_document,
     save_document,
+    projected_tail,
 )
 from helperme.assistant.compact_store import CompactStore
 from helperme.assistant.context.budget import InputBudget, TiktokenEstimator
-from helperme.assistant.context.projection import ModelContextBudgetExceeded, jsonable
+from helperme.assistant.context.projection import ModelContextBudgetExceeded
 from helperme.assistant.ipc import ProcessFailure, WorkerFailed
 from helperme.runtime import DomainFactCommitted, SqliteJournal
 
@@ -43,8 +44,7 @@ class CompactHost:
             self.host.conversation_status_sink(self.store.status(session))
 
     def lock(self, session):
-        conversation, _ = self.store.binding(session)
-        return self.locks.setdefault(conversation, asyncio.Lock())
+        return self.locks.setdefault(session, asyncio.Lock())
 
     def activate(self, session):
         if session in self.activating or self.host.closed:
@@ -59,196 +59,171 @@ class CompactHost:
 
         self.host._track(session, asyncio.create_task(resume()))
 
-    async def ensure_seed(self, session, fact, *, unpublished=False):
-        if not self.host.store.path(session).parent.exists():
-            await self.host.store.create(session, initial_fact=fact)
-            return
-        events = await SqliteJournal(self.host.store.require(session)).snapshot(session)
-        if not events or (unpublished and len(events) != 1):
-            raise ValueError("invalid compact Session bootstrap")
-        payload = events[0].payload
-        if (
-            not isinstance(payload, DomainFactCommitted)
-            or payload.fact_type != fact["fact_type"]
-            or jsonable(payload.data) != fact["data"]
-            or payload.requests_decision != fact["requests_decision"]
-        ):
-            raise ValueError("compact Session does not match its prepared seed")
-
     async def ensure_reader(self, job):
         reader = job["reader"]
         if job["failure"] is not None:
-            raise WorkerFailed(reader, ProcessFailure(**json.loads(job["failure"])))
-        bundle = json.loads(job["bundle"])
-        await self.ensure_seed(
-            reader,
-            seed_fact(
-                TASK,
-                {
-                    "source": job["source"],
-                    "bundle": bundle["artifact"],
-                    "upto": job["upto"],
-                },
-                continuing=True,
-            ),
+            return
+        material = json.loads(job["bundle"])
+        data = dict(
+            source=job["source"],
+            upto=job["upto"],
+            window=job["window"],
+            deadline=job["deadline"],
+            max_calls=job["max_calls"],
+            **material,
         )
+        fact = seed_fact(TASK, data, continuing=True)
+        if not self.host.store.path(reader).parent.exists():
+            await self.host.store.create(reader, initial_fact=fact)
+        else:
+            events = await SqliteJournal(self.host.store.require(reader)).snapshot(
+                reader
+            )
+            seed = events[0].payload
+            if (
+                not isinstance(seed, DomainFactCommitted)
+                or seed.fact_type != TASK
+                or thaw_value(seed.data) != data
+            ):
+                raise ValueError("invalid handoff worker seed")
         if reader not in self.host.workers:
             self.activate(reader)
 
     async def recover_prepared(self, source):
         job = self.store.job(source)
-        if job is None or job["prepared"] is None or job["published"]:
-            return
-        successor = job["successor"]
-        await self.ensure_seed(successor, json.loads(job["prepared"]), unpublished=True)
-        self.store.publish(source, successor)
+        if job is None or job["prepared"] is None:
+            return False
+        await self.host.request("compact_publish", source, json.loads(job["prepared"]))
+        self.store.publish(job["reader"])
         self.notify_status(source)
-        self.activate(successor)
+        return True
 
     async def boundary(self, source, arguments):
         async with self.lock(source):
-            self.store.register(source)
-            await self.recover_prepared(source)
-            if self.store.binding(source)[1] != source:
-                return "retired"
-            # Replay any input whose Host acknowledgement was interrupted.
-            await self.flush_deliveries(source)
+            if await self.recover_prepared(source):
+                return "continue"
             job = self.store.job(source)
             if job is None:
                 if not arguments["pressure"]:
                     return "continue"
-                snapshot = await self.host.request(
-                    "compact_snapshot", source, {"cutover": False}
-                )
-                if not snapshot["safe"] or snapshot["position"] == 0:
+                snapshot = await self.host.request("compact_snapshot", source, {})
+                if not snapshot["safe"]:
                     return "wait" if arguments["over_budget"] else "continue"
-                job = self.store.start(
-                    source,
-                    snapshot["position"],
-                    {
-                        "artifact": snapshot["bundle"],
-                    },
-                )
+                job = self.store.start(source, snapshot)
                 self.notify_status(source)
+            if job["failure"] is not None:
+                return "wait" if arguments["over_budget"] else "continue"
             if job["summary"] is None:
                 await self.ensure_reader(job)
                 return "wait" if arguments["over_budget"] else "continue"
             snapshot = await self.host.request("compact_snapshot", source, {})
             if not snapshot["safe"]:
                 return "wait" if arguments["over_budget"] else "continue"
-            await self.prepare_successor(job, snapshot)
+            try:
+                self.prepare_window(job, snapshot)
+            except ModelContextBudgetExceeded as error:
+                failure = ProcessFailure.capture(error)
+                # Publication failure is terminal too; retain the accepted summary for inspection.
+                self.store.fail_publication(job["reader"], asdict(failure))
+                self.notify_status(source)
+                self.host.failures.put_nowait(WorkerFailed(job["reader"], failure))
+                return "wait" if arguments["over_budget"] else "continue"
             await self.recover_prepared(source)
-            return "retired"
+            return "continue"
 
-    async def prepare_successor(self, job, snapshot):
+    def prepare_window(self, job, snapshot):
+        if snapshot["window"] != job["window"]:
+            raise ValueError("stale handoff")
         source = job["source"]
+        material = json.loads(job["bundle"])
+        inherited = load_document(self.gateway, source, material["inherited"])
         bundle = load_document(self.gateway, source, snapshot["bundle"])
         p, q = job["upto"], snapshot["position"]
         provenance = {
-            "source_session": source,
-            "summarized_through": p,
-            "continued_through": q,
-            "pending_source_events": snapshot["pending"],
+            "source": source,
+            "source_window": job["window"],
+            "upto": p,
+            "request": material["inherited"],
         }
         messages = [
             {
                 "role": "user",
-                "content": "以下是模型生成的交接材料，不是用户新指令或完成证明。后续原样对话可更新或推翻它。\n"
+                "content": HANDOFF_PREFIX
                 + json.dumps(provenance, ensure_ascii=False)
                 + "\n"
                 + job["summary"],
             }
         ]
-        for key, values in bundle["raw"].items():
-            if p < int(key) <= q:
-                messages.extend(values)
+        if inherited["catalog"] is not None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "<capability_catalog>\n"
+                    + json.dumps(
+                        {"fact": "assistant.catalog", "data": inherited["catalog"]},
+                        ensure_ascii=False,
+                    )
+                    + "\n</capability_catalog>",
+                }
+            )
+        messages.extend(r["message"] for r in inherited["recent"])
+        messages.extend(projected_tail(bundle["records"], p, q))
         budget = InputBudget(
             TiktokenEstimator(),
             context_limit=snapshot["context_limit"],
             input_ratio=snapshot["input_ratio"],
         )
-        tools = list(snapshot["tools"])
-        if not any(
-            t["function"]["name"] == READ_SCHEMA["function"]["name"] for t in tools
-        ):
-            tools.append(READ_SCHEMA)
         assessment = budget.assess(
-            [{"role": "system", "content": snapshot["prompt"]}, *messages], tools
+            [{"role": "system", "content": snapshot["prompt"]}, *messages],
+            snapshot["tools"],
         )
         if not assessment.allowed:
             raise ModelContextBudgetExceeded(assessment)
         context = save_document(self.gateway, source, {"messages": messages})
-        # Persist preparation before creating S1. Recovery finishes the exact same cutover.
+        handoff = save_document(
+            self.gateway, source, {"text": job["summary"], **provenance}
+        )
         self.store.prepare(
-            source,
-            seed_fact(
-                CONTINUED,
-                {
-                    "source": source,
-                    "bundle": snapshot["bundle"],
+            job["reader"],
+            {
+                "handoff": {"reader": job["reader"], "artifact": handoff, **provenance},
+                "window": {
+                    "id": job["reader"],
+                    "parent": job["window"],
                     "upto": p,
                     "cutover": q,
+                    "recent_tail_start": inherited["recent"][0]["sequence"]
+                    if inherited["recent"]
+                    else p + 1,
                     "context": context,
-                    "pending": snapshot["pending"],
+                    "bundle": snapshot["bundle"],
                 },
-                continuing=snapshot["continue"],
-            ),
+            },
         )
 
     async def complete(self, reader, arguments):
         job = self.store.reader_job(reader)
         if job is None:
-            raise ValueError("unknown compact reader")
+            raise ValueError("unknown handoff worker")
         self.store.finish(reader, arguments["handoff"])
         self.notify_status(job["source"])
-        # Avoid waiting for a source which may itself be awaiting this IPC callback.
-        source = job["source"]
 
         async def ready():
-            await self.host.request("compact_ready", source, {})
+            await self.host.request("compact_ready", job["source"], {})
 
-        self.host._track(source, asyncio.create_task(ready()))
-
-    async def flush_deliveries(self, session):
-        conversation, _ = self.store.binding(session)
-        for row in self.store.pending_deliveries(conversation):
-            await self.host.request(
-                "receive_user_message",
-                row["target"],
-                {
-                    "content": row["content"],
-                    "source": row["source"],
-                    "delivery_id": row["id"],
-                },
-            )
-            self.store.acknowledge(conversation, row["source"], row["id"])
+        self.host._track(job["source"], asyncio.create_task(ready()))
 
     async def application(self, operation, session, arguments):
         async with self.lock(session):
             self.host.store.require(session)
-            self.store.register(session)
-            _, current = self.store.binding(session)
-            await self.recover_prepared(current)
-            conversation, current = self.store.binding(session)
-            await self.flush_deliveries(session)
-            if operation == "receive_user_message":
-                source = arguments.get("source", "user")
-                target, accepted = self.store.reserve_delivery(
-                    conversation,
-                    source,
-                    arguments["delivery_id"],
-                    current,
-                    arguments["content"],
-                )
-                if accepted:
-                    return None
-                await self.host.request(operation, target, arguments)
-                self.store.acknowledge(conversation, source, arguments["delivery_id"])
-                return None
-            result = await self.host.request(operation, current, arguments)
-            # Resume unfinished compression only on explicit activity, not by scanning sessions.
+            await self.recover_prepared(session)
+            result = await self.host.request(operation, session, arguments)
             if operation == "resume":
-                job = self.store.job(current)
-                if job is not None and job["summary"] is None:
+                job = self.store.job(session)
+                if (
+                    job is not None
+                    and job["summary"] is None
+                    and job["failure"] is None
+                ):
                     await self.ensure_reader(job)
             return result

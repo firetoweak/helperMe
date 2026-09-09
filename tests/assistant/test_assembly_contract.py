@@ -108,12 +108,10 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                             *decision._management.schemas(session_id, state),
                             *assembly.control.schemas(session_id, allowed_control),
                             *assembly.subagents.schemas(session_id),
+                            *decision._compact.schemas(),
                         ]
-                        expected_prompt = (
-                            f"{DEFAULT_ASSISTANT_PROMPT}\n\n"
-                            f"{assembly.surface.catalog_instruction(session_id, state)}"
-                            f"\n\n{decision._management.catalog_instruction(session_id, state)}"
-                        )
+                        expected_tools.sort(key=lambda item: item["function"]["name"])
+                        expected_prompt = DEFAULT_ASSISTANT_PROMPT
 
                         first = await assembly.runtime.advance(session_id)
                         await settle_session(

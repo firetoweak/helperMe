@@ -28,6 +28,8 @@ INITIAL_CONFIG = {
         "model_context_limit": 200000,
         "input_budget_ratio": 0.9,
         "compact_threshold_ratio": 0.55,
+        "compact_max_calls": 8,
+        "compact_timeout_seconds": 300,
     },
     "channels": {
         "telegram": {
@@ -55,6 +57,8 @@ class RuntimeConfig:
     model_context_limit: int
     input_budget_ratio: float
     compact_threshold_ratio: float = 0.55
+    compact_max_calls: int = 8
+    compact_timeout_seconds: int = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,8 @@ class AssistantConfig:
     input_budget_ratio: float
     llm: LLMApi
     compact_threshold_ratio: float = 0.55
+    compact_max_calls: int = 8
+    compact_timeout_seconds: int = 300
 
     def __post_init__(self):
         if not 0 < self.compact_threshold_ratio < 1:
@@ -163,10 +169,12 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         "model_context_limit",
         "input_budget_ratio",
         "compact_threshold_ratio",
+        "compact_max_calls",
+        "compact_timeout_seconds",
     }:
         raise ValueError(
             "runtime 配置字段必须是 model_context_limit/"
-            "input_budget_ratio/compact_threshold_ratio"
+            "input_budget_ratio/compact_threshold_ratio/compact_max_calls/compact_timeout_seconds"
         )
     model_context_limit = runtime["model_context_limit"]
     if type(model_context_limit) is not int or model_context_limit < 1:
@@ -181,6 +189,10 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         or not 0 < compact_threshold_ratio < 1
     ):
         raise ValueError("runtime.compact_threshold_ratio 必须在 (0, 1) 范围内")
+
+    for key in ("compact_max_calls", "compact_timeout_seconds"):
+        if type(runtime[key]) is not int or runtime[key] < 1:
+            raise ValueError(f"runtime.{key} must be a positive integer")
 
     channels = data["channels"]
     if not isinstance(channels, dict):
@@ -215,6 +227,8 @@ def load_app_config(path: Path | None = None) -> AppConfig:
             model_context_limit=model_context_limit,
             input_budget_ratio=float(input_budget_ratio),
             compact_threshold_ratio=float(compact_threshold_ratio),
+            compact_max_calls=runtime["compact_max_calls"],
+            compact_timeout_seconds=runtime["compact_timeout_seconds"],
         ),
         channels=ChannelsConfig(telegram=telegram_config),
     )
@@ -229,4 +243,6 @@ def assistant_config_from_app(app: AppConfig, llm: LLMApi) -> AssistantConfig:
         input_budget_ratio=app.runtime.input_budget_ratio,
         llm=llm,
         compact_threshold_ratio=app.runtime.compact_threshold_ratio,
+        compact_max_calls=app.runtime.compact_max_calls,
+        compact_timeout_seconds=app.runtime.compact_timeout_seconds,
     )

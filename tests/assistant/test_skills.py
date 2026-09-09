@@ -106,17 +106,18 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.temporary.cleanup()
 
-    async def test_enabled_catalog_is_in_load_skill_description(self):
+    async def test_enabled_catalog_is_not_in_load_skill_description(self):
         schemas = self.adapter.schemas()
         self.assertEqual(
             _schema_names(schemas),
             {LOAD_SKILL, READ_SKILL_RESOURCE},
         )
-        self.assertIn("demo: Demo workflow", _load_skill_description(schemas))
+        self.assertNotIn("demo: Demo workflow", _load_skill_description(schemas))
 
-    async def test_disable_removes_skill_tools_from_the_next_decision(self):
+    async def test_disable_keeps_skill_tool_definitions_stable(self):
+        before = self.adapter.schemas()
         await self.service.set_enabled("demo", False)
-        self.assertEqual(self.adapter.schemas(), [])
+        self.assertEqual(self.adapter.schemas(), before)
 
     async def test_load_skill_returns_main_instructions_as_a_tool_result(self):
         delivered: list[str] = []

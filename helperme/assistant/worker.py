@@ -5,8 +5,9 @@ import multiprocessing
 import os
 from pathlib import Path
 import threading
+import time
 
-from helperme.assistant.compact import compact_seed, TASK
+from helperme.assistant.compact import compact_seed, HandoffBudgetExceeded
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.ipc import PipePeer, ProcessFailure
 from helperme.assistant.subagent import project_parent, record_unexpected_return
@@ -32,16 +33,32 @@ async def run_worker(connection, session_id, path, config_factory, home_root):
 
 
 async def _run_session(connection, session_id, journal, config_factory, home_root):
+    seed = compact_seed(await journal.snapshot(session_id))
+    remaining = None if seed is None else max(0, seed[1]["deadline"] - time.time())
+    deadline = asyncio.timeout(remaining)
+    try:
+        async with deadline:
+            await _run_session_body(
+                connection, session_id, journal, config_factory, home_root, deadline
+            )
+    except TimeoutError as error:
+        if deadline.expired():
+            raise HandoffBudgetExceeded(
+                "handoff total time budget exhausted"
+            ) from error
+        raise
+
+
+async def _run_session_body(
+    connection, session_id, journal, config_factory, home_root, deadline
+):
     # Each process owns all clients, caches and its single Journal.
     home = HelperMeHome(Path(home_root))
     config = config_factory()
     events = await journal.snapshot(session_id)
     await journal.prepare_recovery(
         session_id,
-        discard_unfinished=(
-            project_parent(events) is not None
-            or (compact_seed(events) is not None and compact_seed(events)[0] == TASK)
-        ),
+        discard_unfinished=(project_parent(events) is not None),
     )
     stop = asyncio.Event()
     active_requests = 0
@@ -56,6 +73,8 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
         active_requests += 1
         revision += 1
         try:
+            if operation == "compact_publish":
+                return await assembly.compact.publish(arguments)
             if operation == "compact_snapshot":
                 return await assembly.compact.snapshot(**arguments)
             if operation == "compact_ready":
@@ -127,6 +146,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
         session_transport=peer.request,
         home=home,
     )
+    assembly.compact.context.on_completed = lambda: deadline.reschedule(None)
     async with config.llm, assembly.mcp.client_manager:
         reader = asyncio.create_task(peer.run())
         stopped = asyncio.create_task(stop.wait())

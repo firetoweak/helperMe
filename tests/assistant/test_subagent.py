@@ -1131,7 +1131,7 @@ class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
             await scheduler.close()
         return host, runtime, await runtime.snapshot(self.PARENT)
 
-    async def test_pending_child_reaches_the_prompt_and_leaves_when_reclaimed(self):
+    async def test_pending_child_does_not_change_system_prompt(self):
         """同一份 Journal，两个冻结位置，得到两份不同的提示。
 
         位置取自 frame 而不是「现在」：结论已经回来了，但重放一次早先的决策，
@@ -1152,38 +1152,13 @@ class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(project_pending(visible_before), frozenset())
         self.assertEqual(project_pending(parent_events), frozenset())
 
-        instruction = host.pending_instruction(visible_before)
-        self.assertIsNotNone(instruction)
-        self.assertIsNone(host.pending_instruction(parent_events))
-
         llm = _RecordingLlm()
         maker = self._decision_maker(runtime, llm, host)
         await maker.decide(self._frame(before))
         await maker.decide(self._frame(after))
 
         self.assertEqual(len(llm.system_prompts), 2)
-        self.assertIn(instruction, llm.system_prompts[0])
-        self.assertNotIn(instruction, llm.system_prompts[1])
-
-    async def test_instruction_never_names_a_count(self):
-        """约束不带数字，父逐条收结论也不会换掉一份 system 提示。
-
-        没有行为依赖「还差几个」的大小，而带上它会让提示每收到一条结论就变
-        一次，整段 prefix 缓存跟着失效。
-        """
-
-        host, _runtime, parent_events = await self._delegated_parent()
-        first_report = next(
-            event
-            for event in parent_events
-            if isinstance(event.payload, DomainFactCommitted)
-            and event.payload.fact_type == REPORT_FACT
-        )
-        visible = _visible_to(parent_events, self._frame(first_report.sequence - 1))
-
-        instruction = host.pending_instruction(visible)
-        self.assertIsNotNone(instruction)
-        self.assertFalse([char for char in instruction if char.isdigit()])
+        self.assertEqual(llm.system_prompts[0], llm.system_prompts[1])
 
     async def test_report_fact_does_not_carry_a_pending_count(self):
         """「还差谁」不冻进事实。
@@ -1238,4 +1213,3 @@ class SubAgentPolicyTest(unittest.IsolatedAsyncioTestCase):
     def test_nothing_delegated_means_nothing_pending(self):
         host = SubAgentHost()
         self.assertEqual(project_pending(()), frozenset())
-        self.assertIsNone(host.pending_instruction(()))

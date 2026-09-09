@@ -42,12 +42,7 @@ class McpToolsetProvider:
         )
         descriptors: list[ToolsetDescriptor] = []
         for record in records:
-            runtime = self._client_manager.runtime_state(record.id)
             description = f"{record.display_name}: {record.description}".rstrip(": ")
-            if runtime.last_error_summary:
-                description = (
-                    f"{description}（最近失败：{runtime.last_error_summary}）"
-                )
             descriptors.append(
                 ToolsetDescriptor(
                     id=record.toolset_id,

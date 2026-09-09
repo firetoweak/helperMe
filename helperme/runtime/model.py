@@ -7,6 +7,8 @@ from math import isfinite
 from types import MappingProxyType
 from typing import TypeAlias
 
+from helperme.runtime.json_values import thaw_value
+
 
 Arguments: TypeAlias = tuple[tuple[str, object], ...]
 MAX_JSON_VALUE_BYTES = 128 * 1024
@@ -117,7 +119,8 @@ class InvokeTool:
         )
 
     def argument_dict(self) -> dict[str, object]:
-        return dict(self.arguments)
+        """Return detached JSON arguments for execution and external encoding."""
+        return {key: thaw_value(value) for key, value in self.arguments}
 
 
 CommandEffect: TypeAlias = InvokeTool

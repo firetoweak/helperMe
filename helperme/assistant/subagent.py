@@ -416,21 +416,6 @@ class SubAgentHost:
     def system_prompt(self, session_id: str) -> str | None:
         return SUBAGENT_PROMPT if self.is_subagent(session_id) else None
 
-    def pending_instruction(self, events: Sequence[Event]) -> str | None:
-        """父还有子 Agent 没回来时，提醒它结论不齐，也可以主动收回。
-
-        只说「还没齐」不说「还差几个」：没有行为依赖这个数的大小，而带上它会
-        让系统提示每收到一条结论就变一次，白扔掉整段 prefix 缓存。
-        """
-
-        if not project_pending(events):
-            return None
-        return (
-            "还有已委派的子 Agent 没有交回结论。"
-            "不要把已回来的部分当作全部依据。"
-            "不再需要某个子 Agent 时，收回它，不要空等。"
-        )
-
     def schemas(self, session_id: str) -> list[dict[str, object]]:
         if self.is_subagent(session_id):
             return [REPORT_SCHEMA]

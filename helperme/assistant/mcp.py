@@ -42,7 +42,7 @@ class McpToolsetAdapter:
 
 def _loaded_from_spec(spec) -> LoadedTool:
     async def execute(arguments: Mapping[str, object]) -> object:
-        return runtime_tool_result(await spec.handler(dict(arguments)))
+        return runtime_tool_result(await spec.handler(arguments))
 
     return LoadedTool(
         name=spec.name,

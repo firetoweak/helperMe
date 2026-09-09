@@ -1,9 +1,12 @@
-"""Compact reading, handoff and Worker-side scheduling. No Runtime semantics."""
+"""Assistant-owned background handoff and context-window projection."""
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from helperme.runtime.json_values import thaw_value
+
 import json
+from copy import deepcopy
+from dataclasses import asdict
 
 from helperme.assistant.artifacts import (
     is_valid_artifact_id,
@@ -11,30 +14,26 @@ from helperme.assistant.artifacts import (
 )
 from helperme.assistant.context.projection import (
     ModelContextBudgetExceeded,
-    jsonable,
     _translate_visible_events,
+    PreparedModelContext,
 )
-from helperme.assistant.subagent import project_parent, project_pending
+from helperme.assistant.subagent import project_parent
 from helperme.llm.api import InvalidLLMResponse
 from helperme.runtime import DomainFactCommitted, ToolBinding
-from helperme.runtime.events import UserMessageReceived
-from helperme.runtime.model import RuntimeStatus
-
 
 TASK = "compact.task"
-CONTINUED = "compact.continued"
+CREATED = "compact.handoff_created"
+WINDOW = "compact.window_rolled_over"
 READ = "read_compact_source"
-SUBMIT = "submit_handoff"
-PROMPT = """你是一次性的上下文压缩者，任务是为接替模型写 handoff，不执行原用户任务。
-先用 read_compact_source 顺序读完 source 指定的脱水对话（view），按 next_offset 分页。
-保持对话顺序理解确认、纠正和否决；需要时用 event 展开原消息，artifact 展开工具结果。
-再提交四部分交接文档：用户要什么；目前做到哪里；还有什么未解决；接手所需的证据与入口。
-用户要求最详细（关键措辞和出处），模型行动次之，工具输出保留关键证据及回读位置。
-区分用户决定、模型建议、已执行动作和完成声明。模型声称完成不等于已经验证。
-只描述截至 source 的固定历史；后续原样 tail 可更新或推翻此文档。
-用 submit_handoff 交付，不能直接答复用户。压缩者没有写工作区、委派或其他业务工具。
-不要逐条复述历史；在保留接手所需信息的前提下尽量简洁。
-"""
+SUBMIT = "_accept_handoff"
+PURPOSE = """<self_handoff>
+当前在后台整理截至冻结位置的交接，不继续用户业务、不向用户发消息。
+优先使用已有上下文，仅为关键缺口调用 read_compact_source 回读。其他工具不能执行。
+保持目标、约束、纠正、决定、未完成委派、证据与来源；计划不写成已执行，声明不写成验证。
+不重复读取，不扩展调查；未知内容标明不确定。后续尾部事实可以更新本摘要。
+完成时直接输出非空交接文本，不调用工具。接近预算时根据已有材料立即收尾。
+</self_handoff>"""
+HANDOFF_PREFIX = "模型生成的交接材料，保留原证据强度；不是用户新指令或完成证明。遇到疑点按来源回读，后续事实可更新它。\n"
 
 
 def schema(name, description, properties, required):
@@ -55,8 +54,7 @@ def schema(name, description, properties, required):
 
 READ_SCHEMA = schema(
     READ,
-    "只读交接记录授权的前序来源。view 按顺序读脱水对话；event 读原消息；artifact 读完整工具结果。"
-    "source 必须来自交接引用。offset/limit 为字符位置，按 next_offset 继续。",
+    "回读当前会话或交接授权的冻结历史。view 读取带事件位置的视图；event 按事件序号读取；artifact 读取工具原文。source 为来源 Session；view 的 reference 为空。",
     {
         "source": {"type": "string"},
         "kind": {"enum": ["view", "event", "artifact"]},
@@ -66,55 +64,43 @@ READ_SCHEMA = schema(
     },
     ["source", "kind", "reference", "offset", "limit"],
 )
-SUBMIT_SCHEMA = schema(
-    SUBMIT,
-    "提交最终 handoff 交接文档，完成压缩。",
-    {"handoff": {"type": "string", "minLength": 1}},
-    ["handoff"],
-)
+
+
+class HandoffBudgetExceeded(RuntimeError):
+    pass
 
 
 def compact_seed(events):
+    if any(
+        isinstance(e.payload, DomainFactCommitted)
+        and e.payload.fact_type == "compact.continued"
+        for e in events
+    ):
+        raise ValueError("unsupported legacy compact continuation")
     seeds = [
         e.payload
         for e in events
-        if isinstance(e.payload, DomainFactCommitted)
-        and e.payload.fact_type in (TASK, CONTINUED)
+        if isinstance(e.payload, DomainFactCommitted) and e.payload.fact_type == TASK
     ]
     if not seeds:
         return None
     if len(seeds) != 1 or events[0].payload is not seeds[0]:
-        raise ValueError("compact seed must be the unique first event")
-    seed = seeds[0]
-    data = jsonable(seed.data)
-    expected = (
-        {"source", "bundle", "upto"}
-        if seed.fact_type == TASK
-        else {"source", "bundle", "upto", "cutover", "context", "pending"}
-    )
-    if set(data) != expected:
-        raise ValueError("invalid compact seed fields")
-    for key in ("source", "bundle"):
-        if type(data[key]) is not str or not data[key]:
-            raise ValueError(f"invalid compact {key}")
-    if not is_valid_artifact_id(data["bundle"]):
-        raise ValueError("invalid compact bundle")
-    if type(data["upto"]) is not int or data["upto"] < 1:
-        raise ValueError("invalid compact cutoff")
-    if seed.fact_type == CONTINUED:
-        if type(data["cutover"]) is not int or data["cutover"] < data["upto"]:
-            raise ValueError("invalid compact cutover")
-        if not is_valid_artifact_id(data["context"]):
-            raise ValueError("invalid compact context")
-        if type(data["pending"]) is not list or any(
-            type(x) is not str for x in data["pending"]
-        ):
-            raise ValueError("invalid pending source events")
-    return seed.fact_type, data
+        raise ValueError("compact task must be the unique first event")
+    data = thaw_value(seeds[0].data)
+    if set(data) != {
+        "source",
+        "inherited",
+        "bundle",
+        "upto",
+        "window",
+        "deadline",
+        "max_calls",
+    }:
+        raise ValueError("invalid compact task")
+    return TASK, data
 
 
 def load_document(gateway, session, reference):
-    # The references are trusted persisted bindings; absent/corrupt data must fail.
     store = gateway.for_session(session)
     first = store.read(reference, 0, 1)
     return json.loads(store.read(reference, 0, max(1, first.total_chars)).content)
@@ -128,37 +114,66 @@ def save_document(gateway, session, value):
     )
 
 
+def window_fact(events):
+    result = None
+    for event in events:
+        if (
+            isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == WINDOW
+        ):
+            data = thaw_value(event.payload.data)
+            if data["parent"] != (None if result is None else result["id"]):
+                raise ValueError("broken context window lineage")
+            result = data
+    return result
+
+
 class CompactContext:
     def __init__(self, session_id, events, projector, transport):
         self.session_id = session_id
         self.projector = projector
         self.transport = transport
+        self.runtime = None
+        self.on_completed = lambda: None
         self.seed = compact_seed(events)
         self.prefix = []
-        if self.seed is not None and self.seed[0] == CONTINUED:
+        self.window = None
+        self.request = None
+        if self.is_reader:
             data = self.seed[1]
-            document = load_document(projector.gateway, data["source"], data["context"])
-            if set(document) != {"messages"} or type(document["messages"]) is not list:
-                raise ValueError("invalid compact context document")
-            self.prefix = document["messages"]
+            self.request = load_document(
+                projector.gateway, data["source"], data["inherited"]
+            )
+        self.refresh(events)
 
     @property
     def is_reader(self):
-        return self.seed is not None and self.seed[0] == TASK
+        return self.seed is not None
+
+    def refresh(self, events):
+        self.window = window_fact(events)
+        self.prefix = []
+        if self.window is not None:
+            self.prefix = load_document(
+                self.projector.gateway, self.session_id, self.window["context"]
+            )["messages"]
 
     def schemas(self):
-        if self.seed is None:
-            return []
-        return [READ_SCHEMA, SUBMIT_SCHEMA] if self.is_reader else [READ_SCHEMA]
+        return deepcopy(self.request["tools"]) if self.is_reader else [READ_SCHEMA]
 
     def visible(self, events, ids):
-        hidden = {
+        self.refresh(events)
+        cutoff = 0 if self.window is None else self.window["cutover"]
+        allowed = {
             e.event_id
             for e in events
-            if isinstance(e.payload, DomainFactCommitted)
-            and e.payload.fact_type == CONTINUED
+            if e.sequence > cutoff
+            and not (
+                isinstance(e.payload, DomainFactCommitted)
+                and e.payload.fact_type in (WINDOW, CREATED)
+            )
         }
-        return tuple(x for x in ids if x not in hidden)
+        return tuple(x for x in ids if x in allowed)
 
     def bindings(self):
         return {
@@ -166,22 +181,65 @@ class CompactContext:
             SUBMIT: ToolBinding(self.submit, decision_on_outcome=False),
         }
 
-    def _sources(self):
-        if self.seed is None:
-            return {}
-        data = self.seed[1]
-        pending = [(data["source"], data["bundle"])]
-        sources = {}
-        while pending:
-            source, reference = pending.pop()
-            if source in sources:
-                raise ValueError("cyclic compact lineage")
-            bundle = load_document(self.projector.gateway, source, reference)
-            if set(bundle) != {"records", "raw", "artifacts", "previous"}:
-                raise ValueError("invalid compact source bundle")
-            sources[source] = bundle
-            pending.extend(tuple(x) for x in bundle["previous"])
-        return sources
+    async def _sources(self):
+        if self.is_reader:
+            data = self.seed[1]
+            bundle = load_document(
+                self.projector.gateway, data["source"], data["bundle"]
+            )
+            bundle["artifacts"] = sorted(
+                set(bundle["artifacts"]) | {data["inherited"], data["bundle"]}
+            )
+            return {data["source"]: bundle}
+        events = await self.runtime.snapshot(self.session_id)
+        return {
+            self.session_id: frozen_bundle(
+                self.projector, events, self.session_id, self
+            )
+        }
+
+    async def prepare_reader(self, events, visible):
+        usage = await self.transport("compact_attempt", self.session_id, {})
+        if usage["exhausted"]:
+            raise HandoffBudgetExceeded("handoff model call budget exhausted")
+        own = _translate_visible_events(events, visible, "")[1:]
+        messages = deepcopy(self.request["messages"])
+        for item in own:
+            if item.sequence == 1:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": PURPOSE
+                        + "\n"
+                        + json.dumps(
+                            {
+                                "source": self.seed[1]["source"],
+                                "upto": self.seed[1]["upto"],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+            else:
+                messages.append(item.message)
+        if usage["calls"] == self.seed[1]["max_calls"]:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "<handoff_budget>最后一次调用，请直接提交交接文本，不再调用工具。</handoff_budget>",
+                }
+            )
+        assessment = self.projector.budget.assess(messages, self.request["tools"])
+        if not assessment.allowed:
+            raise ModelContextBudgetExceeded(assessment)
+        return PreparedModelContext(
+            messages=messages,
+            assessment=assessment,
+            protection_start_index=0,
+            size_externalized_command_ids=(),
+            age_dehydrated_command_ids=(),
+            source_sequences=tuple([0] * len(messages)),
+        )
 
     async def read(self, context, arguments):
         if set(arguments) != {"source", "kind", "reference", "offset", "limit"}:
@@ -200,7 +258,7 @@ class CompactContext:
             or not 1 <= limit <= 12000
         ):
             return {"error": "INVALID_ARGUMENT"}
-        sources = self._sources()
+        sources = await self._sources()
         if source not in sources:
             return {"error": "SOURCE_NOT_AUTHORIZED"}
         bundle = sources[source]
@@ -234,39 +292,29 @@ class CompactContext:
         }
 
     async def submit(self, context, arguments):
-        if not self.is_reader:
-            raise ValueError("only compactor can submit handoff")
-        if (
-            set(arguments) != {"handoff"}
-            or type(arguments["handoff"]) is not str
-            or not arguments["handoff"].strip()
-        ):
-            raise InvalidLLMResponse(
-                "invalid_handoff", "handoff must be a nonempty string"
-            )
+        if not self.is_reader or set(arguments) != {"handoff"}:
+            raise ValueError("invalid internal handoff submission")
         text = arguments["handoff"]
+        if type(text) is not str or not text.strip():
+            raise InvalidLLMResponse("invalid_handoff", "handoff must be nonempty")
         await self.transport("compact_complete", self.session_id, {"handoff": text})
+        self.on_completed()
         return {"submitted": True}
 
 
-def frozen_bundle(projector, events, session_id, prefix, seed):
-    visible = tuple(
-        e.event_id
-        for e in events
-        if not (
-            isinstance(e.payload, DomainFactCommitted)
-            and e.payload.fact_type == CONTINUED
+def frozen_bundle(projector, events, session_id, context, prepared=None):
+    ids = tuple(e.event_id for e in events)
+    visible = context.visible(events, ids)
+    if prepared is None:
+        prepared = projector.prepare(
+            events, visible, session_id, "", prefix=context.prefix, enforce_budget=False
         )
-    )
-    prepared = projector.prepare(
-        events, visible, session_id, "", prefix=prefix, enforce_budget=False
-    )
     records = [
-        {"source": session_id, "sequence": seq if seq else None, "message": message}
+        {"source": session_id, "sequence": seq, "message": message}
         for seq, message in zip(prepared.source_sequences[1:], prepared.messages[1:])
     ]
     raw = {}
-    for item in _translate_visible_events(events, visible, ""):
+    for item in _translate_visible_events(events, ids, ""):
         if item.sequence:
             raw.setdefault(str(item.sequence), []).append(item.message)
     artifacts = set()
@@ -282,111 +330,131 @@ def frozen_bundle(projector, events, session_id, prefix, seed):
             for child in value:
                 collect(child)
 
-    for item in records:
-        message = item["message"]
-        if message["role"] == "tool":
-            collect(json.loads(message["content"]))
     for values in raw.values():
         for message in values:
             if message["role"] == "tool":
                 collect(json.loads(message["content"]))
-    previous = [] if seed is None else [[seed[1]["source"], seed[1]["bundle"]]]
-    return {
-        "records": records,
-        "raw": raw,
-        "artifacts": sorted(artifacts),
-        "previous": previous,
-    }
+    for event in events:
+        payload = event.payload
+        if isinstance(payload, DomainFactCommitted):
+            if payload.fact_type == CREATED:
+                artifacts.update((payload.data["artifact"], payload.data["request"]))
+            elif payload.fact_type == WINDOW:
+                artifacts.update((payload.data["context"], payload.data["bundle"]))
+    return {"records": records, "raw": raw, "artifacts": sorted(artifacts)}
+
+
+def projected_tail(records, p, q):
+    return [r["message"] for r in records if p < r["sequence"] <= q]
 
 
 class CompactBoundary:
-    """Runs only between advances; Host serializes publication with input admission."""
-
     def __init__(self, runtime, decision, context, config, control, transport):
-        self.runtime = runtime
-        self.decision = decision
-        self.context = context
-        self.config = config
-        self.control = control
-        self.transport = transport
+        self.runtime, self.decision, self.context = runtime, decision, context
+        self.config, self.control, self.transport = config, control, transport
         self.scheduler = None
 
-    async def snapshot(self, *, cutover=True):
+    async def snapshot(self, *, persist=True):
         sid = self.context.session_id
         events = await self.runtime.snapshot(sid)
-        projection = self.runtime.projector.project(sid, events)
-        state = projection.state
-        safe = not state.waiting_command_ids and (
-            not cutover
-            or (not project_pending(events) and self.control.pending_view(sid) is None)
-        )
-        if not safe:
+        state = self.runtime.projector.project(sid, events).state
+        if state.waiting_command_ids or self.control.pending_view(sid) is not None:
             return {"safe": False}
-        bundle = frozen_bundle(
-            self.context.projector, events, sid, self.context.prefix, self.context.seed
-        )
-        ref = save_document(self.context.projector.gateway, sid, bundle)
-        consumed = {step.trigger_event_id for step in state.steps}
-        pending = [
-            e.event_id
-            for e in events
-            if e.event_id not in consumed
-            and (
-                isinstance(e.payload, UserMessageReceived)
-                or isinstance(e.payload, DomainFactCommitted)
-                and e.payload.requests_decision
-            )
-        ]
-        frame = projection.next_decision
-        view = state if frame is None else frame.state
-        prompt = self.decision.prompt_for(view)
-        tools = self.decision.schemas_for(view)[0]
-        return {
-            "safe": True,
-            "position": state.journal_position,
-            "bundle": ref,
-            "continue": state.status is RuntimeStatus.RUNNABLE,
-            "pending": pending,
-            "context_limit": self.config.model_context_limit,
-            "input_ratio": self.config.input_budget_ratio,
-            "prompt": prompt,
-            "tools": tools,
-        }
-
-    async def before_advance(self):
-        sid = self.context.session_id
-        events = await self.runtime.snapshot(sid)
-        if self.context.is_reader or project_parent(events) is not None:
-            return True
-        projection = self.runtime.projector.project(sid, events)
-        frame = projection.next_decision
-        if frame is None and projection.state.waiting_command_ids:
-            # Runtime still dispatches eligible commands. No in-flight execution moves.
-            return True
-        if frame is None:
-            prompt = self.decision.prompt_for(projection.state)
-            tools = self.decision.schemas_for(projection.state)[0]
-            visible = tuple(e.event_id for e in events)
-        else:
-            prompt = self.decision._prompt_for(frame)
-            tools, _ = self.decision._schemas(frame)
-            visible = frame.state.visible_event_ids
+        visible = self.context.visible(events, tuple(e.event_id for e in events))
+        prompt = self.decision.prompt_for(state)
+        tools = self.decision.schemas_for(state)[0]
         prepared = self.context.projector.prepare(
             events,
-            self.context.visible(events, visible),
+            visible,
             sid,
             prompt,
             tools,
             prefix=self.context.prefix,
             enforce_budget=False,
         )
-        assessment = prepared.assessment
-        if projection.state.waiting_command_ids:
-            if not assessment.allowed:
-                # Await outcomes/authorization without issuing an oversized decision.
-                await self.runtime.dispatcher.start_pending(sid)
-                return False
+        if not persist:
+            return {"safe": True, "assessment": prepared.assessment}
+        bundle = frozen_bundle(
+            self.context.projector, events, sid, self.context, prepared
+        )
+        # Keep the most recent complete assistant turn before P, without retaining a huge user input.
+        start = len(bundle["records"])
+        for i in range(len(bundle["records"]) - 1, -1, -1):
+            if bundle["records"][i]["message"]["role"] == "assistant":
+                start = i
+                break
+        catalog = next(
+            (
+                thaw_value(e.payload.data)
+                for e in reversed(events)
+                if isinstance(e.payload, DomainFactCommitted)
+                and e.payload.fact_type == "assistant.catalog"
+            ),
+            None,
+        )
+        return {
+            "safe": True,
+            "position": state.journal_position,
+            "window": None
+            if self.context.window is None
+            else self.context.window["id"],
+            "bundle": save_document(self.context.projector.gateway, sid, bundle),
+            "inherited": save_document(
+                self.context.projector.gateway,
+                sid,
+                {
+                    "catalog": catalog,
+                    "model": self.config.model_name,
+                    "messages": prepared.messages,
+                    "tools": tools,
+                    "recent": bundle["records"][start:],
+                },
+            ),
+            "prompt": prompt,
+            "tools": tools,
+            "context_limit": self.config.model_context_limit,
+            "input_ratio": self.config.input_budget_ratio,
+            "max_calls": self.config.compact_max_calls,
+            "timeout": self.config.compact_timeout_seconds,
+        }
+
+    async def publish(self, arguments):
+        sid = self.context.session_id
+        events = await self.runtime.snapshot(sid)
+        current = window_fact(events)
+        data = arguments["window"]
+        if current is not None and current["id"] == data["id"]:
+            if current != data:
+                raise ValueError("conflicting context window publication")
+            return
+        if data["parent"] != (None if current is None else current["id"]):
+            raise ValueError("stale handoff window")
+        await self.runtime.receive_domain_fact(
+            sid,
+            CREATED,
+            arguments["handoff"],
+            source="compact",
+            delivery_id=data["id"] + ":handoff",
+        )
+        await self.runtime.receive_domain_fact(
+            sid, WINDOW, data, source="compact", delivery_id=data["id"] + ":window"
+        )
+        self.context.refresh(await self.runtime.snapshot(sid))
+
+    async def before_advance(self):
+        sid = self.context.session_id
+        if self.context.is_reader:
             return True
+        events = await self.runtime.snapshot(sid)
+        if project_parent(events) is not None:
+            return True
+        state = self.runtime.projector.project(sid, events).state
+        if state.waiting_command_ids:
+            return True
+        snap = await self.snapshot(persist=False)
+        if not snap["safe"]:
+            return True
+        assessment = snap["assessment"]
         response = await self.transport(
             "compact_boundary",
             sid,
@@ -398,13 +466,8 @@ class CompactBoundary:
                 "over_budget": not assessment.allowed,
             },
         )
-        if response == "retired":
-            self.scheduler.retired = True
-            return False
         if response == "wait":
             return False
         if response != "continue":
             raise ValueError("invalid compact boundary response")
-        if frame is not None and not assessment.allowed:
-            raise ModelContextBudgetExceeded(assessment)
         return True

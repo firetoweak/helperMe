@@ -31,40 +31,40 @@ class CompactLlm:
 
     async def chat(self, messages, model, *, tools=None):
         names = {t["function"]["name"] for t in tools or []}
-        if "submit_handoff" in names:
+        if any("<self_handoff>" in str(m["content"]) for m in messages):
+            request = self.workspace / "handoff_request.json"
+            if not request.exists():
+                request.write_text(
+                    json.dumps(
+                        {"messages": messages, "tools": tools},
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
             (self.workspace / "compact_started").touch()
             if (self.workspace / "fail_compact").exists():
                 from helperme.llm.api import LLMProviderError
 
                 raise LLMProviderError("compactor provider failed")
+            if (self.workspace / "invalid_handoff").exists():
+                return LLMCallResult(
+                    LLMResponse(content="", calls=()),
+                    LLMUsage(input_tokens=0, output_tokens=5),
+                )
+            if (self.workspace / "read_compact").exists():
+                tool_results = [m for m in messages if m["role"] == "tool" and "source" in str(m["content"])]
+                if not tool_results or (self.workspace / "loop_compact").exists():
+                    return LLMCallResult(LLMResponse(content="回读", calls=(ToolCall(
+                        "read-source", "read_compact_source", json.dumps({
+                            "source": "chat", "kind": "view", "reference": "", "offset": 0, "limit": 1000
+                        })),)), LLMUsage(input_tokens=0, output_tokens=5))
+            if (self.workspace / "write_compact").exists():
+                return LLMCallResult(LLMResponse(content="", calls=(ToolCall(
+                    "write", "write_file", '{"path":"forbidden.txt","content":"bad"}'
+                ),)), LLMUsage(input_tokens=0, output_tokens=5))
             while not (self.workspace / "release_compact").exists():
                 await asyncio.sleep(0.02)
-            task = json.loads(messages[1]["content"])["data"]
-            results = [
-                json.loads(m["content"])["value"]
-                for m in messages
-                if m["role"] == "tool"
-            ]
-            if not results or results[-1]["next_offset"] is not None:
-                offset = 0 if not results else results[-1]["next_offset"]
-                call = ToolCall(
-                    "read",
-                    "read_compact_source",
-                    json.dumps(
-                        {
-                            "source": task["source"],
-                            "kind": "view",
-                            "reference": "",
-                            "offset": offset,
-                            "limit": 12000,
-                        }
-                    ),
-                )
-            else:
-                call = ToolCall(
-                    "submit", "submit_handoff", json.dumps({"handoff": HANDOFF})
-                )
-            response = LLMResponse(content="", calls=(call,))
+            response = LLMResponse(content=HANDOFF, calls=())
         else:
             # Record actual requests to prove S1 sees the tail and no old execution replays.
             with (self.workspace / "requests.jsonl").open(
@@ -96,6 +96,8 @@ def config_for(workspace: Path):
         input_budget_ratio=0.9,
         llm=CompactLlm(workspace),
         compact_threshold_ratio=0.55,
+        compact_max_calls=2 if (workspace / "loop_compact").exists() else 8,
+        compact_timeout_seconds=12 if (workspace / "timeout_compact").exists() else 300,
     )
 
 
@@ -111,7 +113,7 @@ def tool_config(workspace: Path):
             await asyncio.sleep(0.02)
         with (workspace / "tool_count").open("a") as file:
             file.write("executed\n")
-        return {"ok": True, "text": "TOOL_EVIDENCE"}
+        return {"ok": True, "text": "TOOL_EVIDENCE" + ("X" * 20000)}
 
     async def assembly(*args, **kwargs):
         result = await build(*args, **kwargs)

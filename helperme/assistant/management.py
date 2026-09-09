@@ -227,14 +227,12 @@ class ManagementSurface:
         session_id: str,
         decision_state: DecisionState | None = None,
     ) -> str:
-        visible = self._visible_domains(session_id, decision_state)
         lines = [
             "管理能力按需加载。需要诊断、安装、更新或修复时，先调用 "
             "load_management_tools；具体工具从下一个 Step 开始可用："
         ]
         for domain in self._domains.values():
-            mark = "（已加载）" if domain.id in visible else ""
-            lines.append(f"- {domain.id}: {domain.description}{mark}")
+            lines.append(f"- {domain.id}: {domain.description}")
         return "\n".join(lines)
 
     async def load(

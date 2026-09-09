@@ -63,13 +63,14 @@ class HostSupervisor:
     async def _route(self, operation, session_id, arguments):
         if operation == "compact_boundary":
             return await self.compact.boundary(session_id, arguments)
+        if operation == "compact_attempt":
+            return self.compact.store.attempt(session_id)
         if operation == "compact_complete":
             return await self.compact.complete(session_id, arguments)
         if operation == "output":
             if self.compact.store.reader_job(session_id) is not None:
                 return None
-            conversation, _ = self.compact.store.binding(session_id)
-            await emit_delivery(self.sink, conversation, arguments["text"])
+            await emit_delivery(self.sink, session_id, arguments["text"])
             return None
         if operation == "create_child":
             # Identity is stable; an existing child is resumed, never replaced.
@@ -100,7 +101,7 @@ class HostSupervisor:
                     and self.compact.store.reader_job(session_id) is None
                 ):
                     self.context_usage_sink(
-                        self.compact.store.binding(values[0])[0], *values[1:]
+                        *values
                     )
             elif kind == "activity":
                 if (
@@ -108,7 +109,7 @@ class HostSupervisor:
                     and self.compact.store.reader_job(session_id) is None
                 ):
                     self.subagent_activity_sink(
-                        self.compact.store.binding(values[0])[0], *values[1:]
+                        *values
                     )
             elif kind == "idle":
                 worker.idle_revision = values[0]

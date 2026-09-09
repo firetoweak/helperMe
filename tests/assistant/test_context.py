@@ -172,6 +172,33 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
     def _tool_messages(self, messages):
         return [message for message in messages if message["role"] == "tool"]
 
+    async def test_projection_serializes_nested_tool_arguments(self):
+        arguments = {"fields": [{"target": "amount", "options": {"value": "12.34"}}]}
+
+        async def fill(_context, _arguments):
+            self.assertEqual(json.loads(json.dumps(_arguments)), arguments)
+            self.assertIsInstance(_arguments["fields"], list)
+            self.assertIsInstance(_arguments["fields"][0]["options"], dict)
+            _arguments["fields"][0]["options"]["value"] = "changed by tool"
+            return "filled"
+
+        events, _ = await self._history(
+            (
+                lambda _frame: ModelDecision(
+                    command_requests=(InvokeTool("fill", tuple(arguments.items())),),
+                ),
+                lambda _frame: _deliver("done"),
+            ),
+            {"fill": ToolBinding(fill)},
+            ("go",),
+        )
+        messages = project_chat_messages(
+            events, tuple(event.event_id for event in events), "sys",
+        )
+        calls = [call for message in messages for call in message.get("tool_calls", [])]
+        self.assertEqual(json.loads(calls[0]["function"]["arguments"]), arguments)
+        json.dumps(messages)
+
     async def test_raw_projection_keeps_full_tool_body(self):
         async def ping(_context, _arguments):
             return "pong-body"

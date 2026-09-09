@@ -28,6 +28,20 @@ class SkillToolAdapter:
         self._gateway = gateway
         self._settings = settings
 
+    def catalog(self) -> list[dict[str, object]]:
+        return sorted(
+            (
+                {
+                    "id": record.name,
+                    "description": record.description,
+                    "revision": record.revision,
+                }
+                for record in self._catalog.registry.snapshot()
+                if record.enabled
+            ),
+            key=lambda item: item["id"],
+        )
+
     def schemas(self) -> list[dict[str, object]]:
         return [spec.to_openai_tool() for spec in self._catalog.tool_specs()]
 
