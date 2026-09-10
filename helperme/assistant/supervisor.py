@@ -63,8 +63,6 @@ class HostSupervisor:
     async def _route(self, operation, session_id, arguments):
         if operation == "compact_boundary":
             return await self.compact.boundary(session_id, arguments)
-        if operation == "compact_attempt":
-            return self.compact.store.attempt(session_id)
         if operation == "compact_complete":
             return await self.compact.complete(session_id, arguments)
         if operation == "output":

@@ -22,8 +22,7 @@ class AppConfigTest(unittest.TestCase):
                 "model_context_limit": 1000,
                 "input_budget_ratio": ratio,
                 "compact_threshold_ratio": 0.55,
-                "compact_max_calls": 8,
-                "compact_timeout_seconds": 300,
+                "loop_guard_repeat_threshold": 3,
             },
             "channels": {},
         }
@@ -39,6 +38,17 @@ class AppConfigTest(unittest.TestCase):
 
         self.assertEqual(document, INITIAL_CONFIG)
         self.assertIsNotNone(config.channels.telegram)
+
+    def test_loop_guard_threshold_is_validated_at_config_boundary(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            for value in (0, 1, True, 3.5, "3"):
+                with self.subTest(value=value):
+                    data = self._data()
+                    data["runtime"]["loop_guard_repeat_threshold"] = value
+                    self._write_config(path, data)
+                    with self.assertRaisesRegex(ValueError, "loop_guard_repeat_threshold"):
+                        load_app_config(path)
 
     def test_first_run_creates_default_config_and_stops(self):
         with TemporaryDirectory() as directory:

@@ -28,8 +28,7 @@ INITIAL_CONFIG = {
         "model_context_limit": 200000,
         "input_budget_ratio": 0.9,
         "compact_threshold_ratio": 0.55,
-        "compact_max_calls": 8,
-        "compact_timeout_seconds": 300,
+        "loop_guard_repeat_threshold": 3,
     },
     "channels": {
         "telegram": {
@@ -57,8 +56,7 @@ class RuntimeConfig:
     model_context_limit: int
     input_budget_ratio: float
     compact_threshold_ratio: float = 0.55
-    compact_max_calls: int = 8
-    compact_timeout_seconds: int = 300
+    loop_guard_repeat_threshold: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +87,7 @@ class AssistantConfig:
     input_budget_ratio: float
     llm: LLMApi
     compact_threshold_ratio: float = 0.55
-    compact_max_calls: int = 8
-    compact_timeout_seconds: int = 300
+    loop_guard_repeat_threshold: int = 3
 
     def __post_init__(self):
         if not 0 < self.compact_threshold_ratio < 1:
@@ -169,12 +166,10 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         "model_context_limit",
         "input_budget_ratio",
         "compact_threshold_ratio",
-        "compact_max_calls",
-        "compact_timeout_seconds",
+        "loop_guard_repeat_threshold",
     }:
         raise ValueError(
-            "runtime 配置字段必须是 model_context_limit/"
-            "input_budget_ratio/compact_threshold_ratio/compact_max_calls/compact_timeout_seconds"
+            "runtime 配置字段必须是 model_context_limit/input_budget_ratio/compact_threshold_ratio/loop_guard_repeat_threshold"
         )
     model_context_limit = runtime["model_context_limit"]
     if type(model_context_limit) is not int or model_context_limit < 1:
@@ -190,9 +185,8 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     ):
         raise ValueError("runtime.compact_threshold_ratio 必须在 (0, 1) 范围内")
 
-    for key in ("compact_max_calls", "compact_timeout_seconds"):
-        if type(runtime[key]) is not int or runtime[key] < 1:
-            raise ValueError(f"runtime.{key} must be a positive integer")
+    if type(runtime["loop_guard_repeat_threshold"]) is not int or runtime["loop_guard_repeat_threshold"] < 2:
+        raise ValueError("runtime.loop_guard_repeat_threshold must be an integer >= 2")
 
     channels = data["channels"]
     if not isinstance(channels, dict):
@@ -227,8 +221,7 @@ def load_app_config(path: Path | None = None) -> AppConfig:
             model_context_limit=model_context_limit,
             input_budget_ratio=float(input_budget_ratio),
             compact_threshold_ratio=float(compact_threshold_ratio),
-            compact_max_calls=runtime["compact_max_calls"],
-            compact_timeout_seconds=runtime["compact_timeout_seconds"],
+            loop_guard_repeat_threshold=runtime["loop_guard_repeat_threshold"],
         ),
         channels=ChannelsConfig(telegram=telegram_config),
     )
@@ -243,6 +236,5 @@ def assistant_config_from_app(app: AppConfig, llm: LLMApi) -> AssistantConfig:
         input_budget_ratio=app.runtime.input_budget_ratio,
         llm=llm,
         compact_threshold_ratio=app.runtime.compact_threshold_ratio,
-        compact_max_calls=app.runtime.compact_max_calls,
-        compact_timeout_seconds=app.runtime.compact_timeout_seconds,
+        loop_guard_repeat_threshold=app.runtime.loop_guard_repeat_threshold,
     )

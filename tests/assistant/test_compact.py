@@ -10,7 +10,6 @@ import unittest
 from helperme.assistant.compact import (
     WINDOW,
 )
-from helperme.assistant.compact_store import CompactStore
 from helperme.assistant.session_store import SessionStore
 from helperme.assistant.supervisor import HostSupervisor
 from helperme.assistant.artifacts import FileArtifactGateway
@@ -119,10 +118,8 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
             lambda: self.host.conversation_status("chat").compact_phase == "failed"
         )
         job = self.host.compact.store.job("chat")
-        self.assertEqual(job["calls"], 1)
         await self.host.receive_user_message("chat", "继续", delivery_id="next")
         await until(lambda: len(self.outputs) == 2)
-        self.assertEqual(self.host.compact.store.job("chat")["calls"], 1)
         self.assertEqual(self.host.conversation_status("chat").compact_count, 0)
 
     async def test_prepared_publication_is_recovered_without_new_session(self):
@@ -148,39 +145,29 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         await until(lambda: self.host.conversation_status("chat").compact_count == 1)
         with closing(self.host.compact.store.connect()) as db:
             job = dict(db.execute("SELECT * FROM compactions").fetchone())
-        self.assertEqual(job["calls"], 2)
         events = await SqliteJournal(self.store.require(job["reader"])).snapshot(
             job["reader"]
         )
         self.assertEqual(sum(isinstance(e.payload, StepCommitted) for e in events), 2)
         self.assertTrue(self.host.failures.empty())
 
-    async def test_loop_is_stopped_by_durable_call_budget(self):
-        (self.root / "read_compact").touch()
-        (self.root / "loop_compact").touch()
+    async def test_repeated_reads_are_reminded_and_can_complete(self):
+        (self.root / "repeat_reads").touch()
+        (self.root / "release_compact").touch()
         await self.host.create("chat")
         await self.host.receive_user_message(
             "chat", " history" * 31000, delivery_id="first"
         )
-        await until(
-            lambda: self.host.conversation_status("chat").compact_phase == "failed"
-        )
-        job = self.host.compact.store.job("chat")
-        self.assertEqual(job["calls"], 2)
-        self.assertIn("HandoffBudgetExceeded", job["failure"])
-        self.assertEqual(self.host.conversation_status("chat").compact_count, 0)
-
-    async def test_hanging_generation_hits_total_deadline(self):
-        (self.root / "timeout_compact").touch()
-        await self.host.create("chat")
-        await self.host.receive_user_message(
-            "chat", " history" * 31000, delivery_id="first"
-        )
-        await until(
-            lambda: self.host.conversation_status("chat").compact_phase == "failed"
-        )
-        self.assertIn("time budget", self.host.compact.store.job("chat")["failure"])
-        self.assertEqual(self.host.conversation_status("chat").compact_count, 0)
+        await until(lambda: self.host.conversation_status("chat").compact_count == 1)
+        with closing(self.host.compact.store.connect()) as db:
+            job = dict(db.execute("SELECT * FROM compactions").fetchone())
+        events = await SqliteJournal(self.store.require(job["reader"])).snapshot(job["reader"])
+        steps = [e.payload for e in events if isinstance(e.payload, StepCommitted)]
+        self.assertEqual(len(steps), 11)
+        notices = [s.decision_metadata["loop_guard_notice"] for s in steps if s.decision_metadata]
+        self.assertEqual(len(notices), 3)
+        self.assertTrue(all(n["evidence"][0]["new_count"] == 3 for n in notices))
+        self.assertTrue(self.host.failures.empty())
 
     async def test_visible_write_schema_does_not_authorize_handoff_execution(self):
         (self.root / "write_compact").touch()
@@ -193,25 +180,3 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse((self.root / "forbidden.txt").exists())
         self.assertEqual(self.host.conversation_status("chat").compact_count, 0)
-
-
-class BudgetTest(unittest.TestCase):
-    def test_call_budget_survives_store_reopen(self):
-        with TemporaryDirectory() as root:
-            store = CompactStore(Path(root))
-            job = store.start(
-                "s",
-                dict(
-                    window=None,
-                    position=1,
-                    inherited="a",
-                    bundle="b",
-                    timeout=100,
-                    max_calls=1,
-                ),
-            )
-            self.assertEqual(
-                store.attempt(job["reader"]), {"calls": 1, "exhausted": False}
-            )
-            restored = CompactStore(Path(root))
-            self.assertTrue(restored.attempt(job["reader"])["exhausted"])

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import replace
 from typing import AbstractSet, Protocol
 
 from helperme.assistant.compact import (
@@ -11,6 +12,7 @@ from helperme.assistant.compact import (
     SUBMIT,
 )
 from helperme.assistant.artifacts import ArtifactGateway
+from helperme.assistant.loop_guard import LoopGuard, NOTICE
 from helperme.assistant.control import (
     AssistantControlPlane,
     ControlArgumentsError,
@@ -20,6 +22,7 @@ from helperme.assistant.context.projection import (
     ModelContextProjector,
     ModelContextSettings,
     externalize_tool_result,
+    ModelContextBudgetExceeded,
 )
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.assistant.toolsets import ToolSurface
@@ -171,6 +174,7 @@ class JournalBackedLlmDecisionMaker:
         context_usage_sink: Callable[[str, int, int], None] | None = None,
         subagents: SubAgentHost | None = None,
         compact: CompactContext | None = None,
+        loop_guard: LoopGuard | None = None,
     ) -> None:
         self._journal = journal
         self._llm = llm
@@ -184,6 +188,7 @@ class JournalBackedLlmDecisionMaker:
         self._context_usage_sink = context_usage_sink
         self._subagents = subagents
         self._compact = compact
+        self._loop_guard = LoopGuard() if loop_guard is None else loop_guard
 
     def _schemas(self, frame: DecisionFrame):
         return self.schemas_for(frame.state)
@@ -314,6 +319,16 @@ class JournalBackedLlmDecisionMaker:
                 schemas,
                 prefix=None if self._compact is None else self._compact.prefix,
             )
+        notice = self._loop_guard.inspect(events, frame.observed_journal_position)
+        if notice is not None:
+            messages = [*prepared.messages, {"role": "user", "content": notice["text"]}]
+            assessment = self._projector.budget.assess(messages, schemas)
+            if not assessment.allowed:
+                raise ModelContextBudgetExceeded(assessment)
+            prepared = replace(
+                prepared, messages=messages, assessment=assessment,
+                source_sequences=(*prepared.source_sequences, 0),
+            )
         if self._context_usage_sink is not None:
             estimated = self._projector.budget.assess(
                 prepared.messages,
@@ -411,4 +426,7 @@ class JournalBackedLlmDecisionMaker:
         artifact = self._projector.gateway.for_session(frame.state.session_id).save(
             json.dumps(manifest, ensure_ascii=False, sort_keys=True)
         )
-        return RecordedDecision(decision, (artifact.artifact_id,))
+        return RecordedDecision(
+            decision, (artifact.artifact_id,),
+            None if notice is None else {NOTICE: notice},
+        )

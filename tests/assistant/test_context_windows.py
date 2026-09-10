@@ -1,4 +1,3 @@
-import time
 import unittest
 
 from helperme.assistant.artifacts import MemoryArtifactGateway
@@ -47,8 +46,6 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
                 "inherited": request,
                 "upto": 1,
                 "window": None,
-                "deadline": time.time() + 100,
-                "max_calls": 2,
             },
             source="compact",
             delivery_id="task",

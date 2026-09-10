@@ -3,7 +3,6 @@
 from __future__ import annotations
 import json
 import sqlite3
-import time
 from contextlib import closing
 from dataclasses import dataclass
 from uuid import uuid4
@@ -26,8 +25,7 @@ class CompactStore:
                 db.executescript("""
                 CREATE TABLE compactions (
                     reader TEXT PRIMARY KEY, source TEXT NOT NULL, window TEXT,
-                    upto INTEGER NOT NULL, bundle TEXT NOT NULL, deadline REAL NOT NULL,
-                    max_calls INTEGER NOT NULL, calls INTEGER NOT NULL DEFAULT 0,
+                    upto INTEGER NOT NULL, bundle TEXT NOT NULL,
                     summary TEXT, prepared TEXT, failure TEXT, published INTEGER NOT NULL DEFAULT 0);
                 CREATE UNIQUE INDEX active_compaction ON compactions(source) WHERE published=0;
                 """)
@@ -73,30 +71,16 @@ class CompactStore:
         bundle = {k: snapshot[k] for k in ("inherited", "bundle")}
         with closing(self.connect()) as db, db:
             db.execute(
-                "INSERT INTO compactions(reader,source,window,upto,bundle,deadline,max_calls) VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO compactions(reader,source,window,upto,bundle) VALUES (?,?,?,?,?)",
                 (
                     reader,
                     source,
                     snapshot["window"],
                     snapshot["position"],
                     json.dumps(bundle),
-                    time.time() + snapshot["timeout"],
-                    snapshot["max_calls"],
                 ),
             )
         return self.reader_job(reader)
-
-    def attempt(self, reader):
-        with closing(self.connect()) as db, db:
-            row = db.execute(
-                "SELECT * FROM compactions WHERE reader=?", (reader,)
-            ).fetchone()
-            if row["failure"] or row["summary"] is not None:
-                raise ValueError("handoff job is not running")
-            if time.time() >= row["deadline"] or row["calls"] >= row["max_calls"]:
-                return {"calls": row["calls"], "exhausted": True}
-            db.execute("UPDATE compactions SET calls=calls+1 WHERE reader=?", (reader,))
-            return {"calls": row["calls"] + 1, "exhausted": False}
 
     def fail(self, reader, failure):
         with closing(self.connect()) as db, db:

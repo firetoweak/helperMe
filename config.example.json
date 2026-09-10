@@ -13,8 +13,7 @@
     "model_context_limit": 200000,
     "input_budget_ratio": 0.9,
     "compact_threshold_ratio": 0.8,
-    "compact_max_calls": 8,
-    "compact_timeout_seconds": 300
+    "loop_guard_repeat_threshold": 3
   },
   "channels": {
     "telegram": {

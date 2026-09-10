@@ -120,10 +120,12 @@ class UserMessageReceived:
 @dataclass(frozen=True, slots=True)
 class StepCommitted:
     step: Step
+    decision_metadata: object = None
 
     def __post_init__(self) -> None:
         if type(self.step) is not Step:
             raise TypeError("step must be Step")
+        object.__setattr__(self, "decision_metadata", freeze_value(self.decision_metadata))
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,7 +248,7 @@ class EventDraft:
     occurred_at: datetime
     causation_id: str | None = None
     correlation_id: str | None = None
-    schema_version: int = 3
+    schema_version: int = 4
     artifact_refs: tuple[str, ...] = ()
     delivery: DeliveryIdentity | None = None
 

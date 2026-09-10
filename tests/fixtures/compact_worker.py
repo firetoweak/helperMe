@@ -51,9 +51,10 @@ class CompactLlm:
                     LLMResponse(content="", calls=()),
                     LLMUsage(input_tokens=0, output_tokens=5),
                 )
-            if (self.workspace / "read_compact").exists():
+            if (self.workspace / "read_compact").exists() or (self.workspace / "repeat_reads").exists():
                 tool_results = [m for m in messages if m["role"] == "tool" and "source" in str(m["content"])]
-                if not tool_results or (self.workspace / "loop_compact").exists():
+                reads = 10 if (self.workspace / "repeat_reads").exists() else 1
+                if len(tool_results) < reads:
                     return LLMCallResult(LLMResponse(content="回读", calls=(ToolCall(
                         "read-source", "read_compact_source", json.dumps({
                             "source": "chat", "kind": "view", "reference": "", "offset": 0, "limit": 1000
@@ -96,8 +97,6 @@ def config_for(workspace: Path):
         input_budget_ratio=0.9,
         llm=CompactLlm(workspace),
         compact_threshold_ratio=0.55,
-        compact_max_calls=2 if (workspace / "loop_compact").exists() else 8,
-        compact_timeout_seconds=12 if (workspace / "timeout_compact").exists() else 300,
     )
 
 

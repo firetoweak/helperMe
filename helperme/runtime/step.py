@@ -32,10 +32,11 @@ class DecisionMaker(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class RecordedDecision:
-    """Adapter 提供的决策及其不透明证据引用。"""
+    """Adapter 提供的决策、不透明证据引用及原子提交元数据。"""
 
     decision: ModelDecision
     artifact_refs: tuple[str, ...] = ()
+    decision_metadata: object = None
 
     def __post_init__(self) -> None:
         if type(self.decision) is not ModelDecision:
@@ -88,9 +89,11 @@ class StepRunner:
         if type(result) is RecordedDecision:
             decision = result.decision
             artifact_refs = result.artifact_refs
+            decision_metadata = result.decision_metadata
         else:
             decision = result
             artifact_refs = ()
+            decision_metadata = None
         commands: list[Command] = []
         for request in decision.command_requests:
             command_id = self._id_factory("command")
@@ -116,7 +119,7 @@ class StepRunner:
             EventDraft(
                 event_id=self._id_factory("event"),
                 session_id=frame.trigger_event.session_id,
-                payload=StepCommitted(step),
+                payload=StepCommitted(step, decision_metadata),
                 occurred_at=datetime.now(timezone.utc),
                 causation_id=frame.trigger_event.event_id,
                 artifact_refs=artifact_refs,

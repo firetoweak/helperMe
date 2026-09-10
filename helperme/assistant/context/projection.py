@@ -191,6 +191,12 @@ def _translate_visible_events(
             ))
             continue
         if isinstance(payload, StepCommitted):
+            metadata = payload.decision_metadata
+            if metadata is not None and "loop_guard_notice" in metadata:
+                items.append(_Projected(
+                    {"role": "user", "content": metadata["loop_guard_notice"]["text"]},
+                    "user", sequence=event.sequence,
+                ))
             shown: list[dict[str, object]] = []
             for command_index, command in enumerate(payload.step.commands):
                 effect = command.effect

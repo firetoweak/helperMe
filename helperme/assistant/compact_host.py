@@ -68,8 +68,6 @@ class CompactHost:
             source=job["source"],
             upto=job["upto"],
             window=job["window"],
-            deadline=job["deadline"],
-            max_calls=job["max_calls"],
             **material,
         )
         fact = seed_fact(TASK, data, continuing=True)

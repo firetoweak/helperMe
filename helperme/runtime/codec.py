@@ -35,7 +35,7 @@ from helperme.runtime.model import (
 )
 
 
-EVENT_SCHEMA_VERSION = 3
+EVENT_SCHEMA_VERSION = 4
 DELIVERY_FINGERPRINT_VERSION = 3
 STATE_CODEC_VERSION = 5
 STATE_PROJECTION_VERSION = "canonical-state-v2"
@@ -214,7 +214,7 @@ def encode_payload(payload: EventPayload) -> tuple[str, str]:
         data = {"content": payload.content}
     elif isinstance(payload, StepCommitted):
         kind = _STEP_COMMITTED
-        data = {"step": _step_to_data(payload.step)}
+        data = {"step": _step_to_data(payload.step), "decision_metadata": thaw_value(payload.decision_metadata)}
     elif isinstance(payload, CommandAuthorized):
         kind = _COMMAND_AUTHORIZED
         data = {"command_id": payload.command_id}
@@ -276,8 +276,8 @@ def decode_payload(
         _require_object(data, {"content"}, kind)
         return UserMessageReceived(data["content"])
     if kind == _STEP_COMMITTED:
-        _require_object(data, {"step"}, kind)
-        return StepCommitted(_step_from_data(data["step"]))
+        _require_object(data, {"step", "decision_metadata"}, kind)
+        return StepCommitted(_step_from_data(data["step"]), data["decision_metadata"])
     if kind == _COMMAND_AUTHORIZED:
         _require_object(data, {"command_id"}, kind)
         return CommandAuthorized(data["command_id"])

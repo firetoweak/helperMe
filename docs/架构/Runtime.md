@@ -148,3 +148,7 @@ Checkpoint 只用于加速重放，必须携带足够的版本信息；投影规
 | Session 应用服务 | `helperme/assistant/sessions.py` |
 | Session 进程与路由 | `helperme/assistant/supervisor.py`、`helperme/assistant/worker.py` |
 | Channel | `helperme/channels/` |
+
+## 决策附带元数据
+
+`RecordedDecision.decision_metadata` 随 `StepCommitted` 原子持久化；Runtime 仅冻结和序列化该不透明 JSON，不据此调度或解释应用语义。Assistant 用它保存 [LoopGuard](LoopGuard.md) 的实际提醒文本、策略版本、证据与覆盖位置。未提交的 Step 不产生提醒覆盖事实。事件格式为 v4，不读取旧格式。

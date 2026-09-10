@@ -9,6 +9,8 @@ from helperme.assistant.artifacts import (
     read_artifact_binding,
 )
 from helperme.assistant.compact import CompactContext, CompactBoundary, READ, SUBMIT
+from helperme.assistant.loop_guard import LoopGuard
+from helperme.assistant.loop_guard_strategies import ConsecutiveActions
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
 from helperme.assistant.context.projection import (
     ModelContextProjector,
@@ -157,6 +159,7 @@ async def build_assistant_assembly(
         context_usage_sink=context_usage_sink,
         subagents=subagents,
         compact=compact_context,
+        loop_guard=LoopGuard((ConsecutiveActions(config.loop_guard_repeat_threshold),)),
     )
     runtime = AgentRuntime(journal, decision, bindings)
     surface.attach(runtime)

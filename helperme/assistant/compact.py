@@ -31,7 +31,7 @@ PURPOSE = """<self_handoff>
 优先使用已有上下文，仅为关键缺口调用 read_compact_source 回读。其他工具不能执行。
 保持目标、约束、纠正、决定、未完成委派、证据与来源；计划不写成已执行，声明不写成验证。
 不重复读取，不扩展调查；未知内容标明不确定。后续尾部事实可以更新本摘要。
-完成时直接输出非空交接文本，不调用工具。接近预算时根据已有材料立即收尾。
+完成时直接输出非空交接文本，不调用工具。
 </self_handoff>"""
 HANDOFF_PREFIX = "模型生成的交接材料，保留原证据强度；不是用户新指令或完成证明。遇到疑点按来源回读，后续事实可更新它。\n"
 
@@ -66,10 +66,6 @@ READ_SCHEMA = schema(
 )
 
 
-class HandoffBudgetExceeded(RuntimeError):
-    pass
-
-
 def compact_seed(events):
     if any(
         isinstance(e.payload, DomainFactCommitted)
@@ -93,8 +89,6 @@ def compact_seed(events):
         "bundle",
         "upto",
         "window",
-        "deadline",
-        "max_calls",
     }:
         raise ValueError("invalid compact task")
     return TASK, data
@@ -134,7 +128,6 @@ class CompactContext:
         self.projector = projector
         self.transport = transport
         self.runtime = None
-        self.on_completed = lambda: None
         self.seed = compact_seed(events)
         self.prefix = []
         self.window = None
@@ -199,9 +192,6 @@ class CompactContext:
         }
 
     async def prepare_reader(self, events, visible):
-        usage = await self.transport("compact_attempt", self.session_id, {})
-        if usage["exhausted"]:
-            raise HandoffBudgetExceeded("handoff model call budget exhausted")
         own = _translate_visible_events(events, visible, "")[1:]
         messages = deepcopy(self.request["messages"])
         for item in own:
@@ -222,13 +212,6 @@ class CompactContext:
                 )
             else:
                 messages.append(item.message)
-        if usage["calls"] == self.seed[1]["max_calls"]:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "<handoff_budget>最后一次调用，请直接提交交接文本，不再调用工具。</handoff_budget>",
-                }
-            )
         assessment = self.projector.budget.assess(messages, self.request["tools"])
         if not assessment.allowed:
             raise ModelContextBudgetExceeded(assessment)
@@ -298,7 +281,6 @@ class CompactContext:
         if type(text) is not str or not text.strip():
             raise InvalidLLMResponse("invalid_handoff", "handoff must be nonempty")
         await self.transport("compact_complete", self.session_id, {"handoff": text})
-        self.on_completed()
         return {"submitted": True}
 
 
@@ -414,8 +396,6 @@ class CompactBoundary:
             "tools": tools,
             "context_limit": self.config.model_context_limit,
             "input_ratio": self.config.input_budget_ratio,
-            "max_calls": self.config.compact_max_calls,
-            "timeout": self.config.compact_timeout_seconds,
         }
 
     async def publish(self, arguments):
