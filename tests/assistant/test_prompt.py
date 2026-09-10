@@ -107,14 +107,14 @@ def _externalized_meta_fields() -> set[str]:
 
     gateway = MemoryArtifactGateway()
     payload, _artifact_id = externalize_payload(
-        "x" * 64,
+        {"ok": True, "code": "OK", "data": "x" * 64},
         gateway.for_session("prompt-vocabulary"),
         max_chars=8,
         preview_chars=4,
     )
     if not isinstance(payload, dict):
         raise TypeError("oversized payload must externalize to a dict")
-    return set(payload)
+    return set(payload) | set(payload["data"])
 
 
 def _fact_type_tokens() -> set[str]:

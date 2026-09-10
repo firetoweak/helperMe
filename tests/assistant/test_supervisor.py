@@ -272,7 +272,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(self.host.failures.empty())
 
-    async def test_child_recovery_erases_and_retries_actual_unfinished_read(self):
+    async def test_child_recovery_preserves_unfinished_read_and_reports_once(self):
         from helperme.runtime import DispatchAttemptStarted
         from helperme.assistant.subagent import TASK_FACT
 
@@ -302,9 +302,32 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.host.resume("child"), 30)
         await until(lambda: not self.host.workers and not self.host.watchers)
         after = await journal.snapshot("child")
-        self.assertNotIn(started, {e.event_id for e in after})
+        self.assertEqual(after[:len(before)], before)
+        self.assertIn(started, {e.event_id for e in after})
+        self.assertFalse((self.root / "read-retried").exists())
+        from helperme.runtime import CommandPhase, DomainFactCommitted, StateProjector
+        from helperme.assistant.subagent import REPORT_FACT, RETURN_FACT
+        state = StateProjector().project("child", after).state
+        self.assertEqual(state.commands[0].phase, CommandPhase.UNKNOWN)
+        self.assertEqual(sum(
+            isinstance(e.payload, DomainFactCommitted) and e.payload.fact_type == RETURN_FACT
+            for e in after
+        ), 1)
         events = await SqliteJournal(self.store.require("parent")).snapshot("parent")
         self.assertEqual(project_reclaimed(events), frozenset({"child"}))
+        report = next(e for e in events if isinstance(e.payload, DomainFactCommitted)
+                      and e.payload.fact_type == REPORT_FACT)
+        self.assertTrue(report.payload.requests_decision)
+        self.assertIn("执行结果未知", report.payload.data["failure"])
+        self.assertIn(state.commands[0].command.command_id, report.payload.data["failure"])
+        await asyncio.wait_for(self.host.resume("child"), 30)
+        await until(lambda: not self.host.workers and not self.host.watchers)
+        self.assertEqual(await journal.snapshot("child"), after)
+        events = await SqliteJournal(self.store.require("parent")).snapshot("parent")
+        self.assertEqual(sum(
+            isinstance(e.payload, DomainFactCommitted) and e.payload.fact_type == REPORT_FACT
+            for e in events
+        ), 1)
         self.assertTrue(self.host.failures.empty())
 
     async def test_child_unexpected_crash_is_reported_then_still_exposed(self):

@@ -18,6 +18,7 @@ from helperme.assistant.ipc import ProcessFailure
 from helperme.runtime import (
     AgentRuntime,
     CommandOutcomeReceived,
+    CommandPhase,
     DeliveryConflictError,
     DomainFactCommitted,
     Event,
@@ -25,6 +26,7 @@ from helperme.runtime import (
     LeaseLostError,
     OutcomeStatus,
     StepCommitted,
+    StateProjector,
     ToolBinding,
 )
 from helperme.runtime.dispatcher import AttemptContext
@@ -136,6 +138,35 @@ async def record_unexpected_return(journal: Journal, session_id: str, error: Exc
         ),
     )
     return parent, report_arguments(session_id, returned.payload.data)
+
+
+async def record_interrupted_return(journal: Journal, session_id: str) -> None:
+    """新 Worker 独占接管后，把未完成调用作为中断事实交回父会话。"""
+    events = await journal.snapshot(session_id)
+    if project_parent(events) is None or _return_event(events) is not None:
+        return
+    state = StateProjector().project(session_id, events).state
+    unfinished = [
+        command.command.command_id
+        for command in state.commands
+        if command.phase is CommandPhase.UNKNOWN
+    ]
+    if not unfinished:
+        return
+    await persist_return(
+        journal,
+        session_id,
+        return_data(
+            session_id,
+            reported=False,
+            summary=None,
+            failure=(
+                "子会话执行中断：以下 Command 已开始，但没有记录到 Outcome，"
+                "执行结果未知，未自动重试。原调用和已完成结果仍保留在子会话 Journal。"
+                " Command IDs: " + ", ".join(unfinished)
+            ),
+        ),
+    )
 
 
 SubAgentActivitySink = Callable[[str, bool], None]
@@ -488,13 +519,7 @@ class SubAgentHost:
                     await self._transport(
                         "fact",
                         parent_session_id,
-                        dict(
-                            fact_type=REPORT_FACT,
-                            data=dict(event.payload.data),
-                            delivery_id=f"{session_id}:report",
-                            source=FACT_SOURCE,
-                            requests_decision=True,
-                        ),
+                        report_arguments(session_id, event.payload.data),
                     )
             return ()
         reclaimed = project_reclaimed(events)

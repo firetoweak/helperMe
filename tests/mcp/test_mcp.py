@@ -572,7 +572,7 @@ class McpAdapterTest(unittest.TestCase):
             self.assertIsNotNone(artifact_id)
             artifact = store.read(artifact_id, 0, 10_000).content
 
-        self.assertTrue(body["externalized"])
+        self.assertTrue(body["data"]["externalized"])
         self.assertNotIn(secret, artifact)
         self.assertNotIn(secret, json.dumps(body, ensure_ascii=False))
 

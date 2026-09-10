@@ -18,9 +18,9 @@
 
 **返回值有四种，不是一种。** 父拿到的永远是同一条 `subagent.report` 事实，但它表达四件不同的事：子成功交回结论（`reported=true`，`summary` 有值）；子没跑完（`failure` 非空）；子静止了但从没调用 `report`（`reported=false`，`cancelled=false`，两个字段都空）；父主动收回（`cancelled=true`）。前三种是子自己的终局，第四种是父已经做过的判断。取消不是失败，父不应按「要不要重派这次失败」去读它。
 
-`failure` 有两种来源，形状相同：已识别的模型失败装 `assistant_failure_message` 的原文；未知异常装 `ProcessFailure` 的类型、消息和 traceback，不改写成友好句。父是 Judge，重派、换做法还是如实告诉用户，由它读了原因再定。未知异常仍会结束子 Worker，并由 Host 把同一份原始失败亮给 Channel；report 只是补一条父能看见的机械终局，不是把异常降级成普通 Outcome，也不自动重试。
+`failure` 有三种来源，形状相同：已识别的模型失败装 `assistant_failure_message` 的原文；未知异常装 `ProcessFailure` 的类型、消息和 traceback，不改写成友好句；恢复发现未完成 Attempt 时记录执行中断、结果未知及相关 Command ID，不虚构异常原因。父是 Judge，重派、换做法还是如实告诉用户，由它读了原因再定。未知异常仍会结束子 Worker，并由 Host 把同一份原始失败亮给 Channel；report 只是补一条父能看见的机械终局，不是把异常降级成普通 Outcome，也不自动重试。
 
-**「一次性」是投递幂等的性质，不是生命周期的性质。** 子 Session 不会被关闭。它没有 `COMPLETED / TERMINATED`，也不过 Finalization Barrier（见 [Runtime 的“状态与终态”](Runtime.md#状态与终态)），交回结论后就一直停在 `WAITING(user_message)`。真正保证「最多回收一次」的是回收事实的 `delivery_id = f"{child_session_id}:report"`：同一个子第二次回收会被 Journal 的投递幂等吞掉。代价是失败的子即使又被推进并再次静止，第二条终局也不会被看见。
+**「一次性」是投递幂等的性质，不是生命周期的性质。** 子 Session 不会被关闭。它没有 `COMPLETED / TERMINATED`，也不过 Finalization Barrier（见 [Runtime 的“状态与终态”](Runtime.md#状态与终态)），正常交回结论后停在 `WAITING(user_message)`；中断回传不会改写未知 Attempt，是否已回收由 `subagent.return` 判断。真正保证「最多回收一次」的是回收事实的 `delivery_id = f"{child_session_id}:report"`：同一个子第二次回收会被 Journal 的投递幂等吞掉。代价是失败的子即使又被推进并再次静止，第二条终局也不会被看见。
 
 **「传入任务」不是参数传递，是一条事实。** 任务以 `subagent.task` 进入子自己的 Journal，不伪装成用户消息。子因此知道另一端没有人，`report` 是唯一出口。父没有追问的通道，所以任务描述必须自包含——`delegate` 的参数说明里写明「它看不到当前对话，所需背景必须写在这里」。父要停掉一个还在工作的子，用的是收回，不是追问。
 
@@ -50,7 +50,7 @@
 
 未知异常走同一条回收形状，但子 Worker 保存回传内容后，通过单向生命周期信号交给 Host 投递，自己带着原始失败退出；不等待父确认。已识别的模型失败回收后子可以静止离开。
 
-父主动收回必须先留下回收事实，再停进程。只杀进程、不写 `subagent.return`，恢复父时会把这个子再拉起来；当前只读子的未完成 Attempt 还会被删掉重试。取消这条 report 不单独要 Step：判断已经在发出 `reclaim` 的那次决策里做完了。子自己交回的结论仍要唤醒父。已经回收过的再 `reclaim`，Outcome 为 `ALREADY_RECLAIMED`。同一 Step 里收回旧的、再 `delegate` 新的，合法；新子 id 绑在新的 command id 上。
+父主动收回由 Host 先停子进程，再在没有 Writer 时留下取消回收事实。只杀进程、不写 `subagent.return`，恢复父时仍会恢复这个子；若存在未完成 Attempt，则向父报告中断而不重试。取消这条 report 不单独要 Step：判断已经在发出 `reclaim` 的那次决策里做完了。子自己交回的结论仍要唤醒父。已经回收过的再 `reclaim`，Outcome 为 `ALREADY_RECLAIMED`。同一 Step 里收回旧的、再 `delegate` 新的，合法；新子 id 绑在新的 command id 上。
 
 Host 停子用进程终止，不走 Finalization Barrier，也不用 `COMPLETED / TERMINATED`。子是只读的，进行中的读取没有外部副作用要补偿。与子自己 `report` 的竞态交给投递幂等：同一个 `delivery_id` 只接纳一次，先写入的终局胜出。已有 `subagent.return` 的子 Worker 不再被唤醒。
 
@@ -58,7 +58,7 @@ Host 停子用进程终止，不走 Finalization Barrier，也不用 `COMPLETED 
 
 子 id 从委派命令派生（`{parent}/sub-{command_id}`），重放同一条命令不会造出第二个子 Session。
 
-回收的挂点有三处：Scheduler 的静止 / 已识别失败，Worker 在未知异常退出前的 `record_unexpected_return`，以及父发出的 `reclaim`。子 Worker 只读写自己的 Journal，通过 Host 请求创建子会话、向父投递或被 Host 终止；不会直接操作另一条 Session 的 Runtime。子 Session 是**没有人的 Session**：父落到 `WAITING(user_message)` 合理，因为真的有人会再说话；子落到同样状态则没人会来。由此得到纯机械的判据，不问模型做完没有，只看它还有没有事做：
+回收挂点包括 Scheduler 的静止 / 已识别失败、Worker 在未知异常退出前的 `record_unexpected_return`、新 Worker 接管后的 `record_interrupted_return`，以及父发出的 `reclaim`。子 Worker 只读写自己的 Journal，通过 Host 请求创建子会话、向父投递或被 Host 终止；不会直接操作另一条 Session 的 Runtime。子 Session 是**没有人的 Session**：父落到 `WAITING(user_message)` 合理，因为真的有人会再说话；子落到同样状态则没人会来。由此得到纯机械的判据，不问模型做完没有，只看它还有没有事做：
 
 | `waiting_for` | 含义 |
 |---|---|
@@ -68,7 +68,7 @@ Host 停子用进程终止，不走 Finalization Barrier，也不用 `COMPLETED 
 
 Scheduler 报告两种终局：静止（`on_quiesced`）与已识别的失败（`on_failed`）。未知异常不进 Scheduler 的 `on_failed`——那会把它降级成普通失败。子 Worker 的外层异常边界覆盖配置、装配、客户端进入及运行阶段：先通过 `record_unexpected_return` 写入 `subagent.return`，再单向交给 Host 投递 `subagent.report`。它不依赖 Worker 的 IPC 接收循环，也不在异常路径等待回复；Host 释放死掉的 Worker 后继续投递，原始失败独立暴露。`LeaseLostError` 是接管，不是这条生命线失败，不回收。
 
-漏接这些终局，父会拿着一个永远清不空的待回收集合干等。通知父「这条路断了」不是把未知异常变成 Runtime Outcome，也不是自动重试；已开始的 Attempt 仍是 `unknown`，Worker 照死，Host 照亮 `ProcessFailure`。进程被直接杀掉、没走到这段回收时，恢复仍按[多活跃会话](多活跃会话.md)的只读回退处理。
+漏接这些终局，父会拿着一个永远清不空的待回收集合干等。通知父「这条路断了」不是把未知异常变成 Runtime Outcome，也不是自动重试；已开始的 Attempt 仍是 `unknown`，Worker 照死，Host 照亮 `ProcessFailure`。进程被直接杀掉、没走到这段回收时，恢复时按[多活跃会话](多活跃会话.md#subagent-中断回传)保留未完成 Attempt 并回传中断事实。
 
 异常回传不要求完整 Assistant 已装配。新建子 Session 时，`subagent.task` 与 Journal 一起原子建立，保证首次初始化失败也能找回父身份。持久化完成即确认创建，由 Host 异步启动子 Worker；子初始化失败不会卡住父的 delegate Attempt，而是经 report 回传。Journal 无法读取或写入时不伪造回传事实；回传本身再失败则同时保留原异常与回传异常。
 
@@ -92,7 +92,7 @@ Scheduler 报告两种终局：静止（`on_quiesced`）与已识别的失败（
 
 **单写者是委派树内的不变量，不是全局不变量。** 分界在于并行由谁制造：父决定开几个子，这个并行是 Agent 造的，用户没参与，Agent 必须为它负责；用户同时开两条顶层 Session 是在开两个完整任务，写冲突是用户的选择，Agent 不替他兜底。`get_changes` 的契约因此不需要改——它本就只报告工作区快照、明确不做变更归因；需要约束的只是子 Session 的工具白名单。
 
-只读子 Session 中断后会删除未完成 Attempt 并重新执行；这段历史不再可追溯，是已接受的设计缺陷，详见[多活跃会话](多活跃会话.md)。已形成的 `subagent.return` 则保留，恢复时只重投，不重新调用模型。
+子 Session 恢复时若发现未完成 Attempt，保留执行历史并追加中断回传，由父模型决定下一步，不自动重试；详见[多活跃会话](多活跃会话.md#subagent-中断回传)。已形成的 `subagent.return` 则保留，恢复时只重投，不重新调用模型。
 
 这道边界是**安全性质**，所以进程内的父子缓存 `_parents` 必须能从 Journal 认回来，否则重启后子 Session 就没有只读限制了。两个方向都要认：恢复父时从它的 `delegate` Outcome 找出子，并经 Host 请求恢复未回收的那些，恢复子时从它自己的 `subagent.task` 事实找回父。只做前者的话，直接 `/resume` 一个子 Session 就绕过了整道边界。
 

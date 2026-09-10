@@ -75,7 +75,7 @@ class FakeEchoProvider:
             )
 
         async def ping(arguments: Mapping[str, object]) -> object:
-            return {"ok": True, "data": {"echo": arguments.get("text", "")}}
+            return {"ok": True, "code": "ECHO", "data": {"echo": arguments.get("text", "")}}
 
         return (
             LoadedTool(

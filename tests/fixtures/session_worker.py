@@ -70,9 +70,10 @@ def interrupted_read_config(workspace: Path):
         marker = workspace / "read-started"
         if not marker.exists():
             marker.touch()
-            # Kill the process without a Python except path; resume must retry.
+            # Kill without a Python except path; recovery must report the interruption.
             os._exit(1)
-        return {"ok": True, "data": "read successfully"}
+        (workspace / "read-retried").touch()
+        return {"ok": True, "code": "FILE_READ", "data": "read successfully"}
 
     async def assembly(*args, **kwargs):
         result = await build(*args, **kwargs)

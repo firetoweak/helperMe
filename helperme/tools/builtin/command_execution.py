@@ -21,7 +21,7 @@ EXECUTE_COMMAND_DESCRIPTION = """
 用途：在当前 Environment 中使用 {shell_name} 执行本机 CLI 命令。
 何时使用：用于依赖安装、构建、测试、格式化、静态检查、Git、包管理器和运行脚本；常规文件发现、搜索、读取和修改应使用专用文件工具。
 关键限制：相对 cwd 基于当前 Environment cwd，绝对 cwd 使用 Environment 原生语义；cwd 只决定启动位置，当前本地实现尚无进程级 Sandbox；command 使用 {shell_name} 语义；Shell 路径为 {shell_path}；workspace_effect 必须按预期副作用声明；仅支持有超时的前台非交互命令。
-失败/截断后：检查 exit_code、stdout、stderr、timed_out 和各流的 truncated；超时或失败时不能假定命令成功，也不要无条件重试可能产生副作用的命令；命令产生的文件变化需通过文件工具或 Git diff 重新验证。
+失败/截断后：检查 exit_code、stdout、stderr、timed_out、io_errors 和各流的 truncated；io_errors 非空表示管道失败，采集结果可能不完整；超时或失败时不能假定命令成功，也不要无条件重试可能产生副作用的命令；命令产生的文件变化需通过文件工具或 Git diff 重新验证。
 """.strip()
 
 
@@ -53,6 +53,7 @@ def _result_data(result: CommandResult) -> dict[str, Any]:
         "stderr": result.stderr.to_dict(),
         "duration_ms": result.duration_ms,
         "timed_out": result.timed_out,
+        "io_errors": list(result.io_errors),
     }
 
 
@@ -142,6 +143,14 @@ def create_command_execution_spec(
                 "code": "COMMAND_TIMEOUT",
                 "data": data,
                 "error": f"命令执行超过 {raw.timeout_seconds} 秒",
+            }
+        if result.io_errors:
+            return {
+                "ok": False,
+                "code": "COMMAND_IO_FAILED",
+                "data": data,
+                "error": "命令管道 I/O 失败，采集结果可能不完整",
+                "hint": "进程已经启动，可能产生副作用；根据现有输出和实际文件状态决定下一步。",
             }
         return {
             "ok": True,

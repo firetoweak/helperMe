@@ -21,7 +21,7 @@ class McpArgumentsTest(unittest.IsolatedAsyncioTestCase):
                 params=CallToolRequestParams(name="browser", arguments=payload),
             )
             requests.append(request.model_dump(mode="json", exclude_none=True))
-            return {"ok": True}
+            return {"ok": True, "code": "OK"}
 
         tool = _loaded_from_spec(ToolSpec(
             name="browser",

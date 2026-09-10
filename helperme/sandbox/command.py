@@ -79,6 +79,7 @@ class CommandResult:
     stderr: CapturedOutput
     duration_ms: int
     timed_out: bool
+    io_errors: tuple[str, ...] = ()
 
 
 class ShellNotFoundError(FileNotFoundError):

@@ -112,7 +112,7 @@ def tool_config(workspace: Path):
             await asyncio.sleep(0.02)
         with (workspace / "tool_count").open("a") as file:
             file.write("executed\n")
-        return {"ok": True, "text": "TOOL_EVIDENCE" + ("X" * 20000)}
+        return {"ok": True, "code": "FILE_READ", "data": {"text": "TOOL_EVIDENCE" + ("X" * 20000)}}
 
     async def assembly(*args, **kwargs):
         result = await build(*args, **kwargs)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from dataclasses import replace
 import io
 from pathlib import Path, PurePosixPath
@@ -139,34 +140,51 @@ class SkillSourceRouter:
         accept: str | None = None,
     ) -> tuple[bytes, str]:
         headers = {"Accept": accept} if accept else None
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=self.timeout_seconds,
-            transport=self.transport,
-        ) as client:
+        stack = AsyncExitStack()
+        request_error: BaseException | None = None
+        try:
             try:
-                async with client.stream(
-                    "GET",
-                    url,
-                    headers=headers,
-                ) as response:
-                    response.raise_for_status()
-                    chunks: list[bytes] = []
-                    total = 0
-                    async for chunk in response.aiter_bytes():
-                        total += len(chunk)
-                        if total > self.max_download_bytes:
-                            raise SkillSourceError(
-                                "Skill source 下载超出大小限制"
-                            )
-                        chunks.append(chunk)
-                    return b"".join(chunks), str(response.url)
-            except httpx.HTTPError as exc:
-                host = urlparse(url).hostname or "unknown host"
-                raise SkillSourceError(
-                    "Skill source 下载失败："
-                    f"{host} ({type(exc).__name__})"
-                ) from exc
+                client = await stack.enter_async_context(httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=self.timeout_seconds,
+                    transport=self.transport,
+                ))
+                response = await stack.enter_async_context(
+                    client.stream("GET", url, headers=headers)
+                )
+                response.raise_for_status()
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > self.max_download_bytes:
+                        raise SkillSourceError("Skill source 下载超出大小限制")
+                    chunks.append(chunk)
+                return b"".join(chunks), str(response.url)
+            except BaseException as exc:
+                request_error = exc
+                raise
+            finally:
+                try:
+                    await stack.aclose()
+                except BaseException as close_error:
+                    if request_error is not None and close_error is not request_error:
+                        raise BaseExceptionGroup(
+                            "Skill 下载失败且关闭失败", [request_error, close_error]
+                        )
+                    raise
+        except httpx.HTTPError as exc:
+            host = urlparse(url).hostname or "unknown host"
+            raise SkillSourceError(
+                f"Skill source 下载失败：{host} ({type(exc).__name__})"
+            ) from exc
+        except BaseExceptionGroup as exc:
+            if not _is_download_error(exc):
+                raise
+            host = urlparse(url).hostname or "unknown host"
+            raise SkillSourceError(
+                f"Skill source 下载或关闭失败：{host}"
+            ) from exc
 
     def _read_zip(
         self,
@@ -249,7 +267,12 @@ class SkillSourceRouter:
                     normalized_relative
                 ).parts)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                data = archive.read(info)
+                try:
+                    data = archive.read(info)
+                except zipfile.BadZipFile as exc:
+                    raise SkillSourceError(
+                        f"Skill ZIP 内容损坏: {raw}"
+                    ) from exc
                 if len(data) != info.file_size:
                     raise SkillSourceError(f"Skill ZIP 文件长度不一致: {raw}")
                 destination.write_bytes(data)
@@ -290,3 +313,11 @@ class SkillSourceRouter:
         subpath = PurePosixPath(*parts[4:]).as_posix()
         validate_relative_skill_path(subpath)
         return owner, repository, ref, subpath
+
+
+def _is_download_error(exc: BaseException) -> bool:
+    if isinstance(exc, (httpx.HTTPError, SkillSourceError)):
+        return True
+    return isinstance(exc, BaseExceptionGroup) and all(
+        _is_download_error(item) for item in exc.exceptions
+    )

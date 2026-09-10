@@ -8,7 +8,9 @@ import threading
 
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.ipc import PipePeer, ProcessFailure
-from helperme.assistant.subagent import project_parent, record_unexpected_return
+from helperme.assistant.subagent import (
+    project_parent, record_interrupted_return, record_unexpected_return,
+)
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal
 
@@ -33,12 +35,10 @@ async def run_worker(connection, session_id, path, config_factory, home_root):
 async def _run_session(connection, session_id, journal, config_factory, home_root):
     # Each process owns all clients, caches and its single Journal.
     home = HelperMeHome(Path(home_root))
+    await journal.prepare_recovery(session_id)
+    await record_interrupted_return(journal, session_id)
     config = config_factory()
     events = await journal.snapshot(session_id)
-    await journal.prepare_recovery(
-        session_id,
-        discard_unfinished=(project_parent(events) is not None),
-    )
     stop = asyncio.Event()
     active_requests = 0
     ready = asyncio.Event()

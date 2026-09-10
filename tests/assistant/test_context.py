@@ -18,6 +18,7 @@ from helperme.assistant.context.projection import (
     ModelContextProjector,
     ModelContextSettings,
     externalize_payload,
+    outcome_text,
     parse_tool_result_meta,
     project_chat_messages,
 )
@@ -73,8 +74,73 @@ def _deliver(text: str) -> ModelDecision:
     )
 
 
+def _result(data):
+    return {"ok": True, "code": "OK", "data": data, "error": None, "hint": None}
+
+
 class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
     SESSION = "ctx-session"
+
+    def test_model_receives_only_tool_fields_while_outcome_is_unchanged(self):
+        value = {
+            "ok": False, "code": "MCP_TRANSPORT_ERROR", "data": {},
+            "error": "TLS connection failed", "hint": "inspect connection",
+        }
+        outcome = CommandOutcome(OutcomeStatus.SUCCEEDED, value=value)
+        self.assertEqual(json.loads(outcome_text(outcome)), value)
+        self.assertIs(outcome.status, OutcomeStatus.SUCCEEDED)
+        self.assertEqual(outcome.value["code"], value["code"])
+
+    async def test_domain_failure_is_not_age_dehydrated(self):
+        async def failed(_context, _arguments):
+            return {"ok": False, "code": "MCP_TRANSPORT_ERROR", "error": "offline"}
+
+        events, _ = await self._history(
+            (
+                lambda _frame: ModelDecision(command_requests=(InvokeTool("failed"),)),
+                lambda _frame: _deliver("first-done"),
+                lambda _frame: _deliver("second-done"),
+            ),
+            {"failed": ToolBinding(failed)},
+            ("first", "second"),
+        )
+        prepared = self._projector().prepare(
+            events, tuple(event.event_id for event in events), self.SESSION,
+        )
+        self.assertEqual(prepared.age_dehydrated_command_ids, ())
+        payload = json.loads(self._tool_messages(prepared.messages)[0]["content"])
+        self.assertEqual(set(payload), {"ok", "code", "data", "error", "hint"})
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "offline")
+
+    async def test_execute_time_externalized_failure_keeps_failure_and_preview(self):
+        gateway = MemoryArtifactGateway()
+        value = {"ok": False, "code": "REMOTE_FAILED", "error": "offline" * 50}
+        stub, artifact_id = externalize_payload(
+            value, gateway.for_session(self.SESSION), max_chars=80, preview_chars=20,
+        )
+
+        async def failed(_context, _arguments):
+            return stub
+
+        events, _ = await self._history(
+            (
+                lambda _frame: ModelDecision(command_requests=(InvokeTool("failed"),)),
+                lambda _frame: _deliver("first-done"),
+                lambda _frame: _deliver("second-done"),
+            ),
+            {"failed": ToolBinding(failed)},
+            ("first", "second"),
+        )
+        prepared = self._projector(gateway=gateway).prepare(
+            events, tuple(event.event_id for event in events), self.SESSION,
+        )
+        payload = json.loads(self._tool_messages(prepared.messages)[0]["content"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["code"], "REMOTE_FAILED")
+        self.assertEqual(payload["data"]["artifact_id"], artifact_id)
+        self.assertTrue(payload["data"]["preview"])
+        self.assertEqual(prepared.age_dehydrated_command_ids, ())
 
     def _projector(self, **overrides) -> ModelContextProjector:
         gateway = overrides.pop("gateway", MemoryArtifactGateway())
@@ -180,7 +246,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(_arguments["fields"], list)
             self.assertIsInstance(_arguments["fields"][0]["options"], dict)
             _arguments["fields"][0]["options"]["value"] = "changed by tool"
-            return "filled"
+            return _result("filled")
 
         events, _ = await self._history(
             (
@@ -201,7 +267,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_raw_projection_keeps_full_tool_body(self):
         async def ping(_context, _arguments):
-            return "pong-body"
+            return _result("pong-body")
 
         events, _delivered = await self._history(
             (
@@ -223,7 +289,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_previous_user_consumed_success_is_dehydrated(self):
         async def ping(_context, _arguments):
-            return "old-result"
+            return _result("old-result")
 
         gateway = MemoryArtifactGateway()
         events, delivered = await self._history(
@@ -260,11 +326,11 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         async def slow(_context, _arguments):
             await release_slow.wait()
             await asyncio.sleep(0.02)
-            return "slow-result"
+            return _result("slow-result")
 
         async def fast(_context, _arguments):
             release_slow.set()
-            return "fast-result"
+            return _result("fast-result")
 
         events, _delivered = await self._history(
             (
@@ -309,7 +375,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_latest_user_turn_is_not_age_dehydrated(self):
         async def ping(_context, _arguments):
-            return "fresh-result"
+            return _result("fresh-result")
 
         events, _delivered = await self._history(
             (
@@ -366,7 +432,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_result_consumed_before_latest_user_is_dehydrated(self):
         async def ping(_context, _arguments):
-            return "pending-result"
+            return _result("pending-result")
 
         delivered: list[str] = []
         runtime = AgentRuntime(
@@ -415,7 +481,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         blob = "N" * 200
 
         async def ping(_context, _arguments):
-            return blob
+            return _result(blob)
 
         gateway = MemoryArtifactGateway()
         events, _delivered = await self._history(
@@ -449,7 +515,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         chunk = gateway.for_session(self.SESSION).read(artifact_id, 0, 3000)
         self.assertIn(blob, chunk.content)
 
-    async def test_oversized_failure_keeps_status_in_externalized_projection(self):
+    async def test_oversized_failure_keeps_ok_and_code_in_externalized_projection(self):
         failure_body = "remote-failure-" + "X" * 200
 
         async def boom(_context, _arguments):
@@ -486,20 +552,20 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
         tool = self._tool_messages(prepared.messages)[0]
         payload = json.loads(tool["content"])
-        self.assertEqual(payload["status"], "failed")
-        self.assertEqual(payload["error_type"], "RemoteError")
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["code"], "RemoteError")
         self.assertNotIn(failure_body, tool["content"])
-        artifact_id = payload["externalized"]["artifact_id"]
+        artifact_id = payload["data"]["artifact_id"]
         chunk = gateway.for_session(self.SESSION).read(artifact_id, 0, 3000)
         full_outcome = json.loads(chunk.content)
-        self.assertEqual(full_outcome["status"], "failed")
-        self.assertEqual(full_outcome["error_message"], failure_body)
+        self.assertEqual(full_outcome["ok"], False)
+        self.assertEqual(full_outcome["error"], failure_body)
 
     async def test_old_oversized_success_drops_preview_without_new_artifact(self):
         blob = "old-large-result-" + "Y" * 200
 
         async def ping(_context, _arguments):
-            return blob
+            return _result(blob)
 
         gateway = MemoryArtifactGateway()
         events, _delivered = await self._history(
@@ -527,9 +593,9 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
         tool = self._tool_messages(prepared.messages)[0]
         payload = json.loads(tool["content"])
-        artifact_id = payload["externalized"]["artifact_id"]
-        self.assertEqual(payload["status"], "succeeded")
-        self.assertEqual(payload["externalized"]["preview"], "")
+        artifact_id = payload["data"]["artifact_id"]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["data"]["preview"], "")
         self.assertIn(
             tool["tool_call_id"],
             prepared.size_externalized_command_ids,
@@ -541,12 +607,12 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         store = gateway.for_session(self.SESSION)
         self.assertEqual(tuple(store.contents), (artifact_id,))
         full_outcome = json.loads(store.read(artifact_id, 0, 3000).content)
-        self.assertEqual(full_outcome["status"], "succeeded")
-        self.assertEqual(full_outcome["value"], blob)
+        self.assertEqual(full_outcome["ok"], True)
+        self.assertEqual(full_outcome["data"], blob)
 
     async def test_token_window_can_keep_older_consumed_result(self):
         async def ping(_context, _arguments):
-            return "keep-me"
+            return _result("keep-me")
 
         events, _delivered = await self._history(
             (
@@ -574,7 +640,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_budget_overflow_fails_fast(self):
         async def ping(_context, _arguments):
-            return "old-result"
+            return _result("old-result")
 
         events, _delivered = await self._history(
             (
@@ -619,13 +685,13 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             AttemptContext("s1", "cmd-1", "att-1", 1),
             {},
         )
-        self.assertEqual(result["externalized"], True)
-        chunk = gateway.for_session("s1").read(result["artifact_id"], 0, 3000)
+        self.assertEqual(result["data"]["externalized"], True)
+        chunk = gateway.for_session("s1").read(result["data"]["artifact_id"], 0, 3000)
         full_outcome = json.loads(chunk.content)
-        self.assertEqual(full_outcome["status"], "succeeded")
+        self.assertEqual(full_outcome["ok"], True)
         self.assertEqual(
-            full_outcome["value"],
-            {"ok": True, "code": "OK", "data": "Z" * 80},
+            full_outcome,
+            _result("Z" * 80),
         )
 
     async def test_execute_time_externalized_result_uses_canonical_projection(self):
@@ -669,9 +735,8 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
 
         tool = self._tool_messages(prepared.messages)[0]
         payload = json.loads(tool["content"])
-        self.assertEqual(payload["status"], "succeeded")
-        self.assertIsNone(payload["value"])
-        self.assertIn("artifact_id", payload["externalized"])
+        self.assertEqual(payload["ok"], True)
+        self.assertIn("artifact_id", payload["data"])
 
     async def test_read_artifact_binding_pages_session_store(self):
         gateway = MemoryArtifactGateway()
@@ -692,40 +757,40 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
     def test_externalize_payload_below_threshold_is_identity(self):
         gateway = MemoryArtifactGateway()
         payload, artifact_id = externalize_payload(
-            {"ok": True},
+            _result(None),
             gateway.for_session("s1"),
             max_chars=80,
             preview_chars=10,
         )
-        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(payload, _result(None))
         self.assertIsNone(artifact_id)
 
-    def test_externalize_payload_above_threshold_saves_outcome_shaped_artifact(self):
+    def test_externalize_payload_above_threshold_saves_tool_result_artifact(self):
         gateway = MemoryArtifactGateway()
         blob = "oversized-tool-result-" + "Y" * 80
         stub, artifact_id = externalize_payload(
-            blob,
+            _result(blob),
             gateway.for_session("s1"),
             max_chars=40,
             preview_chars=12,
         )
         self.assertIsNotNone(artifact_id)
-        self.assertEqual(stub["externalized"], True)
-        self.assertEqual(stub["artifact_id"], artifact_id)
-        self.assertTrue(stub["preview"].startswith('{"status":'))
+        self.assertEqual(stub["data"]["externalized"], True)
+        self.assertEqual(stub["data"]["artifact_id"], artifact_id)
+        self.assertTrue(stub["data"]["preview"].startswith('{"ok":'))
         journaled = CommandOutcome(OutcomeStatus.SUCCEEDED, value=stub)
-        self.assertEqual(journaled.value["artifact_id"], artifact_id)
+        self.assertEqual(journaled.value["data"]["artifact_id"], artifact_id)
         stored = json.loads(gateway.for_session("s1").read(artifact_id, 0, 4000).content)
-        self.assertEqual(stored["status"], "succeeded")
-        self.assertEqual(stored["value"], blob)
-        self.assertIsNone(stored["error_type"])
-        self.assertIsNone(stored["error_message"])
+        self.assertEqual(stored["ok"], True)
+        self.assertEqual(stored["data"], blob)
+        self.assertIsNone(stored["error"])
+        self.assertIsNone(stored["hint"])
 
     def test_externalize_payload_larger_than_runtime_freeze_budget(self):
         gateway = MemoryArtifactGateway()
         blob = "x" * (MAX_JSON_VALUE_BYTES + 1)
         stub, artifact_id = externalize_payload(
-            {"tree": blob},
+            _result({"tree": blob}),
             gateway.for_session("s1"),
             max_chars=16_000,
             preview_chars=1_200,
@@ -736,5 +801,5 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         head = store.read(artifact_id, 0, 80)
         self.assertGreater(head.total_chars, MAX_JSON_VALUE_BYTES)
         stored = json.loads(store.read(artifact_id, 0, head.total_chars).content)
-        self.assertEqual(stored["status"], "succeeded")
-        self.assertEqual(stored["value"]["tree"], blob)
+        self.assertEqual(stored["ok"], True)
+        self.assertEqual(stored["data"]["tree"], blob)

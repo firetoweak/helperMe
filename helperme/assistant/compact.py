@@ -226,7 +226,7 @@ class CompactContext:
 
     async def read(self, context, arguments):
         if set(arguments) != {"source", "kind", "reference", "offset", "limit"}:
-            return {"error": "INVALID_ARGUMENT"}
+            return {"ok": False, "code": "INVALID_ARGUMENT", "error": "INVALID_ARGUMENT"}
         source, kind, reference, offset, limit = (
             arguments[k] for k in ("source", "kind", "reference", "offset", "limit")
         )
@@ -240,38 +240,42 @@ class CompactContext:
             or type(limit) is not int
             or not 1 <= limit <= 12000
         ):
-            return {"error": "INVALID_ARGUMENT"}
+            return {"ok": False, "code": "INVALID_ARGUMENT", "error": "INVALID_ARGUMENT"}
         sources = await self._sources()
         if source not in sources:
-            return {"error": "SOURCE_NOT_AUTHORIZED"}
+            return {"ok": False, "code": "SOURCE_NOT_AUTHORIZED", "error": "SOURCE_NOT_AUTHORIZED"}
         bundle = sources[source]
         if kind == "view":
             if reference != "":
-                return {"error": "view reference must be empty"}
+                return {"ok": False, "code": "INVALID_ARGUMENT", "error": "view reference must be empty"}
             text = json.dumps(bundle["records"], ensure_ascii=False)
         elif kind == "event":
             if reference not in bundle["raw"]:
-                return {"error": "EVENT_NOT_IN_SOURCE"}
+                return {"ok": False, "code": "EVENT_NOT_IN_SOURCE", "error": "EVENT_NOT_IN_SOURCE"}
             text = json.dumps(bundle["raw"][reference], ensure_ascii=False)
         else:
             if reference not in bundle["artifacts"]:
-                return {"error": "ARTIFACT_NOT_IN_SOURCE"}
+                return {"ok": False, "code": "ARTIFACT_NOT_IN_SOURCE", "error": "ARTIFACT_NOT_IN_SOURCE"}
             try:
                 chunk = self.projector.gateway.for_session(source).read(
                     reference, offset, limit
                 )
             except ArtifactOffsetOutOfRangeError:
-                return {"error": "OFFSET_OUT_OF_RANGE"}
-            return asdict(chunk)
+                return {"ok": False, "code": "OFFSET_OUT_OF_RANGE", "error": "OFFSET_OUT_OF_RANGE"}
+            return {"ok": True, "code": "COMPACT_SOURCE_READ", "data": asdict(chunk)}
         if offset > len(text):
-            return {"error": "OFFSET_OUT_OF_RANGE"}
+            return {"ok": False, "code": "OFFSET_OUT_OF_RANGE", "error": "OFFSET_OUT_OF_RANGE"}
         end = min(len(text), offset + limit)
         return {
-            "source": source,
-            "content": text[offset:end],
-            "offset": offset,
-            "next_offset": end if end < len(text) else None,
-            "total_chars": len(text),
+            "ok": True,
+            "code": "COMPACT_SOURCE_READ",
+            "data": {
+                "source": source,
+                "content": text[offset:end],
+                "offset": offset,
+                "next_offset": end if end < len(text) else None,
+                "total_chars": len(text),
+            },
         }
 
     async def submit(self, context, arguments):
@@ -281,7 +285,7 @@ class CompactContext:
         if type(text) is not str or not text.strip():
             raise InvalidLLMResponse("invalid_handoff", "handoff must be nonempty")
         await self.transport("compact_complete", self.session_id, {"handoff": text})
-        return {"submitted": True}
+        return {"ok": True, "code": "HANDOFF_SUBMITTED", "data": {"submitted": True}}
 
 
 def frozen_bundle(projector, events, session_id, context, prepared=None):

@@ -61,7 +61,7 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
                 "limit": 1000,
             },
         )
-        self.assertIn("fixed", request_read["content"])
+        self.assertIn("fixed", request_read["data"]["content"])
 
         args = {
             "source": "b",
@@ -70,7 +70,7 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
             "offset": 0,
             "limit": 1000,
         }
-        self.assertIn("before P", (await context.read(None, args))["content"])
+        self.assertIn("before P", (await context.read(None, args))["data"]["content"])
         self.assertEqual(
             (await context.read(None, {**args, "reference": "2"}))["error"],
             "EVENT_NOT_IN_SOURCE",
@@ -132,7 +132,7 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
                 "limit": 1000,
             },
         )
-        self.assertIn("handoff 1", evidence["content"])
+        self.assertIn("handoff 1", evidence["data"]["content"])
 
         self.assertEqual(
             restored.visible(events, tuple(e.event_id for e in events)), ()

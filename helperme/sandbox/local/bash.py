@@ -115,16 +115,24 @@ class BashCommandRunner:
 
         stdout_capture = BoundedTextCapture(self.capture_limit)
         stderr_capture = BoundedTextCapture(self.capture_limit)
+        io_errors: list[str] = []
 
-        async def drain(stream, capture: BoundedTextCapture) -> None:
+        async def drain(stream, capture: BoundedTextCapture, name: str) -> None:
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-            while chunk := await stream.read(4_096):
+            while True:
+                try:
+                    chunk = await stream.read(4_096)
+                except OSError as exc:
+                    io_errors.append(f"{name}: {type(exc).__name__}: {exc}")
+                    break
+                if not chunk:
+                    break
                 capture.feed(decoder.decode(chunk))
             capture.feed(decoder.decode(b"", final=True))
 
         readers = (
-            asyncio.create_task(drain(proc.stdout, stdout_capture)),
-            asyncio.create_task(drain(proc.stderr, stderr_capture)),
+            asyncio.create_task(drain(proc.stdout, stdout_capture, "stdout")),
+            asyncio.create_task(drain(proc.stderr, stderr_capture, "stderr")),
         )
 
         async def terminate_and_drain() -> None:
@@ -145,12 +153,19 @@ class BashCommandRunner:
                 await terminate_and_drain()
             else:
                 await asyncio.gather(*readers)
-        except BaseException:
+        except BaseException as run_error:
             cleanup = asyncio.create_task(terminate_and_drain())
             try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                await cleanup
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    await cleanup
+            except BaseException as cleanup_error:
+                if cleanup_error is not run_error:
+                    raise BaseExceptionGroup(
+                        "命令执行失败且清理失败", [run_error, cleanup_error]
+                    )
+                raise
             raise
 
         return CommandResult(
@@ -159,4 +174,5 @@ class BashCommandRunner:
             stderr=stderr_capture.finish(),
             duration_ms=round((time.perf_counter() - started) * 1_000),
             timed_out=timed_out,
+            io_errors=tuple(io_errors),
         )

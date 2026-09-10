@@ -17,7 +17,6 @@ from helperme.runtime import (
 )
 from helperme.runtime.journal.api import LeaseLostError, StepClaimRequest
 from tests.assistant.test_runner import ScriptedDecisionMaker
-from tests.session_scheduler import SettlingScheduler
 
 
 class WorkerRecoveryTest(unittest.IsolatedAsyncioTestCase):
@@ -75,7 +74,7 @@ class WorkerRecoveryTest(unittest.IsolatedAsyncioTestCase):
                     finally:
                         await runtime.dispatcher.close()
 
-    async def test_readonly_rollback_preserves_sibling_outcome_and_new_input(self):
+    async def test_recovery_preserves_unfinished_attempt_sibling_outcome_and_new_input(self):
         async def unfinished(context, arguments):
             await asyncio.Event().wait()
 
@@ -108,46 +107,13 @@ class WorkerRecoveryTest(unittest.IsolatedAsyncioTestCase):
             )
             await runtime.dispatcher.close()
             before = await journal.snapshot("child")
-            unfinished_id = (
-                (await runtime.state("child")).commands[0].attempts[0].started_event_id
-            )
-            await journal.prepare_recovery("child", discard_unfinished=False)
-            self.assertEqual(
-                (await runtime.state("child")).commands[0].phase, CommandPhase.UNKNOWN
-            )
-            await journal.prepare_recovery("child", discard_unfinished=True)
-            after = await journal.snapshot("child")
-            self.assertEqual(
-                after, tuple(e for e in before if e.event_id != unfinished_id)
-            )
-            self.assertEqual(
-                (await runtime.state("child")).commands[0].phase, CommandPhase.PENDING
-            )
-            runtime.bind_tool("read", ToolBinding(finished))
-            scheduler = SettlingScheduler(runtime, "child")
-            # The new input gets a fresh decision after the pending read completes.
-            runtime.step_runner._decision_maker = ScriptedDecisionMaker(
-                (lambda _: ModelDecision(content="done"),)
-            )
-            try:
-                await scheduler.wake("child")
-                await scheduler.join()
-            finally:
-                await scheduler.close()
+            await journal.prepare_recovery("child")
+            self.assertEqual(await journal.snapshot("child"), before)
             state = await runtime.state("child")
-            self.assertTrue(
-                all(c.phase is CommandPhase.TERMINAL for c in state.commands)
-            )
-            self.assertEqual(
-                len(
-                    [
-                        e
-                        for e in await journal.snapshot("child")
-                        if isinstance(e.payload, DispatchAttemptStarted)
-                    ]
-                ),
-                2,
-            )
+            self.assertEqual(state.commands[0].phase, CommandPhase.UNKNOWN)
+            self.assertEqual(state.commands[1].phase, CommandPhase.TERMINAL)
+            await journal.prepare_recovery("child")
+            self.assertEqual(await journal.snapshot("child"), before)
 
     async def test_expiration_does_not_revoke_owner_but_takeover_does(self):
         with tempfile.TemporaryDirectory() as directory:

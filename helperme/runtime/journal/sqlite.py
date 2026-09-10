@@ -186,14 +186,8 @@ class SqliteJournal:
     def path(self) -> str:
         return self._path
 
-    async def prepare_recovery(
-        self, session_id: str, *, discard_unfinished: bool
-    ) -> None:
-        """Called by a new exclusive Worker, before constructing any projections.
-
-        The caller owns the policy for discarding unfinished read-only operations.
-        Sequence positions are never reused: committed decision boundaries stay valid.
-        """
+    async def prepare_recovery(self, session_id: str) -> None:
+        """新 Worker 独占接管时释放旧 Step claim；保留全部执行事实。"""
 
         def recover(connection: sqlite3.Connection) -> None:
             identities = connection.execute(
@@ -204,32 +198,6 @@ class SqliteJournal:
             connection.execute(
                 "UPDATE step_claims SET expires_at = 0 WHERE session_id = ?",
                 (session_id,),
-            )
-            if not discard_unfinished:
-                return
-            attempts = connection.execute(
-                """SELECT attempts.attempt_id, attempts.command_id,
-                          attempts.dispatch_event_id, events.causation_id
-                   FROM attempts JOIN events ON events.event_id = attempts.dispatch_event_id
-                   JOIN commands ON commands.command_id = attempts.command_id
-                   WHERE commands.session_id = ? AND attempts.terminal_event_id IS NULL""",
-                (session_id,),
-            ).fetchall()
-            for attempt in attempts:
-                connection.execute(
-                    "DELETE FROM attempts WHERE attempt_id = ?",
-                    (attempt["attempt_id"],),
-                )
-                connection.execute(
-                    "DELETE FROM events WHERE event_id = ?",
-                    (attempt["dispatch_event_id"],),
-                )
-                connection.execute(
-                    "UPDATE commands SET dispatch_eligible_event_id = ? WHERE command_id = ? AND abandoned = 0",
-                    (attempt["causation_id"], attempt["command_id"]),
-                )
-            connection.execute(
-                "DELETE FROM checkpoints WHERE session_id = ?", (session_id,)
             )
 
         await self._write(recover)

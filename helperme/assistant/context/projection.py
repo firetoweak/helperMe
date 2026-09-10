@@ -35,7 +35,7 @@ from helperme.runtime.model import (
 )
 
 
-PROJECTOR_VERSION = 1
+PROJECTOR_VERSION = 2
 DEFAULT_RECENT_PROTECTION_TOKENS = 10_000
 DEFAULT_SIZE_EXTERNALIZE_CHARS = 16_000
 DEFAULT_PREVIEW_CHARS = 1_200
@@ -104,32 +104,28 @@ class _Projected:
 
 
 def outcome_text(outcome: CommandOutcome) -> str:
-    return _outcome_json(
-        status=outcome.status.value,
-        value=outcome.value,
-        error_type=outcome.error_type,
-        error_message=outcome.error_message,
-    )
+    if outcome.status is OutcomeStatus.SUCCEEDED:
+        payload = thaw_value(outcome.value)
+    else:
+        payload = {
+            "ok": False,
+            "code": outcome.error_type or outcome.status.value.upper(),
+            "data": thaw_value(outcome.value),
+            "error": outcome.error_message,
+            "hint": None,
+        }
+    return _tool_result_json(payload)
 
 
-def _outcome_json(
-    *,
-    status: str,
-    value: object,
-    error_type: str | None,
-    error_message: str | None,
-) -> str:
-    """Serialize an outcome-shaped document without constructing CommandOutcome.
-
-    Artifact 完整正文可以超过 Runtime freeze 预算；Journal 里的
-    CommandOutcome.value 仍必须能冻住。
-    """
+def _tool_result_json(payload: Mapping[str, object]) -> str:
+    """模型只接收工具协议；可选结果字段与 ToolsExecutor 一样显式为 null。"""
     return json.dumps(
         {
-            "status": status,
-            "value": thaw_value(value),
-            "error_type": error_type,
-            "error_message": error_message,
+            "ok": payload["ok"],
+            "code": payload["code"],
+            "data": thaw_value(payload.get("data")),
+            "error": payload.get("error"),
+            "hint": payload.get("hint"),
         },
         ensure_ascii=False,
     )
@@ -280,30 +276,10 @@ def _canonicalize_tool_result_runs(
 
 
 def _externalized_meta(content: object) -> dict[str, object] | None:
-    payload: object = json.loads(content) if isinstance(content, str) else content
+    payload = json.loads(content) if isinstance(content, str) else content
     if not isinstance(payload, dict):
         return None
-
-    projected_fields = {
-        "status",
-        "value",
-        "error_type",
-        "error_message",
-        "externalized",
-        "error",
-        "hint",
-    }
-    if set(payload) == projected_fields:
-        meta = payload["externalized"]
-        if _is_externalized_meta(meta):
-            return meta
-
-    outcome_fields = {"status", "value", "error_type", "error_message"}
-    if set(payload) == outcome_fields:
-        meta = _journaled_externalized_meta(payload["value"])
-        if meta is not None:
-            return meta
-    return None
+    return _journaled_externalized_meta(payload.get("data"))
 
 
 def _is_externalized_meta(value: object) -> bool:
@@ -355,16 +331,15 @@ def _stub_content(
     if not isinstance(outcome, dict):
         raise TypeError("projected tool content must be a JSON object")
     stub = {
-        "status": outcome["status"],
-        "value": None,
-        "error_type": outcome.get("error_type"),
-        "error_message": None,
-        "externalized": {
+        "ok": outcome["ok"],
+        "code": outcome["code"],
+        "data": {
+            "externalized": True,
             "artifact_id": artifact_id,
             "size_chars": size_chars,
             "preview": preview,
         },
-        "error": None,
+        "error": None if outcome["ok"] else "完整错误信息见外置结果。",
         "hint": "需要更多内容时调用 read_artifact 分页读取。",
     }
     return json.dumps(stub, ensure_ascii=False, separators=(",", ":"))
@@ -378,23 +353,15 @@ def externalize_payload(
     preview_chars: int,
 ) -> tuple[object, str | None]:
     """过大的工具返回值立刻外置；未超限则原样返回。"""
-    encoded = json.dumps(thaw_value(payload), ensure_ascii=False)
+    encoded = _tool_result_json(payload)
     if len(encoded) <= max_chars:
         return payload, None
-    complete_outcome = _outcome_json(
-        status=OutcomeStatus.SUCCEEDED.value,
-        value=payload,
-        error_type=None,
-        error_message=None,
-    )
-    artifact = store.save(complete_outcome)
+    artifact = store.save(encoded)
     return (
-        {
-            "externalized": True,
-            "artifact_id": artifact.artifact_id,
-            "size_chars": artifact.size_chars,
-            "preview": complete_outcome[:preview_chars],
-        },
+        json.loads(_stub_content(
+            encoded, artifact.size_chars, artifact.artifact_id,
+            encoded[:preview_chars],
+        )),
         artifact.artifact_id,
     )
 
@@ -521,16 +488,6 @@ class ModelContextProjector:
             content = item.message["content"]
             meta = _externalized_meta(content)
             if meta is not None:
-                payload = json.loads(content) if isinstance(content, str) else content
-                if not isinstance(payload, dict):
-                    raise TypeError("projected tool content must be a JSON object")
-                if not isinstance(payload.get("externalized"), dict):
-                    item.message["content"] = _stub_content(
-                        json.dumps(payload, ensure_ascii=False),
-                        meta["size_chars"],
-                        meta["artifact_id"],
-                        meta.get("preview", ""),
-                    )
                 continue
             if _content_char_length(content) <= self._settings.size_externalize_chars:
                 continue
@@ -610,7 +567,7 @@ class ModelContextProjector:
                     if meta is not None:
                         if meta.get("preview"):
                             payload = json.loads(item.message["content"])
-                            payload["externalized"]["preview"] = ""
+                            payload["data"]["preview"] = ""
                             item.message["content"] = json.dumps(
                                 payload,
                                 ensure_ascii=False,
@@ -676,10 +633,6 @@ def _tool_succeeded(message: Mapping[str, object]) -> bool:
     payload = json.loads(content)
     if not isinstance(payload, dict):
         raise TypeError("projected tool content must be a JSON object")
-    if "status" in payload:
-        return OutcomeStatus(payload["status"]) is OutcomeStatus.SUCCEEDED
-    if "ok" in payload:
-        if type(payload["ok"]) is not bool:
-            raise TypeError("projected tool ok must be bool")
-        return payload["ok"]
-    raise ValueError("projected tool content has no status")
+    if type(payload["ok"]) is not bool:
+        raise TypeError("projected tool ok must be bool")
+    return payload["ok"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -56,7 +57,7 @@ _EXPECTED_SDK_ERRORS = (
     anyio.ClosedResourceError,
 )
 def _is_expected_sdk_error(exc: BaseException) -> bool:
-    if isinstance(exc, _EXPECTED_SDK_ERRORS):
+    if isinstance(exc, (McpSdkError, *_EXPECTED_SDK_ERRORS)):
         return True
     return isinstance(exc, BaseExceptionGroup) and all(
         _is_expected_sdk_error(item) for item in exc.exceptions
@@ -64,6 +65,8 @@ def _is_expected_sdk_error(exc: BaseException) -> bool:
 
 
 def _sdk_error(exc: BaseException) -> McpSdkError:
+    if isinstance(exc, BaseExceptionGroup):
+        return McpSdkError("; ".join(str(_sdk_error(item)) for item in exc.exceptions))
     return McpSdkError(str(exc) or type(exc).__name__)
 
 
@@ -216,10 +219,17 @@ class ManagedMcpConnection:
     alive_handler: Callable[[], bool] | None = None
 
     async def aclose(self) -> None:
-        if self.close_handler is not None:
-            await self.close_handler()
-            return
-        await self.stack.aclose()
+        try:
+            if self.close_handler is not None:
+                await self.close_handler()
+            else:
+                await self.stack.aclose()
+        except _EXPECTED_SDK_ERRORS as exc:
+            raise _sdk_error(exc) from exc
+        except BaseExceptionGroup as exc:
+            if not _is_expected_sdk_error(exc):
+                raise
+            raise _sdk_error(exc) from exc
 
     def is_alive(self) -> bool:
         return self.alive_handler is None or self.alive_handler()
@@ -377,6 +387,7 @@ class _SdkConnectionOwner:
         stack = AsyncExitStack()
         await stack.__aenter__()
         current: _SdkOperation | None = None
+        run_error: BaseException | None = None
         try:
             try:
                 facade = await self._open_facade(stack)
@@ -438,6 +449,7 @@ class _SdkConnectionOwner:
                 finally:
                     current = None
         except BaseException as exc:
+            run_error = exc
             if not self._ready.done():
                 self._ready.set_exception(exc)
             if current is not None and not current.result.done():
@@ -446,7 +458,14 @@ class _SdkConnectionOwner:
         finally:
             self._closing = True
             self._fail_pending_operations()
-            await stack.aclose()
+            try:
+                await stack.aclose()
+            except BaseException as close_error:
+                if run_error is not None and close_error is not run_error:
+                    raise BaseExceptionGroup(
+                        "MCP owner 运行失败且关闭失败", [run_error, close_error]
+                    )
+                raise
 
     async def _open_facade(self, stack: AsyncExitStack) -> _SdkClientFacade:
         read_timeout: float | None = None
@@ -555,7 +574,18 @@ class McpClientManager:
             )
             entry = self._connections.pop(server_id, None)
         if entry is not None:
-            await entry.connection.aclose()
+            await self._close_connection(entry.connection)
+
+    async def _close_connection(self, connection: ManagedMcpConnection) -> None:
+        try:
+            await connection.aclose()
+        except McpSdkError as exc:
+            summary = self.sanitized_error(connection.record, exc)
+            self.runtime_state(connection.record.id).mark_unavailable(summary)
+            logging.getLogger(__name__).warning(
+                "MCP 连接已回收，远端关闭失败 [%s]: %s",
+                connection.record.id, summary,
+            )
 
     async def aclose(self) -> None:
         self._closed = True
@@ -565,7 +595,7 @@ class McpClientManager:
         errors: list[BaseException] = []
         for entry in entries:
             try:
-                await entry.connection.aclose()
+                await self._close_connection(entry.connection)
             except BaseException as exc:
                 errors.append(exc)
         if len(errors) == 1:
@@ -697,7 +727,7 @@ class McpClientManager:
             old = self._connections.pop(record.id, None)
 
         if old is not None:
-            await old.connection.aclose()
+            await self._close_connection(old.connection)
 
         state = self.runtime_state(record.id)
         connection: ManagedMcpConnection | None = None
@@ -721,18 +751,18 @@ class McpClientManager:
         except asyncio.CancelledError:
             if connection is not None:
                 if connection.cacheable:
-                    await _finish_cleanup(connection.aclose())
+                    await _finish_cleanup(self._close_connection(connection))
                 else:
-                    await connection.aclose()
+                    await self._close_connection(connection)
             raise
         except (OSError, McpClientError) as exc:
             if connection is not None:
-                await connection.aclose()
+                await self._close_connection(connection)
             state.mark_unavailable(self.sanitized_error(record, exc))
             raise
         except BaseException:
             if connection is not None:
-                await connection.aclose()
+                await self._close_connection(connection)
             raise
 
         if not connection.cacheable:
@@ -747,7 +777,7 @@ class McpClientManager:
                             f"{record.id}"
                         )
             except BaseException:
-                await connection.aclose()
+                await self._close_connection(connection)
                 raise
             return connection
 
@@ -762,7 +792,7 @@ class McpClientManager:
                     )
                 current = self._connections.get(record.id)
                 if current is not None and current.revision == record.revision:
-                    await connection.aclose()
+                    await self._close_connection(connection)
                     return current.connection
                 stale = current
                 self._connections[record.id] = _CacheEntry(
@@ -770,18 +800,18 @@ class McpClientManager:
                     revision=record.revision,
                 )
         except BaseException:
-            await _finish_cleanup(connection.aclose())
+            await _finish_cleanup(self._close_connection(connection))
             raise
         if stale is not None:
-            await stale.connection.aclose()
+            await self._close_connection(stale.connection)
         return connection
 
-    @staticmethod
     async def _release_connection(
+        self,
         connection: ManagedMcpConnection,
     ) -> None:
         if not connection.cacheable:
-            await connection.aclose()
+            await self._close_connection(connection)
 
     async def _paginate_tools(
         self,
@@ -826,4 +856,9 @@ class McpClientManager:
                     env_refs=config.env_refs,
                 ),
             )
-        return await _SdkConnectionOwner(record, secrets).start()
+        try:
+            return await _SdkConnectionOwner(record, secrets).start()
+        except BaseExceptionGroup as exc:
+            if not _is_expected_sdk_error(exc):
+                raise
+            raise _sdk_error(exc) from exc

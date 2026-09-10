@@ -310,7 +310,7 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_unmatched_step_discards_staged_call(self):
         async def propose(_input: ProposalInput):
-            return {"ok": True}
+            return {"ok": True, "code": "OK"}
 
         control = AssistantControlPlane((_operation(propose),))
         control.stage(_frame(), PROPOSAL_NAME, {"value": "frozen"})
