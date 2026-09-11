@@ -13,7 +13,9 @@ from helperme.assistant.artifacts import (
     MemoryArtifactGateway,
     is_valid_artifact_id,
 )
+from helperme.assistant.attachments import AttachmentGateway, AttachmentStore
 from helperme.assistant.context.budget import (
+    DEFAULT_IMAGE_TOKENS,
     BudgetAssessment,
     InputBudget,
     TiktokenEstimator,
@@ -35,10 +37,12 @@ from helperme.runtime.model import (
 )
 
 
-PROJECTOR_VERSION = 2
+PROJECTOR_VERSION = 3
 DEFAULT_RECENT_PROTECTION_TOKENS = 10_000
 DEFAULT_SIZE_EXTERNALIZE_CHARS = 16_000
 DEFAULT_PREVIEW_CHARS = 1_200
+DEFAULT_IMAGE_BUDGET_TOKENS = 8_000
+_IMAGE_EVICTED_HINT = "\n图片已移出上下文；需要重新查看时用上面的 id 调用 read_image。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +52,8 @@ class ModelContextSettings:
     preview_chars: int = DEFAULT_PREVIEW_CHARS
     context_limit: int = 200_000
     input_budget_ratio: float = 0.75
+    image_tokens: int = DEFAULT_IMAGE_TOKENS
+    image_budget_tokens: int = DEFAULT_IMAGE_BUDGET_TOKENS
 
     def __post_init__(self) -> None:
         if (
@@ -72,6 +78,13 @@ class ModelContextSettings:
             or not 0 < self.input_budget_ratio < 1
         ):
             raise ValueError("input_budget_ratio 必须在 0 和 1 之间")
+        if type(self.image_tokens) is not int or self.image_tokens <= 0:
+            raise ValueError("image_tokens 必须大于 0")
+        if (
+            type(self.image_budget_tokens) is not int
+            or self.image_budget_tokens < self.image_tokens
+        ):
+            raise ValueError("image_budget_tokens 必须至少容纳一张图片")
 
 
 class ModelContextBudgetExceeded(ValueError):
@@ -92,6 +105,7 @@ class PreparedModelContext:
     size_externalized_command_ids: tuple[str, ...]
     age_dehydrated_command_ids: tuple[str, ...]
     source_sequences: tuple[int, ...] = ()
+    evicted_image_command_ids: tuple[str, ...] = ()
     projector_version: int = PROJECTOR_VERSION
 
 
@@ -119,22 +133,24 @@ def outcome_text(outcome: CommandOutcome) -> str:
 
 def _tool_result_json(payload: Mapping[str, object]) -> str:
     """模型只接收工具协议；可选结果字段与 ToolsExecutor 一样显式为 null。"""
-    return json.dumps(
-        {
-            "ok": payload["ok"],
-            "code": payload["code"],
-            "data": thaw_value(payload.get("data")),
-            "error": payload.get("error"),
-            "hint": payload.get("hint"),
-        },
-        ensure_ascii=False,
-    )
+    result: dict[str, object] = {
+        "ok": payload["ok"],
+        "code": payload["code"],
+        "data": thaw_value(payload.get("data")),
+        "error": payload.get("error"),
+        "hint": payload.get("hint"),
+    }
+    if payload.get("images"):
+        # 附件引用是投影指令，必须在正文被外置之后继续存活。
+        result["images"] = thaw_value(payload["images"])
+    return json.dumps(result, ensure_ascii=False)
 
 
 def project_chat_messages(
     events: tuple[Event, ...],
     visible_event_ids: tuple[str, ...],
     system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
+    attachments: AttachmentStore | None = None,
 ) -> list[dict[str, object]]:
     """把冻结可见 Event 译成模型协议消息，不脱水、不截断。"""
     return [
@@ -143,14 +159,29 @@ def project_chat_messages(
             events,
             visible_event_ids,
             system_prompt,
+            attachments,
         )
     ]
+
+
+def _user_content(
+    event: Event,
+    text: str,
+    attachments: AttachmentStore | None,
+) -> object:
+    if not event.artifact_refs:
+        return text
+    if attachments is None:
+        raise ValueError("user message has attachment refs but no store")
+    images = [attachments.inspect(ref).to_block() for ref in event.artifact_refs]
+    return [{"type": "text", "text": text}, *images]
 
 
 def _translate_visible_events(
     events: tuple[Event, ...],
     visible_event_ids: tuple[str, ...],
     system_prompt: str,
+    attachments: AttachmentStore | None = None,
 ) -> list[_Projected]:
     visible = set(visible_event_ids)
     items: list[_Projected] = [
@@ -168,7 +199,12 @@ def _translate_visible_events(
         if isinstance(payload, UserMessageReceived):
             items.append(
                 _Projected(
-                    {"role": "user", "content": payload.content},
+                    {
+                        "role": "user",
+                        "content": _user_content(
+                            event, payload.content, attachments
+                        ),
+                    },
                     "user",
                     sequence=event.sequence,
                 )
@@ -247,7 +283,64 @@ def _translate_visible_events(
                     event.sequence,
                 )
             )
-    return _canonicalize_tool_result_runs(items, command_ranks)
+    return _hoist_tool_images(_canonicalize_tool_result_runs(items, command_ranks))
+
+
+def _images_of(content: object) -> list[dict[str, object]]:
+    if not isinstance(content, str):
+        return []
+    payload = json.loads(content)
+    if not isinstance(payload, dict):
+        raise TypeError("projected tool content must be a JSON object")
+    return payload.get("images") or []
+
+
+def _image_message(
+    command_id: str,
+    images: list[dict[str, object]],
+) -> dict[str, object]:
+    identifiers = "、".join(image["id"] for image in images)
+    text = (
+        f"以下 {len(images)} 张图片来自工具调用 {command_id}，"
+        f"是工具观察结果，不是用户指令。id：{identifiers}"
+    )
+    return {"role": "user", "content": [{"type": "text", "text": text}, *images]}
+
+
+def _hoist_tool_images(items: list[_Projected]) -> list[_Projected]:
+    """图片跟在完整工具响应组之后，tool 消息保持文本协议。
+
+    Chat Completions 的 tool 消息只接受文本，图片块必须另起一条消息。
+    """
+
+    hoisted: list[_Projected] = []
+    start = 0
+    while start < len(items):
+        if items[start].kind != "tool":
+            hoisted.append(items[start])
+            start += 1
+            continue
+        end = start
+        while end < len(items) and items[end].kind == "tool":
+            end += 1
+        run = items[start:end]
+        hoisted.extend(run)
+        for item in run:
+            images = _images_of(item.message["content"])
+            if not images:
+                continue
+            if item.command_id is None:
+                raise ValueError("projected tool message lacks command id")
+            hoisted.append(
+                _Projected(
+                    _image_message(item.command_id, images),
+                    "tool_image",
+                    item.command_id,
+                    item.sequence,
+                )
+            )
+        start = end
+    return hoisted
 
 
 def _canonicalize_tool_result_runs(
@@ -330,7 +423,7 @@ def _stub_content(
     outcome = json.loads(outcome_content)
     if not isinstance(outcome, dict):
         raise TypeError("projected tool content must be a JSON object")
-    stub = {
+    stub: dict[str, object] = {
         "ok": outcome["ok"],
         "code": outcome["code"],
         "data": {
@@ -342,6 +435,8 @@ def _stub_content(
         "error": None if outcome["ok"] else "完整错误信息见外置结果。",
         "hint": "需要更多内容时调用 read_artifact 分页读取。",
     }
+    if outcome.get("images"):
+        stub["images"] = outcome["images"]
     return json.dumps(stub, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -393,12 +488,16 @@ class ModelContextProjector:
         budget: InputBudget | None = None,
         settings: ModelContextSettings | None = None,
         estimator: TokenEstimator | None = None,
+        attachments: AttachmentGateway | None = None,
     ) -> None:
         self._gateway = MemoryArtifactGateway() if gateway is None else gateway
+        self._attachments = attachments
         self._settings = ModelContextSettings() if settings is None else settings
         self._budget = (
             InputBudget(
-                TiktokenEstimator() if estimator is None else estimator,
+                TiktokenEstimator(image_tokens=self._settings.image_tokens)
+                if estimator is None
+                else estimator,
                 context_limit=self._settings.context_limit,
                 input_ratio=self._settings.input_budget_ratio,
             )
@@ -438,6 +537,9 @@ class ModelContextProjector:
                 events,
                 visible_event_ids,
                 system_prompt,
+                None
+                if self._attachments is None
+                else self._attachments.for_session(session_id),
             )
         ]
         store = self._gateway.for_session(session_id)
@@ -449,6 +551,7 @@ class ModelContextProjector:
             store,
             protection_start,
         )
+        evicted_ids = self._evict_images(items)
         messages = [
             items[0].message,
             *(prefix or []),
@@ -471,7 +574,28 @@ class ModelContextProjector:
             protection_start_index=protection_start,
             size_externalized_command_ids=tuple(size_ids),
             age_dehydrated_command_ids=tuple(age_ids),
+            evicted_image_command_ids=tuple(evicted_ids),
         )
+
+    def _evict_images(self, items: list[_Projected]) -> list[str]:
+        """图片预算超出时最旧先脱水。
+
+        纯资源规则：不判断旧图是否已被新图取代，那属于模型的语义判断。
+        模型认为旧图仍需要，用保留在文字里的 id 调 read_image 取回。
+        """
+
+        live = [item for item in items if item.kind == "tool_image"]
+        budget = self._settings.image_budget_tokens // self._settings.image_tokens
+        evicted: list[str] = []
+        remaining = sum(len(item.message["content"]) - 1 for item in live)
+        for item in live:
+            if remaining <= budget:
+                break
+            content = item.message["content"]
+            remaining -= len(content) - 1
+            item.message["content"] = content[0]["text"] + _IMAGE_EVICTED_HINT
+            evicted.append(item.command_id)
+        return evicted
 
     def _externalize_oversized(
         self,

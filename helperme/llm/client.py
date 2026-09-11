@@ -23,6 +23,7 @@ from helperme.llm.api import (
     LLMTransientError,
 )
 from helperme.llm.config import ModelConfig
+from helperme.llm.images import encode_images
 from helperme.llm.types import (
     LLMCallResult,
     LLMResponse,
@@ -52,6 +53,7 @@ def is_context_limit_error(error: str) -> bool:
 class LLMClient:
     def __init__(self, config: ModelConfig):
         self._enable_thinking = config.enable_thinking
+        self._read_attachment = None
         http_client = httpx.AsyncClient(
             trust_env=False,
             timeout=httpx.Timeout(
@@ -67,6 +69,9 @@ class LLMClient:
             http_client=http_client,
             max_retries=2,
         )
+
+    def bind_attachment_reader(self, read) -> None:
+        self._read_attachment = read
 
     async def __aenter__(self) -> "LLMClient":
         return self
@@ -147,7 +152,9 @@ class LLMClient:
     ) -> Any:
         return await self.client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=encode_images(
+                messages, getattr(self, "_read_attachment", None)
+            ),
             tools=tools,
             tool_choice="auto" if tools else None,
             extra_body={"enable_thinking": self._enable_thinking},

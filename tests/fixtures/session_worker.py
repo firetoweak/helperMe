@@ -20,6 +20,17 @@ class ProcessLlm:
         pass
 
     async def chat(self, messages, model, *, tools=None):
+        images = [
+            part
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+            if part["type"] == "image"
+        ]
+        if images:
+            (self.workspace / "received-images.json").write_text(
+                json.dumps(images), encoding="utf-8"
+            )
         text = json.dumps(messages)
         names = {tool["function"]["name"] for tool in tools}
         if "CRASH_PROCESS" in text:

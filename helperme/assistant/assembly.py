@@ -8,6 +8,11 @@ from helperme.assistant.artifacts import (
     FileArtifactGateway,
     read_artifact_binding,
 )
+from helperme.assistant.attachments import (
+    AttachmentGateway,
+    READ_IMAGE_SCHEMA,
+    read_image_binding,
+)
 from helperme.assistant.compact import CompactContext, CompactBoundary, READ, SUBMIT
 from helperme.assistant.loop_guard import LoopGuard
 from helperme.assistant.loop_guard_strategies import ConsecutiveActions
@@ -73,10 +78,18 @@ async def build_assistant_assembly(
 ) -> AssistantAssembly:
     builtin_tools = await build_builtin_tools(config)
     settings = _model_context_settings(config)
-    gateway = FileArtifactGateway(
-        runtime_data_root() if home is None else home.runtime_sessions_root
+    sessions_root = runtime_data_root() if home is None else home.runtime_sessions_root
+    gateway = FileArtifactGateway(sessions_root)
+    attachment_gateway = AttachmentGateway(sessions_root)
+    attachments = attachment_gateway.for_session(session_id)
+    bind_reader = getattr(config.llm, "bind_attachment_reader", None)
+    if bind_reader is not None:
+        bind_reader(attachments.read)
+    projector = ModelContextProjector(
+        gateway=gateway,
+        attachments=attachment_gateway,
+        settings=settings,
     )
-    projector = ModelContextProjector(gateway=gateway, settings=settings)
     home = HelperMeHome.default() if home is None else home
     home.initialize()
     mcp = build_mcp(home)
@@ -110,14 +123,16 @@ async def build_assistant_assembly(
     skill_tools = SkillToolAdapter(skills, gateway, settings)
     subagents = SubAgentHost(subagent_activity_sink)
     surface = ToolSurface(
-        providers=(McpToolsetAdapter(mcp),),
+        providers=(McpToolsetAdapter(mcp, attachments),),
         base_schemas=[
             *builtin_tools.schemas,
             READ_ARTIFACT_SCHEMA,
+            READ_IMAGE_SCHEMA,
         ],
         reserved_names=(
             *builtin_tools.names(),
             "read_artifact",
+            "read_image",
             DELIVER_TOOL_NAME,
             LOAD_SKILL,
             READ_SKILL_RESOURCE,
@@ -140,6 +155,7 @@ async def build_assistant_assembly(
     bindings = {
         **bind_executor_tools(builtin_tools, gateway, settings),
         **read_artifact_binding(gateway),
+        **read_image_binding(journal, attachments),
         **deliver_binding(subagents.routed_sink(sink)),
         **load_toolset_binding(surface),
         **skill_tools.bindings(),

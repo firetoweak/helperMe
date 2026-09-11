@@ -23,6 +23,7 @@ from helperme.mcp.models import sanitize_error_summary
 
 _SAFE_NAME = re.compile(r"[^a-zA-Z0-9_-]+")
 _MAX_TOOL_NAME_LENGTH = 64
+_BINARY_BLOCK_TYPES = frozenset({"image", "audio"})
 
 
 def encode_tool_name(server_id: str, tool_name: str) -> str:
@@ -92,10 +93,13 @@ def adapt_call_result(
     output_validator: Any | None = None,
     secret_values: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    content = _redact_secrets(
-        [_serialize_content_block(block) for block in result.content],
-        secret_values,
-    )
+    content = [
+        # 二进制 base64 不是文本，字符串替换会破坏原始字节。
+        block
+        if block.get("type") in _BINARY_BLOCK_TYPES
+        else _redact_secrets(block, secret_values)
+        for block in (_serialize_content_block(item) for item in result.content)
+    ]
     structured = _redact_secrets(result.structured_content, secret_values)
     meta = _redact_secrets(result.meta, secret_values)
 

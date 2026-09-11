@@ -27,6 +27,30 @@ async def until(predicate, timeout=30):
 
 
 class SupervisorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_user_image_refs_cross_the_worker_boundary(self):
+        import json
+        from PIL import Image
+        from io import BytesIO
+        from helperme.assistant.attachments import AttachmentGateway
+
+        buffer = BytesIO()
+        Image.new("RGB", (16, 16), "red").save(buffer, format="PNG")
+        await self.host.create("image-session")
+        ref = AttachmentGateway(self.home.runtime_sessions_root).for_session(
+            "image-session"
+        ).save_image(buffer.getvalue(), "image/png")
+        await self.host.accept_input(
+            "image-session",
+            "[Image #1]",
+            artifact_refs=(ref.attachment_id,),
+            delivery_id="image-input",
+        )
+        await until(lambda: ("image-session", "done") in self.output)
+        received = json.loads(
+            (self.root / "received-images.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(received[0]["id"], ref.attachment_id)
+
     async def persist_child(self):
         from datetime import datetime, timezone
         from helperme.runtime.events import (

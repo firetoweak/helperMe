@@ -18,6 +18,7 @@
 | [Assistant 与 Sandbox](架构/Assistant与Sandbox.md) | 产品装配、执行环境与工具边界                   |
 | [判定](架构/判定.md)                                 | 未开始                              |
 | [上下文](架构/上下文.md)                               | Journal 投影、保护窗、Artifact、预算       |
+| [多模态附件](架构/多模态附件.md)                       | 工具回图与 TUI 粘贴：Session 外置、引用、投影         |
 | [工具与能力](架构/工具与能力.md)                           | 环境工具、MCP Toolset、Skill           |
 | [SubAgent](架构/SubAgent.md)                     | 委派、回收、只读边界、结论不齐时的约束             |
 | [多活跃会话](架构/多活跃会话.md)                       | 每 Session 进程、独立 Journal 与父子唤醒         |

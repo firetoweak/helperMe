@@ -10,6 +10,19 @@ import json
 import tiktoken
 
 
+DEFAULT_IMAGE_TOKENS = 1_600
+
+
+def count_images(messages: Sequence[dict[str, object]]) -> int:
+    return sum(
+        1
+        for message in messages
+        if type(message.get("content")) is list
+        for part in message["content"]
+        if part["type"] == "image"
+    )
+
+
 class TokenEstimator(Protocol):
     def estimate(
         self,
@@ -79,10 +92,18 @@ class InputBudget:
 
 
 class TiktokenEstimator:
-    def __init__(self, window_size: int = 8) -> None:
+    def __init__(
+        self,
+        window_size: int = 8,
+        *,
+        image_tokens: int = DEFAULT_IMAGE_TOKENS,
+    ) -> None:
         if window_size <= 0:
             raise ValueError("window_size 必须大于 0")
+        if type(image_tokens) is not int or image_tokens <= 0:
+            raise ValueError("image_tokens 必须大于 0")
         self._encoding = tiktoken.get_encoding("o200k_base")
+        self._image_tokens = image_tokens
         self._observed_coefficients: deque[float] = deque(maxlen=window_size)
 
     @property
@@ -117,4 +138,8 @@ class TiktokenEstimator:
             separators=(",", ":"),
             sort_keys=True,
         )
-        return len(self._encoding.encode_ordinary(serialized))
+        # 图片按整件计入；引用本身很短，不对二进制做文本分词。
+        return (
+            len(self._encoding.encode_ordinary(serialized))
+            + count_images(messages) * self._image_tokens
+        )

@@ -149,12 +149,14 @@ class AssistantSessions:
         *,
         delivery_id: str,
         source: str = "user",
+        artifact_refs: tuple[str, ...] = (),
     ) -> None:
         await self._runtime.receive_user_message(
             session_id,
             content,
             delivery_id=delivery_id,
             source=source,
+            artifact_refs=tuple(artifact_refs),
         )
         await self._scheduler.wake(session_id)
 
@@ -165,6 +167,7 @@ class AssistantSessions:
         *,
         delivery_id: str,
         source: str = "user",
+        artifact_refs: tuple[str, ...] = (),
     ) -> SessionView:
         view = await self.view(session_id)
         answer = content.strip().lower()
@@ -187,6 +190,7 @@ class AssistantSessions:
             content,
             delivery_id=delivery_id,
             source=source,
+            artifact_refs=tuple(artifact_refs),
         )
         return await self.view(session_id)
 

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import AsyncMock, call, patch
 
+from PIL import Image
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.layout import HSplit, Window
 from prompt_toolkit.output import DummyOutput
+from helperme.assistant.attachments import AttachmentGateway
 from helperme.assistant.compact_store import ConversationStatus
 
+from helperme.channels.cli.images import ConsoleMessage, ImagePaste
 from helperme.channels.cli.console import (
     _BottomAnchoredPromptSession,
     _ContextMeter,
@@ -17,6 +22,31 @@ from helperme.channels.cli.console import (
 
 
 class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
+    def test_clipboard_image_becomes_a_token_and_session_ref(self):
+        with TemporaryDirectory() as directory:
+            paste = ImagePaste(AttachmentGateway(Path(directory)))
+            paste.bind("session-a")
+            inserted = []
+
+            class _Event:
+                current_buffer = type(
+                    "Buffer", (), {"insert_text": staticmethod(inserted.append)}
+                )()
+                key_sequence = [type("Key", (), {"key": "c-v"})()]
+                data = ""
+
+            with patch(
+                "helperme.channels.cli.images.ImageGrab.grabclipboard",
+                return_value=Image.new("RGB", (8, 8)),
+            ):
+                paste.paste(_Event())
+
+            self.assertEqual(inserted, ["[Image #1]"])
+            submitted = paste.submit("[Image #1]")
+            self.assertEqual(submitted.text, "[Image #1]")
+            self.assertEqual(len(submitted.artifact_refs), 1)
+            self.assertEqual(paste.submit("next"), ConsoleMessage("next"))
+
     def test_prompt_is_anchored_above_the_bottom_toolbar(self):
         with create_pipe_input() as console_input:
             session = _BottomAnchoredPromptSession(
@@ -70,7 +100,7 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("上下文 2k/200k", meter.render())
 
     async def test_reader_continuously_collects_complete_lines(self):
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        queue: asyncio.Queue[ConsoleMessage | None] = asyncio.Queue()
         session = AsyncMock()
         session.prompt_async.side_effect = (
             "第一个任务",
@@ -90,6 +120,6 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
                 call("你：", refresh_interval=0.25),
             ],
         )
-        self.assertEqual(await queue.get(), "第一个任务")
-        self.assertEqual(await queue.get(), "运行时打断")
+        self.assertEqual(await queue.get(), ConsoleMessage("第一个任务"))
+        self.assertEqual(await queue.get(), ConsoleMessage("运行时打断"))
         self.assertIsNone(await queue.get())

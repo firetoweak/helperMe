@@ -8,12 +8,14 @@ from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.patch_stdout import patch_stdout
 
+from helperme.assistant.attachments import AttachmentGateway
 from helperme.assistant.compact_store import ConversationStatus
 from helperme.assistant.ipc import WorkerFailed
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import SessionView
 from helperme.assistant.toolsets import ToolsetLoadError
 from helperme.bootstrap import bootstrap_assistant
+from helperme.channels.cli.images import ConsoleMessage, ImagePaste
 from helperme.mcp.console import McpCommandError, McpConsoleAdapter
 from helperme.mcp.errors import McpInputError
 from helperme.skills.console import SkillCommandError, SkillConsoleAdapter
@@ -101,8 +103,9 @@ class _ContextMeter:
 
 
 async def read_console_input(
-    queue: asyncio.Queue[str | None],
+    queue: asyncio.Queue[ConsoleMessage | None],
     session: PromptSession[str],
+    image_paste: ImagePaste | None = None,
 ) -> None:
     with patch_stdout():
         while True:
@@ -114,7 +117,11 @@ async def read_console_input(
             except (EOFError, KeyboardInterrupt):
                 await queue.put(None)
                 return
-            await queue.put(text.strip())
+            await queue.put(
+                ConsoleMessage(text.strip())
+                if image_paste is None
+                else image_paste.submit(text)
+            )
 
 
 def _print_runtime_status(view: SessionView) -> None:
@@ -152,6 +159,11 @@ async def run_runtime_console() -> None:
         conversation_status_sink=context_meter.update_conversation_status,
     ) as app:
         config = app.config
+        image_paste = ImagePaste(AttachmentGateway(app.sessions_root))
+        # 只追加粘贴绑定。PromptSession 自己会把它和回车提交绑在一起；
+        # 再 merge load_key_bindings() 会盖掉 Enter。
+        session.key_bindings = image_paste.bindings
+        session.default_buffer.on_text_changed += image_paste.changed
         sessions = app.sessions
         mcp_console = McpConsoleAdapter(app.mcp_service)
         skill_console = SkillConsoleAdapter(app.skill_service)
@@ -164,7 +176,8 @@ async def run_runtime_console() -> None:
             config.runtime.model_context_limit,
             subagent_active=view.has_active_subagents,
         )
-        input_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        image_paste.bind(session_id)
+        input_queue: asyncio.Queue[ConsoleMessage | None] = asyncio.Queue()
         access = "整台电脑" if config.workspace.full_access else "配置的 Workspace"
         print(f"HelperMe 已启动。model={config.model.name}")
         print(f"工作区：{access}")
@@ -173,8 +186,9 @@ async def run_runtime_console() -> None:
         print("/mcp  /skill  管理外部能力")
         print("直接输入任务。运行中再输入会打断当前任务。")
         print("Ctrl+C 或 Ctrl+D 退出。")
+        print("Ctrl+V 粘贴图片或文字；终端拦截时用 Alt+V。删除 [Image #n] 可取消附件。")
 
-        reader = asyncio.create_task(read_console_input(input_queue, session))
+        reader = asyncio.create_task(read_console_input(input_queue, session, image_paste))
         failure = asyncio.create_task(
             app.sessions.wait_failure(),
             name="assistant-failure",
@@ -199,10 +213,11 @@ async def run_runtime_console() -> None:
                             next_input.cancel()
                             await asyncio.gather(next_input, return_exceptions=True)
                             continue
-                    user_message = next_input.result()
-                    if user_message is None:
+                    submitted = next_input.result()
+                    if submitted is None:
                         print("\n已退出。")
                         return
+                    user_message = submitted.text
                     if not user_message:
                         continue
                     separate_turns = True
@@ -211,6 +226,7 @@ async def run_runtime_console() -> None:
                         await sessions.create(target_session_id)
                         view = await sessions.select(owner, target_session_id)
                         session_id = target_session_id
+                        image_paste.bind(session_id)
                         context_meter.select(
                             sessions.conversation_status(session_id),
                             config.runtime.model_context_limit,
@@ -233,6 +249,7 @@ async def run_runtime_console() -> None:
                             print(f"\nSession 恢复失败：{exc.code}: {exc.message}")
                             continue
                         session_id = target_session_id
+                        image_paste.bind(session_id)
                         context_meter.select(
                             sessions.conversation_status(session_id),
                             config.runtime.model_context_limit,
@@ -262,6 +279,7 @@ async def run_runtime_console() -> None:
                     view = await sessions.accept_input(
                         session_id,
                         user_message,
+                        artifact_refs=submitted.artifact_refs,
                         delivery_id=f"user-{uuid4().hex}",
                     )
                     if view.control_message is not None:

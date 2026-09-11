@@ -124,6 +124,7 @@ class AgentRuntime:
         delivery: DeliveryIdentity,
         *,
         causation_id: str | None = None,
+        artifact_refs: tuple[str, ...] = (),
     ) -> Event:
         result = await self._journal.accept_delivery(
             EventDraft(
@@ -132,6 +133,7 @@ class AgentRuntime:
                 payload=payload,
                 occurred_at=datetime.now(timezone.utc),
                 causation_id=causation_id,
+                artifact_refs=artifact_refs,
                 delivery=delivery,
             )
         )
@@ -171,11 +173,13 @@ class AgentRuntime:
         *,
         delivery_id: str,
         source: str = "user",
+        artifact_refs: tuple[str, ...] = (),
     ) -> Event:
         return await self._append_external(
             session_id,
             UserMessageReceived(content),
             DeliveryIdentity(source, delivery_id),
+            artifact_refs=tuple(artifact_refs),
         )
 
     async def receive_termination(

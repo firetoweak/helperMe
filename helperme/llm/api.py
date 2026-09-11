@@ -40,7 +40,12 @@ class LLMAuthenticationError(LLMProviderError):
 
 
 class LLMApi(Protocol):
-    """Assistant 使用的最小模型调用协议。"""
+    """Assistant 使用的最小模型调用协议。
+
+    content 为文本或有序内容块；图片块为
+    {"type": "image", "id": 内容寻址 id, "mime": MIME 类型}。
+    Client 在请求边界读取字节，不修改上层消息或持久化 base64。
+    """
 
     async def chat(
         self,

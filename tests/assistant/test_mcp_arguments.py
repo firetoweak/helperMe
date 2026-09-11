@@ -1,7 +1,10 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from mcp.types import CallToolRequest, CallToolRequestParams
 
+from helperme.assistant.attachments import AttachmentStore
 from helperme.assistant.mcp import _loaded_from_spec
 from helperme.runtime.model import InvokeTool
 from helperme.tools.spec import JsonSchemaParameters, ToolSpec
@@ -23,13 +26,20 @@ class McpArgumentsTest(unittest.IsolatedAsyncioTestCase):
             requests.append(request.model_dump(mode="json", exclude_none=True))
             return {"ok": True, "code": "OK"}
 
-        tool = _loaded_from_spec(ToolSpec(
-            name="browser",
-            description="Browser tool",
-            parameters=JsonSchemaParameters({"type": "object"}),
-            handler=handler,
-        ))
+        with TemporaryDirectory() as directory:
+            tool = _loaded_from_spec(
+                ToolSpec(
+                    name="browser",
+                    description="Browser tool",
+                    parameters=JsonSchemaParameters({"type": "object"}),
+                    handler=handler,
+                ),
+                AttachmentStore(Path(directory)),
+            )
         effect = InvokeTool("browser", tuple(arguments.items()))
-        self.assertEqual(await tool.execute(effect.argument_dict()), {"ok": True})
+        self.assertEqual(
+            await tool.execute(effect.argument_dict()),
+            {"ok": True, "code": "OK"},
+        )
         self.assertEqual(requests[0]["params"]["arguments"], arguments)
         self.assertIsInstance(dict(effect.arguments)["items"], tuple)
