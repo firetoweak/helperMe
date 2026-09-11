@@ -22,6 +22,7 @@ class Worker:
     reader: asyncio.Task | None = None
     requests: int = 0
     idle_revision: int | None = None
+    terminal: bool = False
     stopping: bool = False
     exited: asyncio.Event = field(default_factory=asyncio.Event)
     failure: WorkerFailed | None = None
@@ -56,6 +57,9 @@ class HostSupervisor:
         self.locks: dict[str, asyncio.Lock] = {}
         self.failures: asyncio.Queue[WorkerFailed] = asyncio.Queue()
         self.reclaimed: set[str] = set()
+        self.selections: dict[str, str] = {}
+        self.selecting: dict[str, str] = {}
+        self.selection_locks: dict[str, asyncio.Lock] = {}
         self.closed = False
         self.compact = CompactHost(self)
         self.job = WindowsJob.create() if os.name == "nt" else None
@@ -111,7 +115,8 @@ class HostSupervisor:
                     )
             elif kind == "idle":
                 worker.idle_revision = values[0]
-                await self._stop_idle(worker)
+                worker.terminal = values[1]
+                await self._stop_idle(session_id, worker)
             elif kind == "busy":
                 worker.idle_revision = None
                 worker.stopping = False
@@ -258,11 +263,21 @@ class HostSupervisor:
             report_arguments(session_id, returned.payload.data),
         )
 
-    async def _stop_idle(self, worker):
+    def _selected(self, session_id):
+        return session_id in self.selections.values()
+
+    def _being_selected(self, session_id):
+        return session_id in self.selecting.values()
+
+    async def _stop_idle(self, session_id, worker):
         if (
             worker.requests == 0
             and worker.idle_revision is not None
             and not worker.stopping
+            and (
+                worker.terminal
+                or not self._selected(session_id) and not self._being_selected(session_id)
+            )
         ):
             worker.stopping = True
             worker.transition.clear()
@@ -288,7 +303,7 @@ class HostSupervisor:
         finally:
             worker.requests -= 1
             if not worker.exited.is_set():
-                await self._stop_idle(worker)
+                await self._stop_idle(session_id, worker)
 
     def conversation_status(self, session_id):
         return self.compact.store.status(session_id)
@@ -296,7 +311,34 @@ class HostSupervisor:
     async def create(self, session_id):
         async with self.locks.setdefault(session_id, asyncio.Lock()):
             await self.store.create(session_id)
-        return await self.request("create", session_id, {})
+
+    async def select(self, owner, session_id):
+        async with self.selection_locks.setdefault(owner, asyncio.Lock()):
+            self.store.require(session_id)
+            previous = self.selections.get(owner)
+            self.selecting[owner] = session_id
+            try:
+                view = await self.compact.application("resume", session_id, {})
+                self.selections[owner] = session_id
+            finally:
+                del self.selecting[owner]
+                worker = self.workers.get(session_id)
+                if worker is not None:
+                    await self._stop_idle(session_id, worker)
+            if previous is not None and previous != session_id:
+                worker = self.workers.get(previous)
+                if worker is not None:
+                    await self._stop_idle(previous, worker)
+            return view
+
+    async def release(self, owner):
+        async with self.selection_locks.setdefault(owner, asyncio.Lock()):
+            session_id = self.selections.pop(owner, None)
+            if session_id is None:
+                return
+            worker = self.workers.get(session_id)
+            if worker is not None:
+                await self._stop_idle(session_id, worker)
 
     async def resume(self, session_id):
         return await self.compact.application("resume", session_id, {})
@@ -307,6 +349,11 @@ class HostSupervisor:
     async def receive_user_message(self, session_id, content, **kwargs):
         await self.compact.application(
             "receive_user_message", session_id, dict(content=content, **kwargs)
+        )
+
+    async def accept_input(self, session_id, content, **kwargs):
+        return await self.compact.application(
+            "accept_input", session_id, dict(content=content, **kwargs)
         )
 
     async def resolve_authorizations(self, session_id, *, approved):

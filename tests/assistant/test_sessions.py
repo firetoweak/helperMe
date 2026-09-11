@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import AsyncMock
 
 from helperme.assistant.artifacts import MemoryArtifactGateway
 from helperme.assistant.context.projection import ModelContextSettings
 from helperme.assistant.management import ManagementSurface
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
 from helperme.assistant.runner import SessionNotFoundError
-from helperme.assistant.sessions import AssistantSessions
+from helperme.assistant.sessions import AssistantSessions, SessionView
 from helperme.assistant.toolsets import (
     LOAD_TOOLSET,
     ToolSurface,
@@ -287,6 +288,66 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scheduler.woken, [])
         finally:
             await scheduler.close()
+
+
+class AcceptInputTest(unittest.IsolatedAsyncioTestCase):
+    async def test_control_confirmation_precedes_command_authorization(self):
+        sessions = object.__new__(AssistantSessions)
+        pending = SessionView(
+            status="waiting",
+            waiting_for=(),
+            pending_authorization_ids=("command-1",),
+            terminal=False,
+            should_wake=False,
+            control_approval=object(),
+        )
+        resolved = SessionView(
+            status="waiting",
+            waiting_for=("user_message",),
+            pending_authorization_ids=("command-1",),
+            terminal=False,
+            should_wake=False,
+        )
+        sessions.view = AsyncMock(side_effect=(pending, resolved))
+        sessions.resolve_control = AsyncMock(return_value="控制操作完成")
+        sessions.resolve_authorizations = AsyncMock()
+        sessions.receive_user_message = AsyncMock()
+
+        result = await sessions.accept_input(
+            "session-1",
+            "yes",
+            delivery_id="input-1",
+        )
+
+        sessions.resolve_control.assert_awaited_once_with(
+            "session-1", approved=True
+        )
+        sessions.resolve_authorizations.assert_not_awaited()
+        sessions.receive_user_message.assert_not_awaited()
+        self.assertEqual(result.control_message, "控制操作完成")
+
+    async def test_terminal_input_is_not_recorded_as_user_message(self):
+        sessions = object.__new__(AssistantSessions)
+        terminal = SessionView(
+            status="completed",
+            waiting_for=(),
+            pending_authorization_ids=(),
+            terminal=True,
+            should_wake=False,
+        )
+        sessions.view = AsyncMock(return_value=terminal)
+        sessions.resolve_control = AsyncMock()
+        sessions.resolve_authorizations = AsyncMock()
+        sessions.receive_user_message = AsyncMock()
+
+        result = await sessions.accept_input(
+            "session-1",
+            "hello",
+            delivery_id="input-1",
+        )
+
+        self.assertIs(result, terminal)
+        sessions.receive_user_message.assert_not_awaited()
 
 
 async def _explode(_context, _arguments):

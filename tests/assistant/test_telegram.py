@@ -16,15 +16,18 @@ from helperme.channels.telegram.assistant import (
 class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
     async def test_startup_resumes_session_for_same_bot_and_chat(self) -> None:
         sessions = AsyncMock()
-        sessions.view.return_value = _session_view()
+        sessions.select.return_value = _session_view()
+        sessions.accept_input.return_value = _session_view()
         bot = AsyncMock()
 
         channel = await _open_chat_channel(sessions, bot, 101, 7)
 
-        sessions.resume.assert_awaited_once_with("telegram-bot-101-chat-7")
+        sessions.select.assert_awaited_once_with(
+            "telegram-bot-101-chat-7", "telegram-bot-101-chat-7"
+        )
         sessions.create.assert_not_awaited()
         await channel.accept(10, _message(7, "新任务"))
-        sessions.receive_user_message.assert_awaited_once_with(
+        sessions.accept_input.assert_awaited_once_with(
             "telegram-bot-101-chat-7",
             "新任务",
             delivery_id="telegram-bot-101-update-10",
@@ -33,11 +36,14 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_bot_creates_its_own_session(self) -> None:
         sessions = AsyncMock()
-        sessions.resume.side_effect = SessionNotFoundError("missing")
+        sessions.select.side_effect = (
+            SessionNotFoundError("missing"),
+            _session_view(),
+        )
 
         await _open_chat_channel(sessions, AsyncMock(), 202, 7)
 
-        sessions.resume.assert_awaited_once_with("telegram-bot-202-chat-7")
+        self.assertEqual(sessions.select.await_count, 2)
         sessions.create.assert_awaited_once_with("telegram-bot-202-chat-7")
 
     async def test_unpaired_start_reports_chat_id_without_touching_runtime(
@@ -79,12 +85,12 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         bot = AsyncMock()
         sessions = AsyncMock()
-        sessions.view.return_value = _session_view()
+        sessions.accept_input.return_value = _session_view()
         channel = TelegramChannel(sessions, bot, 7, "session-current", 101)
 
         await channel.accept(11, _message(7, "帮我看看"))
 
-        sessions.receive_user_message.assert_awaited_once_with(
+        sessions.accept_input.assert_awaited_once_with(
             "session-current",
             "帮我看看",
             delivery_id="telegram-bot-101-update-11",
@@ -94,7 +100,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_each_message_is_an_ordered_user_event(self) -> None:
         sessions = AsyncMock()
-        sessions.view.return_value = _session_view()
+        sessions.accept_input.return_value = _session_view()
         channel = TelegramChannel(
             sessions,
             AsyncMock(),
@@ -106,17 +112,15 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         await channel.accept(11, _message(7, "先检查项目"))
         await channel.accept(12, _message(7, "停一下，先别执行"))
 
-        self.assertEqual(sessions.receive_user_message.await_count, 2)
+        self.assertEqual(sessions.accept_input.await_count, 2)
         self.assertEqual(
-            sessions.receive_user_message.await_args_list[1].args,
+            sessions.accept_input.await_args_list[1].args,
             ("session-current", "停一下，先别执行"),
         )
 
     async def test_authorization_reply_resumes_session(self) -> None:
         sessions = AsyncMock()
-        sessions.view.return_value = _session_view(
-            pending_authorization_ids=("command-1",)
-        )
+        sessions.accept_input.return_value = _session_view()
         channel = TelegramChannel(
             sessions,
             AsyncMock(),
@@ -127,9 +131,11 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
 
         await channel.accept(12, _message(7, "yes"))
 
-        sessions.resolve_authorizations.assert_awaited_once_with(
+        sessions.accept_input.assert_awaited_once_with(
             "session-current",
-            approved=True,
+            "yes",
+            delivery_id="telegram-bot-101-update-12",
+            source="telegram",
         )
 
     async def test_other_chat_is_ignored(self) -> None:

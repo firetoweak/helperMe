@@ -11,10 +11,6 @@ from helperme.assistant.sessions import AssistantSessions
 from helperme.config import InitialConfigCreated, load_app_config
 
 
-_YES = {"yes", "y"}
-_NO = {"no", "n"}
-
-
 class TelegramPairing:
     def __init__(self, bot: Bot) -> None:
         self._bot = bot
@@ -51,6 +47,7 @@ class TelegramChannel:
         self._chat_id = chat_id
         self._session_id = session_id
         self._delivery_prefix = f"telegram-bot-{bot_id}-update-"
+        self.owner = f"telegram-bot-{bot_id}-chat-{chat_id}"
 
     async def send(self, text: str) -> None:
         await self._bot.send_message(chat_id=self._chat_id, text=text)
@@ -62,20 +59,16 @@ class TelegramChannel:
             await self.send("HelperMe 已连接。直接发送任务即可。")
             return
 
-        view = await self._sessions.view(self._session_id)
-        answer = message.text.strip().lower()
-        if view.pending_authorization_ids and answer in _YES | _NO:
-            await self._sessions.resolve_authorizations(
-                self._session_id,
-                approved=answer in _YES,
-            )
-        else:
-            await self._sessions.receive_user_message(
-                self._session_id,
-                message.text,
-                delivery_id=f"{self._delivery_prefix}{update_id}",
-                source="telegram",
-            )
+        view = await self._sessions.accept_input(
+            self._session_id,
+            message.text,
+            delivery_id=f"{self._delivery_prefix}{update_id}",
+            source="telegram",
+        )
+        if view.control_message is not None:
+            await self.send(view.control_message)
+        elif view.terminal:
+            await self.send("当前 Session 已结束。")
 
 
 async def _open_chat_channel(
@@ -85,10 +78,12 @@ async def _open_chat_channel(
     chat_id: int,
 ) -> TelegramChannel:
     session_id = f"telegram-bot-{bot_id}-chat-{chat_id}"
+    owner = f"telegram-bot-{bot_id}-chat-{chat_id}"
     try:
-        await sessions.resume(session_id)
+        await sessions.select(owner, session_id)
     except SessionNotFoundError:
         await sessions.create(session_id)
+        await sessions.select(owner, session_id)
     return TelegramChannel(sessions, bot, chat_id, session_id, bot_id)
 
 
@@ -171,6 +166,7 @@ async def run_telegram_assistant() -> None:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(polling, failure, return_exceptions=True)
+                await app.sessions.release(channel.owner)
 
 
 def main() -> None:

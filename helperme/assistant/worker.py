@@ -164,7 +164,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                     # Control proposals currently live in this Worker until resolved.
                     if view.control_approval is None:
                         advertised = revision
-                        await peer.send(("idle", revision))
+                        await peer.send(("idle", revision, view.terminal))
             await peer.send(("stopping",))
         finally:
             await peer.close(RuntimeError("Worker closed"))

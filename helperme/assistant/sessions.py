@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from helperme.assistant.control import (
     AssistantControlPlane,
@@ -157,6 +157,38 @@ class AssistantSessions:
             source=source,
         )
         await self._scheduler.wake(session_id)
+
+    async def accept_input(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        delivery_id: str,
+        source: str = "user",
+    ) -> SessionView:
+        view = await self.view(session_id)
+        answer = content.strip().lower()
+        if view.control_approval is not None and answer in {"yes", "y", "no", "n"}:
+            message = await self.resolve_control(
+                session_id,
+                approved=answer in {"yes", "y"},
+            )
+            return replace(await self.view(session_id), control_message=message)
+        if view.pending_authorization_ids and answer in {"yes", "y", "no", "n"}:
+            await self.resolve_authorizations(
+                session_id,
+                approved=answer in {"yes", "y"},
+            )
+            return await self.view(session_id)
+        if view.terminal:
+            return view
+        await self.receive_user_message(
+            session_id,
+            content,
+            delivery_id=delivery_id,
+            source=source,
+        )
+        return await self.view(session_id)
 
     async def resolve_authorizations(
         self,

@@ -171,6 +171,72 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await until(lambda: not self.host.workers and not self.host.watchers)
         self.assertEqual(self.output, [("one", "done")])
 
+    async def test_selected_idle_worker_stays_until_owner_releases_it(self):
+        await self.host.create("one")
+        view = await self.host.select("cli", "one")
+        self.assertEqual(view.status, "waiting")
+        await until(
+            lambda: "one" in self.host.workers
+            and self.host.workers["one"].idle_revision is not None
+        )
+        process_id = self.host.workers["one"].process.pid
+
+        await self.host.receive_user_message("one", "hello", delivery_id="input")
+        await until(lambda: self.output == [("one", "done")])
+        await until(lambda: self.host.workers["one"].idle_revision is not None)
+        self.assertIn("one", self.host.workers)
+        self.assertEqual(self.host.workers["one"].process.pid, process_id)
+
+        await self.host.select("web", "one")
+        await self.host.release("cli")
+        self.assertIn("one", self.host.workers)
+        await self.host.release("web")
+        await until(lambda: "one" not in self.host.workers)
+
+    async def test_unselected_busy_worker_stops_only_after_work_finishes(self):
+        await self.host.create("one")
+        await self.host.select("cli", "one")
+        await self.host.receive_user_message(
+            "one", "BLOCK_PROCESS", delivery_id="input"
+        )
+        await until(lambda: list(self.root.glob("blocked-*")))
+
+        await self.host.release("cli")
+        self.assertIn("one", self.host.workers)
+
+        (self.root / "release").touch()
+        await until(lambda: ("one", "done") in self.output)
+        await until(lambda: "one" not in self.host.workers)
+
+    async def test_terminal_idle_worker_stops_even_while_selected(self):
+        from unittest.mock import AsyncMock
+        from helperme.assistant.supervisor import Worker
+
+        worker = Worker(object(), AsyncMock(), idle_revision=3, terminal=True)
+        self.host.workers["one"] = worker
+        self.host.selections["cli"] = "one"
+
+        await self.host._stop_idle("one", worker)
+
+        worker.peer.send.assert_awaited_once_with(("stop", 3))
+        self.host.workers.pop("one")
+
+    async def test_failed_selection_keeps_previous_owner_mapping(self):
+        from helperme.assistant.ipc import WorkerFailed
+
+        await self.host.create("old")
+        await self.host.select("cli", "old")
+        await self.host.create("broken")
+        self.host.config_factory = partial(
+            failing_startup_config, self.root, "config"
+        )
+
+        with self.assertRaises(WorkerFailed):
+            await self.host.select("cli", "broken")
+
+        self.assertEqual(self.host.selections["cli"], "old")
+        self.assertIn("old", self.host.workers)
+
     async def test_blocking_worker_and_crash_do_not_stop_another(self):
         await self.host.create("blocked")
         await self.host.receive_user_message(

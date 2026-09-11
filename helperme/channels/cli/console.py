@@ -155,8 +155,10 @@ async def run_runtime_console() -> None:
         sessions = app.sessions
         mcp_console = McpConsoleAdapter(app.mcp_service)
         skill_console = SkillConsoleAdapter(app.skill_service)
+        owner = "cli"
         session_id = f"session-{uuid4().hex}"
-        view = await sessions.create(session_id)
+        await sessions.create(session_id)
+        view = await sessions.select(owner, session_id)
         context_meter.select(
             sessions.conversation_status(session_id),
             config.runtime.model_context_limit,
@@ -205,8 +207,10 @@ async def run_runtime_console() -> None:
                         continue
                     separate_turns = True
                     if user_message == "/new":
-                        session_id = f"session-{uuid4().hex}"
-                        view = await sessions.create(session_id)
+                        target_session_id = f"session-{uuid4().hex}"
+                        await sessions.create(target_session_id)
+                        view = await sessions.select(owner, target_session_id)
+                        session_id = target_session_id
                         context_meter.select(
                             sessions.conversation_status(session_id),
                             config.runtime.model_context_limit,
@@ -221,7 +225,7 @@ async def run_runtime_console() -> None:
                             continue
                         target_session_id = parts[1].strip()
                         try:
-                            view = await sessions.resume(target_session_id)
+                            view = await sessions.select(owner, target_session_id)
                         except SessionNotFoundError:
                             print(f"\nSession 不存在：{target_session_id}")
                             continue
@@ -255,39 +259,15 @@ async def run_runtime_console() -> None:
                     if skill_reply is not None:
                         print(f"\nSkill：\n{skill_reply}")
                         continue
-                    view = await sessions.view(session_id)
-                    if view.control_approval is not None and user_message.lower() in {
-                        "yes",
-                        "y",
-                        "no",
-                        "n",
-                    }:
-                        message = await sessions.resolve_control(
-                            session_id,
-                            approved=user_message.lower() in {"yes", "y"},
-                        )
-                        print(f"\n控制面：{message}")
-                        _print_runtime_status(await sessions.view(session_id))
-                        continue
-                    if view.pending_authorization_ids and user_message.lower() in {
-                        "yes",
-                        "y",
-                        "no",
-                        "n",
-                    }:
-                        await sessions.resolve_authorizations(
-                            session_id,
-                            approved=user_message.lower() in {"yes", "y"},
-                        )
-                        continue
-                    if view.terminal:
-                        print("当前 Session 已结束，输入 /new。")
-                        continue
-                    await sessions.receive_user_message(
+                    view = await sessions.accept_input(
                         session_id,
                         user_message,
                         delivery_id=f"user-{uuid4().hex}",
                     )
+                    if view.control_message is not None:
+                        _print_runtime_status(view)
+                    elif view.terminal:
+                        print("当前 Session 已结束，输入 /new。")
                 except WorkerFailed as error:
                     print(f"\nSession 运行失败：{error}")
         finally:
@@ -299,3 +279,4 @@ async def run_runtime_console() -> None:
                 await reader
             except asyncio.CancelledError:
                 pass
+            await sessions.release(owner)
