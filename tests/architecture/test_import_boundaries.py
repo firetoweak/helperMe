@@ -113,11 +113,11 @@ class LayerImportBoundaryTest(unittest.TestCase):
 
     def test_bootstrap_not_config_owns_the_concrete_llm_client(self):
         self.assertNotIn(
-            "helperme.llm.client",
+            "helperme.llm.adapter",
             _imported_modules(CONFIG_PATH),
         )
         self.assertIn(
-            "helperme.llm.client",
+            "helperme.llm.adapter",
             _imported_modules(BOOTSTRAP_PATH),
         )
 

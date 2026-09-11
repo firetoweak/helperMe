@@ -1,24 +1,19 @@
-"""模型 Provider 连接配置。"""
+"""LiteLLM Router 的应用侧配置。"""
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
-    name: str
-    base_url: str
-    api_key: str
-    enable_thinking: bool
+    active: str
+    router: dict[str, object]
 
     def __post_init__(self) -> None:
-        for field, value in (
-            ("name", self.name),
-            ("base_url", self.base_url),
-            ("api_key", self.api_key),
-        ):
-            if type(value) is not str or not value:
-                raise ValueError(f"{field} must be a non-empty str")
-        if type(self.enable_thinking) is not bool:
-            raise ValueError("enable_thinking must be a bool")
+        if type(self.active) is not str or not self.active:
+            raise ValueError("active must be a non-empty str")
+        if type(self.router) is not dict or not self.router:
+            raise ValueError("router must be a non-empty dict")
+        object.__setattr__(self, "router", deepcopy(self.router))

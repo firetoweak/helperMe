@@ -41,7 +41,7 @@ pip install -r requirements.txt
 python console_chat.py
 ```
 
-首次启动会创建 `~/.helperme/config.json`。按提示填写模型接口和工作区后重新启动，完整配置见 [config.example.json](config.example.json)。
+首次启动会创建 `~/.helperme/config.json`。按[模型配置指南](docs/模型配置.md)填写模型接口和工作区后重新启动，完整配置结构见 [config.example.json](config.example.json)。
 
 ## 文档
 

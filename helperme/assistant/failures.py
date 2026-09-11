@@ -12,7 +12,7 @@ def assistant_failure_message(error: BaseException) -> str | None:
     if isinstance(error, LLMAuthenticationError):
         return (
             "模型认证失败：API 密钥无效，或当前密钥无权访问配置的模型。"
-            "请检查 config.json 中的 model.api_key 和 model.name。"
+            "请检查 config.json 中 model.router 的 LiteLLM 部署配置。"
         )
     if isinstance(error, LLMTransientError):
         return f"模型服务暂时不可用，自动重试仍未成功：{error}"

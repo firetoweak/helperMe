@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
+import json
 
 
 class InvalidLLMResponse(ValueError):
@@ -37,6 +39,7 @@ class ToolCall:
 class LLMResponse:
     content: str = ""
     calls: tuple[ToolCall, ...] = ()
+    message_extensions: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if type(self.content) is not str:
@@ -60,6 +63,26 @@ class LLMResponse:
                     "invalid_llm_response",
                     f"tool call[{index}] must be ToolCall",
                 )
+        if type(self.message_extensions) is not dict:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "response message_extensions must be a JSON object",
+            )
+        if {"role", "content", "tool_calls"} & self.message_extensions.keys():
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "response message_extensions contains normalized fields",
+            )
+        try:
+            json.dumps(self.message_extensions, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "response message_extensions must contain JSON values",
+            ) from exc
+        object.__setattr__(
+            self, "message_extensions", deepcopy(self.message_extensions)
+        )
 
 
 @dataclass(frozen=True)

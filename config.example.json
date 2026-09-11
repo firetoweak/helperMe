@@ -1,9 +1,19 @@
 {
   "model": {
-    "name": "your-model-name",
-    "base_url": "https://your-model-endpoint.example/v1",
-    "api_key": "your-api-key",
-    "enable_thinking": true
+    "active": "deepseek-v4-pro",
+    "router": {
+      "model_list": [
+        {
+          "model_name": "deepseek-v4-pro",
+          "litellm_params": {
+            "model": "deepseek/deepseek-v4-pro",
+            "api_key": "your-api-key",
+            "reasoning_effort": "high"
+          }
+        }
+      ],
+      "num_retries": 0
+    }
   },
   "workspace": {
     "root": "D:/work/agent",
@@ -12,7 +22,7 @@
   "runtime": {
     "model_context_limit": 200000,
     "input_budget_ratio": 0.9,
-    "compact_threshold_ratio": 0.8,
+    "compact_threshold_ratio": 0.55,
     "loop_guard_repeat_threshold": 3
   },
   "channels": {

@@ -8,7 +8,7 @@ from pathlib import Path
 from helperme.assistant.assembly import build_assistant_assembly
 from tests.session_scheduler import SettlingScheduler
 from helperme.config import assistant_config_from_app, load_app_config
-from helperme.llm.client import LLMClient
+from helperme.llm.adapter import LiteLLMAdapter
 from helperme.runtime import (
     CommandOutcomeReceived,
     InvokeTool,
@@ -64,7 +64,7 @@ async def main() -> None:
 
     config = assistant_config_from_app(
         app_config,
-        LLMClient(app_config.model),
+        LiteLLMAdapter(app_config.model),
     )
     delivered: list[str] = []
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")

@@ -11,7 +11,7 @@ import time
 
 from helperme.assistant.context.budget import TiktokenEstimator
 from helperme.config import load_app_config
-from helperme.llm.client import LLMClient
+from helperme.llm.adapter import LiteLLMAdapter
 from helperme.paths import runtime_data_root
 
 
@@ -160,7 +160,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     salts = {name: secrets.token_urlsafe(32) for name in variants}
     rows: list[dict[str, object]] = []
 
-    async with LLMClient(app.model) as client:
+    async with LiteLLMAdapter(app.model) as client:
         for step_index in range(len(manifests)):
             names = list(variants)
             offset = step_index % len(names)
@@ -168,8 +168,8 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             for name in names:
                 request = variants[name][step_index]
                 started = time.perf_counter()
-                completion = await client.client.chat.completions.create(
-                    model=app.model.name,
+                completion = await client._router.acompletion(
+                    model=app.model.active,
                     messages=request.messages,
                     tools=request.tools,
                     tool_choice="auto" if request.tools else None,

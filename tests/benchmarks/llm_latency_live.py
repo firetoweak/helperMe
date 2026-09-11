@@ -2,31 +2,29 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 import json
 import time
 
 from helperme.config import load_app_config
-from helperme.llm.client import LLMClient
+from helperme.llm.adapter import LiteLLMAdapter
 
 
 async def _stream_once(
-    client: LLMClient,
+    client: LiteLLMAdapter,
     model: str,
     prompt: str,
     thinking: bool,
 ) -> dict[str, object]:
     started = time.perf_counter()
-    stream = await client.client.chat.completions.create(
+    stream = await client._router.acompletion(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         max_tokens=64,
         temperature=0,
         stream=True,
         stream_options={"include_usage": True},
-        extra_body={
-            "thinking": {"type": "enabled" if thinking else "disabled"}
-        },
     )
     opened = time.perf_counter()
     first_token_at: float | None = None
@@ -58,13 +56,18 @@ async def _stream_once(
 
 
 async def _run_mode(app, prompt: str, thinking: bool, repeats: int):
-    model_config = replace(app.model, enable_thinking=thinking)
+    router = deepcopy(app.model.router)
+    for deployment in router["model_list"]:
+        deployment["litellm_params"]["reasoning_effort"] = (
+            "high" if thinking else "none"
+        )
+    model_config = replace(app.model, router=router)
     client_started = time.perf_counter()
-    async with LLMClient(model_config) as client:
+    async with LiteLLMAdapter(model_config) as client:
         client_created = time.perf_counter()
         rows = []
         for index in range(repeats):
-            row = await _stream_once(client, model_config.name, prompt, thinking)
+            row = await _stream_once(client, model_config.active, prompt, thinking)
             row["request"] = index + 1
             rows.append(row)
     return {
@@ -79,7 +82,10 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     app = load_app_config()
     config_seconds = time.perf_counter() - config_started
     modes = (
-        [app.model.enable_thinking]
+        [any(
+            deployment["litellm_params"].get("reasoning_effort") not in (None, "none")
+            for deployment in app.model.router["model_list"]
+        )]
         if args.thinking == "configured"
         else [args.thinking == "on"]
         if args.thinking in {"on", "off"}
@@ -91,8 +97,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         results.append(result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
     return {
-        "model": app.model.name,
-        "base_url": app.model.base_url,
+        "model": app.model.active,
         "config_load_seconds": round(config_seconds, 3),
         "results": results,
     }

@@ -37,7 +37,8 @@ from helperme.runtime.model import (
 )
 
 
-PROJECTOR_VERSION = 3
+PROJECTOR_VERSION = 4
+MESSAGE_EXTENSIONS = "message_extensions"
 DEFAULT_RECENT_PROTECTION_TOKENS = 10_000
 DEFAULT_SIZE_EXTERNALIZE_CHARS = 16_000
 DEFAULT_PREVIEW_CHARS = 1_200
@@ -257,10 +258,15 @@ def _translate_visible_events(
             content = payload.step.decision.content
             if not content and not shown:
                 continue
-            message: dict[str, object] = {
+            message: dict[str, object] = (
+                {}
+                if metadata is None or MESSAGE_EXTENSIONS not in metadata
+                else thaw_value(metadata[MESSAGE_EXTENSIONS])
+            )
+            message.update({
                 "role": "assistant",
                 "content": content or None,
-            }
+            })
             if shown:
                 message["tool_calls"] = shown
             items.append(_Projected(message, "assistant", sequence=event.sequence))

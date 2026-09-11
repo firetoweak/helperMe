@@ -19,6 +19,7 @@ from helperme.assistant.control import (
 )
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, ensure_deliver
 from helperme.assistant.context.projection import (
+    MESSAGE_EXTENSIONS,
     ModelContextProjector,
     ModelContextSettings,
     externalize_tool_result,
@@ -416,6 +417,7 @@ class JournalBackedLlmDecisionMaker:
                     }
                     for call in result.response.calls
                 ],
+                "message_extensions": result.response.message_extensions,
             },
             "usage": {
                 "input_tokens": usage.input_tokens,
@@ -426,7 +428,13 @@ class JournalBackedLlmDecisionMaker:
         artifact = self._projector.gateway.for_session(frame.state.session_id).save(
             json.dumps(manifest, ensure_ascii=False, sort_keys=True)
         )
+        metadata = {}
+        if result.response.message_extensions:
+            metadata[MESSAGE_EXTENSIONS] = result.response.message_extensions
+        if notice is not None:
+            metadata[NOTICE] = notice
         return RecordedDecision(
-            decision, (artifact.artifact_id,),
-            None if notice is None else {NOTICE: notice},
+            decision,
+            (artifact.artifact_id,),
+            metadata or None,
         )

@@ -10,6 +10,12 @@
 | [项目架构方向](项目架构方向.md) | 长期原则与窄端口，不是逐条军令 |
 | [架构总览](架构/总览.md) | 当前分层、目录与边界 |
 
+## 使用
+
+| 文档 | 用途 |
+|---|---|
+| [模型配置](模型配置.md) | DeepSeek、OpenAI、Claude、Gemini、Azure、OpenRouter、vLLM、Ollama 可复制配置 |
+
 ## 架构
 
 | 文档                                             | 内容                               |
@@ -24,3 +30,4 @@
 | [多活跃会话](架构/多活跃会话.md)                       | 每 Session 进程、独立 Journal 与父子唤醒         |
 | [入口与授权](架构/入口与授权.md)                           | 控制台、yes/no、控制面                   |
 | [Channel 接入契约](架构/Channel接入契约.md)              | 会话 identity、投递幂等、Event wake、输出路由 |
+| [LiteLLM 接入](架构/LiteLLM接入.md)                   | 进程内 Router、模型配置所有权与协议扩展重放 |

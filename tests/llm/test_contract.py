@@ -4,6 +4,16 @@ from helperme.llm.types import InvalidLLMResponse, LLMResponse, LLMUsage, ToolCa
 
 
 class LLMResponseContractTest(unittest.TestCase):
+    def test_extensions_reject_core_fields_and_non_json_values(self):
+        for extensions in (
+            {"content": "shadow"},
+            {"reasoning_content": object()},
+            {"reasoning_content": float("nan")},
+        ):
+            with self.subTest(extensions=extensions):
+                with self.assertRaises(InvalidLLMResponse):
+                    LLMResponse(content="done", message_extensions=extensions)
+
     def test_text_response_requires_non_empty_content(self):
         for content in ("", "   "):
             with self.subTest(content=content):

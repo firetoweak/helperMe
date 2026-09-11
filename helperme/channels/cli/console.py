@@ -179,7 +179,7 @@ async def run_runtime_console() -> None:
         image_paste.bind(session_id)
         input_queue: asyncio.Queue[ConsoleMessage | None] = asyncio.Queue()
         access = "整台电脑" if config.workspace.full_access else "配置的 Workspace"
-        print(f"HelperMe 已启动。model={config.model.name}")
+        print(f"HelperMe 已启动。model={config.model.active}")
         print(f"工作区：{access}")
         print(f"当前对话：{session_id}")
         print("/new 新对话    /resume <id> 恢复")

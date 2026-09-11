@@ -1,21 +1,47 @@
 import json
 import os
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from helperme.config import INITIAL_CONFIG, InitialConfigCreated, load_app_config
+from helperme.llm.config import ModelConfig
 
 
 class AppConfigTest(unittest.TestCase):
+    def test_documented_model_examples_are_valid_json_configs(self):
+        path = Path(__file__).resolve().parents[2] / "docs" / "模型配置.md"
+        blocks = re.findall(
+            r"```json\n(.*?)\n```",
+            path.read_text(encoding="utf-8"),
+            re.DOTALL,
+        )
+        examples = [
+            value
+            for block in blocks
+            if set(value := json.loads(block)) == {"active", "router"}
+        ]
+
+        self.assertGreaterEqual(len(examples), 10)
+        for example in examples:
+            ModelConfig(**example)
+
     def _data(self, ratio: float = 0.8) -> dict:
         return {
             "model": {
-                "name": "model",
-                "base_url": "https://example.test/v1",
-                "api_key": "key",
-                "enable_thinking": True,
+                "active": "model",
+                "router": {
+                    "model_list": [{
+                        "model_name": "model",
+                        "litellm_params": {
+                            "model": "openai/provider-model",
+                            "custom_field": {"kept": True},
+                        },
+                    }],
+                    "num_retries": 0,
+                },
             },
             "workspace": {"root": ".", "full_access": False},
             "runtime": {
@@ -80,8 +106,11 @@ class AppConfigTest(unittest.TestCase):
             ):
                 config = load_app_config()
 
-        self.assertEqual(config.model.name, "model")
-        self.assertTrue(config.model.enable_thinking)
+        self.assertEqual(config.model.active, "model")
+        self.assertEqual(
+            config.model.router["model_list"][0]["litellm_params"]["custom_field"],
+            {"kept": True},
+        )
         self.assertTrue(0 < config.runtime.input_budget_ratio < 1)
         self.assertIsInstance(config.workspace.root, Path)
         self.assertIsNone(config.channels.telegram)
@@ -132,7 +161,7 @@ class AppConfigTest(unittest.TestCase):
             ):
                 config = load_app_config(path)
 
-        self.assertEqual(config.model.name, "model")
+        self.assertEqual(config.model.active, "model")
 
     def test_environment_overrides_default_path(self):
         with TemporaryDirectory() as directory:
@@ -142,7 +171,7 @@ class AppConfigTest(unittest.TestCase):
             with patch.dict(os.environ, {"HELPERME_CONFIG": str(path)}):
                 config = load_app_config()
 
-        self.assertEqual(config.model.name, "model")
+        self.assertEqual(config.model.active, "model")
 
     def test_explicit_missing_path_is_not_created(self):
         with TemporaryDirectory() as directory:
@@ -163,14 +192,14 @@ class AppConfigTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_app_config(path)
 
-    def test_rejects_non_boolean_enable_thinking(self):
+    def test_rejects_non_mapping_router(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
             data = self._data()
-            data["model"]["enable_thinking"] = 1
+            data["model"]["router"] = []
             self._write_config(path, data)
 
-            with self.assertRaisesRegex(ValueError, "enable_thinking"):
+            with self.assertRaisesRegex(ValueError, "model.router"):
                 load_app_config(path)
 
     def test_rejects_budget_ratio_at_closed_upper_bound(self):

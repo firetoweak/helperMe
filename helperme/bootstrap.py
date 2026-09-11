@@ -9,7 +9,7 @@ from pathlib import Path
 from helperme.assistant.session_store import SessionStore
 from helperme.assistant.supervisor import HostSupervisor
 from helperme.config import AppConfig, assistant_config_from_app, load_app_config
-from helperme.llm.client import LLMClient
+from helperme.llm.adapter import LiteLLMAdapter
 from helperme.paths import HelperMeHome
 from helperme.mcp.composition import build_mcp
 from helperme.skills.composition import build_skills
@@ -17,7 +17,7 @@ from helperme.skills.summarizer import LlmSkillDiffSummarizer
 
 
 def worker_config(app_config: AppConfig):
-    return assistant_config_from_app(app_config, LLMClient(app_config.model))
+    return assistant_config_from_app(app_config, LiteLLMAdapter(app_config.model))
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,10 +52,10 @@ async def bootstrap_assistant(
         conversation_status_sink=conversation_status_sink,
     )
     # Channel management is product-level; session tools get their own clients.
-    management_llm = LLMClient(config.model)
+    management_llm = LiteLLMAdapter(config.model)
     mcp = build_mcp(home)
     skills = build_skills(
-        home, diff_summarizer=LlmSkillDiffSummarizer(management_llm, config.model.name)
+        home, diff_summarizer=LlmSkillDiffSummarizer(management_llm, config.model.active)
     )
     async with management_llm, mcp.client_manager:
         try:

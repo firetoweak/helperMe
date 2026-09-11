@@ -43,7 +43,11 @@ class CapturingLlm:
                 ),
             )
         return LLMCallResult(
-            LLMResponse(content="done", calls=calls),
+            LLMResponse(
+                content="done",
+                calls=calls,
+                message_extensions={"reasoning_content": "private-state"},
+            ),
             LLMUsage(input_tokens=1, output_tokens=1),
         )
 
@@ -143,6 +147,23 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                             .content
                         )
                         self.assertEqual(manifest["request"], request)
+                        self.assertEqual(
+                            event.payload.decision_metadata["message_extensions"],
+                            {"reasoning_content": "private-state"},
+                        )
+                        replayed = next(
+                            message
+                            for message in llm.requests[1]["messages"]
+                            if message["role"] == "assistant"
+                            and message.get("tool_calls")
+                        )
+                        self.assertEqual(
+                            replayed["reasoning_content"], "private-state"
+                        )
+                        self.assertEqual(
+                            replayed["tool_calls"][0]["id"],
+                            first.step.commands[0].command_id,
+                        )
                         requests.append(request)
 
                         names = assembly.control.names()

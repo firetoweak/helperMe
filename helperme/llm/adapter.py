@@ -1,20 +1,11 @@
-"""外部模型 API 客户端。"""
+"""LiteLLM Router 到 HelperMe 窄协议的进程内适配。"""
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
-import httpx
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AsyncOpenAI,
-    AuthenticationError,
-    OpenAIError,
-    PermissionDeniedError,
-    RateLimitError,
-)
+import litellm
 
 from helperme.llm.api import (
     LLMAuthenticationError,
@@ -25,15 +16,16 @@ from helperme.llm.api import (
 from helperme.llm.config import ModelConfig
 from helperme.llm.images import encode_images
 from helperme.llm.types import (
+    InvalidLLMResponse,
     LLMCallResult,
     LLMResponse,
     LLMUsage,
-    InvalidLLMResponse,
     ToolCall,
 )
 
 
-CONTEXT_LIMIT_ERROR_MARKERS = (
+_NORMALIZED_MESSAGE_FIELDS = frozenset({"role", "content", "tool_calls"})
+_CONTEXT_LIMIT_ERROR_MARKERS = (
     "context length",
     "maximum context",
     "max context",
@@ -45,66 +37,44 @@ CONTEXT_LIMIT_ERROR_MARKERS = (
 )
 
 
-def is_context_limit_error(error: str) -> bool:
+def _is_context_limit_error(error: str) -> bool:
     text = error.lower()
-    return any(marker in text for marker in CONTEXT_LIMIT_ERROR_MARKERS)
+    return any(marker in text for marker in _CONTEXT_LIMIT_ERROR_MARKERS)
 
 
-class LLMClient:
+class LiteLLMAdapter:
     def __init__(self, config: ModelConfig):
-        self._enable_thinking = config.enable_thinking
+        self._router = litellm.Router(**deepcopy(config.router))
         self._read_attachment = None
-        http_client = httpx.AsyncClient(
-            trust_env=False,
-            timeout=httpx.Timeout(
-                connect=10.0,
-                read=300.0,
-                write=30.0,
-                pool=10.0,
-            ),
-        )
-        self.client = AsyncOpenAI(
-            base_url=config.base_url,
-            api_key=config.api_key,
-            http_client=http_client,
-            max_retries=2,
-        )
 
     def bind_attachment_reader(self, read) -> None:
         self._read_attachment = read
 
-    async def __aenter__(self) -> "LLMClient":
+    async def __aenter__(self) -> "LiteLLMAdapter":
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
-        await self.close()
-
-    async def close(self) -> None:
-        await self.client.close()
+        await litellm.close_litellm_async_clients()
 
     async def chat(self, messages, model, tools=None) -> LLMCallResult:
         try:
-            completion = await self.completions_create(model, messages, tools)
-        except OpenAIError as exc:
+            completion = await self._completion(model, messages, tools)
+        except litellm.ContextWindowExceededError as exc:
+            raise LLMContextLengthError(str(exc)) from exc
+        except (litellm.AuthenticationError, litellm.PermissionDeniedError) as exc:
+            raise LLMAuthenticationError(str(exc)) from exc
+        except (
+            litellm.APIConnectionError,
+            litellm.Timeout,
+            litellm.RateLimitError,
+            litellm.InternalServerError,
+            litellm.ServiceUnavailableError,
+        ) as exc:
+            raise LLMTransientError(str(exc)) from exc
+        except litellm.APIError as exc:
             error = str(exc)
-            if is_context_limit_error(error):
+            if _is_context_limit_error(error):
                 raise LLMContextLengthError(error) from exc
-            if isinstance(
-                exc,
-                (AuthenticationError, PermissionDeniedError),
-            ) or (
-                isinstance(exc, APIStatusError)
-                and exc.status_code in {401, 403}
-            ):
-                raise LLMAuthenticationError(error) from exc
-            if isinstance(
-                exc,
-                (APIConnectionError, APITimeoutError, RateLimitError),
-            ) or (
-                isinstance(exc, APIStatusError)
-                and exc.status_code >= 500
-            ):
-                raise LLMTransientError(error) from exc
             raise LLMProviderError(error) from exc
 
         try:
@@ -122,53 +92,51 @@ class LLMClient:
             )
         try:
             message = choices[0].message
-            prompt_tokens = usage.prompt_tokens
-            completion_tokens = usage.completion_tokens
+            input_tokens = usage.prompt_tokens
+            output_tokens = usage.completion_tokens
         except AttributeError as exc:
             raise InvalidLLMResponse(
                 "invalid_llm_response",
                 "model response choice or usage fields are invalid",
             ) from exc
-        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        details = getattr(usage, "prompt_tokens_details", None)
         cached_tokens = (
-            0
-            if prompt_details is None
-            else getattr(prompt_details, "cached_tokens", 0) or 0
+            getattr(usage, "cache_read_input_tokens", None)
+            or (None if details is None else getattr(details, "cached_tokens", None))
+            or 0
         )
         return LLMCallResult(
             response=self._parse_response(message),
-            usage=LLMUsage(
-                input_tokens=prompt_tokens,
-                output_tokens=completion_tokens,
-                cached_input_tokens=cached_tokens,
-            ),
+            usage=LLMUsage(input_tokens, output_tokens, cached_tokens),
         )
 
-    async def completions_create(
+    async def _completion(
         self,
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> Any:
-        return await self.client.chat.completions.create(
+        return await self._router.acompletion(
             model=model,
-            messages=encode_images(
-                messages, getattr(self, "_read_attachment", None)
-            ),
+            messages=encode_images(messages, self._read_attachment),
             tools=tools,
             tool_choice="auto" if tools else None,
-            extra_body={"enable_thinking": self._enable_thinking},
         )
 
-    def _parse_response(self, response: Any) -> LLMResponse:
+    def _parse_response(self, message: Any) -> LLMResponse:
         try:
-            raw_content = response.content
-            raw_calls = response.tool_calls
+            data = message.model_dump(exclude_none=True)
         except AttributeError as exc:
             raise InvalidLLMResponse(
                 "invalid_llm_response",
-                "model response message fields are invalid",
+                "model response message is invalid",
             ) from exc
+        if type(data) is not dict:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model response message must be an object",
+            )
+        raw_content = data.get("content")
         if raw_content is None:
             content = ""
         elif type(raw_content) is str:
@@ -178,19 +146,20 @@ class LLMClient:
                 "invalid_llm_response",
                 "model response content must be str|null",
             )
+        raw_calls = data.get("tool_calls")
         if raw_calls is None:
             calls = ()
         elif type(raw_calls) is list:
             try:
                 calls = tuple(
                     ToolCall(
-                        id=call.id,
-                        name=call.function.name,
-                        arguments=call.function.arguments,
+                        id=call["id"],
+                        name=call["function"]["name"],
+                        arguments=call["function"]["arguments"],
                     )
                     for call in raw_calls
                 )
-            except AttributeError as exc:
+            except (KeyError, TypeError) as exc:
                 raise InvalidLLMResponse(
                     "invalid_llm_response",
                     "model tool call fields are invalid",
@@ -200,7 +169,9 @@ class LLMClient:
                 "invalid_llm_response",
                 "model response tool_calls must be array|null",
             )
-        return LLMResponse(
-            content=content,
-            calls=calls,
-        )
+        extensions = {
+            key: value
+            for key, value in data.items()
+            if key not in _NORMALIZED_MESSAGE_FIELDS and value is not None
+        }
+        return LLMResponse(content, calls, extensions)
