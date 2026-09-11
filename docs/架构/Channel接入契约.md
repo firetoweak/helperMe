@@ -1,8 +1,8 @@
 # Channel 接入契约
 
-[Compact](Compact.md) 只切换同一业务 Session 内的上下文窗口；Channel 直接使用稳定 Session identity，不为压缩维护入口路由。
+Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 Access、Conversation、Delivery、Reply route 四种 identity，不实现模型决策或 Session 推进循环。TUI / Telegram 的具体行为见[入口与授权](入口与授权.md)；进程驻留见[多活跃会话](多活跃会话.md)。
 
-Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 Access、Conversation、Delivery、Reply route 四种 identity，不实现模型决策或 Session 推进循环。
+[Compact](Compact.md) 只切换同一业务 Session 内的上下文窗口；Channel 使用稳定 Session identity，不为压缩维护入口路由。
 
 | identity | 用途 |
 |---|---|
@@ -17,7 +17,7 @@ Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 
 
 ## 输入
 
-Channel 将原始文本交给一次 `accept_input()` 请求。Assistant 在同一个 Worker 内按固定优先级处理：control confirmation、Command authorization、terminal、普通用户消息。这样状态检查与动作之间没有 `view → action` 竞态，CLI 与 Telegram 使用相同行为。
+Channel 将原始文本交给一次 `accept_input()` 请求。Assistant 在同一个 Worker 内按固定优先级处理：control confirmation、Command authorization、terminal、普通用户消息。这样状态检查与动作之间没有 `view → action` 竞态，TUI 与 Telegram 使用相同行为。
 
 所有普通文本，无论 Session 当时正在模型决策、执行 Command 还是等待输入，都单次接纳为 `UserMessageReceived`：
 

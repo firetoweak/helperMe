@@ -6,11 +6,16 @@ from unittest.mock import AsyncMock, patch
 
 from helperme.assistant.sessions import SessionView
 from helperme.assistant.runner import SessionNotFoundError
-from helperme.channels.telegram.assistant import (
-    TelegramChannel,
-    TelegramPairing,
-    _open_chat_channel,
-)
+
+
+def _telegram():
+    from helperme.channels.telegram.assistant import (
+        TelegramChannel,
+        TelegramPairing,
+        _open_chat_channel,
+    )
+
+    return TelegramChannel, TelegramPairing, _open_chat_channel
 
 
 class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
@@ -20,7 +25,8 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         sessions.accept_input.return_value = _session_view()
         bot = AsyncMock()
 
-        channel = await _open_chat_channel(sessions, bot, 101, 7)
+        _TelegramChannel, _TelegramPairing, open_chat_channel = _telegram()
+        channel = await open_chat_channel(sessions, bot, 101, 7)
 
         sessions.select.assert_awaited_once_with(
             "telegram-bot-101-chat-7", "telegram-bot-101-chat-7"
@@ -41,7 +47,8 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
             _session_view(),
         )
 
-        await _open_chat_channel(sessions, AsyncMock(), 202, 7)
+        _TelegramChannel, _TelegramPairing, open_chat_channel = _telegram()
+        await open_chat_channel(sessions, AsyncMock(), 202, 7)
 
         self.assertEqual(sessions.select.await_count, 2)
         sessions.create.assert_awaited_once_with("telegram-bot-202-chat-7")
@@ -49,6 +56,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
     async def test_unpaired_start_reports_chat_id_without_touching_runtime(
         self,
     ) -> None:
+        _TelegramChannel, TelegramPairing, _open_chat_channel = _telegram()
         bot = AsyncMock()
         pairing = TelegramPairing(bot)
 
@@ -60,6 +68,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("17", bot.send_message.await_args.kwargs["text"])
 
     async def test_unpaired_message_cannot_create_session(self) -> None:
+        _TelegramChannel, TelegramPairing, _open_chat_channel = _telegram()
         bot = AsyncMock()
         pairing = TelegramPairing(bot)
 
@@ -68,6 +77,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.method_calls, [])
 
     async def test_start_replies_without_touching_runtime(self) -> None:
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
         bot = AsyncMock()
         sessions = AsyncMock()
         channel = TelegramChannel(sessions, bot, 7, "session-current", 101)
@@ -83,6 +93,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
     async def test_message_is_persisted_and_scheduler_is_owned_by_sessions(
         self,
     ) -> None:
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
         bot = AsyncMock()
         sessions = AsyncMock()
         sessions.accept_input.return_value = _session_view()
@@ -99,6 +110,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(hasattr(channel, "drive_next"))
 
     async def test_each_message_is_an_ordered_user_event(self) -> None:
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
         sessions = AsyncMock()
         sessions.accept_input.return_value = _session_view()
         channel = TelegramChannel(
@@ -119,6 +131,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_authorization_reply_resumes_session(self) -> None:
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
         sessions = AsyncMock()
         sessions.accept_input.return_value = _session_view()
         channel = TelegramChannel(
@@ -139,6 +152,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_other_chat_is_ignored(self) -> None:
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
         sessions = AsyncMock()
         bot = AsyncMock()
         channel = TelegramChannel(sessions, bot, 7, "session-current", 101)

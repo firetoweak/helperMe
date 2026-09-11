@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import AbstractSet, Protocol
 
-from helperme.assistant.compact import (
+from helperme.assistant.compact.core import (
     CompactContext,
     READ_SCHEMA,
     SUBMIT,
@@ -28,7 +28,7 @@ from helperme.assistant.context.projection import (
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
-from helperme.assistant.subagent import SubAgentHost
+from helperme.assistant.subagent.subagent import SubAgentHost
 from helperme.runtime import (
     InvokeTool,
     ModelDecision,

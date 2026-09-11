@@ -4,7 +4,7 @@
 
 当前父子 Session 在独立进程与独立 Journal 中推进；实现边界见[多活跃会话](多活跃会话.md)。
 
-领域代码：`helperme/assistant/subagent.py`。子 Session 是普通独立 Session：同一套 `create / advance / recover`，自己的 Journal 与判定。父子关系只存在于 Assistant 侧，用因果事实表达，Runtime 不增加 `parent_session_id` 或 `agent_type`。
+领域代码：`helperme/assistant/subagent/`。子 Session 是普通独立 Session：同一套 `create / advance / recover`，自己的 Journal 与判定。父子关系只存在于 Assistant 侧，用因果事实表达，Runtime 不增加 `parent_session_id` 或 `agent_type`。
 
 ## 为什么要有它
 
@@ -102,7 +102,7 @@ Scheduler 报告两种终局：静止（`on_quiesced`）与已识别的失败（
 
 子 Session 的 `deliver` 经 `routed_sink` 变成空操作，正文留在子自己的 Journal 里。失败提示同样不外露：`notify` 与 deliver 走同一条路由。用户该看到的是父转述后的判断，而不是一条不知来处的裸错误。父自己失败仍照常送达——拦的是子，不是所有失败。
 
-唯一外露的是一个活动指示：`SubAgentHost` 接受可选的 `activity_sink`，CLI 状态行据此显示「子 Agent 工作中」。它读的是进程内缓存 `_visible_pending` 而不是 Journal 投影，且经 `call_soon` 异步发出——**这条线只管显示，不进入委派与回收的执行闭环**。执行判断始终从 Journal 投影。两者不混用：显示可以丢、可以过期，执行判断不行。
+唯一外露的是一个活动指示：`SubAgentHost` 接受可选的 `activity_sink`，TUI 状态行据此显示「子 Agent 工作中」。它读的是进程内缓存 `_visible_pending` 而不是 Journal 投影，且经 `call_soon` 异步发出——**这条线只管显示，不进入委派与回收的执行闭环**。执行判断始终从 Journal 投影。两者不混用：显示可以丢、可以过期，执行判断不行。
 
 ## 不做
 

@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from helperme.sandbox.command import CaptureLimit, ShellNotFoundError
 from helperme.sandbox.local.bash import (
     BashCommandEnvironmentPolicy,
@@ -115,6 +117,7 @@ class BashFailureContractTest(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(BASH, "需要 POSIX Bash")
+@pytest.mark.process
 class BashCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
     async def test_preserves_stdout_stderr_and_explicit_exit_code(self):
         runner = BashCommandRunner()

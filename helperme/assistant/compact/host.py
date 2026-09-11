@@ -7,17 +7,17 @@ import asyncio
 import json
 from dataclasses import asdict
 from helperme.assistant.artifacts import FileArtifactGateway
-from helperme.assistant.compact import (
+from helperme.assistant.compact.core import (
     TASK,
     HANDOFF_PREFIX,
     load_document,
     save_document,
     projected_tail,
 )
-from helperme.assistant.compact_store import CompactStore
+from helperme.assistant.compact.store import CompactStore
 from helperme.assistant.context.budget import InputBudget, TiktokenEstimator
 from helperme.assistant.context.projection import ModelContextBudgetExceeded
-from helperme.assistant.ipc import ProcessFailure, WorkerFailed
+from helperme.assistant.host.ipc import ProcessFailure, WorkerFailed
 from helperme.runtime import DomainFactCommitted, SqliteJournal
 
 

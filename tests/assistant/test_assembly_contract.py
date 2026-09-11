@@ -15,9 +15,7 @@ from helperme.config import AssistantConfig
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage, ToolCall
 from helperme.paths import HelperMeHome
 from helperme.runtime import MemoryJournal, StepCommitted
-from tests.benchmarks.final_session_stress_live import build_stress_assistant
-from tests.live.test_runtime_live import build_live_assistant
-from tests.session_scheduler import settle_session
+from tests.session_scheduler import build_settling_assistant, settle_session
 
 
 class CapturingLlm:
@@ -56,8 +54,7 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
     async def test_all_entries_share_one_model_request_contract(self):
         factories = (
             build_assistant_assembly,
-            build_live_assistant,
-            build_stress_assistant,
+            build_settling_assistant,
         )
         requests: list[dict[str, object]] = []
 
@@ -172,7 +169,7 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                     finally:
                         await assembly.scheduler.close()
 
-        self.assertEqual(requests[1:], requests[:1] * 2)
+        self.assertEqual(requests[1:], requests[:1])
 
 
 class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):

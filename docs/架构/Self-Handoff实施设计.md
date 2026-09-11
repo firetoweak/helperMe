@@ -1,8 +1,8 @@
 # Self-Handoff 实施设计
 
-> 2026-09-10：已移除调用次数、任务总耗时限制及预算收尾提醒，接入 [LoopGuard](LoopGuard.md)。输入上下文预算与其他局部超时不变。
+对照文档，不是入门。当前实现、配置与持久格式读 [Compact](Compact.md)。提醒读 [LoopGuard](LoopGuard.md)；SYS／工具呈现读[前缀稳定性](上下文窗口与前缀稳定性.md)。
 
-2026-09-09。已按本文替换旧接续实现。本文记录同 Session 后台 Self-Handoff 的完整设计约束；当前代码结构、配置及持久格式见[Compact](Compact.md)。SYS／工具呈现的独立优化见[上下文窗口与前缀稳定性](上下文窗口与前缀稳定性.md)。
+已按本文替换旧接续实现。下文只保留同 Session 后台交接的设计约束。
 
 ## 同 Session 的后台 Self-Handoff
 

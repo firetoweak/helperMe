@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from helperme.assistant.subagent import (
+from helperme.assistant.subagent.subagent import (
     RETURN_FACT, TASK_FACT, persist_return, record_interrupted_return, return_data,
 )
 from helperme.runtime import (

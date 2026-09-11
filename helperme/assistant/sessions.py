@@ -13,7 +13,7 @@ from helperme.assistant.runner import (
 )
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
-from helperme.assistant.subagent import SubAgentHost, project_pending
+from helperme.assistant.subagent.subagent import SubAgentHost, project_pending
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState, CommandPhase
 

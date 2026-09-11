@@ -8,7 +8,7 @@ from helperme.config import InitialConfigCreated
 
 async def async_main(argv: list[str] | None = None) -> None:
     sys.stdout.reconfigure(encoding="utf-8")
-    from helperme.channels.cli.console import run_runtime_console
+    from helperme.channels.tui.console import run_runtime_console
 
     await run_runtime_console()
 

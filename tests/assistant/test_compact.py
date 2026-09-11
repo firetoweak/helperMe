@@ -7,15 +7,19 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from helperme.assistant.compact import (
+import pytest
+
+from helperme.assistant.compact.core import (
     WINDOW,
 )
-from helperme.assistant.session_store import SessionStore
-from helperme.assistant.supervisor import HostSupervisor
+from helperme.assistant.host.session_store import SessionStore
+from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.assistant.artifacts import FileArtifactGateway
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal, StepCommitted, DomainFactCommitted
 from tests.fixtures.compact_worker import config_for, HANDOFF
+
+pytestmark = pytest.mark.process
 
 
 async def until(predicate, timeout=45):

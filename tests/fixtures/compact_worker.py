@@ -101,7 +101,7 @@ def config_for(workspace: Path):
 
 
 def tool_config(workspace: Path):
-    from helperme.assistant import worker
+    from helperme.assistant.host import worker
     from helperme.runtime import ToolBinding
 
     build = worker.build_assistant_assembly

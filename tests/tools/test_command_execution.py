@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from pydantic import ValidationError
 
 from helperme.sandbox.api import (
@@ -220,6 +222,7 @@ class PowerShellDiscoveryTest(unittest.TestCase):
 
 
 @unittest.skipUnless(POWERSHELL, "需要 Windows PowerShell")
+@pytest.mark.process
 class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
     async def test_preserves_stdout_stderr_and_explicit_exit_code(self):
         runner = PowerShellCommandRunner()
@@ -398,6 +401,7 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(POWERSHELL, "需要 Windows PowerShell")
+@pytest.mark.process
 class ExecuteCommandToolTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

@@ -1,1 +1,1 @@
-"""Command-line channel."""
+"""Terminal UI channel."""

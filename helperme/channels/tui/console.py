@@ -9,13 +9,13 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from helperme.assistant.attachments import AttachmentGateway
-from helperme.assistant.compact_store import ConversationStatus
-from helperme.assistant.ipc import WorkerFailed
+from helperme.assistant.compact.store import ConversationStatus
+from helperme.assistant.host.ipc import WorkerFailed
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import SessionView
 from helperme.assistant.toolsets import ToolsetLoadError
 from helperme.bootstrap import bootstrap_assistant
-from helperme.channels.cli.images import ConsoleMessage, ImagePaste
+from helperme.channels.tui.images import ConsoleMessage, ImagePaste
 from helperme.mcp.console import McpCommandError, McpConsoleAdapter
 from helperme.mcp.errors import McpInputError
 from helperme.skills.console import SkillCommandError, SkillConsoleAdapter
@@ -167,7 +167,7 @@ async def run_runtime_console() -> None:
         sessions = app.sessions
         mcp_console = McpConsoleAdapter(app.mcp_service)
         skill_console = SkillConsoleAdapter(app.skill_service)
-        owner = "cli"
+        owner = "tui"
         session_id = f"session-{uuid4().hex}"
         await sessions.create(session_id)
         view = await sessions.select(owner, session_id)

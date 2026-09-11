@@ -13,7 +13,7 @@ from helperme.assistant.attachments import (
     READ_IMAGE_SCHEMA,
     read_image_binding,
 )
-from helperme.assistant.compact import CompactContext, CompactBoundary, READ, SUBMIT
+from helperme.assistant.compact.core import CompactContext, CompactBoundary, READ, SUBMIT
 from helperme.assistant.loop_guard import LoopGuard
 from helperme.assistant.loop_guard_strategies import ConsecutiveActions
 from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
@@ -28,7 +28,7 @@ from helperme.assistant.decision import (
 )
 from helperme.assistant.runner import SessionScheduler
 from helperme.assistant.sessions import AssistantSessions
-from helperme.assistant.subagent import DELEGATE, REPORT, SubAgentHost
+from helperme.assistant.subagent.subagent import DELEGATE, REPORT, SubAgentHost
 from helperme.assistant.toolsets import ToolSurface, load_toolset_binding
 from helperme.runtime import AgentRuntime, ToolBinding
 from helperme.assistant.builtin_tools import build_builtin_tools

@@ -17,7 +17,7 @@ from helperme.assistant.context.projection import (
     _translate_visible_events,
     PreparedModelContext,
 )
-from helperme.assistant.subagent import project_parent
+from helperme.assistant.subagent.subagent import project_parent
 from helperme.llm.api import InvalidLLMResponse
 from helperme.runtime import DomainFactCommitted, ToolBinding
 

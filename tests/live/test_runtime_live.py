@@ -4,21 +4,14 @@ import asyncio
 import os
 import unittest
 
+import pytest
+
 from helperme.runtime import MemoryJournal, RuntimeStatus
-from helperme.assistant.assembly import build_assistant_assembly
-from tests.session_scheduler import SettlingScheduler
+from tests.session_scheduler import build_settling_assistant as build_live_assistant
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
 
-
-async def build_live_assistant(config, sink, journal, session_id):
-    return await build_assistant_assembly(
-        config,
-        sink,
-        journal,
-        session_id=session_id,
-        scheduler_factory=SettlingScheduler,
-    )
+pytestmark = pytest.mark.live
 
 
 @unittest.skipUnless(

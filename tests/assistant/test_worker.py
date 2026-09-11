@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from helperme.assistant.worker import run_worker
+from helperme.assistant.host.worker import run_worker
 
 
 class WorkerFailureTest(unittest.IsolatedAsyncioTestCase):
@@ -13,11 +13,11 @@ class WorkerFailureTest(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory() as directory:
             with (
                 patch(
-                    "helperme.assistant.worker._run_session",
+                    "helperme.assistant.host.worker._run_session",
                     AsyncMock(side_effect=original),
                 ),
                 patch(
-                    "helperme.assistant.worker.record_unexpected_return",
+                    "helperme.assistant.host.worker.record_unexpected_return",
                     AsyncMock(side_effect=reporting),
                 ),
                 self.assertRaises(ExceptionGroup) as caught,

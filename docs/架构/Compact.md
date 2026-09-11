@@ -1,8 +1,6 @@
 # Compact：后台交接与上下文窗口
 
-> 2026-09-10：已移除调用次数和任务总时长限制，使用 Session 级 [LoopGuard](LoopGuard.md) 提醒；上下文预算与其他局部超时保留。
-
-2026-09-09。当前代码采用同一业务 Session 的 ContextWindow 切换；完整决策见[Self-Handoff 实施设计](Self-Handoff实施设计.md)。真实模型的摘要质量、实际缓存命中率与预算阈值仍待评测。
+第 2 章窗口切换的当前实现、配置与持久格式。投影脱水见[上下文](上下文.md)；提醒见 [LoopGuard](LoopGuard.md)；SYS／工具呈现见[前缀稳定性](上下文窗口与前缀稳定性.md)。改切换规则时对照 [Self-Handoff 实施设计](Self-Handoff实施设计.md)。真实模型的摘要质量、缓存命中率与预算阈值仍待评测。
 
 ## 执行模型
 
@@ -47,11 +45,11 @@ Host 的 `conversations.sqlite` 仅保存后台任务、结果和发布准备，
 
 ## 实现与验证
 
-`compact.py`：来源读取、后台请求组装、窗口投影与 Worker 决策边界。
-`compact_host.py`：后台任务启动、交接接纳和同 Session 发布。
-`compact_store.py`：任务持久化与发布准备。
+`compact/core.py`：来源读取、后台请求组装、窗口投影与 Worker 决策边界。
+`compact/host.py`：后台任务启动、交接接纳和同 Session 发布。
+`compact/store.py`：任务持久化与发布准备。
 `decision.py`：冻结工具面、只读调用限制、最终文本转内部提交。
-`worker.py`：Session 执行与窗口发布入口。
+`host/worker.py`：Session 执行与窗口发布入口。
 `loop_guard.py` / `loop_guard_strategies.py`：提醒覆盖重建、证据汇总与机械策略。
 
 测试覆盖后台并行、尾部与输入幂等、同 Session 发布、重启恢复、多轮回读、重复回读提醒与继续执行、写调用拒绝、来源上界和多窗口重建。业务工具结果脱水本轮未调整；H 冻结前缀不随回读轮数重新脱水。

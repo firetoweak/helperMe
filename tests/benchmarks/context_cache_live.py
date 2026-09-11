@@ -10,8 +10,6 @@ import secrets
 import time
 
 from helperme.assistant.context.budget import TiktokenEstimator
-from helperme.config import load_app_config
-from helperme.llm.adapter import LiteLLMAdapter
 from helperme.paths import runtime_data_root
 
 
@@ -139,6 +137,9 @@ def build_variants(
 
 
 async def run(args: argparse.Namespace) -> dict[str, object]:
+    from helperme.config import load_app_config
+    from helperme.llm.adapter import LiteLLMAdapter
+
     root = runtime_data_root()
     drawer = Path(args.drawer).resolve() if args.drawer else _default_drawer(root)
     manifests = _load_manifests(drawer)

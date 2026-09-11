@@ -72,7 +72,7 @@ def config_for(workspace: Path):
 
 
 def interrupted_read_config(workspace: Path):
-    from helperme.assistant import worker
+    from helperme.assistant.host import worker
     from helperme.runtime import ToolBinding
 
     build = worker.build_assistant_assembly
@@ -97,7 +97,7 @@ def interrupted_read_config(workspace: Path):
 
 def failing_startup_config(workspace: Path, stage: str):
     """Fail once so the parent can subsequently start with the same factory."""
-    from helperme.assistant import worker
+    from helperme.assistant.host import worker
 
     marker = workspace / f"failed-{stage}"
     if marker.exists():
@@ -122,7 +122,7 @@ def failing_startup_config(workspace: Path, stage: str):
 
 
 def failing_request_config(workspace: Path):
-    from helperme.assistant import worker
+    from helperme.assistant.host import worker
 
     build = worker.build_assistant_assembly
 

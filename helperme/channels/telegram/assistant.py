@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, Update
 
 from helperme.assistant.runner import SessionNotFoundError
-from helperme.assistant.ipc import WorkerFailed
+from helperme.assistant.host.ipc import WorkerFailed
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import InitialConfigCreated, load_app_config
 

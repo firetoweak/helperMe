@@ -13,7 +13,7 @@ from helperme.assistant.context.prompt import (
     DEFAULT_ASSISTANT_PROMPT,
     SUBAGENT_PROMPT,
 )
-from helperme.assistant.subagent import (
+from helperme.assistant.subagent.subagent import (
     READONLY_TOOL_NAMES,
     REPORT_FACT,
     TASK_FACT,

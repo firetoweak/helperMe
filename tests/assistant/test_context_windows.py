@@ -1,7 +1,7 @@
 import unittest
 
 from helperme.assistant.artifacts import MemoryArtifactGateway
-from helperme.assistant.compact import (
+from helperme.assistant.compact.core import (
     CompactBoundary,
     CompactContext,
     TASK,

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.context.projection import project_chat_messages
-from helperme.assistant.compact import CompactBoundary, save_document
+from helperme.assistant.compact.core import CompactBoundary, save_document
 from helperme.assistant.loop_guard import LoopGuard, NOTICE, committed_notice
 from helperme.assistant.loop_guard_strategies import Action, ConsecutiveActions
 from helperme.config import AssistantConfig

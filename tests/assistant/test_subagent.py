@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from helperme.assistant.control import AssistantControlPlane
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.delivery import deliver_binding
-from helperme.assistant.subagent import (
+from helperme.assistant.subagent.subagent import (
     DELEGATE,
     FACT_SOURCE,
     READONLY_TOOL_NAMES,
@@ -560,7 +560,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             requests_decision=True,
         )
         try:
-            from helperme.assistant.subagent import record_unexpected_return
+            from helperme.assistant.subagent.subagent import record_unexpected_return
 
             self.assertIsNone(
                 await record_unexpected_return(

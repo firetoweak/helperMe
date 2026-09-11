@@ -11,14 +11,19 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.layout import HSplit, Window
 from prompt_toolkit.output import DummyOutput
 from helperme.assistant.attachments import AttachmentGateway
-from helperme.assistant.compact_store import ConversationStatus
+from helperme.assistant.compact.store import ConversationStatus
 
-from helperme.channels.cli.images import ConsoleMessage, ImagePaste
-from helperme.channels.cli.console import (
-    _BottomAnchoredPromptSession,
-    _ContextMeter,
-    read_console_input,
-)
+from helperme.channels.tui.images import ConsoleMessage, ImagePaste
+
+
+def _console():
+    from helperme.channels.tui.console import (
+        _BottomAnchoredPromptSession,
+        _ContextMeter,
+        read_console_input,
+    )
+
+    return _BottomAnchoredPromptSession, _ContextMeter, read_console_input
 
 
 class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
@@ -36,7 +41,7 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
                 data = ""
 
             with patch(
-                "helperme.channels.cli.images.ImageGrab.grabclipboard",
+                "helperme.channels.tui.images.ImageGrab.grabclipboard",
                 return_value=Image.new("RGB", (8, 8)),
             ):
                 paste.paste(_Event())
@@ -48,8 +53,9 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(paste.submit("next"), ConsoleMessage("next"))
 
     def test_prompt_is_anchored_above_the_bottom_toolbar(self):
+        BottomAnchoredPromptSession, _ContextMeter, _read_console_input = _console()
         with create_pipe_input() as console_input:
-            session = _BottomAnchoredPromptSession(
+            session = BottomAnchoredPromptSession(
                 bottom_toolbar=lambda: "上下文 0/200k  ·  compact 0 次\nSession ID：session-1",
                 input=console_input,
                 output=DummyOutput(),
@@ -64,7 +70,8 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(prompt.preferred_height(80, 24).max, 3)
 
     def test_context_meter_tracks_only_the_selected_session(self):
-        meter = _ContextMeter()
+        _BottomAnchoredPromptSession, ContextMeter, _read_console_input = _console()
+        meter = ContextMeter()
         meter.select(ConversationStatus("chat", "session-1", 0, None), 200_000)
 
         def rendered(context):
@@ -100,6 +107,7 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("上下文 2k/200k", meter.render())
 
     async def test_reader_continuously_collects_complete_lines(self):
+        _BottomAnchoredPromptSession, _ContextMeter, read_console_input = _console()
         queue: asyncio.Queue[ConsoleMessage | None] = asyncio.Queue()
         session = AsyncMock()
         session.prompt_async.side_effect = (
@@ -108,7 +116,7 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
             EOFError,
         )
 
-        with patch("helperme.channels.cli.console.patch_stdout") as patched:
+        with patch("helperme.channels.tui.console.patch_stdout") as patched:
             await read_console_input(queue, session)
 
         patched.assert_called_once_with()

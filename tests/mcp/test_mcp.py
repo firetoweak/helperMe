@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from mcp.types import (
     CallToolResult,
     ListPromptsResult,
@@ -962,6 +964,7 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(mcp.toolset_provider)
 
 
+@pytest.mark.process
 class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_stdio_reuses_state_across_toolset_loads(self):
         with TemporaryDirectory() as directory:
@@ -1088,6 +1091,39 @@ class McpRealStdioIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 await manager.aclose()
 
 
+class McpPaginationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_list_collects_all_paginated_pages(self):
+        pages = {
+            None: ListToolsResult(
+                tools=[_tool(f"tool_{index}") for index in range(50)],
+                nextCursor="page-2",
+                ttlMs=5_000,
+            ),
+            "page-2": ListToolsResult(
+                tools=[_tool(f"tool_{index}") for index in range(50, 120)],
+                ttlMs=3_000,
+            ),
+        }
+
+        class PaginatedSession(FakeMcpSession):
+            async def list_tools(self, *, cursor=None):
+                return pages[cursor]
+
+        with TemporaryDirectory() as directory:
+            workspace = HelperMeHome(Path(directory) / ".helperme")
+            workspace.initialize()
+            manager = McpClientManager(
+                McpSecretStore.from_home(workspace),
+                runtime_root=_runtime_root(workspace),
+            )
+            tools, ttl = await manager._paginate_tools(PaginatedSession())
+
+        self.assertEqual(len(tools), 120)
+        self.assertEqual(tools[-1].name, "tool_119")
+        self.assertEqual(ttl, 3.0)
+
+
+@pytest.mark.process
 class McpRealStreamableHttpIntegrationTest(
     unittest.IsolatedAsyncioTestCase
 ):
@@ -1157,37 +1193,8 @@ class McpRealStreamableHttpIntegrationTest(
                     process.terminate()
                 await process.wait()
 
-    async def test_tool_list_collects_all_paginated_pages(self):
-        pages = {
-            None: ListToolsResult(
-                tools=[_tool(f"tool_{index}") for index in range(50)],
-                nextCursor="page-2",
-                ttlMs=5_000,
-            ),
-            "page-2": ListToolsResult(
-                tools=[_tool(f"tool_{index}") for index in range(50, 120)],
-                ttlMs=3_000,
-            ),
-        }
 
-        class PaginatedSession(FakeMcpSession):
-            async def list_tools(self, *, cursor=None):
-                return pages[cursor]
-
-        with TemporaryDirectory() as directory:
-            workspace = HelperMeHome(Path(directory) / ".helperme")
-            workspace.initialize()
-            manager = McpClientManager(
-                McpSecretStore.from_home(workspace),
-                runtime_root=_runtime_root(workspace),
-            )
-            tools, ttl = await manager._paginate_tools(PaginatedSession())
-
-        self.assertEqual(len(tools), 120)
-        self.assertEqual(tools[-1].name, "tool_119")
-        self.assertEqual(ttl, 3.0)
-
-
+@pytest.mark.process
 class McpRealStdioWorkingDirectoryIntegrationTest(
     unittest.IsolatedAsyncioTestCase
 ):

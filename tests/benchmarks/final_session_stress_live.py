@@ -5,8 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from helperme.assistant.assembly import build_assistant_assembly
-from tests.session_scheduler import SettlingScheduler
+from tests.session_scheduler import build_settling_assistant as build_stress_assistant
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
 from helperme.runtime import (
@@ -41,16 +40,6 @@ output/phase1.md、output/final_report.md，并使用 grep 或 glob 做一次交
 否则明确输出 STRESS-FAIL 和不符合项。
 """.strip(),
 )
-
-
-async def build_stress_assistant(config, sink, journal, session_id):
-    return await build_assistant_assembly(
-        config,
-        sink,
-        journal,
-        session_id=session_id,
-        scheduler_factory=SettlingScheduler,
-    )
 
 
 async def main() -> None:

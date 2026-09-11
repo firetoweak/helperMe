@@ -7,8 +7,8 @@ from pathlib import Path
 import threading
 
 from helperme.assistant.assembly import build_assistant_assembly
-from helperme.assistant.ipc import PipePeer, ProcessFailure
-from helperme.assistant.subagent import (
+from helperme.assistant.host.ipc import PipePeer, ProcessFailure
+from helperme.assistant.subagent.subagent import (
     project_parent, record_interrupted_return, record_unexpected_return,
 )
 from helperme.paths import HelperMeHome

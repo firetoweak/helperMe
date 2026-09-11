@@ -5,12 +5,12 @@ from dataclasses import asdict, dataclass, field
 import multiprocessing
 import os
 
-from helperme.assistant.compact_host import CompactHost
+from helperme.assistant.compact.host import CompactHost
 from helperme.assistant.delivery import emit_delivery
-from helperme.assistant.ipc import PipePeer, ProcessFailure, WorkerFailed
-from helperme.assistant.session_store import SessionStore
-from helperme.assistant.subagent import persist_return, report_arguments, return_data
-from helperme.assistant.worker import worker_main
+from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
+from helperme.assistant.host.session_store import SessionStore
+from helperme.assistant.subagent.subagent import persist_return, report_arguments, return_data
+from helperme.assistant.host.worker import worker_main
 from helperme.runtime import SqliteJournal
 from helperme.sandbox.local.windows_job import WindowsJob
 

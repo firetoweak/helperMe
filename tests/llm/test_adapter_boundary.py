@@ -2,9 +2,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import litellm
-
-from helperme.llm.adapter import LiteLLMAdapter
 from helperme.llm.api import LLMAuthenticationError
 from helperme.llm.config import ModelConfig
 from helperme.llm.types import InvalidLLMResponse
@@ -24,6 +21,8 @@ class _Message:
 
 class LiteLLMAdapterBoundaryTest(unittest.TestCase):
     def setUp(self) -> None:
+        from helperme.llm.adapter import LiteLLMAdapter
+
         self.adapter = object.__new__(LiteLLMAdapter)
 
     def test_keeps_unknown_assistant_message_fields(self):
@@ -57,6 +56,8 @@ class LiteLLMAdapterBoundaryTest(unittest.TestCase):
 
 class LiteLLMAdapterUsageTest(unittest.IsolatedAsyncioTestCase):
     async def test_reads_cached_prompt_tokens(self):
+        from helperme.llm.adapter import LiteLLMAdapter
+
         adapter = object.__new__(LiteLLMAdapter)
         adapter._completion = AsyncMock(return_value=SimpleNamespace(
             choices=[SimpleNamespace(message=_Message({"content": "done"}))],
@@ -73,6 +74,9 @@ class LiteLLMAdapterUsageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage.uncached_input_tokens, 24)
 
     async def test_authentication_failure_has_a_specific_error(self):
+        import litellm
+        from helperme.llm.adapter import LiteLLMAdapter
+
         adapter = object.__new__(LiteLLMAdapter)
         adapter._completion = AsyncMock(side_effect=litellm.AuthenticationError(
             "invalid api key", "openai", "model"
@@ -95,12 +99,16 @@ class LiteLLMAdapterRequestTest(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+        from helperme.llm.adapter import LiteLLMAdapter
+
         with patch("helperme.llm.adapter.litellm.Router") as router:
             LiteLLMAdapter(config)
 
         router.assert_called_once_with(**config.router)
 
     async def test_calls_in_process_router(self):
+        from helperme.llm.adapter import LiteLLMAdapter
+
         adapter = object.__new__(LiteLLMAdapter)
         adapter._read_attachment = None
         adapter._router = SimpleNamespace(acompletion=AsyncMock(return_value=object()))

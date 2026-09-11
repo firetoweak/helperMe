@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from helperme.assistant.context.prompt import SUBAGENT_PROMPT
 from helperme.assistant.delivery import DeliverySink, emit_delivery
-from helperme.assistant.ipc import ProcessFailure
+from helperme.assistant.host.ipc import ProcessFailure
 from helperme.runtime import (
     AgentRuntime,
     CommandOutcomeReceived,

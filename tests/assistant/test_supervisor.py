@@ -7,9 +7,11 @@ import tempfile
 import time
 import unittest
 
-from helperme.assistant.session_store import SessionStore
-from helperme.assistant.supervisor import HostSupervisor
-from helperme.assistant.subagent import project_delegations, project_reclaimed
+import pytest
+
+from helperme.assistant.host.session_store import SessionStore
+from helperme.assistant.host.supervisor import HostSupervisor
+from helperme.assistant.subagent.subagent import project_delegations, project_reclaimed
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal
 from tests.fixtures.session_worker import (
@@ -18,6 +20,8 @@ from tests.fixtures.session_worker import (
     failing_startup_config,
     failing_request_config,
 )
+
+pytestmark = pytest.mark.process
 
 
 async def until(predicate, timeout=30):
@@ -92,7 +96,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(message, reports[0].data["failure"])
 
     async def test_failed_reader_still_reports_and_exits(self):
-        from helperme.assistant.ipc import WorkerFailed
+        from helperme.assistant.host.ipc import WorkerFailed
 
         await self.host.create("parent")
         await self.persist_child()
@@ -142,7 +146,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("parent", "done"), self.output)
 
     async def assert_startup_failure(self, stage):
-        from helperme.assistant.ipc import WorkerFailed
+        from helperme.assistant.host.ipc import WorkerFailed
 
         await self.host.create("parent")
         await self.persist_child()
@@ -234,7 +238,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_terminal_idle_worker_stops_even_while_selected(self):
         from unittest.mock import AsyncMock
-        from helperme.assistant.supervisor import Worker
+        from helperme.assistant.host.supervisor import Worker
 
         worker = Worker(object(), AsyncMock(), idle_revision=3, terminal=True)
         self.host.workers["one"] = worker
@@ -246,7 +250,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.host.workers.pop("one")
 
     async def test_failed_selection_keeps_previous_owner_mapping(self):
-        from helperme.assistant.ipc import WorkerFailed
+        from helperme.assistant.host.ipc import WorkerFailed
 
         await self.host.create("old")
         await self.host.select("cli", "old")
@@ -364,7 +368,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_child_recovery_preserves_unfinished_read_and_reports_once(self):
         from helperme.runtime import DispatchAttemptStarted
-        from helperme.assistant.subagent import TASK_FACT
+        from helperme.assistant.subagent.subagent import TASK_FACT
 
         self.host.config_factory = partial(interrupted_read_config, self.root)
         (self.root / "release").touch()
@@ -396,7 +400,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(started, {e.event_id for e in after})
         self.assertFalse((self.root / "read-retried").exists())
         from helperme.runtime import CommandPhase, DomainFactCommitted, StateProjector
-        from helperme.assistant.subagent import REPORT_FACT, RETURN_FACT
+        from helperme.assistant.subagent.subagent import REPORT_FACT, RETURN_FACT
         state = StateProjector().project("child", after).state
         self.assertEqual(state.commands[0].phase, CommandPhase.UNKNOWN)
         self.assertEqual(sum(
@@ -422,7 +426,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_child_unexpected_crash_is_reported_then_still_exposed(self):
         from helperme.runtime import DomainFactCommitted
-        from helperme.assistant.subagent import REPORT_FACT, TASK_FACT
+        from helperme.assistant.subagent.subagent import REPORT_FACT, TASK_FACT
 
         await self.host.create("parent")
         await self.host._route(
@@ -453,7 +457,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_parent_reclaim_stops_child_and_does_not_resume_it(self):
         from helperme.runtime import DomainFactCommitted
-        from helperme.assistant.subagent import REPORT_FACT, RETURN_FACT, TASK_FACT
+        from helperme.assistant.subagent.subagent import REPORT_FACT, RETURN_FACT, TASK_FACT
 
         await self.host.create("parent")
         await self.host._route(

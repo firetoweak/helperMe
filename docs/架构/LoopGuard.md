@@ -1,6 +1,8 @@
 # LoopGuard：Session 级进展审视提醒
 
-2026-09-10。首批连续重复策略已实现。本文同时取代 Self-Handoff 原有的调用次数和任务总时长预算决策；当前代码仍见 [Compact](Compact.md)。
+Session 级进展审视。不判定无进展，不切换上下文窗口。窗口切换读 [Compact](Compact.md)。
+
+首批连续重复策略已实现，并取代 Compact 旧的调用次数和任务总时长预算。
 
 ## 职责与边界
 

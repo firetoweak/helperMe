@@ -3,8 +3,12 @@ from __future__ import annotations
 import os
 import unittest
 
+import pytest
+
 from helperme.config import load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
+
+pytestmark = pytest.mark.live
 
 
 @unittest.skipUnless(

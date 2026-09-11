@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
-from helperme.assistant.session_store import SessionStore
-from helperme.assistant.supervisor import HostSupervisor
+from helperme.assistant.host.session_store import SessionStore
+from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.config import AppConfig, assistant_config_from_app, load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
 from helperme.paths import HelperMeHome

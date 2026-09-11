@@ -114,7 +114,7 @@ Command 是 Step 提交时冻结的副作用请求。Dispatcher 只执行已经�
 | `COMPLETED` | 有界 Session 的 Host 已显式确认完成 |
 | `TERMINATED` | 有界 Session 的 Host 已显式确认终止 |
 
-CLI 和 Telegram Session 是持续对话，普通回答结束后回到等待输入，不自动进入终态。SubAgent 交回结论后同样停在等待状态，“最多回收一次”由投递幂等保证。
+TUI 和 Telegram Session 是持续对话，普通回答结束后回到等待输入，不自动进入终态。SubAgent 交回结论后同样停在等待状态，“最多回收一次”由投递幂等保证。
 
 终态只为未来明确有界的任务保留，必须由边界外的 Host 在完成 Judge 或 Policy 后显式请求。终态屏障只验证机械条件，不判断目标是否真的完成，也不负责删除 Journal 数据。
 
@@ -148,7 +148,7 @@ Checkpoint 只用于加速重放，必须携带足够的版本信息；投影规
 | Command 执行 | `helperme/runtime/dispatcher.py` |
 | Session 激活 | `helperme/assistant/runner.py` |
 | Session 应用服务 | `helperme/assistant/sessions.py` |
-| Session 进程与路由 | `helperme/assistant/supervisor.py`、`helperme/assistant/worker.py` |
+| Session 进程与路由 | `helperme/assistant/host/supervisor.py`、`helperme/assistant/host/worker.py` |
 | Channel | `helperme/channels/` |
 
 ## 决策附带元数据
