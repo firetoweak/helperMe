@@ -1,43 +1,49 @@
 # Channel 协议改造
 
-> 状态：已决策，待实施。本文描述目标结构，不覆盖当前仍在运行的 TUI / Telegram 实现；当前行为仍以 [Channel 接入契约](Channel接入契约.md) 与 [入口与授权](入口与授权.md) 为准。
+> 状态：架构方向已确认。本轮只确定入口关系和职责边界，不展开详细设计或实施。当前接入行为见 [Channel 接入契约](Channel接入契约.md)，ACP 已接线能力见 [ACP 映射](ACP映射.md)。
 
 ## 目标
 
-HelperMe 对两类外部差异分别采用现成协议：
+TUI、Web、ACP、Satori 四个 Channel 平级并存，共享 Assistant 应用能力，不以 ACP 统一所有入口。
 
-- ACP 连接 Obsidian、编辑器、Web、TUI 等 Agent Client；
-- Satori 连接 QQ、Telegram、Discord、飞书等 IM 平台。
-
-两种协议在 HelperMe 内部止于现有 Channel 应用边界，共同调用 `AssistantSessions`。它们不是上下游关系，也不互相转换。
+| Channel | 职责 | 当前安排 |
+|---|---|---|
+| TUI | 自有终端交互，原生使用 Assistant 应用能力 | 保留独立入口，不迁入 ACP |
+| Web | 自有网页交互，原生使用 Assistant 应用能力 | 确定架构位置，传输与交互细节待设计 |
+| ACP | 适配 Obsidian 等外部编辑器与 ACP Client | 保留已有实现与边界约定 |
+| Satori | 适配 IM 平台 | 保留架构方向，当前暂缓 |
 
 ```text
-Obsidian / Web / TUI / 其他 ACP Client
-                    │ ACP
-                    ▼
-          helperme/channels/acp
-                    │
-                    ├── AssistantSessions ── Host / Worker ── Runtime / Journal
-                    │
-        helperme/channels/satori
-                    ▲
-                    │ Satori
-       QQ / Telegram / Discord / 飞书等
+TUI ─────┐
+Web ─────┤
+ACP ─────┼── Assistant 应用操作 / 查询 ── Host / Worker ── Runtime / Journal
+Satori ──┘   （Satori 暂缓）
 ```
 
-ACP 与 Satori 只适配外部协议、identity、投递和回复。Assistant 继续拥有模型决策、授权应用操作和 Session 装配；Runtime 不出现 ACP、Satori、Web 或 IM 名词。
+平级不要求功能完全一致。TUI 与 Web 可以按产品需要呈现事件级历史、消息分叉等原生能力；ACP 的协议表达范围不构成其他入口的能力上限。这些能力在本文中只是架构动机，不代表已经实现，也不在本轮展开事件切点、分叉语义或接口设计。
 
-## 不做
+## 职责边界
 
-- 不建立同时包住 ACP 与 Satori 的通用协议框架；
-- 不把 Satori 消息转换成 ACP Prompt；
-- 不让 ACP Session 成为 Journal 之外的第二份会话状态；
-- 不因 ACP 支持 `cwd`、MCP 或终端能力就绕过 HelperMe 的 Workspace、能力渐进加载与授权边界；
-- 不把 ACP Client 的进程环境当成 HelperMe 在本机执行命令的环境；
-- 不保留旧 TUI / Telegram 的长期兼容入口或双轨配置；
-- 不同时兼容多个 ACP 大版本。实现时锁定一个经 Obsidian Client 实测的协议与 SDK 版本。
+各 Channel 负责交互、外部协议适配、identity、投递和回复；Assistant 负责模型决策、授权应用操作、Session 装配与面向入口的查询投影；Runtime 负责事实持久化、确定性归约和执行不变量，不出现 TUI、Web、ACP 或 Satori 名词。
 
-## ACP 目标版本
+现有 `AssistantSessions` 是协议无关的应用端口。共享能力沿这条边界按实际需求扩展；Channel 不直接操作 Journal、实现 Runtime 推进循环或维护第二份会话事实。展示从 Journal / Assistant 事实投影，各入口自行适配。
+
+不为四个入口增加宽泛的 Channel 基类、统一消息模型或能力协商框架。入口之间不互相转译，不要求连接生命周期与配置 Schema 相同。Web 的传输方式留待具体设计，不在此指定。
+
+TUI 原生接入是正式路径，与 ACP 平级并存不属于兼容双轨。Satori 暂缓期间不启动 Telegram 替换，也不因目标架构尚未实施而删除当前 Telegram 入口。
+
+## 共同约束
+
+- Session 与 Event 仍以 Journal 为唯一事实源，前端聊天记录不承担恢复执行的职责。
+- Channel 使用 Assistant 应用边界，不绕过 Workspace、授权与能力渐进加载规则。
+- Host 按本机用户环境拉起 Worker，不使用外部编辑器残留的执行环境。
+- 各入口只承诺自身已经实现的能力，不为其他入口保留无实际用途的适配路径。
+
+## ACP 既有约定
+
+以下保留 ACP 独立入口已有的版本、identity 与能力取舍，不作为 TUI / Web 的共同协议，也不构成本轮实施排期。
+
+### 目标版本
 
 当前目标客户端是 Obsidian Agent Client `0.12.1`。该发布版锁定 `@agentclientprotocol/sdk` `0.28.1`，初始化请求使用 SDK 常量 `PROTOCOL_VERSION = 1`，因此 HelperMe 的首个 ACP 实现以 **wire protocol v1** 为唯一目标，不按仍在演进的 v2 Prompt 生命周期实现。
 
@@ -52,23 +58,7 @@ Obsidian 当前的关键行为是：
 
 v1 把 `session/cancel` 列为 Agent 基线能力。HelperMe 将它映射为 `cancel_turn`：模型阶段由 `DecisionCancelled(trigger_event_id)` 与 `StepCommitted` 原子互斥；Command 阶段追加 `StepContinuationCancelled(step_event_id)`，让 Outcome 入账但不再自动续步。它不停止 Command，也不终止 Session。
 
-## 内部边界
-
-现有 `AssistantSessions` 是协议无关的应用端口，不再为“统一 Channel”增加一层宽泛 `Channel` 基类。ACP 与 Satori 各自把外部事实翻译成现有窄操作：
-
-```text
-create(session_id)
-select(owner, session_id)
-accept_input(session_id, source, delivery_id, content)
-authorize / reject
-release(owner)
-```
-
-两种 Adapter 可以共享这些应用操作，但不共享外部消息模型、连接生命周期或配置 Schema。
-
-## Identity 映射
-
-### ACP
+### Identity 映射
 
 | HelperMe identity | ACP 来源 | 规则 |
 |---|---|---|
@@ -82,19 +72,7 @@ release(owner)
 
 如果以后支持网络 ACP 或自动重试客户端，必须先取得协议级稳定投递标识，或明确增加双方协商的扩展；不能用内容去重、时间窗或进程内缓存伪造可靠性。
 
-### Satori
-
-| HelperMe identity | Satori 来源 | 规则 |
-|---|---|---|
-| Access | `platform + self_id + user.id` | 配置在入口边界精确授权用户、群组或频道 |
-| Conversation | `platform + self_id + channel.id` | 选择稳定业务 Session；凭证不进入 identity |
-| Delivery | Satori event/message ID | 同一外部事件只接纳一次 |
-| Reply route | account + channel | 使用产生事件的账号向原频道回复 |
-| Owner | Satori Channel 实例 | 实例启动时选择，关闭时释放 |
-
-Satori 的最终字段组合以所选 SDK 的当前协议 Schema 为准；Adapter 在外部边界校验完整字段后才构造内部 identity，不以显示名或可变昵称代替稳定 ID。
-
-## ACP 语义映射
+### 语义映射
 
 当前已经接到代码的方法与 `session/update` 类型以 [ACP 映射](ACP映射.md) 为准。下表仍是目标取舍，不是实现清单。
 
@@ -123,57 +101,13 @@ Journal Event / Assistant lifecycle
           ACP session/update
                  │ render
                  ▼
-          Obsidian / Web / TUI
+          Obsidian / 其他外部 ACP Client
 ```
 
 连接断开可以导致展示失败，但不能回滚已经提交的 Event、Step 或 Command。恢复历史时重新从 Journal 投影；不能依靠 ACP Client 保存的聊天记录恢复 Runtime。
 
-## Satori 语义映射
+## 当前范围与后续专题
 
-Satori Adapter 只消费明确支持的消息事件，并将文本、附件引用和来源 identity 转成一次 Channel 输入。输出通过对应 Bot/account 的消息 API发送。
+当前仅修正四个 Channel 的架构关系及职责，不安排 TUI / Web 迁入 ACP，不推进 Satori 开发或 Telegram 替换，也不以完成 ACP 闭环作为其他入口的前置条件。
 
-平台特有事件不进入通用分支。出现真实需求时，在 Satori Adapter 内增加明确映射；不把点赞、群成员变化等所有 Satori 事件提前泛化为 Runtime Event。
-
-当前 Telegram 专用配对和 allowlist 行为迁移到 Satori 外部边界后，删除 `helperme/channels/telegram` 及其配置、测试和启动路径，不保留 fallback。
-
-## 实施顺序
-
-### 1. ACP 兼容性探针
-
-源码探针已经确定 Obsidian Agent Client `0.12.1` 使用 ACP wire protocol v1 和 SDK `0.28.1`。实现前仍用 Obsidian 启动一个最小脚本 Agent，保存真实 wire transcript，核对初始化参数、Session 方法、Prompt 生命周期、权限请求、取消以及进程关闭行为。
-
-这一步只验证已经选定的 v1 外部协议，不接入 Runtime，也不为了 v2 或旧 SDK 保留分支。
-
-### 2. ACP 最小闭环
-
-实现 `initialize → session/new → session/prompt → session/update → prompt response`，证明：
-
-- Obsidian 选择 Vault 后能建立 HelperMe Session；
-- Prompt 先进入 Journal；ACP 请求保持挂起，Session 为本轮重新静止后才返回 `end_turn`；
-- Agent 输出回到正确的 Obsidian Session；用量与工具进度以标准 `session/update` 推给 Client；
-- 连接关闭释放 owner，但 Journal 和 Session identity 保留；
-- 未预期异常原样结束对应工作，不伪造成 `end_turn`；
-- Worker 按本机用户环境查找和执行命令，不沿用 Client 进程残留的环境变量。
-
-随后验证 `session/cancel` 的真实竞态，再接入权限请求和 `session/load`。工具状态、思考流、计划、模式和模型切换只在出现产品需求时分别增加。
-
-### 3. 替换 TUI / Web 入口
-
-若继续保留自有 TUI 或 Web，它们作为 ACP Client 存在，不再直接依赖 Assistant。替换完成时删除旧 TUI 直连路径；在替换完成前，ACP 不算新的主入口。
-
-### 4. Satori 替换 Telegram
-
-先用当前真实 Telegram 场景验证 Access、Conversation、Delivery、Reply route 四项映射，再删除 Telegram 专用实现。之后新增 IM 平台只增加 Satori 侧配置或明确的平台特性映射，不修改 Assistant / Runtime。
-
-## 验收
-
-1. ACP Client 与 Satori Adapter 能分别驱动相同的 `AssistantSessions` 操作，而 Runtime 不 import 或持有协议名词。
-2. 从编辑器拉起的 Session 与从终端拉起的 Session，看到同一套本机用户环境；Client 进程自带的 `PATH` 等不能决定能否找到 PowerShell 或用户常用命令。
-3. Obsidian 中新建和恢复会话对应同一条 HelperMe Journal 生命线。
-4. ACP Prompt 开始执行以前，输入已经可靠写入 Journal；v1 请求在 Session 为本轮重新静止前不返回 `end_turn`。
-5. 输出只发送到当前选择该 Session 的正确 ACP route 或 Satori route。
-6. ACP 权限回答必须形成现有授权事实后才允许 Dispatcher 执行 Command。
-7. 不支持的 ACP 能力在初始化时不声明；未知协议输入保留原始协议错误，不降级为普通用户消息。
-8. Satori 重复事件只产生一条 `UserMessageReceived`；相同文本的不同事件产生两条事实。
-9. 替换完成后不存在旧 Telegram、旧 TUI 直连、ACP、Satori 同时表达同一入口的双轨路径。
-10. `session/cancel` 在模型阶段消费当前 trigger，在 Command 阶段关闭所属 Step 的 Outcome 自动续步；Command、Outcome 及副作用事实保持不变，Session 可继续追加 Event。
+事件级历史回看、从历史继续运行与消息分叉留待独立专题讨论；本轮不确定其应用接口、持久结构或执行规则。Satori 的协议字段、identity 映射与平台迁移方案在恢复该专题时再设计。

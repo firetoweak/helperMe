@@ -32,7 +32,17 @@ MCP、Skill、SubAgent 等能力也不会侵入 Runtime。它们各自通过窄�
 
 ## 运行
 
-开发和运行环境统一使用 Python 3.13.x，目前主要在 Windows 上开发和测试。先安装 Python 3.13，再创建虚拟环境：
+开发和运行环境统一使用 Python 3.13.x，目前主要在 Windows 上开发和测试。
+
+内置 `grep` 工具依赖外部 [ripgrep](https://github.com/BurntSushi/ripgrep#installation)（命令名 `rg`），需要单独安装，`requirements.txt` 不会安装它。Windows 可使用：
+
+```powershell
+winget install --id BurntSushi.ripgrep.MSVC --exact
+```
+
+安装后重新打开终端，执行 `rg --version` 验证。确保 `rg` 所在目录已加入本机用户的 `PATH`，让 HelperMe Worker 能找到它；已运行的 HelperMe 需重新启动。缺少该依赖时，调用 `grep` 会返回 `RG_NOT_FOUND`。
+
+安装 Python 3.13 后，创建虚拟环境并启动：
 
 ```powershell
 py -3.13 -m venv .venv

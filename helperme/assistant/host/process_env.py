@@ -19,10 +19,13 @@ def host_process_environment(
     session = user_session_environment()
     if session is None:
         return result
+    # Windows environment names are case-insensitive, unlike ordinary dict keys.
+    result = {name.upper(): value for name, value in result.items()}
+    session = {name.upper(): value for name, value in session.items()}
     for name, value in session.items():
         if not result.get(name):
             result[name] = value
-    result["PATH"] = _merge_path(_path_of(result), _path_of(session))
+    result["PATH"] = _merge_path(result.get("PATH", ""), session.get("PATH", ""))
     return result
 
 
@@ -34,13 +37,6 @@ def user_session_environment() -> dict[str, str] | None:
     if os.name != "nt":
         return None
     return _windows_user_environment()
-
-
-def _path_of(env: Mapping[str, str]) -> str:
-    for name, value in env.items():
-        if name.upper() == "PATH":
-            return value
-    return ""
 
 
 def _merge_path(current: str, session: str) -> str:
@@ -62,7 +58,22 @@ def _windows_user_environment() -> dict[str, str]:
     import ctypes
     from ctypes import wintypes
 
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
+    get_process = kernel32.GetCurrentProcess
+    get_process.argtypes = []
+    get_process.restype = wintypes.HANDLE
+    open_token = advapi32.OpenProcessToken
+    open_token.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    open_token.restype = wintypes.BOOL
+    close = kernel32.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
     create = userenv.CreateEnvironmentBlock
     create.argtypes = [
         ctypes.POINTER(ctypes.c_void_p),
@@ -74,14 +85,20 @@ def _windows_user_environment() -> dict[str, str]:
     destroy.argtypes = [ctypes.c_void_p]
     destroy.restype = wintypes.BOOL
 
-    block = ctypes.c_void_p()
-    if not create(ctypes.byref(block), None, False):
-        error = ctypes.get_last_error()
-        raise OSError(error, "CreateEnvironmentBlock failed")
+    token = wintypes.HANDLE()
+    # CreateEnvironmentBlock requires QUERY | DUPLICATE for a primary token.
+    if not open_token(get_process(), 0x0008 | 0x0002, ctypes.byref(token)):
+        raise OSError(ctypes.get_last_error(), "OpenProcessToken failed")
     try:
-        return _parse_environment_block(block.value)
+        block = ctypes.c_void_p()
+        if not create(ctypes.byref(block), token, False):
+            raise OSError(ctypes.get_last_error(), "CreateEnvironmentBlock failed")
+        try:
+            return _parse_environment_block(block.value)
+        finally:
+            destroy(block)
     finally:
-        destroy(block)
+        close(token)
 
 
 def _parse_environment_block(address: int | None) -> dict[str, str]:

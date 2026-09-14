@@ -2,7 +2,7 @@
 
 Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 Access、Conversation、Delivery、Reply route 四种 identity，不实现模型决策或 Session 推进循环，也不决定本机用哪套环境变量去找程序、跑命令。TUI / Telegram 的具体行为见[入口与授权](入口与授权.md)；进程驻留和进程身份见[多活跃会话](多活跃会话.md)。
 
-本文仍是当前实现准绳。ACP v1 当前接了哪些方法见 [ACP 映射](ACP映射.md)。已经确认、尚未实施的 ACP / Satori 替换方案见 [Channel 协议改造](Channel协议改造.md)。
+本文仍是当前实现准绳。ACP v1 当前接了哪些方法见 [ACP 映射](ACP映射.md)。TUI / Web / ACP / Satori 平级并存的目标边界见 [Channel 协议改造](Channel协议改造.md)；TUI 保留原生入口，Satori 暂缓。
 
 [Compact](Compact.md) 只切换同一业务 Session 内的上下文窗口；Channel 使用稳定 Session identity，不为压缩维护入口路由。
 

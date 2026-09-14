@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from helperme.assistant.host.process_env import host_process_environment
+from helperme.assistant.host.process_env import (
+    host_process_environment,
+    install_host_environment,
+    user_session_environment,
+)
 
 
 class HostProcessEnvironmentTest(unittest.TestCase):
@@ -53,6 +59,32 @@ class HostProcessEnvironmentTest(unittest.TestCase):
             built = host_process_environment(current)
 
         self.assertEqual(built, current)
+
+    @unittest.skipUnless(os.name == "nt", "需要 Windows 用户会话环境")
+    def test_install_preserves_program_lookup_with_mixed_case_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "rg.exe"
+            executable.touch()
+            with patch.dict(os.environ, {"PATH": directory, "HELPERME_TEST": "current"}):
+                with patch(
+                    "helperme.assistant.host.process_env.user_session_environment",
+                    return_value={"Path": r"C:\Windows", "HelperMe_Test": "session"},
+                ):
+                    install_host_environment()
+
+                self.assertEqual(Path(shutil.which("rg")), executable)
+                self.assertEqual(os.environ["HELPERME_TEST"], "current")
+                self.assertEqual(os.environ["PATH"].split(os.pathsep)[0], directory)
+                self.assertIn(r"C:\Windows", os.environ["PATH"].split(os.pathsep))
+
+    @unittest.skipUnless(os.name == "nt", "需要 Windows 用户会话环境")
+    def test_session_environment_contains_current_user_profile(self):
+        session = {name.upper(): value for name, value in user_session_environment().items()}
+
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(session["USERPROFILE"])),
+            os.path.normcase(os.path.normpath(os.environ["USERPROFILE"])),
+        )
 
     @unittest.skipUnless(os.name == "nt", "需要 Windows 用户会话环境")
     def test_stripped_path_can_discover_powershell_from_user_session(self):

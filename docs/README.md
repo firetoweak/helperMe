@@ -52,7 +52,7 @@
 | [Channel 接入契约](架构/Channel接入契约.md) | 准绳：identity、投递幂等、Event wake、输出路由 |
 | [入口与授权](架构/入口与授权.md) | 当前 TUI / Telegram 行为 |
 | [ACP 映射](架构/ACP映射.md) | 当前 ACP v1 已接线 / 未接线清单 |
-| [Channel 协议改造](架构/Channel协议改造.md) | 已决策、待实施：ACP Agent Client 与 Satori IM 接入 |
+| [Channel 协议改造](架构/Channel协议改造.md) | 架构方向：TUI / Web / ACP / Satori 平级，Satori 暂缓 |
 | [多活跃会话](架构/多活跃会话.md) | 每 Session 进程、Host、进程身份与父子唤醒 |
 | [SubAgent](架构/SubAgent.md) | 委派、回收、只读边界 |
 
