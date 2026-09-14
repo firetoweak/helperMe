@@ -18,7 +18,10 @@ from helperme.skills.summarizer import LlmSkillDiffSummarizer
 
 
 def worker_config(app_config: AppConfig):
-    return assistant_config_from_app(app_config, LiteLLMAdapter(app_config.model))
+    return assistant_config_from_app(
+        app_config,
+        LiteLLMAdapter(app_config.model, app_config.litellm),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +59,7 @@ async def bootstrap_assistant(
         tool_progress_sink=tool_progress_sink,
     )
     # Channel management is product-level; session tools get their own clients.
-    management_llm = LiteLLMAdapter(config.model)
+    management_llm = LiteLLMAdapter(config.model, config.litellm)
     mcp = build_mcp(home)
     skills = build_skills(
         home, diff_summarizer=LlmSkillDiffSummarizer(management_llm, config.model.active)

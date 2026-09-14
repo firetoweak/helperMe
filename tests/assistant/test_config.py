@@ -30,6 +30,7 @@ class AppConfigTest(unittest.TestCase):
 
     def _data(self, ratio: float = 0.8) -> dict:
         return {
+            "litellm": {"local_model_cost_map": True},
             "model": {
                 "active": "model",
                 "router": {
@@ -107,6 +108,7 @@ class AppConfigTest(unittest.TestCase):
                 config = load_app_config()
 
         self.assertEqual(config.model.active, "model")
+        self.assertTrue(config.litellm.local_model_cost_map)
         self.assertEqual(
             config.model.router["model_list"][0]["litellm_params"]["custom_field"],
             {"kept": True},
@@ -200,6 +202,16 @@ class AppConfigTest(unittest.TestCase):
             self._write_config(path, data)
 
             with self.assertRaisesRegex(ValueError, "model.router"):
+                load_app_config(path)
+
+    def test_rejects_non_boolean_local_model_cost_map(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            data = self._data()
+            data["litellm"]["local_model_cost_map"] = "true"
+            self._write_config(path, data)
+
+            with self.assertRaisesRegex(ValueError, "local_model_cost_map"):
                 load_app_config(path)
 
     def test_rejects_budget_ratio_at_closed_upper_bound(self):

@@ -1,4 +1,7 @@
 {
+  "litellm": {
+    "local_model_cost_map": true
+  },
   "model": {
     "active": "deepseek-v4-pro",
     "router": {

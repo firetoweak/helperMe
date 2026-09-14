@@ -8,12 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from helperme.llm.api import LLMApi
-from helperme.llm.config import ModelConfig
+from helperme.llm.config import LiteLLMConfig, ModelConfig
 from helperme.paths import HelperMeHome
 
 
 CONFIG_PATH_ENV = "HELPERME_CONFIG"
 INITIAL_CONFIG = {
+    "litellm": {
+        "local_model_cost_map": True,
+    },
     "model": {
         "active": "deepseek-v4-pro",
         "router": {
@@ -82,6 +85,7 @@ class ChannelsConfig:
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
+    litellm: LiteLLMConfig
     model: ModelConfig
     workspace: WorkspaceConfig
     runtime: RuntimeConfig
@@ -151,8 +155,16 @@ def _parse_model_config(data: dict) -> ModelConfig:
 
 def load_app_config(path: Path | None = None) -> AppConfig:
     data = _load_config_data(path)
-    if set(data) != {"model", "workspace", "runtime", "channels"}:
-        raise ValueError("配置字段必须是 model/workspace/runtime/channels")
+    if set(data) != {"litellm", "model", "workspace", "runtime", "channels"}:
+        raise ValueError("配置字段必须是 litellm/model/workspace/runtime/channels")
+    litellm = data["litellm"]
+    if not isinstance(litellm, dict):
+        raise ValueError("配置必须包含 litellm 映射")
+    if set(litellm) != {"local_model_cost_map"}:
+        raise ValueError("litellm 配置字段必须是 local_model_cost_map")
+    local_model_cost_map = litellm["local_model_cost_map"]
+    if type(local_model_cost_map) is not bool:
+        raise ValueError("配置 litellm.local_model_cost_map 必须是布尔值")
     workspace = data["workspace"]
     if not isinstance(workspace, dict):
         raise ValueError("配置必须包含 workspace 映射")
@@ -218,6 +230,7 @@ def load_app_config(path: Path | None = None) -> AppConfig:
         )
 
     return AppConfig(
+        litellm=LiteLLMConfig(local_model_cost_map=local_model_cost_map),
         model=_parse_model_config(data),
         workspace=WorkspaceConfig(
             root=Path(workspace_root.strip()),

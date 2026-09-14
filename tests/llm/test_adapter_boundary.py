@@ -1,10 +1,12 @@
 from types import SimpleNamespace
+import os
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from helperme.llm.api import LLMAuthenticationError
-from helperme.llm.config import ModelConfig
+from helperme.llm.config import LiteLLMConfig, ModelConfig
 from helperme.llm.types import InvalidLLMResponse
+from helperme.paths import HelperMeHome
 
 
 class _Message:
@@ -74,13 +76,27 @@ class LiteLLMAdapterUsageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage.uncached_input_tokens, 24)
 
     async def test_authentication_failure_has_a_specific_error(self):
-        import litellm
         from helperme.llm.adapter import LiteLLMAdapter
 
+        class LiteLLMError(Exception):
+            pass
+
+        class OtherLiteLLMError(Exception):
+            pass
+
         adapter = object.__new__(LiteLLMAdapter)
-        adapter._completion = AsyncMock(side_effect=litellm.AuthenticationError(
-            "invalid api key", "openai", "model"
-        ))
+        adapter._litellm = SimpleNamespace(
+            ContextWindowExceededError=OtherLiteLLMError,
+            AuthenticationError=LiteLLMError,
+            PermissionDeniedError=OtherLiteLLMError,
+            APIConnectionError=OtherLiteLLMError,
+            Timeout=OtherLiteLLMError,
+            RateLimitError=OtherLiteLLMError,
+            InternalServerError=OtherLiteLLMError,
+            ServiceUnavailableError=OtherLiteLLMError,
+            APIError=OtherLiteLLMError,
+        )
+        adapter._completion = AsyncMock(side_effect=LiteLLMError("invalid api key"))
 
         with self.assertRaisesRegex(LLMAuthenticationError, "invalid api key"):
             await adapter.chat([], "model")
@@ -101,10 +117,19 @@ class LiteLLMAdapterRequestTest(unittest.IsolatedAsyncioTestCase):
 
         from helperme.llm.adapter import LiteLLMAdapter
 
-        with patch("helperme.llm.adapter.litellm.Router") as router:
-            LiteLLMAdapter(config)
+        fake_litellm = SimpleNamespace(Router=Mock())
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch("helperme.llm.adapter.import_module", return_value=fake_litellm),
+        ):
+            LiteLLMAdapter(config, LiteLLMConfig(local_model_cost_map=True))
+            self.assertEqual(os.environ["LITELLM_LOCAL_MODEL_COST_MAP"], "True")
+            self.assertEqual(
+                os.environ["CUSTOM_TIKTOKEN_CACHE_DIR"],
+                str(HelperMeHome.default().cache_root / "tiktoken"),
+            )
 
-        router.assert_called_once_with(**config.router)
+        fake_litellm.Router.assert_called_once_with(**config.router)
 
     async def test_calls_in_process_router(self):
         from helperme.llm.adapter import LiteLLMAdapter

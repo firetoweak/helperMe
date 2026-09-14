@@ -161,7 +161,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     salts = {name: secrets.token_urlsafe(32) for name in variants}
     rows: list[dict[str, object]] = []
 
-    async with LiteLLMAdapter(app.model) as client:
+    async with LiteLLMAdapter(app.model, app.litellm) as client:
         for step_index in range(len(manifests)):
             names = list(variants)
             offset = step_index % len(names)

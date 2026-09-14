@@ -38,6 +38,10 @@ class HelperMeHome:
         return self.root / "state"
 
     @property
+    def cache_root(self) -> Path:
+        return self.root / "cache"
+
+    @property
     def runtime_sessions_root(self) -> Path:
         return self.root / "runtime_sessions"
 
@@ -46,6 +50,7 @@ class HelperMeHome:
         self.mcp_root.mkdir(parents=True, exist_ok=True)
         self.skills_root.mkdir(parents=True, exist_ok=True)
         self.state_root.mkdir(parents=True, exist_ok=True)
+        self.cache_root.mkdir(parents=True, exist_ok=True)
 
 
 def runtime_data_root() -> Path:

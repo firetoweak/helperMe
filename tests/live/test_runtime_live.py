@@ -23,7 +23,7 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
         app_config = load_app_config()
         config = assistant_config_from_app(
             app_config,
-            LiteLLMAdapter(app_config.model),
+            LiteLLMAdapter(app_config.model, app_config.litellm),
         )
         delivered: list[str] = []
         journal = MemoryJournal()

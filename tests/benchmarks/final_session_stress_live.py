@@ -53,7 +53,7 @@ async def main() -> None:
 
     config = assistant_config_from_app(
         app_config,
-        LiteLLMAdapter(app_config.model),
+        LiteLLMAdapter(app_config.model, app_config.litellm),
     )
     delivered: list[str] = []
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")

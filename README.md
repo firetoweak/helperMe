@@ -32,14 +32,16 @@ MCP、Skill、SubAgent 等能力也不会侵入 Runtime。它们各自通过窄�
 
 ## 运行
 
-需要 Python 3.11 或更高版本，目前主要在 Windows 上开发和测试。
+开发和运行环境统一使用 Python 3.13.x，目前主要在 Windows 上开发和测试。先安装 Python 3.13，再创建虚拟环境：
 
 ```powershell
-python -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 python console_chat.py
 ```
+
+如果已有 `.venv` 是用其他 Python 版本创建的，先移走旧环境，再按上述命令重建；安装新版本 Python 不会自动升级已有虚拟环境。激活后可用 `python --version` 确认版本为 3.13.x。
 
 首次启动会创建 `~/.helperme/config.json`。按[模型配置指南](docs/模型配置.md)填写模型接口和工作区后重新启动，完整配置结构见 [config.example.json](config.example.json)。
 

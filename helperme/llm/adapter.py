@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
+from importlib import import_module
 from typing import Any
-
-import litellm
 
 from helperme.llm.api import (
     LLMAuthenticationError,
@@ -13,7 +13,7 @@ from helperme.llm.api import (
     LLMProviderError,
     LLMTransientError,
 )
-from helperme.llm.config import ModelConfig
+from helperme.llm.config import LiteLLMConfig, ModelConfig
 from helperme.llm.images import encode_images
 from helperme.llm.types import (
     InvalidLLMResponse,
@@ -22,6 +22,7 @@ from helperme.llm.types import (
     LLMUsage,
     ToolCall,
 )
+from helperme.paths import HelperMeHome
 
 
 _NORMALIZED_MESSAGE_FIELDS = frozenset({"role", "content", "tool_calls"})
@@ -43,8 +44,15 @@ def _is_context_limit_error(error: str) -> bool:
 
 
 class LiteLLMAdapter:
-    def __init__(self, config: ModelConfig):
-        self._router = litellm.Router(**deepcopy(config.router))
+    def __init__(self, config: ModelConfig, litellm_config: LiteLLMConfig):
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = (
+            "True" if litellm_config.local_model_cost_map else "False"
+        )
+        os.environ["CUSTOM_TIKTOKEN_CACHE_DIR"] = str(
+            HelperMeHome.default().cache_root / "tiktoken"
+        )
+        self._litellm = import_module("litellm")
+        self._router = self._litellm.Router(**deepcopy(config.router))
         self._read_attachment = None
 
     def bind_attachment_reader(self, read) -> None:
@@ -54,24 +62,27 @@ class LiteLLMAdapter:
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
-        await litellm.close_litellm_async_clients()
+        await self._litellm.close_litellm_async_clients()
 
     async def chat(self, messages, model, tools=None) -> LLMCallResult:
         try:
             completion = await self._completion(model, messages, tools)
-        except litellm.ContextWindowExceededError as exc:
+        except self._litellm.ContextWindowExceededError as exc:
             raise LLMContextLengthError(str(exc)) from exc
-        except (litellm.AuthenticationError, litellm.PermissionDeniedError) as exc:
+        except (
+            self._litellm.AuthenticationError,
+            self._litellm.PermissionDeniedError,
+        ) as exc:
             raise LLMAuthenticationError(str(exc)) from exc
         except (
-            litellm.APIConnectionError,
-            litellm.Timeout,
-            litellm.RateLimitError,
-            litellm.InternalServerError,
-            litellm.ServiceUnavailableError,
+            self._litellm.APIConnectionError,
+            self._litellm.Timeout,
+            self._litellm.RateLimitError,
+            self._litellm.InternalServerError,
+            self._litellm.ServiceUnavailableError,
         ) as exc:
             raise LLMTransientError(str(exc)) from exc
-        except litellm.APIError as exc:
+        except self._litellm.APIError as exc:
             error = str(exc)
             if _is_context_limit_error(error):
                 raise LLMContextLengthError(error) from exc
