@@ -8,14 +8,13 @@ from helperme.runtime.events import (
     CommandAuthorized,
     CommandOutcomeReceived,
     CommandRejected,
+    DecisionCancelled,
     DomainFactCommitted,
     DispatchAttemptStarted,
     EventDraft,
     EventPayload,
-    RuntimeCompleted,
-    RuntimeTerminated,
+    StepContinuationCancelled,
     StepCommitted,
-    TerminationRequested,
     UserMessageReceived,
 )
 from helperme.runtime.model import (
@@ -27,7 +26,6 @@ from helperme.runtime.model import (
     CommandPhase,
     CommandState,
     InvokeTool,
-    LifecycleIntent,
     ModelDecision,
     OutcomeStatus,
     RuntimeStatus,
@@ -35,10 +33,10 @@ from helperme.runtime.model import (
 )
 
 
-EVENT_SCHEMA_VERSION = 4
+EVENT_SCHEMA_VERSION = 5
 DELIVERY_FINGERPRINT_VERSION = 3
-STATE_CODEC_VERSION = 5
-STATE_PROJECTION_VERSION = "canonical-state-v2"
+STATE_CODEC_VERSION = 6
+STATE_PROJECTION_VERSION = "canonical-state-v3"
 
 _USER_MESSAGE = "user.message.received"
 _STEP_COMMITTED = "step.committed"
@@ -46,9 +44,8 @@ _COMMAND_AUTHORIZED = "command.authorized"
 _COMMAND_REJECTED = "command.rejected"
 _ATTEMPT_STARTED = "command.attempt.started"
 _OUTCOME_RECEIVED = "command.outcome.received"
-_TERMINATION_REQUESTED = "runtime.termination.requested"
-_RUNTIME_COMPLETED = "runtime.completed"
-_RUNTIME_TERMINATED = "runtime.terminated"
+_DECISION_CANCELLED = "decision.cancelled"
+_STEP_CONTINUATION_CANCELLED = "step.continuation.cancelled"
 _DOMAIN_FACT_COMMITTED = "domain.fact.committed"
 
 
@@ -148,7 +145,6 @@ def _decision_to_data(decision: ModelDecision) -> dict[str, object]:
         "command_requests": [
             _effect_to_data(effect) for effect in decision.command_requests
         ],
-        "lifecycle_intent": decision.lifecycle_intent.value,
     }
 
 
@@ -158,7 +154,6 @@ def _decision_from_data(data: dict[str, object]) -> ModelDecision:
         {
             "content",
             "command_requests",
-            "lifecycle_intent",
         },
         "model decision",
     )
@@ -167,7 +162,6 @@ def _decision_from_data(data: dict[str, object]) -> ModelDecision:
         command_requests=tuple(
             _effect_from_data(effect) for effect in data["command_requests"]
         ),
-        lifecycle_intent=LifecycleIntent(data["lifecycle_intent"]),
     )
 
 
@@ -237,18 +231,12 @@ def encode_payload(payload: EventPayload) -> tuple[str, str]:
             "attempt_id": payload.attempt_id,
             "outcome": _outcome_to_data(payload.outcome),
         }
-    elif isinstance(payload, TerminationRequested):
-        kind = _TERMINATION_REQUESTED
-        data = {"reason": payload.reason}
-    elif isinstance(payload, RuntimeCompleted):
-        kind = _RUNTIME_COMPLETED
-        data = {"declared_by_event_id": payload.declared_by_event_id}
-    elif isinstance(payload, RuntimeTerminated):
-        kind = _RUNTIME_TERMINATED
-        data = {
-            "declared_by_event_id": payload.declared_by_event_id,
-            "abandoned_command_ids": list(payload.abandoned_command_ids),
-        }
+    elif isinstance(payload, DecisionCancelled):
+        kind = _DECISION_CANCELLED
+        data = {"trigger_event_id": payload.trigger_event_id}
+    elif isinstance(payload, StepContinuationCancelled):
+        kind = _STEP_CONTINUATION_CANCELLED
+        data = {"step_event_id": payload.step_event_id}
     elif isinstance(payload, DomainFactCommitted):
         kind = _DOMAIN_FACT_COMMITTED
         data = {
@@ -308,22 +296,12 @@ def decode_payload(
             attempt_id=data["attempt_id"],
             outcome=_outcome_from_data(data["outcome"]),
         )
-    if kind == _TERMINATION_REQUESTED:
-        _require_object(data, {"reason"}, kind)
-        return TerminationRequested(data["reason"])
-    if kind == _RUNTIME_COMPLETED:
-        _require_object(data, {"declared_by_event_id"}, kind)
-        return RuntimeCompleted(data["declared_by_event_id"])
-    if kind == _RUNTIME_TERMINATED:
-        _require_object(
-            data,
-            {"declared_by_event_id", "abandoned_command_ids"},
-            kind,
-        )
-        return RuntimeTerminated(
-            declared_by_event_id=data["declared_by_event_id"],
-            abandoned_command_ids=tuple(data["abandoned_command_ids"]),
-        )
+    if kind == _DECISION_CANCELLED:
+        _require_object(data, {"trigger_event_id"}, kind)
+        return DecisionCancelled(data["trigger_event_id"])
+    if kind == _STEP_CONTINUATION_CANCELLED:
+        _require_object(data, {"step_event_id"}, kind)
+        return StepContinuationCancelled(data["step_event_id"])
     if kind == _DOMAIN_FACT_COMMITTED:
         _require_object(
             data,
@@ -393,7 +371,6 @@ def _command_state_to_data(state: CommandState) -> dict[str, object]:
         "command": _command_to_data(state.command),
         "phase": state.phase.value,
         "issued_by_event_id": state.issued_by_event_id,
-        "abandoned": state.abandoned,
         "attempts": [_attempt_to_data(attempt) for attempt in state.attempts],
         "outcome": (
             _outcome_to_data(state.outcome) if state.outcome is not None else None
@@ -413,7 +390,6 @@ def _command_state_from_data(data: dict[str, object]) -> CommandState:
             "command",
             "phase",
             "issued_by_event_id",
-            "abandoned",
             "attempts",
             "outcome",
             "canonical_outcome_event_id",
@@ -426,7 +402,6 @@ def _command_state_from_data(data: dict[str, object]) -> CommandState:
         command=_command_from_data(data["command"]),
         phase=CommandPhase(data["phase"]),
         issued_by_event_id=data["issued_by_event_id"],
-        abandoned=data["abandoned"],
         attempts=tuple(_attempt_from_data(attempt) for attempt in data["attempts"]),
         outcome=(
             _outcome_from_data(data["outcome"]) if data["outcome"] is not None else None

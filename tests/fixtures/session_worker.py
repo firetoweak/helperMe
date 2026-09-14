@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 from pathlib import Path
 import time
 
@@ -68,6 +69,30 @@ def config_for(workspace: Path):
         model_context_limit=200000,
         input_budget_ratio=0.9,
         llm=ProcessLlm(workspace),
+    )
+
+
+class CancellableProcessLlm(ProcessLlm):
+    async def chat(self, messages, model, *, tools=None):
+        if "CANCEL_PROCESS" not in json.dumps(messages):
+            return await super().chat(messages, model, tools=tools)
+        (self.workspace / "cancel-started").touch()
+        try:
+            while True:
+                await asyncio.sleep(1)
+        finally:
+            (self.workspace / "cancel-observed").touch()
+
+
+def cancellable_config(workspace: Path):
+    config = config_for(workspace)
+    return AssistantConfig(
+        model_name=config.model_name,
+        workspace_root=config.workspace_root,
+        full_access=config.full_access,
+        model_context_limit=config.model_context_limit,
+        input_budget_ratio=config.input_budget_ratio,
+        llm=CancellableProcessLlm(workspace),
     )
 
 

@@ -150,17 +150,10 @@ class Command:
             raise TypeError("decision_on_outcome must be bool")
 
 
-class LifecycleIntent(str, Enum):
-    NONE = "none"
-    COMPLETE = "complete"
-    TERMINATE = "terminate"
-
-
 @dataclass(frozen=True, slots=True)
 class ModelDecision:
     content: str = ""
     command_requests: tuple[CommandEffect, ...] = ()
-    lifecycle_intent: LifecycleIntent = LifecycleIntent.NONE
 
     def __post_init__(self) -> None:
         if type(self.content) is not str:
@@ -169,13 +162,7 @@ class ModelDecision:
             raise TypeError("command requests must be tuple")
         if any(type(request) is not InvokeTool for request in self.command_requests):
             raise TypeError("command request is invalid")
-        if type(self.lifecycle_intent) is not LifecycleIntent:
-            raise TypeError("lifecycle intent must be LifecycleIntent")
-        if (
-            not self.content.strip()
-            and not self.command_requests
-            and self.lifecycle_intent is LifecycleIntent.NONE
-        ):
+        if not self.content.strip() and not self.command_requests:
             raise ValueError("decision must contain content or effects")
 
 
@@ -279,7 +266,6 @@ class CommandState:
     command: Command
     phase: CommandPhase
     issued_by_event_id: str
-    abandoned: bool = False
     attempts: tuple[AttemptState, ...] = ()
     outcome: CommandOutcome | None = None
     canonical_outcome_event_id: str | None = None
@@ -292,8 +278,6 @@ class CommandState:
         if type(self.phase) is not CommandPhase:
             raise TypeError("command state phase is invalid")
         _require_str(self.issued_by_event_id, "issued by event id")
-        if type(self.abandoned) is not bool:
-            raise TypeError("command abandoned must be bool")
         if type(self.attempts) is not tuple or any(
             type(attempt) is not AttemptState for attempt in self.attempts
         ):
@@ -354,8 +338,6 @@ class DecisionState:
 class RuntimeStatus(str, Enum):
     RUNNABLE = "runnable"
     WAITING = "waiting"
-    COMPLETED = "completed"
-    TERMINATED = "terminated"
 
 
 @dataclass(frozen=True, slots=True)

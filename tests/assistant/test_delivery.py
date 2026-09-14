@@ -10,7 +10,6 @@ from helperme.assistant.delivery import (
 from helperme.runtime import (
     Command,
     InvokeTool,
-    LifecycleIntent,
     ModelDecision,
 )
 from helperme.runtime.dispatcher import AttemptContext
@@ -55,11 +54,3 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(ValueError, "product command"):
             ensure_deliver(mapped)
-        self.assertEqual(
-            ensure_deliver(
-                ModelDecision(
-                    lifecycle_intent=LifecycleIntent.COMPLETE,
-                )
-            ).command_requests,
-            (),
-        )

@@ -59,7 +59,7 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 环境
 
-任务文件在配置的 workspace root。`full_access` 时再挂上 Host 根。命令走 `sandbox/local/powershell.py`。路径契约在 `sandbox/workspace.py`：Agent 不拥有工作目录，Environment 描述在哪里执行。`HelperMeHome` 只表示产品自身数据目录，不能充当任务 Workspace 或 Sandbox。
+任务文件在配置的 workspace root。`full_access` 时再挂上 Host 根。命令走 `sandbox/local/powershell.py`。路径契约在 `sandbox/workspace.py`：Agent 不拥有工作目录，Environment 描述在哪里执行。Sandbox 假定当前进程已经是本机日常环境；若 Channel 客户端把环境带歪了，由 Host 在启动 Worker 时纠正或暴露，不在查找 shell 时猜。`HelperMeHome` 只表示产品自身数据目录，不能充当任务 Workspace 或 Sandbox。见[多活跃会话 · 进程身份](多活跃会话.md#进程身份)。
 
 ## 配置
 

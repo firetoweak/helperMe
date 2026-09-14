@@ -15,6 +15,7 @@ from helperme.assistant.subagent.subagent import project_delegations, project_re
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal
 from tests.fixtures.session_worker import (
+    cancellable_config,
     config_for,
     interrupted_read_config,
     failing_startup_config,
@@ -221,6 +222,27 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await self.host.release("web")
         await until(lambda: "one" not in self.host.workers)
 
+    async def test_decision_cancel_is_cooperative_and_durable_across_worker_boundary(self):
+        from helperme.runtime import DecisionCancelled
+
+        self.host.config_factory = partial(cancellable_config, self.root)
+        await self.host.create("one")
+        await self.host.select("acp", "one")
+        await self.host.accept_input(
+            "one",
+            "CANCEL_PROCESS",
+            delivery_id="input",
+        )
+        await until(lambda: (self.root / "cancel-started").exists())
+
+        await self.host.cancel_turn("one")
+        view = await self.host.wait_quiescent("one")
+
+        self.assertTrue((self.root / "cancel-observed").exists())
+        self.assertEqual(view.status, "waiting")
+        events = await SqliteJournal(self.store.require("one")).snapshot("one")
+        self.assertIsInstance(events[-1].payload, DecisionCancelled)
+
     async def test_unselected_busy_worker_stops_only_after_work_finishes(self):
         await self.host.create("one")
         await self.host.select("cli", "one")
@@ -235,19 +257,6 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         (self.root / "release").touch()
         await until(lambda: ("one", "done") in self.output)
         await until(lambda: "one" not in self.host.workers)
-
-    async def test_terminal_idle_worker_stops_even_while_selected(self):
-        from unittest.mock import AsyncMock
-        from helperme.assistant.host.supervisor import Worker
-
-        worker = Worker(object(), AsyncMock(), idle_revision=3, terminal=True)
-        self.host.workers["one"] = worker
-        self.host.selections["cli"] = "one"
-
-        await self.host._stop_idle("one", worker)
-
-        worker.peer.send.assert_awaited_once_with(("stop", 3))
-        self.host.workers.pop("one")
 
     async def test_failed_selection_keeps_previous_owner_mapping(self):
         from helperme.assistant.host.ipc import WorkerFailed

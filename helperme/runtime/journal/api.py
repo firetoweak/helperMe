@@ -11,21 +11,15 @@ from helperme.runtime.events import (
     CommandAuthorized,
     CommandOutcomeReceived,
     CommandRejected,
+    DecisionCancelled,
     DeliveryIdentity,
     DispatchAttemptStarted,
     DomainFactCommitted,
     Event,
     EventDraft,
-    RuntimeCompleted,
-    RuntimeTerminated,
+    StepContinuationCancelled,
     StepCommitted,
-    TerminationRequested,
     UserMessageReceived,
-)
-from helperme.runtime.finalization import (
-    FinalizationKind,
-    finalization_opportunity,
-    terminal_event_draft,
 )
 from helperme.runtime.model import (
     CanonicalState,
@@ -135,6 +129,16 @@ class Journal(Protocol):
         draft: EventDraft,
     ) -> Event: ...
 
+    async def cancel_decision(
+        self,
+        draft: EventDraft,
+    ) -> Event | None: ...
+
+    async def cancel_continuation(
+        self,
+        draft: EventDraft,
+    ) -> Event | None: ...
+
     async def start_attempt(
         self,
         draft: EventDraft,
@@ -180,16 +184,6 @@ class Journal(Protocol):
 
     async def delete_checkpoint(self, session_id: str) -> None: ...
 
-    async def finalize(self, session_id: str, event_id: str) -> Event | None: ...
-
-    async def accept_termination(
-        self,
-        request_draft: EventDraft,
-        *,
-        terminal_event_id: str,
-    ) -> AppendResult: ...
-
-
 class MemoryJournal:
     def __init__(
         self,
@@ -205,11 +199,11 @@ class MemoryJournal:
         ] = {}
         self._step_claims: dict[str, StepLease] = {}
         self._step_claim_tokens: dict[str, str] = {}
-        self._step_consumptions: dict[str, str] = {}
+        self._decision_consumptions: dict[str, str] = {}
+        self._cancelled_step_continuations: dict[str, str] = {}
         self._step_ids: set[str] = set()
         self._commands: dict[str, tuple[str, str]] = {}
         self._command_definitions: dict[str, Command] = {}
-        self._abandoned_commands: set[str] = set()
         self._dispatch_eligibility: dict[str, str] = {}
         self._rejected_commands: dict[str, str] = {}
         self._attempts: dict[tuple[str, int], Event] = {}
@@ -218,7 +212,6 @@ class MemoryJournal:
         self._attempt_leases: dict[str, tuple[str, float]] = {}
         self._attempt_terminal_events: dict[str, Event] = {}
         self._terminal_commands: set[str] = set()
-        self._terminals: dict[str, Event] = {}
         self._checkpoints: dict[str, tuple[int, str, CanonicalState]] = {}
         self._clock = clock
         self._lock = asyncio.Lock()
@@ -249,7 +242,6 @@ class MemoryJournal:
             event.payload,
             (
                 UserMessageReceived,
-                TerminationRequested,
                 DomainFactCommitted,
             ),
         )
@@ -330,9 +322,7 @@ class MemoryJournal:
             trigger = self._event_ids.get(request.trigger_event_id)
             if trigger is None or trigger.session_id != request.session_id:
                 raise KeyError(request.trigger_event_id)
-            if request.trigger_event_id in self._step_consumptions:
-                return None
-            if request.session_id in self._terminals:
+            if request.trigger_event_id in self._decision_consumptions:
                 return None
             current = self._step_claims.get(request.session_id)
             now = self._clock()
@@ -399,19 +389,57 @@ class MemoryJournal:
                 if not self._same_event(existing, draft):
                     raise ValueError(f"event id conflict: {draft.event_id}")
                 if (
-                    self._step_consumptions.get(lease.request.trigger_event_id)
+                    self._decision_consumptions.get(lease.request.trigger_event_id)
                     != existing.event_id
                 ):
                     raise LeaseLostError(lease.token)
                 return existing
             self._validate_step_lease(lease, draft)
-            if draft.session_id in self._terminals:
-                raise LeaseLostError(lease.token)
             event = self._append_locked(draft).event
             del self._step_claims[lease.request.session_id]
             if self._step_claim_tokens.get(lease.token) == lease.request.session_id:
                 self._step_claim_tokens.pop(lease.token, None)
             return event
+
+    async def cancel_decision(
+        self,
+        draft: EventDraft,
+    ) -> Event | None:
+        self._validate_internal_draft(draft)
+        payload = draft.payload
+        if not isinstance(payload, DecisionCancelled):
+            raise TypeError(type(payload).__name__)
+        async with self._lock:
+            existing = self._event_ids.get(draft.event_id)
+            if existing is not None:
+                if not self._same_event(existing, draft):
+                    raise ValueError(f"event id conflict: {draft.event_id}")
+                if self._decision_consumptions.get(payload.trigger_event_id) != existing.event_id:
+                    return None
+                return existing
+            if payload.trigger_event_id in self._decision_consumptions:
+                return None
+            return self._append_locked(draft).event
+
+    async def cancel_continuation(
+        self,
+        draft: EventDraft,
+    ) -> Event | None:
+        self._validate_internal_draft(draft)
+        payload = draft.payload
+        if not isinstance(payload, StepContinuationCancelled):
+            raise TypeError(type(payload).__name__)
+        async with self._lock:
+            existing = self._event_ids.get(draft.event_id)
+            if existing is not None:
+                if not self._same_event(existing, draft):
+                    raise ValueError(f"event id conflict: {draft.event_id}")
+                if self._cancelled_step_continuations.get(payload.step_event_id) != existing.event_id:
+                    return None
+                return existing
+            if payload.step_event_id in self._cancelled_step_continuations:
+                return None
+            return self._append_locked(draft).event
 
     async def start_attempt(
         self,
@@ -445,8 +473,6 @@ class MemoryJournal:
             command = self._commands.get(payload.command_id)
             if command is None or command[0] != draft.session_id:
                 raise KeyError(payload.command_id)
-            if payload.command_id in self._abandoned_commands:
-                return None
             if payload.command_id in self._terminal_commands:
                 return None
             expected_cause = self._dispatch_eligibility.get(payload.command_id)
@@ -500,8 +526,6 @@ class MemoryJournal:
         if command is None or command[0] != session_id:
             raise KeyError(command_id)
         issued_event_id = command[1]
-        if command_id in self._abandoned_commands:
-            return None
         if command_id in self._terminal_commands:
             return None
         if command_id in self._rejected_commands:
@@ -605,64 +629,6 @@ class MemoryJournal:
         async with self._lock:
             self._checkpoints.pop(session_id, None)
 
-    async def finalize(self, session_id: str, event_id: str) -> Event | None:
-        async with self._lock:
-            return self._finalize_locked(session_id, event_id)
-
-    async def accept_termination(
-        self,
-        request_draft: EventDraft,
-        *,
-        terminal_event_id: str,
-    ) -> AppendResult:
-        self._validate_termination_delivery(request_draft)
-        if request_draft.delivery is None:
-            raise ValueError("external event requires delivery identity")
-        async with self._lock:
-            receipt = self._deliveries.get(request_draft.delivery)
-            if receipt is not None:
-                existing, fingerprint = receipt
-                if fingerprint != delivery_fingerprint(request_draft):
-                    raise DeliveryConflictError(
-                        f"delivery content conflict: {request_draft.delivery}"
-                    )
-                return AppendResult(existing, False)
-            result = self._append_locked(request_draft)
-            self._deliveries[request_draft.delivery] = (
-                result.event,
-                delivery_fingerprint(request_draft),
-            )
-            opportunity = finalization_opportunity(
-                request_draft.session_id,
-                tuple(self._events.get(request_draft.session_id, ())),
-            )
-            if (
-                opportunity is not None
-                and opportunity.kind is FinalizationKind.TERMINATE_FROM_REQUEST
-                and opportunity.declared_by_event_id == result.event.event_id
-            ):
-                self._finalize_locked(
-                    request_draft.session_id,
-                    terminal_event_id,
-                )
-            return result
-
-    def _finalize_locked(self, session_id: str, event_id: str) -> Event | None:
-        existing = self._event_ids.get(event_id)
-        if existing is not None:
-            if not isinstance(
-                existing.payload,
-                (RuntimeCompleted, RuntimeTerminated),
-            ):
-                raise ValueError(f"event id conflict: {event_id}")
-            return existing
-        events = tuple(self._events.get(session_id, ()))
-        opportunity = finalization_opportunity(session_id, events)
-        if opportunity is None:
-            return None
-        draft = terminal_event_draft(session_id, event_id, opportunity)
-        return self._append_locked(draft).event
-
     def _append_locked(
         self,
         draft: EventDraft,
@@ -719,7 +685,7 @@ class MemoryJournal:
         payload = event.payload
         if isinstance(payload, StepCommitted):
             step = payload.step
-            self._step_consumptions[step.trigger_event_id] = event.event_id
+            self._decision_consumptions[step.trigger_event_id] = event.event_id
             self._step_ids.add(step.step_id)
             for command in step.commands:
                 self._commands[command.command_id] = (
@@ -763,13 +729,11 @@ class MemoryJournal:
                 self._clear_attempt_claims(payload.attempt_id)
             self._terminal_commands.add(payload.command_id)
             self._dispatch_eligibility.pop(payload.command_id, None)
-        elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
-            self._terminals[event.session_id] = event
-            if isinstance(payload, RuntimeTerminated):
-                for command_id in payload.abandoned_command_ids:
-                    self._abandoned_commands.add(command_id)
-                    self._dispatch_eligibility.pop(command_id, None)
+        elif isinstance(payload, DecisionCancelled):
+            self._decision_consumptions[payload.trigger_event_id] = event.event_id
             self._clear_session_step_claim(event.session_id)
+        elif isinstance(payload, StepContinuationCancelled):
+            self._cancelled_step_continuations[payload.step_event_id] = event.event_id
 
     def _clear_attempt_claims(self, attempt_id: str) -> None:
         self._attempt_leases.pop(attempt_id, None)
@@ -780,7 +744,7 @@ class MemoryJournal:
             step = payload.step
             if step.step_id in self._step_ids:
                 raise ValueError(f"duplicate step id: {step.step_id}")
-            if step.trigger_event_id in self._step_consumptions:
+            if step.trigger_event_id in self._decision_consumptions:
                 raise ValueError(
                     f"decision event consumed twice: {step.trigger_event_id}"
                 )
@@ -814,31 +778,30 @@ class MemoryJournal:
                 and payload.attempt_id in self._attempt_terminal_events
             ):
                 raise ValueError(f"attempt already terminal: {payload.attempt_id}")
-        elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
-            if event.session_id in self._terminals:
-                raise ValueError("runtime already terminal")
-            declared = self._event_ids.get(payload.declared_by_event_id)
-            if declared is None or declared.session_id != event.session_id:
-                raise KeyError(payload.declared_by_event_id)
-            if isinstance(payload, RuntimeCompleted):
-                if not isinstance(declared.payload, StepCommitted):
-                    raise ValueError("completion must be declared by a step")
-            elif not isinstance(
-                declared.payload,
-                (StepCommitted, TerminationRequested),
-            ):
-                raise ValueError("termination declaration source is invalid")
-            if isinstance(payload, RuntimeTerminated):
-                missing = next(
-                    (
-                        command_id
-                        for command_id in payload.abandoned_command_ids
-                        if command_id not in self._commands
-                    ),
-                    None,
+        elif isinstance(payload, DecisionCancelled):
+            trigger = self._event_ids.get(payload.trigger_event_id)
+            if trigger is None or trigger.session_id != event.session_id:
+                raise KeyError(payload.trigger_event_id)
+            if event.causation_id != payload.trigger_event_id:
+                raise ValueError("decision cancellation causation mismatch")
+            if payload.trigger_event_id in self._decision_consumptions:
+                raise ValueError(
+                    f"decision event consumed twice: {payload.trigger_event_id}"
                 )
-                if missing is not None:
-                    raise KeyError(missing)
+        elif isinstance(payload, StepContinuationCancelled):
+            step_event = self._event_ids.get(payload.step_event_id)
+            if step_event is None or step_event.session_id != event.session_id:
+                raise KeyError(payload.step_event_id)
+            if not isinstance(step_event.payload, StepCommitted):
+                raise ValueError(
+                    f"continuation target is not a step: {payload.step_event_id}"
+                )
+            if event.causation_id != payload.step_event_id:
+                raise ValueError("continuation cancellation causation mismatch")
+            if payload.step_event_id in self._cancelled_step_continuations:
+                raise ValueError(
+                    f"step continuation cancelled twice: {payload.step_event_id}"
+                )
 
     def _clear_session_step_claim(self, session_id: str) -> None:
         current = self._step_claims.pop(session_id, None)
@@ -846,11 +809,6 @@ class MemoryJournal:
             return
         if self._step_claim_tokens.get(current.token) == session_id:
             self._step_claim_tokens.pop(current.token, None)
-
-    @staticmethod
-    def _validate_termination_delivery(draft: EventDraft) -> None:
-        if not isinstance(draft.payload, TerminationRequested):
-            raise ValueError("delivery payload is not an external event")
 
     def _validate_step_lease(
         self,
@@ -876,7 +834,7 @@ class MemoryJournal:
             or draft.causation_id != request.trigger_event_id
         ):
             raise ValueError("step does not match its claim")
-        if request.trigger_event_id in self._step_consumptions:
+        if request.trigger_event_id in self._decision_consumptions:
             raise LeaseLostError(lease.token)
 
     @staticmethod
@@ -941,11 +899,10 @@ class MemoryJournal:
                 StepCommitted,
                 CommandAuthorized,
                 CommandRejected,
+                DecisionCancelled,
+                StepContinuationCancelled,
                 DispatchAttemptStarted,
                 UserMessageReceived,
-                TerminationRequested,
-                RuntimeCompleted,
-                RuntimeTerminated,
             ),
         ):
             raise ValueError("conditional event requires its Journal method")

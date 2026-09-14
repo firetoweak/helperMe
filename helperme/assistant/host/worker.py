@@ -122,6 +122,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
         session_id=session_id,
         context_usage_sink=lambda *values: notify("usage", *values),
         subagent_activity_sink=lambda *values: notify("activity", *values),
+        tool_progress_sink=lambda *values: notify("tool", *values),
         session_transport=peer.request,
         home=home,
     )
@@ -164,7 +165,13 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                     # Control proposals currently live in this Worker until resolved.
                     if view.control_approval is None:
                         advertised = revision
-                        await peer.send(("idle", revision, view.terminal))
+                        await peer.send(
+                            (
+                                "idle",
+                                revision,
+                                view.has_active_subagents,
+                            )
+                        )
             await peer.send(("stopping",))
         finally:
             await peer.close(RuntimeError("Worker closed"))

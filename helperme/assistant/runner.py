@@ -165,6 +165,11 @@ class SessionScheduler:
     def idle(self) -> bool:
         return self._task is None and self._runtime.dispatcher.active_count == 0
 
+    async def cancel_turn(self, session_id: str) -> None:
+        assert session_id == self._session_id
+        await self._runtime.cancel_turn(session_id)
+        self.changed.set()
+
     async def close(self) -> None:
         await self._runtime.dispatcher.close()
         task = self._task

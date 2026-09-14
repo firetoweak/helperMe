@@ -9,13 +9,12 @@ from helperme.runtime.events import (
     CommandAuthorized,
     CommandRejected,
     CommandOutcomeReceived,
+    DecisionCancelled,
     DomainFactCommitted,
     DispatchAttemptStarted,
     Event,
-    RuntimeCompleted,
-    RuntimeTerminated,
+    StepContinuationCancelled,
     StepCommitted,
-    TerminationRequested,
     UserMessageReceived,
 )
 from helperme.runtime.model import (
@@ -56,8 +55,6 @@ class _StateBuilder:
         self.attempt_event_ids: dict[tuple[str, str], str] = {}
         self.dispatch_command_ids: dict[str, str] = {}
         self.canonical_outcome_event_ids: set[str] = set()
-        self.terminal_event_id: str | None = None
-        self.terminal_status: RuntimeStatus | None = None
 
     def version(self) -> str:
         content = json.dumps(
@@ -93,12 +90,8 @@ class _StateBuilder:
             self._apply_dispatch_started(event, payload)
         elif isinstance(payload, CommandOutcomeReceived):
             self._apply_outcome(event, payload)
-        elif isinstance(payload, TerminationRequested):
+        elif isinstance(payload, (DecisionCancelled, StepContinuationCancelled)):
             pass
-        elif isinstance(payload, RuntimeCompleted):
-            self._apply_runtime_completed(event, payload)
-        elif isinstance(payload, RuntimeTerminated):
-            self._apply_runtime_terminated(event, payload)
         elif isinstance(payload, DomainFactCommitted):
             pass
         else:
@@ -229,33 +222,6 @@ class _StateBuilder:
             for attempt in state.attempts
         )
 
-    def _apply_runtime_completed(
-        self,
-        event: Event,
-        payload: RuntimeCompleted,
-    ) -> None:
-        if self.terminal_event_id is not None:
-            raise ValueError("runtime already terminal")
-        if payload.declared_by_event_id not in self.visible_event_ids:
-            raise ValueError("completion declaration is missing")
-        self.terminal_event_id = event.event_id
-        self.terminal_status = RuntimeStatus.COMPLETED
-
-    def _apply_runtime_terminated(
-        self,
-        event: Event,
-        payload: RuntimeTerminated,
-    ) -> None:
-        if self.terminal_event_id is not None:
-            raise ValueError("runtime already terminal")
-        if payload.declared_by_event_id not in self.visible_event_ids:
-            raise ValueError("termination declaration is missing")
-        for command_id in payload.abandoned_command_ids:
-            state = self.commands[command_id]
-            self.commands[command_id] = replace(state, abandoned=True)
-        self.terminal_event_id = event.event_id
-        self.terminal_status = RuntimeStatus.TERMINATED
-
     def apply_step(
         self,
         event: Event,
@@ -265,8 +231,6 @@ class _StateBuilder:
         payload = event.payload
         if not isinstance(payload, StepCommitted):
             raise TypeError(f"not a step event: {type(payload).__name__}")
-        if self.terminal_event_id is not None:
-            raise ValueError("step committed after runtime terminal")
         step = payload.step
         if step.step_id in self.step_ids:
             raise ValueError(f"duplicate step id: {step.step_id}")
@@ -307,6 +271,14 @@ class StateProjector:
     ) -> RuntimeProjection:
         self._validate_session(session_id, events)
         step_events = self._index_step_events(events)
+        cancellation_events = self._index_cancellation_events(events)
+        continuation_cancellations = self._index_continuation_cancellations(events)
+        duplicate_consumptions = set(step_events) & set(cancellation_events)
+        if duplicate_consumptions:
+            raise ValueError(
+                "decision event consumed twice: "
+                f"{sorted(duplicate_consumptions)[0]}"
+            )
         event_sequences = {event.event_id: event.sequence for event in events}
         issuing_observed = {
             event.event_id: event.payload.step.observed_journal_position
@@ -324,6 +296,7 @@ class StateProjector:
         decision = _StateBuilder(session_id)
         consumed: list[str] = []
         applied_step_event_ids: set[str] = set()
+        applied_cancellation_event_ids: set[str] = set()
         next_trigger: Event | None = None
 
         for event in events:
@@ -332,6 +305,12 @@ class StateProjector:
             if event.event_id in decision.visible_event_ids:
                 continue
             decision.apply_regular(event)
+            cancellation_event = cancellation_events.get(event.event_id)
+            if cancellation_event is not None:
+                decision.apply_regular(cancellation_event)
+                consumed.append(event.event_id)
+                applied_cancellation_event_ids.add(cancellation_event.event_id)
+                continue
             step_event = step_events.get(event.event_id)
             if step_event is not None:
                 step = step_event.payload.step
@@ -372,6 +351,7 @@ class StateProjector:
                 decision,
                 events,
                 issuing_observed,
+                continuation_cancellations,
             ):
                 continue
             if _is_external_decision_fact(event.payload) and (
@@ -402,6 +382,14 @@ class StateProjector:
             raise ValueError(
                 f"step commits cross an unconsumed decision event: {sorted(unapplied)}"
             )
+        unapplied_cancellations = {
+            event.event_id for event in cancellation_events.values()
+        } - applied_cancellation_event_ids
+        if unapplied_cancellations:
+            raise ValueError(
+                "cancellations cross an unconsumed decision event: "
+                f"{sorted(unapplied_cancellations)}"
+            )
 
         decision_state = decision.decision_state(tuple(consumed))
         journal_position = events[-1].sequence if events else 0
@@ -421,7 +409,6 @@ class StateProjector:
             state.command.command_id
             for state in command_states
             if state.phase is CommandPhase.PENDING
-            and not state.abandoned
             and state.dispatch_eligible_by_event_id is None
             and state.authorization_rejected_by_event_id is None
         )
@@ -429,7 +416,6 @@ class StateProjector:
             state.command.command_id
             for state in command_states
             if state.phase is not CommandPhase.TERMINAL
-            and not state.abandoned
             and state.authorization_rejected_by_event_id is None
         )
         waiting_for = (
@@ -447,22 +433,14 @@ class StateProjector:
                 or ("user_message",)
             )
         )
-        if operational.terminal_status is not None:
-            next_frame = None
-            next_trigger = None
-            waiting_for = ()
         state = CanonicalState(
             session_id=session_id,
             journal_position=journal_position,
             decision_cursor=len(consumed),
             status=(
-                operational.terminal_status
-                if operational.terminal_status is not None
-                else (
-                    RuntimeStatus.RUNNABLE
-                    if next_frame is not None
-                    else RuntimeStatus.WAITING
-                )
+                RuntimeStatus.RUNNABLE
+                if next_frame is not None
+                else RuntimeStatus.WAITING
             ),
             commands=command_states,
             steps=tuple(decision.steps),
@@ -514,23 +492,86 @@ class StateProjector:
         return result
 
     @staticmethod
+    def _index_cancellation_events(events: tuple[Event, ...]) -> dict[str, Event]:
+        events_by_id = {event.event_id: event for event in events}
+        result: dict[str, Event] = {}
+        for event in events:
+            payload = event.payload
+            if not isinstance(payload, DecisionCancelled):
+                continue
+            trigger_id = payload.trigger_event_id
+            trigger = events_by_id.get(trigger_id)
+            if trigger is None:
+                raise ValueError(
+                    f"cancelled decision trigger does not exist: {trigger_id}"
+                )
+            if trigger.sequence >= event.sequence:
+                raise ValueError(
+                    f"decision cancellation precedes its trigger: {event.event_id}"
+                )
+            if event.causation_id != trigger_id:
+                raise ValueError(
+                    f"decision cancellation causation mismatch: {event.event_id}"
+                )
+            if trigger_id in result:
+                raise ValueError(f"decision event consumed twice: {trigger_id}")
+            result[trigger_id] = event
+        return result
+
+    @staticmethod
+    def _index_continuation_cancellations(
+        events: tuple[Event, ...],
+    ) -> dict[str, Event]:
+        events_by_id = {event.event_id: event for event in events}
+        result: dict[str, Event] = {}
+        for event in events:
+            payload = event.payload
+            if not isinstance(payload, StepContinuationCancelled):
+                continue
+            step_event = events_by_id.get(payload.step_event_id)
+            if step_event is None:
+                raise ValueError(
+                    f"cancelled continuation step does not exist: {payload.step_event_id}"
+                )
+            if not isinstance(step_event.payload, StepCommitted):
+                raise ValueError(
+                    f"cancelled continuation target is not a step: {payload.step_event_id}"
+                )
+            if step_event.sequence >= event.sequence:
+                raise ValueError(
+                    f"continuation cancellation precedes its step: {event.event_id}"
+                )
+            if event.causation_id != payload.step_event_id:
+                raise ValueError(
+                    f"continuation cancellation causation mismatch: {event.event_id}"
+                )
+            if payload.step_event_id in result:
+                raise ValueError(
+                    f"step continuation cancelled twice: {payload.step_event_id}"
+                )
+            result[payload.step_event_id] = event
+        return result
+
+    @staticmethod
     def _requires_decision(
         event: Event,
         state: _StateBuilder,
         events: tuple[Event, ...],
         issuing_observed: dict[str, int],
+        continuation_cancellations: dict[str, Event],
     ) -> bool:
         payload = event.payload
         if _is_external_decision_fact(payload):
             return True
         if isinstance(payload, CommandRejected):
-            return not state.commands[payload.command_id].abandoned
+            return True
         if isinstance(payload, CommandOutcomeReceived):
             command_state = state.commands[payload.command_id]
             if not (
                 event.event_id in state.canonical_outcome_event_ids
                 and command_state.command.decision_on_outcome
-                and not command_state.abandoned
+                and command_state.issued_by_event_id
+                not in continuation_cancellations
                 and _parallel_decision_group_closed(state, command_state)
             ):
                 return False
@@ -551,8 +592,6 @@ class StateProjector:
         issuing_observed: dict[str, int],
     ) -> bool:
         for command_state in operational.commands.values():
-            if command_state.abandoned:
-                continue
             if (
                 issuing_observed[command_state.issued_by_event_id]
                 >= message.sequence
@@ -625,8 +664,6 @@ def _waited_batch_complete(
     issuing_observed: dict[str, int],
 ) -> bool:
     for command_state in operational.commands.values():
-        if command_state.abandoned:
-            continue
         if issuing_observed[command_state.issued_by_event_id] >= trigger_sequence:
             continue
         if not command_state.attempts:
@@ -652,8 +689,6 @@ def _parallel_decision_group_closed(
         if sibling.issued_by_event_id != issued_by:
             continue
         if not sibling.command.decision_on_outcome:
-            continue
-        if sibling.abandoned:
             continue
         if sibling.phase is not CommandPhase.TERMINAL:
             return False

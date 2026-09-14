@@ -169,11 +169,10 @@ def _message(chat_id: int, text: str):
 
 def _session_view(**overrides) -> SessionView:
     values = {
-        "status": "waiting",
-        "waiting_for": ("user_message",),
-        "pending_authorization_ids": (),
-        "terminal": False,
-        "should_wake": False,
+            "status": "waiting",
+            "waiting_for": ("user_message",),
+            "pending_authorization_ids": (),
+            "should_wake": False,
     }
     values.update(overrides)
     return SessionView(**values)

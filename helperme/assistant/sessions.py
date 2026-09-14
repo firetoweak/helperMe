@@ -23,7 +23,6 @@ class SessionView:
     status: str
     waiting_for: tuple[str, ...]
     pending_authorization_ids: tuple[str, ...]
-    terminal: bool
     should_wake: bool
     has_active_subagents: bool = False
     control_approval: ControlApprovalView | None = None
@@ -37,22 +36,14 @@ def session_view(
     control_message: str | None = None,
     has_active_subagents: bool = False,
 ) -> SessionView:
-    terminal = state.status in {
-        RuntimeStatus.COMPLETED,
-        RuntimeStatus.TERMINATED,
-    }
     return SessionView(
         status=state.status.value,
         waiting_for=state.waiting_for,
         pending_authorization_ids=pending_authorization_ids(state),
-        terminal=terminal,
         should_wake=(
-            not terminal
-            and (
-                state.status is RuntimeStatus.RUNNABLE
-                or any(
-                    command.phase is CommandPhase.PENDING for command in state.commands
-                )
+            state.status is RuntimeStatus.RUNNABLE
+            or any(
+                command.phase is CommandPhase.PENDING for command in state.commands
             )
         ),
         has_active_subagents=has_active_subagents,
@@ -183,8 +174,6 @@ class AssistantSessions:
                 approved=answer in {"yes", "y"},
             )
             return await self.view(session_id)
-        if view.terminal:
-            return view
         await self.receive_user_message(
             session_id,
             content,
@@ -207,3 +196,7 @@ class AssistantSessions:
             else:
                 await self._runtime.reject_command(session_id, command_id)
         await self._scheduler.wake(session_id)
+
+    async def cancel_turn(self, session_id: str) -> SessionView:
+        await self._scheduler.cancel_turn(session_id)
+        return await self.view(session_id)

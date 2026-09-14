@@ -175,29 +175,19 @@ class CommandOutcomeReceived:
 
 
 @dataclass(frozen=True, slots=True)
-class TerminationRequested:
-    reason: str | None = None
+class DecisionCancelled:
+    trigger_event_id: str
 
     def __post_init__(self) -> None:
-        _require_optional_str(self.reason, "termination reason")
+        _require_str(self.trigger_event_id, "cancelled decision trigger")
 
 
 @dataclass(frozen=True, slots=True)
-class RuntimeCompleted:
-    declared_by_event_id: str
+class StepContinuationCancelled:
+    step_event_id: str
 
     def __post_init__(self) -> None:
-        _require_str(self.declared_by_event_id, "declared by event id")
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeTerminated:
-    declared_by_event_id: str
-    abandoned_command_ids: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        _require_str(self.declared_by_event_id, "declared by event id")
-        _require_str_tuple(self.abandoned_command_ids, "abandoned command ids")
+        _require_str(self.step_event_id, "cancelled step continuation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,9 +210,8 @@ EventPayload: TypeAlias = (
     | CommandRejected
     | DispatchAttemptStarted
     | CommandOutcomeReceived
-    | TerminationRequested
-    | RuntimeCompleted
-    | RuntimeTerminated
+    | DecisionCancelled
+    | StepContinuationCancelled
     | DomainFactCommitted
 )
 
@@ -233,9 +222,8 @@ _EVENT_PAYLOAD_TYPES = (
     CommandRejected,
     DispatchAttemptStarted,
     CommandOutcomeReceived,
-    TerminationRequested,
-    RuntimeCompleted,
-    RuntimeTerminated,
+    DecisionCancelled,
+    StepContinuationCancelled,
     DomainFactCommitted,
 )
 
@@ -248,7 +236,7 @@ class EventDraft:
     occurred_at: datetime
     causation_id: str | None = None
     correlation_id: str | None = None
-    schema_version: int = 4
+    schema_version: int = 5
     artifact_refs: tuple[str, ...] = ()
     delivery: DeliveryIdentity | None = None
 

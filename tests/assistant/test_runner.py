@@ -11,7 +11,6 @@ from helperme.llm.api import LLMProviderError
 from helperme.llm.types import LLMResponse, ToolCall
 from helperme.runtime import (
     AgentRuntime,
-    LifecycleIntent,
     MemoryJournal,
     ModelDecision,
     RuntimeStatus,
@@ -151,7 +150,6 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(decision.content, "looking")
-        self.assertEqual(decision.lifecycle_intent, LifecycleIntent.NONE)
         self.assertEqual(decision.command_requests[0].name, "read_file")
         self.assertEqual(
             decision.command_requests[0].argument_dict(),

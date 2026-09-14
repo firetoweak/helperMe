@@ -18,7 +18,6 @@ from helperme.runtime import (
     AgentRuntime,
     CommandPhase,
     InvokeTool,
-    LifecycleIntent,
     MemoryJournal,
     ModelDecision,
     RuntimeStatus,
@@ -238,44 +237,6 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
-    async def test_resume_does_not_wake_terminal_session(self):
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            ScriptedDecisionMaker(
-                (
-                    lambda _frame: ModelDecision(
-                        content="done",
-                        lifecycle_intent=LifecycleIntent.COMPLETE,
-                    ),
-                )
-            ),
-            {},
-            SequentialIds(),
-        )
-        await runtime.create_session(self.SESSION_ID)
-        await runtime.receive_user_message(
-            self.SESSION_ID,
-            "hello",
-            delivery_id="user-1",
-        )
-        await settle_session(runtime, self.SESSION_ID)
-        terminal = await runtime.finalize(self.SESSION_ID)
-        self.assertIsNotNone(terminal)
-        self.assertEqual(
-            (await runtime.state(self.SESSION_ID)).status,
-            RuntimeStatus.COMPLETED,
-        )
-
-        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
-        sessions, _surface = self._sessions(runtime, scheduler)
-        try:
-            view = await sessions.resume(self.SESSION_ID)
-            self.assertTrue(view.terminal)
-            self.assertFalse(view.should_wake)
-            self.assertEqual(scheduler.woken, [])
-        finally:
-            await scheduler.close()
-
     async def test_resume_does_not_wake_idle_session(self):
         runtime = AgentRuntime(MemoryJournal(), ScriptedDecisionMaker(()), {})
         scheduler = RecordingScheduler(runtime, self.SESSION_ID)
@@ -297,7 +258,6 @@ class AcceptInputTest(unittest.IsolatedAsyncioTestCase):
             status="waiting",
             waiting_for=(),
             pending_authorization_ids=("command-1",),
-            terminal=False,
             should_wake=False,
             control_approval=object(),
         )
@@ -305,7 +265,6 @@ class AcceptInputTest(unittest.IsolatedAsyncioTestCase):
             status="waiting",
             waiting_for=("user_message",),
             pending_authorization_ids=("command-1",),
-            terminal=False,
             should_wake=False,
         )
         sessions.view = AsyncMock(side_effect=(pending, resolved))
@@ -325,30 +284,6 @@ class AcceptInputTest(unittest.IsolatedAsyncioTestCase):
         sessions.resolve_authorizations.assert_not_awaited()
         sessions.receive_user_message.assert_not_awaited()
         self.assertEqual(result.control_message, "控制操作完成")
-
-    async def test_terminal_input_is_not_recorded_as_user_message(self):
-        sessions = object.__new__(AssistantSessions)
-        terminal = SessionView(
-            status="completed",
-            waiting_for=(),
-            pending_authorization_ids=(),
-            terminal=True,
-            should_wake=False,
-        )
-        sessions.view = AsyncMock(return_value=terminal)
-        sessions.resolve_control = AsyncMock()
-        sessions.resolve_authorizations = AsyncMock()
-        sessions.receive_user_message = AsyncMock()
-
-        result = await sessions.accept_input(
-            "session-1",
-            "hello",
-            delivery_id="input-1",
-        )
-
-        self.assertIs(result, terminal)
-        sessions.receive_user_message.assert_not_awaited()
-
 
 async def _explode(_context, _arguments):
     raise RuntimeError("boom")

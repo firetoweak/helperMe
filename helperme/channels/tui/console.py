@@ -284,8 +284,6 @@ async def run_runtime_console() -> None:
                     )
                     if view.control_message is not None:
                         _print_runtime_status(view)
-                    elif view.terminal:
-                        print("当前 Session 已结束，输入 /new。")
                 except WorkerFailed as error:
                     print(f"\nSession 运行失败：{error}")
         finally:

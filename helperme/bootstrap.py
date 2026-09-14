@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+from helperme.assistant.host.process_env import install_host_environment
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.config import AppConfig, assistant_config_from_app, load_app_config
@@ -37,7 +38,9 @@ async def bootstrap_assistant(
     context_usage_sink=None,
     subagent_activity_sink=None,
     conversation_status_sink=None,
+    tool_progress_sink=None,
 ) -> AsyncIterator[BootstrappedAssistant]:
+    install_host_environment()
     config = load_app_config() if app_config is None else app_config
     home = HelperMeHome.default()
     home.initialize()
@@ -50,6 +53,7 @@ async def bootstrap_assistant(
         context_usage_sink=context_usage_sink,
         subagent_activity_sink=subagent_activity_sink,
         conversation_status_sink=conversation_status_sink,
+        tool_progress_sink=tool_progress_sink,
     )
     # Channel management is product-level; session tools get their own clients.
     management_llm = LiteLLMAdapter(config.model)

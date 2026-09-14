@@ -72,6 +72,7 @@ async def build_assistant_assembly(
     session_id: str,
     context_usage_sink: Callable[[str, int, int], None] | None = None,
     subagent_activity_sink: Callable[[str, bool], None] | None = None,
+    tool_progress_sink=None,
     scheduler_factory=SessionScheduler,
     session_transport=None,
     home: HelperMeHome | None = None,
@@ -163,6 +164,7 @@ async def build_assistant_assembly(
         **subagents.bindings(),
         **compact_context.bindings(),
     }
+    bindings = _with_tool_progress(bindings, tool_progress_sink)
     decision = JournalBackedLlmDecisionMaker(
         journal,
         config.llm,
@@ -228,3 +230,30 @@ async def build_assistant_assembly(
         control=control,
         subagents=subagents,
     )
+
+
+def _with_tool_progress(bindings, sink):
+    if sink is None:
+        return bindings
+    projected = {}
+    for name, binding in bindings.items():
+        if name == DELIVER_TOOL_NAME:
+            projected[name] = binding
+            continue
+
+        async def handler(context, arguments, _name=name, _handler=binding.handler):
+            sink(context.session_id, "start", context.command_id, _name, arguments)
+            try:
+                result = await _handler(context, arguments)
+            except BaseException:
+                sink(context.session_id, "fail", context.command_id, _name, None)
+                raise
+            sink(context.session_id, "finish", context.command_id, _name, result)
+            return result
+
+        projected[name] = ToolBinding(
+            handler,
+            decision_on_outcome=binding.decision_on_outcome,
+            requires_authorization=binding.requires_authorization,
+        )
+    return projected

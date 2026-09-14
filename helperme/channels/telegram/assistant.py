@@ -67,8 +67,6 @@ class TelegramChannel:
         )
         if view.control_message is not None:
             await self.send(view.control_message)
-        elif view.terminal:
-            await self.send("当前 Session 已结束。")
 
 
 async def _open_chat_channel(

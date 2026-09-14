@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 
@@ -11,15 +11,16 @@ from helperme.runtime.dispatcher import Dispatcher, ToolBinding
 from helperme.runtime.events import (
     CommandAuthorized,
     CommandRejected,
+    DecisionCancelled,
     DomainFactCommitted,
     Event,
     EventDraft,
     DeliveryIdentity,
-    TerminationRequested,
+    StepContinuationCancelled,
     UserMessageReceived,
 )
 from helperme.runtime.journal.api import Journal, LeaseLostError, StepClaimRequest
-from helperme.runtime.model import CanonicalState, RuntimeStatus, Step
+from helperme.runtime.model import CanonicalState, CommandPhase, RuntimeStatus, Step
 from helperme.runtime.projections import (
     ReplayView,
     TraceView,
@@ -34,6 +35,14 @@ from helperme.runtime.step import DecisionMaker, IdFactory, StepRunner, random_i
 class AdvanceResult:
     step: Step | None
     status: RuntimeStatus
+
+
+@dataclass(slots=True)
+class _ActiveDecision:
+    trigger_event_id: str
+    cancel_requested: asyncio.Event = field(default_factory=asyncio.Event)
+    finished: asyncio.Event = field(default_factory=asyncio.Event)
+    cancellation: Event | None = None
 
 
 async def _cancel_task(task: asyncio.Task[object]) -> None:
@@ -96,6 +105,7 @@ class AgentRuntime:
             attempt_lease_seconds=attempt_lease_seconds,
         )
         self._step_locks: dict[str, asyncio.Lock] = {}
+        self._active_decisions: dict[str, _ActiveDecision] = {}
 
     def bind_tool(
         self,
@@ -182,31 +192,77 @@ class AgentRuntime:
             artifact_refs=tuple(artifact_refs),
         )
 
-    async def receive_termination(
-        self,
-        session_id: str,
-        reason: str | None = None,
-        *,
-        delivery_id: str,
-        source: str = "user",
-    ) -> Event:
-        result = await self._journal.accept_termination(
-            EventDraft(
-                event_id=self._id_factory("event"),
-                session_id=session_id,
-                payload=TerminationRequested(reason),
-                occurred_at=datetime.now(timezone.utc),
-                delivery=DeliveryIdentity(source, delivery_id),
-            ),
-            terminal_event_id=self._id_factory("event"),
-        )
-        return result.event
+    async def cancel_turn(self, session_id: str) -> tuple[Event, ...]:
+        """Stop the current automatic decision chain without stopping Commands."""
 
-    async def finalize(self, session_id: str) -> Event | None:
-        return await self._journal.finalize(
-            session_id,
-            self._id_factory("event"),
-        )
+        recorded: list[Event] = []
+        while True:
+            active = self._active_decisions.get(session_id)
+            if active is not None:
+                cancellation = await self._journal.cancel_decision(
+                    EventDraft(
+                        event_id=self._id_factory("event"),
+                        session_id=session_id,
+                        payload=DecisionCancelled(active.trigger_event_id),
+                        occurred_at=datetime.now(timezone.utc),
+                        causation_id=active.trigger_event_id,
+                    )
+                )
+                active.cancellation = cancellation
+                active.cancel_requested.set()
+                await active.finished.wait()
+                if cancellation is not None:
+                    return (*recorded, cancellation)
+                continue
+
+            events = await self._journal.snapshot(session_id)
+            projection = self.projector.project(session_id, events)
+            frame = projection.next_decision
+            if frame is not None:
+                cancellation = await self._journal.cancel_decision(
+                    EventDraft(
+                        event_id=self._id_factory("event"),
+                        session_id=session_id,
+                        payload=DecisionCancelled(frame.trigger_event.event_id),
+                        occurred_at=datetime.now(timezone.utc),
+                        causation_id=frame.trigger_event.event_id,
+                    )
+                )
+                if cancellation is not None:
+                    return (*recorded, cancellation)
+                continue
+
+            cancelled_step_ids = {
+                event.payload.step_event_id
+                for event in events
+                if isinstance(event.payload, StepContinuationCancelled)
+            }
+            step_event_ids = {
+                command.issued_by_event_id
+                for command in projection.state.commands
+                if command.phase is not CommandPhase.TERMINAL
+                and command.authorization_rejected_by_event_id is None
+                and command.command.decision_on_outcome
+                and command.issued_by_event_id not in cancelled_step_ids
+            }
+            cancellations: list[Event] = []
+            for step_event_id in step_event_ids:
+                cancellation = await self._journal.cancel_continuation(
+                    EventDraft(
+                        event_id=self._id_factory("event"),
+                        session_id=session_id,
+                        payload=StepContinuationCancelled(step_event_id),
+                        occurred_at=datetime.now(timezone.utc),
+                        causation_id=step_event_id,
+                    )
+                )
+                if cancellation is not None:
+                    cancellations.append(cancellation)
+            if cancellations:
+                recorded.extend(cancellations)
+                continue
+            if not step_event_ids:
+                return tuple(recorded)
 
     async def grant_command(
         self,
@@ -265,6 +321,10 @@ class AgentRuntime:
             )
             if lease is None:
                 return AdvanceResult(None, RuntimeStatus.RUNNABLE)
+            active = _ActiveDecision(frame.trigger_event.event_id)
+            if session_id in self._active_decisions:
+                raise RuntimeError(f"decision already active: {session_id}")
+            self._active_decisions[session_id] = active
             heartbeat = asyncio.create_task(
                 self._step_heartbeat(lease),
                 name=f"agent-step-heartbeat:{lease.token}",
@@ -273,13 +333,27 @@ class AgentRuntime:
                 self.step_runner.commit(frame, lease),
                 name=f"agent-step:{lease.token}",
             )
+            cancellation = asyncio.create_task(
+                active.cancel_requested.wait(),
+                name=f"agent-step-cancel:{lease.token}",
+            )
             try:
                 done, _ = await asyncio.wait(
-                    (operation, heartbeat),
+                    (operation, heartbeat, cancellation),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if operation in done:
                     step_event = await operation
+                elif cancellation in done:
+                    if not operation.done():
+                        operation.cancel()
+                    try:
+                        step_event = await operation
+                    except asyncio.CancelledError:
+                        return AdvanceResult(
+                            None,
+                            (await self.state(session_id)).status,
+                        )
                 else:
                     error = heartbeat.exception()
                     if error is None:
@@ -287,17 +361,22 @@ class AgentRuntime:
                     raise error
             except LeaseLostError:
                 await self._journal.release_step(lease)
-                return AdvanceResult(None, RuntimeStatus.RUNNABLE)
+                return AdvanceResult(None, (await self.state(session_id)).status)
             except BaseException:
                 await self._journal.release_step(lease)
                 raise
             finally:
+                if not cancellation.done():
+                    cancellation.cancel()
+                await asyncio.gather(cancellation, return_exceptions=True)
                 if not operation.done():
                     await _cancel_task(operation)
                 elif not operation.cancelled():
                     # heartbeat 与提交同时失败时，也要取走提交任务的异常。
                     operation.exception()
                 await _stop_heartbeat(heartbeat)
+                self._active_decisions.pop(session_id)
+                active.finished.set()
             step = step_event.payload.step
             dispatch = await self.dispatcher.start_pending(session_id)
             return AdvanceResult(step, dispatch.status)

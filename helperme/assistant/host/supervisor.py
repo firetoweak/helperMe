@@ -10,6 +10,7 @@ from helperme.assistant.delivery import emit_delivery
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.subagent.subagent import persist_return, report_arguments, return_data
+from helperme.assistant.host.spawn import start_worker
 from helperme.assistant.host.worker import worker_main
 from helperme.runtime import SqliteJournal
 from helperme.sandbox.local.windows_job import WindowsJob
@@ -22,11 +23,12 @@ class Worker:
     reader: asyncio.Task | None = None
     requests: int = 0
     idle_revision: int | None = None
-    terminal: bool = False
     stopping: bool = False
     exited: asyncio.Event = field(default_factory=asyncio.Event)
     failure: WorkerFailed | None = None
     transition: asyncio.Event = field(default_factory=asyncio.Event)
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    idle_has_active_subagents: bool = False
     returned: tuple[str, dict] | None = None
     reclaimed: bool = False
 
@@ -44,6 +46,7 @@ class HostSupervisor:
         context_usage_sink=None,
         subagent_activity_sink=None,
         conversation_status_sink=None,
+        tool_progress_sink=None,
     ):
         self.store = store
         self.config_factory = config_factory
@@ -52,6 +55,7 @@ class HostSupervisor:
         self.context_usage_sink = context_usage_sink
         self.subagent_activity_sink = subagent_activity_sink
         self.conversation_status_sink = conversation_status_sink
+        self.tool_progress_sink = tool_progress_sink
         self.workers: dict[str, Worker] = {}
         self.watchers: set[asyncio.Task] = set()
         self.locks: dict[str, asyncio.Lock] = {}
@@ -113,18 +117,29 @@ class HostSupervisor:
                     self.subagent_activity_sink(
                         *values
                     )
+            elif kind == "tool":
+                if (
+                    self.tool_progress_sink is not None
+                    and self.compact.store.reader_job(session_id) is None
+                ):
+                    self.tool_progress_sink(*values)
             elif kind == "idle":
                 worker.idle_revision = values[0]
-                worker.terminal = values[1]
+                worker.idle_has_active_subagents = values[1]
+                worker.changed.set()
                 await self._stop_idle(session_id, worker)
             elif kind == "busy":
                 worker.idle_revision = None
+                worker.idle_has_active_subagents = False
                 worker.stopping = False
                 worker.transition.set()
+                worker.changed.set()
             elif kind == "stopping":
                 worker.stopping = True
+                worker.changed.set()
             elif kind == "failure":
                 worker.failure = WorkerFailed(session_id, values[0])
+                worker.changed.set()
             elif kind == "return":
                 worker.returned = tuple(values)
             else:
@@ -146,7 +161,7 @@ class HostSupervisor:
             ),
             name=f"session:{session_id}",
         )
-        process.start()
+        start_worker(process, extra_handles=(local, remote))
         try:
             if self.job is not None:
                 self.job.assign(process.pid)
@@ -218,6 +233,7 @@ class HostSupervisor:
             self.workers.pop(session_id)
             worker.exited.set()
             worker.transition.set()
+            worker.changed.set()
         # Release the dead Worker and its pending requests before waking the parent.
         if worker.failure is not None:
             self.compact.store.fail(session_id, asdict(worker.failure.failure))
@@ -274,10 +290,8 @@ class HostSupervisor:
             worker.requests == 0
             and worker.idle_revision is not None
             and not worker.stopping
-            and (
-                worker.terminal
-                or not self._selected(session_id) and not self._being_selected(session_id)
-            )
+            and not self._selected(session_id)
+            and not self._being_selected(session_id)
         ):
             worker.stopping = True
             worker.transition.clear()
@@ -365,6 +379,23 @@ class HostSupervisor:
         return await self.compact.application(
             "resolve_control", session_id, dict(approved=approved)
         )
+
+    async def cancel_turn(self, session_id):
+        return await self.compact.application("cancel_turn", session_id, {})
+
+    async def wait_quiescent(self, session_id):
+        worker = self.workers.get(session_id)
+        if worker is None:
+            return await self.view(session_id)
+        while True:
+            worker.changed.clear()
+            if worker.failure is not None:
+                raise worker.failure
+            if worker.idle_revision is not None and not worker.idle_has_active_subagents:
+                return await self.view(session_id)
+            if worker.exited.is_set():
+                return await self.view(session_id)
+            await worker.changed.wait()
 
     async def wait_failure(self):
         return await self.failures.get()

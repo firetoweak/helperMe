@@ -112,7 +112,6 @@ class Dispatcher:
             item
             for item in state.commands
             if item.phase is CommandPhase.PENDING
-            and not item.abandoned
             and item.dispatch_eligible_by_event_id is not None
             and item.authorization_rejected_by_event_id is None
             and (

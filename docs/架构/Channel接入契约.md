@@ -1,6 +1,8 @@
 # Channel 接入契约
 
-Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 Access、Conversation、Delivery、Reply route 四种 identity，不实现模型决策或 Session 推进循环。TUI / Telegram 的具体行为见[入口与授权](入口与授权.md)；进程驻留见[多活跃会话](多活跃会话.md)。
+Channel 把外部通信协议映射到 Assistant 的 Session 操作。它负责 Access、Conversation、Delivery、Reply route 四种 identity，不实现模型决策或 Session 推进循环，也不决定本机用哪套环境变量去找程序、跑命令。TUI / Telegram 的具体行为见[入口与授权](入口与授权.md)；进程驻留和进程身份见[多活跃会话](多活跃会话.md)。
+
+本文仍是当前实现准绳。ACP v1 当前接了哪些方法见 [ACP 映射](ACP映射.md)。已经确认、尚未实施的 ACP / Satori 替换方案见 [Channel 协议改造](Channel协议改造.md)。
 
 [Compact](Compact.md) 只切换同一业务 Session 内的上下文窗口；Channel 使用稳定 Session identity，不为压缩维护入口路由。
 
@@ -46,9 +48,9 @@ Assistant 文本通过产品拥有的 `deliver` Command 到达 Channel sink。�
 - 不提供 `/stop`；
 - `Ctrl+C` / `Ctrl+D`：退出进程，不写 Runtime Event。
 
-Channel 关闭时释放 owner。Runtime 的 `WAITING` 不决定 Worker 是否退出；Host 在 Worker 静止后根据 terminal 与 owner 选择决定是否继续驻留。
+Channel 关闭时释放 owner。Runtime 的 `WAITING` 不决定 Worker 是否退出；Host 在 Worker 静止后根据 owner 选择决定是否继续驻留。
 
-普通 Channel 不请求 `finalize()`。一次回答结束后 Session 回到 `WAITING(user_message)`，后续文本进入该对话的同一 Session；compact 可以在两次模型决策之间切换 ContextWindow，Session、用户入口和 Reply route 不变。
+一次回答结束后 Session 回到 `WAITING(user_message)`，后续文本进入该对话的同一 Session；compact 可以在两次模型决策之间切换 ContextWindow，Session、用户入口和 Reply route 不变。Session 没有绝对终态。
 
 ## 验收
 

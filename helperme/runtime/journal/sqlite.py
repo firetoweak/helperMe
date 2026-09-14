@@ -24,21 +24,15 @@ from helperme.runtime.events import (
     CommandAuthorized,
     CommandOutcomeReceived,
     CommandRejected,
+    DecisionCancelled,
     DeliveryIdentity,
     DispatchAttemptStarted,
     DomainFactCommitted,
     Event,
     EventDraft,
-    RuntimeCompleted,
-    RuntimeTerminated,
+    StepContinuationCancelled,
     StepCommitted,
-    TerminationRequested,
     UserMessageReceived,
-)
-from helperme.runtime.finalization import (
-    FinalizationKind,
-    finalization_opportunity,
-    terminal_event_draft,
 )
 from helperme.runtime.journal.api import (
     AppendResult,
@@ -53,7 +47,7 @@ from helperme.runtime.model import (
 
 
 _T = TypeVar("_T")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 async def _await_task_uninterruptibly(task: asyncio.Task[_T]) -> _T:
@@ -113,18 +107,22 @@ CREATE TABLE IF NOT EXISTS step_claims (
     expires_at REAL NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS step_consumptions (
+CREATE TABLE IF NOT EXISTS decision_consumptions (
     trigger_event_id TEXT PRIMARY KEY REFERENCES events(event_id),
     session_id TEXT NOT NULL REFERENCES sessions(session_id),
-    step_event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
-    step_id TEXT NOT NULL UNIQUE
+    result_event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
+    step_id TEXT UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS cancelled_step_continuations (
+    step_event_id TEXT PRIMARY KEY REFERENCES events(event_id),
+    cancellation_event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id)
 );
 
 CREATE TABLE IF NOT EXISTS commands (
     command_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(session_id),
     issued_event_id TEXT NOT NULL REFERENCES events(event_id),
-    abandoned INTEGER NOT NULL DEFAULT 0 CHECK (abandoned IN (0, 1)),
     dispatch_eligible_event_id TEXT REFERENCES events(event_id),
     authorization_rejected_event_id TEXT UNIQUE REFERENCES events(event_id),
     canonical_outcome_event_id TEXT UNIQUE REFERENCES events(event_id),
@@ -155,13 +153,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     state_json TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS session_terminals (
-    session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
-    event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
-    kind TEXT NOT NULL CHECK (kind IN ('completed', 'terminated'))
-);
-
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 """
 
 
@@ -327,6 +319,28 @@ class SqliteJournal:
             )
         )
 
+    async def cancel_decision(
+        self,
+        draft: EventDraft,
+    ) -> Event | None:
+        self._validate_internal_draft(draft)
+        if not isinstance(draft.payload, DecisionCancelled):
+            raise TypeError(type(draft.payload).__name__)
+        return await self._write(
+            lambda connection: self._cancel_decision_tx(connection, draft)
+        )
+
+    async def cancel_continuation(
+        self,
+        draft: EventDraft,
+    ) -> Event | None:
+        self._validate_internal_draft(draft)
+        if not isinstance(draft.payload, StepContinuationCancelled):
+            raise TypeError(type(draft.payload).__name__)
+        return await self._write(
+            lambda connection: self._cancel_continuation_tx(connection, draft)
+        )
+
     async def start_attempt(
         self,
         draft: EventDraft,
@@ -465,33 +479,6 @@ class SqliteJournal:
             )
         )
 
-    async def finalize(self, session_id: str, event_id: str) -> Event | None:
-        return await self._write(
-            lambda connection: self._finalize_tx(
-                connection,
-                session_id,
-                event_id,
-            )
-        )
-
-    async def accept_termination(
-        self,
-        request_draft: EventDraft,
-        *,
-        terminal_event_id: str,
-    ) -> AppendResult:
-        if not isinstance(request_draft.payload, TerminationRequested):
-            raise ValueError("delivery payload is not an external event")
-        if request_draft.delivery is None:
-            raise ValueError("external event requires delivery identity")
-        return await self._write(
-            lambda connection: self._accept_termination_tx(
-                connection,
-                request_draft,
-                terminal_event_id,
-            )
-        )
-
     def _initialize(self) -> None:
         connection = sqlite3.connect(
             self._path,
@@ -589,58 +576,6 @@ class SqliteJournal:
             (session_id,),
         ).fetchall()
         return tuple(self._event_from_row(row) for row in rows)
-
-    def _finalize_tx(
-        self,
-        connection: sqlite3.Connection,
-        session_id: str,
-        event_id: str,
-    ) -> Event | None:
-        existing = connection.execute(
-            "SELECT * FROM events WHERE event_id = ?",
-            (event_id,),
-        ).fetchone()
-        if existing is not None:
-            event = self._event_from_row(existing)
-            if not isinstance(
-                event.payload,
-                (RuntimeCompleted, RuntimeTerminated),
-            ):
-                raise ValueError(f"event id conflict: {event_id}")
-            return event
-        opportunity = finalization_opportunity(
-            session_id,
-            self._events_tx(connection, session_id),
-        )
-        if opportunity is None:
-            return None
-        draft = terminal_event_draft(session_id, event_id, opportunity)
-        return self._append_tx(connection, draft).event
-
-    def _accept_termination_tx(
-        self,
-        connection: sqlite3.Connection,
-        request_draft: EventDraft,
-        terminal_event_id: str,
-    ) -> AppendResult:
-        result = self._append_tx(connection, request_draft)
-        if not result.inserted:
-            return result
-        opportunity = finalization_opportunity(
-            request_draft.session_id,
-            self._events_tx(connection, request_draft.session_id),
-        )
-        if (
-            opportunity is not None
-            and opportunity.kind is FinalizationKind.TERMINATE_FROM_REQUEST
-            and opportunity.declared_by_event_id == result.event.event_id
-        ):
-            self._finalize_tx(
-                connection,
-                request_draft.session_id,
-                terminal_event_id,
-            )
-        return result
 
     def _append_tx(
         self,
@@ -795,24 +730,7 @@ class SqliteJournal:
         ).fetchone()
         if trigger is None or trigger["session_id"] != request.session_id:
             raise KeyError(request.trigger_event_id)
-        if (
-            connection.execute(
-                """
-            SELECT 1 FROM step_consumptions
-            WHERE trigger_event_id = ?
-            """,
-                (request.trigger_event_id,),
-            ).fetchone()
-            is not None
-        ):
-            return None
-        if (
-            connection.execute(
-                "SELECT 1 FROM session_terminals WHERE session_id = ?",
-                (request.session_id,),
-            ).fetchone()
-            is not None
-        ):
+        if self._decision_consumed_tx(connection, request.trigger_event_id):
             return None
 
         current = connection.execute(
@@ -962,12 +880,12 @@ class SqliteJournal:
                 raise ValueError(f"event id conflict: {draft.event_id}")
             consumption = connection.execute(
                 """
-                SELECT step_event_id FROM step_consumptions
+                SELECT result_event_id FROM decision_consumptions
                 WHERE trigger_event_id = ?
                 """,
                 (lease.request.trigger_event_id,),
             ).fetchone()
-            if consumption is None or consumption["step_event_id"] != event.event_id:
+            if consumption is None or consumption["result_event_id"] != event.event_id:
                 raise LeaseLostError(lease.token)
             return event
 
@@ -984,24 +902,7 @@ class SqliteJournal:
         ):
             raise LeaseLostError(lease.token)
         self._validate_step_draft(lease.request, draft)
-        if (
-            connection.execute(
-                """
-            SELECT 1 FROM step_consumptions
-            WHERE trigger_event_id = ?
-            """,
-                (lease.request.trigger_event_id,),
-            ).fetchone()
-            is not None
-        ):
-            raise LeaseLostError(lease.token)
-        if (
-            connection.execute(
-                "SELECT 1 FROM session_terminals WHERE session_id = ?",
-                (lease.request.session_id,),
-            ).fetchone()
-            is not None
-        ):
+        if self._decision_consumed_tx(connection, lease.request.trigger_event_id):
             raise LeaseLostError(lease.token)
 
         event = self._append_tx(connection, draft).event
@@ -1017,6 +918,75 @@ class SqliteJournal:
             ),
         )
         return event
+
+    def _cancel_decision_tx(
+        self,
+        connection: sqlite3.Connection,
+        draft: EventDraft,
+    ) -> Event | None:
+        payload = draft.payload
+        if not isinstance(payload, DecisionCancelled):
+            raise TypeError(type(payload).__name__)
+        existing = connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (draft.event_id,),
+        ).fetchone()
+        if existing is not None:
+            event = self._event_from_row(existing)
+            if not self._same_event(event, draft):
+                raise ValueError(f"event id conflict: {draft.event_id}")
+            consumption = connection.execute(
+                """
+                SELECT result_event_id FROM decision_consumptions
+                WHERE trigger_event_id = ?
+                """,
+                (payload.trigger_event_id,),
+            ).fetchone()
+            if consumption is None or consumption["result_event_id"] != event.event_id:
+                return None
+            return event
+        if self._decision_consumed_tx(connection, payload.trigger_event_id):
+            return None
+        return self._append_tx(connection, draft).event
+
+    def _cancel_continuation_tx(
+        self,
+        connection: sqlite3.Connection,
+        draft: EventDraft,
+    ) -> Event | None:
+        payload = draft.payload
+        if not isinstance(payload, StepContinuationCancelled):
+            raise TypeError(type(payload).__name__)
+        existing = connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (draft.event_id,),
+        ).fetchone()
+        if existing is not None:
+            event = self._event_from_row(existing)
+            if not self._same_event(event, draft):
+                raise ValueError(f"event id conflict: {draft.event_id}")
+            cancellation = connection.execute(
+                """
+                SELECT cancellation_event_id FROM cancelled_step_continuations
+                WHERE step_event_id = ?
+                """,
+                (payload.step_event_id,),
+            ).fetchone()
+            if (
+                cancellation is None
+                or cancellation["cancellation_event_id"] != event.event_id
+            ):
+                return None
+            return event
+        if (
+            connection.execute(
+                "SELECT 1 FROM cancelled_step_continuations WHERE step_event_id = ?",
+                (payload.step_event_id,),
+            ).fetchone()
+            is not None
+        ):
+            return None
+        return self._append_tx(connection, draft).event
 
     def _start_attempt_tx(
         self,
@@ -1042,7 +1012,7 @@ class SqliteJournal:
         ).fetchone()
         if command is None or command["session_id"] != draft.session_id:
             raise KeyError(payload.command_id)
-        if command["abandoned"] or command["canonical_outcome_event_id"]:
+        if command["canonical_outcome_event_id"]:
             return None
         if (
             command["dispatch_eligible_event_id"] is None
@@ -1073,7 +1043,7 @@ class SqliteJournal:
         ).fetchone()
         if command is None or command["session_id"] != session_id:
             raise KeyError(command_id)
-        if command["abandoned"] or command["canonical_outcome_event_id"]:
+        if command["canonical_outcome_event_id"]:
             return None
         if command["dispatch_eligible_event_id"] is not None:
             return None
@@ -1204,8 +1174,8 @@ class SqliteJournal:
             step = payload.step
             connection.execute(
                 """
-                INSERT INTO step_consumptions(
-                    trigger_event_id, session_id, step_event_id, step_id
+                INSERT INTO decision_consumptions(
+                    trigger_event_id, session_id, result_event_id, step_id
                 ) VALUES (?, ?, ?, ?)
                 """,
                 (
@@ -1238,7 +1208,6 @@ class SqliteJournal:
                 UPDATE commands SET dispatch_eligible_event_id = ?
                 WHERE command_id = ?
                     AND dispatch_eligible_event_id IS NULL
-                    AND abandoned = 0
                     AND canonical_outcome_event_id IS NULL
                     AND authorization_rejected_event_id IS NULL
                     AND NOT EXISTS (
@@ -1257,7 +1226,6 @@ class SqliteJournal:
                 WHERE command_id = ?
                     AND authorization_rejected_event_id IS NULL
                     AND dispatch_eligible_event_id IS NULL
-                    AND abandoned = 0
                     AND canonical_outcome_event_id IS NULL
                     AND NOT EXISTS (
                         SELECT 1 FROM attempts WHERE command_id = ?
@@ -1333,32 +1301,65 @@ class SqliteJournal:
                     connection,
                     payload.attempt_id,
                 )
-        elif isinstance(payload, (RuntimeCompleted, RuntimeTerminated)):
-            kind = (
-                "completed" if isinstance(payload, RuntimeCompleted) else "terminated"
-            )
+        elif isinstance(payload, DecisionCancelled):
+            trigger = connection.execute(
+                "SELECT session_id FROM events WHERE event_id = ?",
+                (payload.trigger_event_id,),
+            ).fetchone()
+            if trigger is None or trigger["session_id"] != event.session_id:
+                raise KeyError(payload.trigger_event_id)
+            if event.causation_id != payload.trigger_event_id:
+                raise ValueError("decision cancellation causation mismatch")
+            if self._decision_consumed_tx(
+                connection,
+                payload.trigger_event_id,
+            ):
+                raise ValueError(
+                    f"decision event consumed twice: {payload.trigger_event_id}"
+                )
             connection.execute(
                 """
-                INSERT INTO session_terminals(session_id, event_id, kind)
-                VALUES (?, ?, ?)
+                INSERT INTO decision_consumptions(
+                    trigger_event_id, session_id, result_event_id, step_id
+                ) VALUES (?, ?, ?, NULL)
                 """,
-                (event.session_id, event.event_id, kind),
+                (payload.trigger_event_id, event.session_id, event.event_id),
             )
-            if isinstance(payload, RuntimeTerminated):
-                for command_id in payload.abandoned_command_ids:
-                    connection.execute(
-                        """
-                        UPDATE commands SET
-                            abandoned = 1,
-                            dispatch_eligible_event_id = NULL
-                        WHERE command_id = ?
-                        """,
-                        (command_id,),
-                    )
             connection.execute(
                 "DELETE FROM step_claims WHERE session_id = ?",
                 (event.session_id,),
             )
+        elif isinstance(payload, StepContinuationCancelled):
+            step = connection.execute(
+                "SELECT session_id, event_type FROM events WHERE event_id = ?",
+                (payload.step_event_id,),
+            ).fetchone()
+            if step is None or step["session_id"] != event.session_id:
+                raise KeyError(payload.step_event_id)
+            if step["event_type"] != "step.committed":
+                raise ValueError(
+                    f"continuation target is not a step: {payload.step_event_id}"
+                )
+            if event.causation_id != payload.step_event_id:
+                raise ValueError("continuation cancellation causation mismatch")
+            connection.execute(
+                """
+                INSERT INTO cancelled_step_continuations(
+                    step_event_id, cancellation_event_id
+                ) VALUES (?, ?)
+                """,
+                (payload.step_event_id, event.event_id),
+            )
+
+    @staticmethod
+    def _decision_consumed_tx(
+        connection: sqlite3.Connection,
+        trigger_event_id: str,
+    ) -> bool:
+        return connection.execute(
+            "SELECT 1 FROM decision_consumptions WHERE trigger_event_id = ?",
+            (trigger_event_id,),
+        ).fetchone() is not None
 
     @staticmethod
     def _clear_attempt_claims_tx(
@@ -1551,11 +1552,10 @@ class SqliteJournal:
                 StepCommitted,
                 CommandAuthorized,
                 CommandRejected,
+                DecisionCancelled,
+                StepContinuationCancelled,
                 DispatchAttemptStarted,
                 UserMessageReceived,
-                TerminationRequested,
-                RuntimeCompleted,
-                RuntimeTerminated,
             ),
         ):
             raise ValueError("conditional event requires its Journal method")

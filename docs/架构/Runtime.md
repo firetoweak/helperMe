@@ -8,7 +8,7 @@ Event → State → Step → Command → Outcome → Event
 
 ## 职责与边界
 
-Runtime Core 位于 `helperme/runtime`，只负责 Event 持久化、State 归约、Step 原子提交、Command 派发约束和显式终态屏障。
+Runtime Core 位于 `helperme/runtime`，只负责 Event 持久化、State 归约、Step 原子提交和 Command 派发约束。
 
 Runtime 不理解 Conversation、Context、Criteria、MCP、Skill，也不解释工具结果中的领域含义。目标是否满足、事实意味着什么、下一步做什么，由模型、显式 Judge 或用户决定。
 
@@ -30,7 +30,7 @@ Journal 中的 Event 是唯一执行事实。系统可以从有序 Event 完整�
 
 ### State
 
-State 只由有序 Event 确定地归约得到。它描述当前是否可以继续决策、有哪些 Command 等待授权或结果，以及 Session 是否进入终态。
+State 只由有序 Event 确定地归约得到。它描述当前是否可以继续决策，以及有哪些 Command 等待授权或结果。
 
 State 可以缓存，但缓存不是事实源。缓存丢失、过期或升级后，都应当能够从 Journal 重建。
 
@@ -80,6 +80,12 @@ Outcome Event ───────────┘ wake
 
 Runtime 不重新解释模型输出，也不会把后来到达的事实偷塞进已经冻结的决策。
 
+### 取消当前自动决策链
+
+`cancel_turn` 只停止调用方当前等待的自动决策链，不终止 Session。若模型 Decision 尚未提交，`DecisionCancelled(trigger_event_id)` 与 `StepCommitted` 原子竞争并消费同一个 trigger Event；若 Step 已经提交且 Command 正在进行，则追加 `StepContinuationCancelled(step_event_id)`。Command 仍会执行完，Outcome 仍会如实进入 Journal，但该 Step 的有效 `decision_on_outcome` 为 false，Outcome 不再自动触发下一次 Step。
+
+取消事实不修改历史 Step 或 Command，不撤销副作用。之后独立到达的 `UserMessageReceived` 仍可触发新 Decision，并看到已经入账的 Outcome。普通运行中输入仍走下述后到消息规则，不隐式触发取消。
+
 ## 用户输入与后到消息
 
 运行期间和空闲期间收到的普通文本是同一种用户事实。新消息不会抢占当前 Step，不会取消已经发生的外部操作，也不需要单独的 Interrupt 类型；它改变的是下一次决策从哪里开始。
@@ -90,8 +96,6 @@ Runtime 不重新解释模型输出，也不会把后来到达的事实偷塞进
 2. **旧结果不再单独续跑。** 如果一组工具结果收齐前已经收到新消息，这组结果不再独自触发一次模型调用。下一次决策由新消息触发，并同时看到这些工具结果。
 
 因此，新消息既不会制造并发决策，也不会让模型在看不到最新指令的情况下按旧结果多走一步。Runtime 只依据事实顺序和决策冻结边界推进，不判断“继续”“停止”等文本含义。
-
-通用 Cancel、外部进程终止和补偿协议目前没有纳入 Runtime。
 
 ## 副作用与恢复
 
@@ -105,18 +109,14 @@ Command 是 Step 提交时冻结的副作用请求。Dispatcher 只执行已经�
 
 恢复已有 Session 时，系统只从 Journal 重建 State 和可丢弃的 Host 投影；只有重建后的 State 本身允许继续决策，才会重新唤醒。具体领域如果需要查询、补偿或人工处置未知操作，应建立自己的窄协议，而不是依赖通用恢复状态机。
 
-## 状态与终态
+## 状态
 
 | 状态 | 含义 |
 |---|---|
 | `RUNNABLE` | 存在尚未消费且当前可执行的决策事实 |
 | `WAITING` | 等待用户输入、授权或 Command Outcome |
-| `COMPLETED` | 有界 Session 的 Host 已显式确认完成 |
-| `TERMINATED` | 有界 Session 的 Host 已显式确认终止 |
 
-TUI 和 Telegram Session 是持续对话，普通回答结束后回到等待输入，不自动进入终态。SubAgent 交回结论后同样停在等待状态，“最多回收一次”由投递幂等保证。
-
-终态只为未来明确有界的任务保留，必须由边界外的 Host 在完成 Judge 或 Policy 后显式请求。终态屏障只验证机械条件，不判断目标是否真的完成，也不负责删除 Journal 数据。
+Session 是持续追加的 Event 流，没有绝对终态。`RUNNING` 是 Scheduler 正在执行模型调用或 Dispatcher 正在执行 Command 的瞬时状态，不是 Journal 归约出的 Runtime 状态。任务完成是模型、Judge 或 Host 的业务判断；Worker 退出、Session 归档和数据删除分别属于 Host、产品和存储生命周期。
 
 ## 持久化与重放
 
@@ -125,7 +125,8 @@ Journal 保证：
 - 空 Session 也能持久保存 identity；
 - 外部投递按来源和投递 identity 幂等接纳；
 - Event 在单个 Session 内严格有序；
-- 一个决策起点只被消费一次；
+- 一个决策起点只被 `StepCommitted` 或 `DecisionCancelled` 消费一次；
+- 一个 Step 的自动续步权最多被 `StepContinuationCancelled` 关闭一次；
 - Step 和 Attempt 的领取与提交具有原子约束；
 - 一个 Command 最多产生一个 Attempt，一个 Attempt 最多产生一个终态 Outcome；
 - 持久格式和重放缓存精确版本化。
@@ -153,4 +154,4 @@ Checkpoint 只用于加速重放，必须携带足够的版本信息；投影规
 
 ## 决策附带元数据
 
-`RecordedDecision.decision_metadata` 随 `StepCommitted` 原子持久化；Runtime 仅冻结和序列化该不透明 JSON，不据此调度或解释应用语义。Assistant 用它保存 [LoopGuard](LoopGuard.md) 的实际提醒文本、策略版本、证据与覆盖位置。未提交的 Step 不产生提醒覆盖事实。事件格式为 v4，不读取旧格式。
+`RecordedDecision.decision_metadata` 随 `StepCommitted` 原子持久化；Runtime 仅冻结和序列化该不透明 JSON，不据此调度或解释应用语义。Assistant 用它保存 [LoopGuard](LoopGuard.md) 的实际提醒文本、策略版本、证据与覆盖位置。未提交的 Step 不产生提醒覆盖事实。事件格式为 v5，不读取旧格式。
