@@ -1,13 +1,13 @@
 .app-shell {
   display: grid;
-  grid-template-columns: 268px minmax(0, 1fr);
+  grid-template-columns: 256px minmax(0, 1fr);
   height: 100%;
   background: var(--surface-root);
 }
 
 .sidebar {
   min-width: 0;
-  padding: 18px 12px;
+  padding: 20px 12px;
   overflow-y: auto;
   border-right: 1px solid var(--border);
   background: var(--surface-sidebar);
@@ -121,6 +121,9 @@
 .main-pane {
   min-width: 0;
   min-height: 0;
+  background:
+    radial-gradient(circle at 50% -20%, rgb(201 223 154 / 4%), transparent 38%),
+    var(--surface-root);
 }
 
 .empty-state {
@@ -157,7 +160,7 @@
 
 .conversation {
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
   min-height: 0;
 }
@@ -173,25 +176,34 @@
 }
 
 .composer {
-  display: grid;
-  gap: 10px;
-  width: min(760px, calc(100% - 48px));
-  margin: 0 auto 20px;
-  padding: 12px 14px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  width: min(800px, calc(100% - 48px));
+  margin: 0 auto 18px;
+  padding: 10px 10px 10px 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 18px;
   background: var(--surface-raised);
+  box-shadow: 0 10px 32px rgb(0 0 0 / 16%);
 }
 
 .composer textarea {
+  flex: 1;
   width: 100%;
-  min-height: 44px;
+  min-height: 36px;
+  padding: 6px 0;
   resize: none;
   border: 0;
   outline: none;
   background: transparent;
   color: var(--text);
   font: inherit;
+  line-height: 1.5;
+}
+
+.composer textarea::placeholder {
+  color: #737771;
 }
 
 .composer-actions {
@@ -201,9 +213,10 @@
 }
 
 .composer-actions button {
-  padding: 7px 12px;
+  min-height: 36px;
+  padding: 7px 14px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 11px;
   background: var(--accent);
   color: #111212;
   font-weight: 600;
@@ -220,24 +233,47 @@
   color: #111212 !important;
 }
 
-.timeline,
-.messages {
-  display: grid;
-  gap: 18px;
-  width: min(760px, calc(100% - 48px));
-  margin: 0 auto;
-  padding: 56px 0;
+.timeline-scroll {
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
+  scrollbar-color: #555a55 transparent;
+  scrollbar-width: thin;
+}
+
+.timeline-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.timeline-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: #555a55;
+  background-clip: padding-box;
+}
+
+.timeline {
+  display: grid;
+  align-content: start;
+  gap: 20px;
+  width: min(800px, calc(100% - 48px));
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 40px 0 48px;
 }
 
 .tool-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px 12px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface-raised);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 3.5%);
   font-size: 13px;
 }
 
@@ -271,16 +307,22 @@
 }
 
 .message {
-  line-height: 1.65;
+  max-width: 100%;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.75;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .message-user {
   justify-self: end;
-  max-width: 78%;
-  padding: 10px 14px;
-  border-radius: 16px 16px 4px;
+  max-width: 72%;
+  padding: 9px 13px;
+  border: 1px solid rgb(255 255 255 / 3%);
+  border-radius: 16px 16px 5px;
   background: var(--surface-raised);
+  line-height: 1.6;
 }
 
 .message-pending {
@@ -297,10 +339,19 @@
 
 @media (max-width: 720px) {
   .app-shell {
-    grid-template-columns: 210px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
   }
 
-  .composer {
+  .composer,
+  .timeline {
     width: calc(100% - 28px);
+  }
+
+  .timeline {
+    padding-top: 28px;
+  }
+
+  .message-user {
+    max-width: 88%;
   }
 }

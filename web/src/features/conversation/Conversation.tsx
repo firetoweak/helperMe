@@ -92,32 +92,34 @@ export function Conversation() {
           <p>{shortId(conversation.session_id)}</p>
         </div>
       ) : (
-        <div className="timeline">
-          {items.map((item) =>
-            item.kind === "tool" ? (
-              <article
-                className={`tool-card tool-card-${item.status}`}
-                key={item.key}
-              >
-                <span className="tool-name">{item.name}</span>
-                <span className={`tool-status tool-status-${item.status}`}>
-                  {TOOL_STATUS_LABEL[item.status]}
-                </span>
-                {item.error === null ? null : <p className="tool-error">{item.error}</p>}
-              </article>
-            ) : (
-              <article
-                className={
-                  item.pending
-                    ? `message message-${item.kind} message-pending`
-                    : `message message-${item.kind}`
-                }
-                key={item.key}
-              >
-                {item.text}
-              </article>
-            ),
-          )}
+        <div className="timeline-scroll">
+          <div className="timeline">
+            {items.map((item) =>
+              item.kind === "tool" ? (
+                <article
+                  className={`tool-card tool-card-${item.status}`}
+                  key={item.key}
+                >
+                  <span className="tool-name">{item.name}</span>
+                  <span className={`tool-status tool-status-${item.status}`}>
+                    {TOOL_STATUS_LABEL[item.status]}
+                  </span>
+                  {item.error === null ? null : <p className="tool-error">{item.error}</p>}
+                </article>
+              ) : (
+                <article
+                  className={
+                    item.pending
+                      ? `message message-${item.kind} message-pending`
+                      : `message message-${item.kind}`
+                  }
+                  key={item.key}
+                >
+                  {item.text}
+                </article>
+              ),
+            )}
+          </div>
         </div>
       )}
       <Composer
