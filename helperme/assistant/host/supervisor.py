@@ -49,6 +49,7 @@ class HostSupervisor:
         conversation_status_sink=None,
         tool_progress_sink=None,
         preview_sink=None,
+        session_activity_sink=None,
     ):
         self.store = store
         self.config_factory = config_factory
@@ -59,6 +60,7 @@ class HostSupervisor:
         self.conversation_status_sink = conversation_status_sink
         self.tool_progress_sink = tool_progress_sink
         self.preview_sink = preview_sink
+        self.session_activity_sink = session_activity_sink
         self.workers: dict[str, Worker] = {}
         self.watchers: set[asyncio.Task] = set()
         self.locks: dict[str, asyncio.Lock] = {}
@@ -130,7 +132,9 @@ class HostSupervisor:
                     self.tool_progress_sink is not None
                     and self.compact.store.reader_job(session_id) is None
                 ):
-                    self.tool_progress_sink(*values)
+                    emitted = self.tool_progress_sink(*values)
+                    if isawaitable(emitted):
+                        await emitted
             elif kind == "preview":
                 if (
                     self.preview_sink is not None
@@ -144,12 +148,14 @@ class HostSupervisor:
                 worker.idle_has_active_subagents = values[1]
                 worker.changed.set()
                 await self._stop_idle(session_id, worker)
+                await self._emit_session_activity(session_id, "idle")
             elif kind == "busy":
                 worker.idle_revision = None
                 worker.idle_has_active_subagents = False
                 worker.stopping = False
                 worker.transition.set()
                 worker.changed.set()
+                await self._emit_session_activity(session_id, "running")
             elif kind == "stopping":
                 worker.stopping = True
                 worker.changed.set()
@@ -337,6 +343,22 @@ class HostSupervisor:
 
     def conversation_status(self, session_id):
         return self.compact.store.status(session_id)
+
+    def activity(self, session_id):
+        worker = self.workers.get(session_id)
+        if worker is not None and worker.idle_revision is None:
+            return "running"
+        return "idle"
+
+    async def _emit_session_activity(self, session_id, activity):
+        if (
+            self.session_activity_sink is None
+            or self.compact.store.reader_job(session_id) is not None
+        ):
+            return
+        emitted = self.session_activity_sink(session_id, activity)
+        if isawaitable(emitted):
+            await emitted
 
     async def create(self, session_id):
         async with self.locks.setdefault(session_id, asyncio.Lock()):

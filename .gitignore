@@ -7,3 +7,6 @@ tests/.live_workspace/
 docs/.obsidian/
 
 .codex-remote-attachments/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo

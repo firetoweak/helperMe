@@ -36,6 +36,19 @@ class SessionStore:
             raise ValueError(f"Session Journal missing: {path}")
         return path
 
+    def journals(self) -> tuple[Path, ...]:
+        paths: list[Path] = []
+        for entry in self.root.iterdir():
+            if not entry.is_dir() or len(entry.name) != 64 or any(
+                char not in "0123456789abcdef" for char in entry.name
+            ):
+                continue
+            journal = entry / "journal.sqlite"
+            if not journal.is_file():
+                raise ValueError(f"Session Journal missing: {journal}")
+            paths.append(journal)
+        return tuple(sorted(paths))
+
     async def create(
         self, session_id: str, *, initial_fact: dict | None = None
     ) -> None:

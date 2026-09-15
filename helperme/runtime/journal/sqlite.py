@@ -225,6 +225,21 @@ class SqliteJournal:
 
         return await self._read(exists)
 
+    async def session_identity(self) -> str:
+        def read() -> str:
+            connection = self._connect()
+            try:
+                rows = connection.execute(
+                    "SELECT session_id FROM sessions"
+                ).fetchall()
+            finally:
+                connection.close()
+            if len(rows) != 1:
+                raise ValueError("Session Journal must contain one identity")
+            return rows[0]["session_id"]
+
+        return await self._read(read)
+
     async def append(self, draft: EventDraft) -> Event:
         self._validate_generic_append(draft)
         return (

@@ -9,6 +9,7 @@ from pathlib import Path
 from helperme.assistant.host.process_env import install_host_environment
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.host.supervisor import HostSupervisor
+from helperme.assistant.conversations import AssistantQueries
 from helperme.assistant.delivery import DeliverySink, PreviewSink
 from helperme.config import AppConfig, assistant_config_from_app, load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
@@ -32,6 +33,7 @@ class BootstrappedAssistant:
     sessions_root: Path
     mcp_service: object
     skill_service: object
+    queries: AssistantQueries
 
 
 @asynccontextmanager
@@ -44,6 +46,7 @@ async def bootstrap_assistant(
     conversation_status_sink=None,
     tool_progress_sink=None,
     preview_sink: PreviewSink | None = None,
+    session_activity_sink=None,
 ) -> AsyncIterator[BootstrappedAssistant]:
     install_host_environment()
     config = load_app_config() if app_config is None else app_config
@@ -60,6 +63,7 @@ async def bootstrap_assistant(
         conversation_status_sink=conversation_status_sink,
         tool_progress_sink=tool_progress_sink,
         preview_sink=preview_sink,
+        session_activity_sink=session_activity_sink,
     )
     # Channel management is product-level; session tools get their own clients.
     management_llm = LiteLLMAdapter(config.model, config.litellm)
@@ -70,7 +74,12 @@ async def bootstrap_assistant(
     async with management_llm, mcp.client_manager:
         try:
             yield BootstrappedAssistant(
-                config, host, store.root, mcp.service, skills.service
+                config,
+                host,
+                store.root,
+                mcp.service,
+                skills.service,
+                AssistantQueries(store, host),
             )
         finally:
             await host.close()
