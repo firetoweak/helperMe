@@ -91,7 +91,7 @@ class ScriptedDecisionMaker:
             )
         return ModelDecision(
             content="done",
-            command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),),
+            command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "done"))),),
         )
 
 
@@ -125,7 +125,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 decisions,
                 {
                     **management.bindings(),
-                    **deliver_binding(lambda _session_id, text: delivered.append(text)),
+                    **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
                 },
             )
             await runtime.receive_user_message(
@@ -205,7 +205,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                         command_requests=(
                             InvokeTool(
                                 DELIVER_TOOL_NAME,
-                                (("text", "done"),),
+                                (("output_id", "output-1"), ("text", "done")),
                             ),
                         ),
                     )
@@ -215,7 +215,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 MissingDomainDecisionMaker(),
                 {
                     **management.bindings(),
-                    **deliver_binding(lambda _session_id, _text: None),
+                    **deliver_binding(lambda _session_id, _output_id, _text: None),
                 },
             )
             await runtime.receive_user_message(

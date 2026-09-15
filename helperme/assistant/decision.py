@@ -17,7 +17,11 @@ from helperme.assistant.control import (
     AssistantControlPlane,
     ControlArgumentsError,
 )
-from helperme.assistant.delivery import DELIVER_TOOL_NAME, ensure_deliver
+from helperme.assistant.delivery import (
+    DELIVER_TOOL_NAME,
+    PreviewEmitter,
+    ensure_deliver,
+)
 from helperme.assistant.context.projection import (
     MESSAGE_EXTENSIONS,
     ModelContextProjector,
@@ -176,6 +180,7 @@ class JournalBackedLlmDecisionMaker:
         subagents: SubAgentHost | None = None,
         compact: CompactContext | None = None,
         loop_guard: LoopGuard | None = None,
+        preview: PreviewEmitter | None = None,
     ) -> None:
         self._journal = journal
         self._llm = llm
@@ -190,6 +195,7 @@ class JournalBackedLlmDecisionMaker:
         self._subagents = subagents
         self._compact = compact
         self._loop_guard = LoopGuard() if loop_guard is None else loop_guard
+        self._preview = PreviewEmitter() if preview is None else preview
 
     def _schemas(self, frame: DecisionFrame):
         return self.schemas_for(frame.state)
@@ -345,11 +351,44 @@ class JournalBackedLlmDecisionMaker:
             if self._compact is not None and self._compact.is_reader
             else self._model
         )
-        result = await self._llm.chat(
-            prepared.messages,
-            model,
-            tools=schemas or None,
+        output_id = frame.trigger_event.event_id
+        show_preview = (
+            self._preview.enabled
+            and not (self._compact is not None and self._compact.is_reader)
+            and not (
+                self._subagents is not None
+                and self._subagents.is_subagent(frame.state.session_id)
+            )
         )
+        if show_preview:
+            await self._preview.start(frame.state.session_id, output_id)
+
+        async def on_content_delta(text: str) -> None:
+            await self._preview.append(frame.state.session_id, output_id, text)
+
+        try:
+            if show_preview:
+                result = await self._llm.chat(
+                    prepared.messages,
+                    model,
+                    tools=schemas or None,
+                    on_content_delta=on_content_delta,
+                )
+            else:
+                result = await self._llm.chat(
+                    prepared.messages,
+                    model,
+                    tools=schemas or None,
+                )
+        except BaseException as error:
+            try:
+                await self._preview.abort(frame.state.session_id)
+            except BaseException as preview_error:
+                raise BaseExceptionGroup(
+                    "model call and preview cleanup failed",
+                    [error, preview_error],
+                ) from None
+            raise
         usage = result.usage
         if self._context_usage_sink is not None:
             self._context_usage_sink(
@@ -390,8 +429,11 @@ class JournalBackedLlmDecisionMaker:
                     result.response,
                     allowed_tool_names,
                     control_names,
-                )
+                ),
+                output_id,
             )
+            if show_preview and not decision.content.strip():
+                await self._preview.abort(frame.state.session_id)
         manifest = {
             "schema": "decision-replay-manifest/v1",
             "decision_basis": {

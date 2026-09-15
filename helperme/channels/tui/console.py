@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from uuid import uuid4
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -26,14 +29,28 @@ _INPUT_SEPARATOR = "─" * 72
 
 
 class _BottomAnchoredPromptSession(PromptSession[str]):
+    def __init__(self, *args, stream_output=None, **kwargs) -> None:
+        self._stream_output = stream_output
+        super().__init__(*args, **kwargs)
+
     def _create_layout(self) -> Layout:
         prompt_layout = super()._create_layout()
         prompt = HSplit(
             [prompt_layout.container],
             height=Dimension.exact(3),
         )
+        stream = Window()
+        if self._stream_output is not None:
+            stream = Window(
+                content=FormattedTextControl(
+                    text=self._stream_output.render,
+                    show_cursor=False,
+                    get_cursor_position=self._stream_output.cursor_position,
+                ),
+                wrap_lines=True,
+            )
         return Layout(
-            HSplit([Window(), prompt]),
+            HSplit([stream, prompt]),
             focused_element=prompt_layout.current_control,
         )
 
@@ -44,6 +61,53 @@ def _compact_tokens(tokens: int) -> str:
     if tokens % 1_000 == 0:
         return f"{tokens // 1_000}k"
     return f"{tokens / 1_000:.1f}k"
+
+
+class _StreamingConsoleOutput:
+    def __init__(
+        self,
+        invalidate: Callable[[], None],
+        write: Callable[[str], None] = print,
+    ) -> None:
+        self._invalidate = invalidate
+        self._write = write
+        self._previews: dict[tuple[str, str], str] = {}
+
+    def render(self) -> str:
+        return "\n\n".join(
+            f"助手：{text}" for text in self._previews.values() if text
+        )
+
+    def cursor_position(self) -> Point:
+        lines = self.render().split("\n")
+        return Point(x=len(lines[-1]), y=len(lines) - 1)
+
+    def preview(
+        self,
+        session_id: str,
+        phase: str,
+        output_id: str,
+        text: str | None,
+    ) -> None:
+        key = (session_id, output_id)
+        if phase == "started":
+            self._previews[key] = ""
+        elif phase == "delta":
+            self._previews[key] += text
+        elif phase == "aborted":
+            partial = self._previews.pop(key)
+            self._invalidate()
+            if partial:
+                self._write(f"\n助手：{partial}\n\n[输出已中止]")
+            return
+        else:
+            raise ValueError(f"unknown preview phase: {phase}")
+        self._invalidate()
+
+    def deliver(self, session_id: str, output_id: str, text: str) -> None:
+        self._previews.pop((session_id, output_id), None)
+        self._invalidate()
+        self._write(f"\n助手：{text}")
 
 
 class _ContextMeter:
@@ -145,18 +209,18 @@ def _print_runtime_status(view: SessionView) -> None:
 
 
 async def run_runtime_console() -> None:
-    def sink(_session_id: str, text: str) -> None:
-        print(f"\n助手：{text}")
-
     context_meter = _ContextMeter()
+    stream_output = _StreamingConsoleOutput(lambda: session.app.invalidate())
     session: PromptSession[str] = _BottomAnchoredPromptSession(
         bottom_toolbar=context_meter.render,
+        stream_output=stream_output,
     )
     async with bootstrap_assistant(
-        sink,
+        stream_output.deliver,
         context_usage_sink=context_meter.update,
         subagent_activity_sink=context_meter.update_subagent_activity,
         conversation_status_sink=context_meter.update_conversation_status,
+        preview_sink=stream_output.preview,
     ) as app:
         config = app.config
         image_paste = ImagePaste(AttachmentGateway(app.sessions_root))

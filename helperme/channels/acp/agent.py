@@ -44,6 +44,8 @@ class HelperMeAcpAgent:
         self._connection_id = uuid4().hex
         self._owners: dict[str, str] = {}
         self._active: dict[str, _ActivePrompt] = {}
+        self._previews: dict[tuple[str, str], str] = {}
+        self._delivered: dict[tuple[str, str], str] = {}
 
     def on_connect(self, client) -> None:
         self._client = client
@@ -129,7 +131,11 @@ class HelperMeAcpAgent:
             )
             turn.accepted.set()
             if view.control_message is not None:
-                await self.deliver(session_id, view.control_message)
+                await self.deliver(
+                    session_id,
+                    f"control-{uuid4().hex}",
+                    view.control_message,
+                )
             quiescent = asyncio.create_task(
                 self._sessions.wait_quiescent(session_id)
             )
@@ -175,16 +181,59 @@ class HelperMeAcpAgent:
             raise
         turn.cancellation_done.set_result(None)
 
-    async def deliver(self, session_id: str, text: str) -> None:
+    async def deliver(self, session_id: str, output_id: str, text: str) -> None:
         turn = self._active.get(session_id)
         if turn is None or turn.cancel_requested.is_set():
             return
+        key = (session_id, output_id)
+        if key in self._delivered:
+            if self._delivered[key] != text:
+                raise RuntimeError("output_id was delivered with different text")
+            return
+        if key in self._previews:
+            streamed = self._previews.pop(key)
+            if streamed.strip() != text:
+                raise RuntimeError("committed output differs from its preview")
+            self._delivered[key] = text
+            return
+        await self._send_message_chunk(session_id, output_id, text)
+        self._delivered[key] = text
+
+    async def preview(
+        self,
+        session_id: str,
+        phase: str,
+        output_id: str,
+        text: str | None,
+    ) -> None:
+        turn = self._active.get(session_id)
+        if turn is None or turn.cancel_requested.is_set():
+            return
+        key = (session_id, output_id)
+        if phase == "started":
+            self._previews[key] = ""
+            return
+        if phase == "delta":
+            self._previews[key] += text
+            await self._send_message_chunk(session_id, output_id, text)
+            return
+        if phase == "aborted":
+            self._previews.pop(key)
+            return
+        raise ValueError(f"unknown preview phase: {phase}")
+
+    async def _send_message_chunk(
+        self,
+        session_id: str,
+        output_id: str,
+        text: str,
+    ) -> None:
         await self._client.session_update(
             session_id=session_id,
             update=AgentMessageChunk(
                 session_update="agent_message_chunk",
                 content=TextContentBlock(type="text", text=text),
-                message_id=f"message-{uuid4().hex}",
+                message_id=f"message-{output_id}",
             ),
         )
 
@@ -224,6 +273,8 @@ class HelperMeAcpAgent:
         for owner in tuple(self._owners.values()):
             await self._sessions.release(owner)
         self._owners.clear()
+        self._previews.clear()
+        self._delivered.clear()
 
     def _validate_workspace(self, cwd: str) -> Path:
         requested = Path(cwd)

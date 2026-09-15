@@ -42,7 +42,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
             self.store,
             partial(config_for, self.root),
             self.home,
-            lambda sid, text: self.outputs.append((sid, text)),
+            lambda sid, _output_id, text: self.outputs.append((sid, text)),
         )
 
     async def asyncTearDown(self):

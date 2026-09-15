@@ -4,6 +4,7 @@ import unittest
 
 from helperme.assistant.delivery import (
     DELIVER_TOOL_NAME,
+    PreviewEmitter,
     deliver_binding,
     ensure_deliver,
 )
@@ -29,28 +30,54 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_deliver_is_non_deciding_command(self):
-        binding = deliver_binding(lambda _session_id, _text: None)[DELIVER_TOOL_NAME]
+        binding = deliver_binding(
+            lambda _session_id, _output_id, _text: None
+        )[DELIVER_TOOL_NAME]
         self.assertFalse(binding.decision_on_outcome)
 
+    async def test_preview_is_disposable_and_not_a_delivery(self):
+        updates = []
+        preview = PreviewEmitter(lambda *values: updates.append(values))
+
+        await preview.start(self.SESSION_ID, "output-1")
+        await preview.append(self.SESSION_ID, "output-1", "hel")
+        await preview.abort(self.SESSION_ID)
+
+        self.assertEqual(
+            updates,
+            [
+                (self.SESSION_ID, "started", "output-1", None),
+                (self.SESSION_ID, "delta", "output-1", "hel"),
+                (self.SESSION_ID, "aborted", "output-1", None),
+            ],
+        )
+
     async def test_deliver_routes_its_session_id_to_the_sink(self):
-        routed: list[tuple[str, str]] = []
+        routed: list[tuple[str, str, str]] = []
         binding = deliver_binding(
-            lambda session_id, text: routed.append((session_id, text))
+            lambda session_id, output_id, text: routed.append(
+                (session_id, output_id, text)
+            )
         )[DELIVER_TOOL_NAME]
 
         result = await binding.handler(
             AttemptContext(self.SESSION_ID, "command-1", "attempt-1", 1),
-            {"text": "hello"},
+            {"output_id": "output-1", "text": "hello"},
         )
 
         self.assertEqual(result, "hello")
-        self.assertEqual(routed, [(self.SESSION_ID, "hello")])
+        self.assertEqual(routed, [(self.SESSION_ID, "output-1", "hello")])
 
     def test_ensure_deliver_appends_invoke_once(self):
-        mapped = ensure_deliver(ModelDecision(content="  hello  "))
+        mapped = ensure_deliver(ModelDecision(content="  hello  "), "output-1")
         self.assertEqual(
             mapped.command_requests,
-            (InvokeTool(DELIVER_TOOL_NAME, (("text", "hello"),)),),
+            (
+                InvokeTool(
+                    DELIVER_TOOL_NAME,
+                    (("output_id", "output-1"), ("text", "hello")),
+                ),
+            ),
         )
         with self.assertRaisesRegex(ValueError, "product command"):
-            ensure_deliver(mapped)
+            ensure_deliver(mapped, "output-1")

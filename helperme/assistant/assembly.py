@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from uuid import uuid4
 
 from helperme.assistant.artifacts import (
     READ_ARTIFACT_SCHEMA,
@@ -16,7 +17,12 @@ from helperme.assistant.attachments import (
 from helperme.assistant.compact.core import CompactContext, CompactBoundary, READ, SUBMIT
 from helperme.assistant.loop_guard import LoopGuard
 from helperme.assistant.loop_guard_strategies import ConsecutiveActions
-from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
+from helperme.assistant.delivery import (
+    DELIVER_TOOL_NAME,
+    PreviewEmitter,
+    deliver_binding,
+    emit_delivery,
+)
 from helperme.assistant.context.projection import (
     ModelContextProjector,
     ModelContextSettings,
@@ -73,6 +79,7 @@ async def build_assistant_assembly(
     context_usage_sink: Callable[[str, int, int], None] | None = None,
     subagent_activity_sink: Callable[[str, bool], None] | None = None,
     tool_progress_sink=None,
+    preview_sink=None,
     scheduler_factory=SessionScheduler,
     session_transport=None,
     home: HelperMeHome | None = None,
@@ -123,6 +130,17 @@ async def build_assistant_assembly(
     )
     skill_tools = SkillToolAdapter(skills, gateway, settings)
     subagents = SubAgentHost(subagent_activity_sink)
+    preview = PreviewEmitter(preview_sink)
+    delivery_sink = subagents.routed_sink(sink)
+
+    async def notify(session_id: str, text: str) -> None:
+        await emit_delivery(
+            delivery_sink,
+            session_id,
+            f"notification-{uuid4().hex}",
+            text,
+        )
+
     surface = ToolSurface(
         providers=(McpToolsetAdapter(mcp, attachments),),
         base_schemas=[
@@ -157,7 +175,7 @@ async def build_assistant_assembly(
         **bind_executor_tools(builtin_tools, gateway, settings),
         **read_artifact_binding(gateway),
         **read_image_binding(journal, attachments),
-        **deliver_binding(subagents.routed_sink(sink)),
+        **deliver_binding(delivery_sink, preview),
         **load_toolset_binding(surface),
         **skill_tools.bindings(),
         **management.bindings(),
@@ -178,6 +196,7 @@ async def build_assistant_assembly(
         subagents=subagents,
         compact=compact_context,
         loop_guard=LoopGuard((ConsecutiveActions(config.loop_guard_repeat_threshold),)),
+        preview=preview,
     )
     runtime = AgentRuntime(journal, decision, bindings)
     surface.attach(runtime)
@@ -188,9 +207,10 @@ async def build_assistant_assembly(
         control=control,
         # 失败与控制面提示同样是子 Session 的对外输出，一样不外露：
         # 用户该看到的是父转述后的判断，不是一条不知来处的裸错误。
-        notify=subagents.routed_sink(sink),
+        notify=notify,
         on_quiesced=subagents.on_quiesced,
         on_failed=subagents.on_failed,
+        preview=preview,
     )
     compact = None
     if session_transport is not None:

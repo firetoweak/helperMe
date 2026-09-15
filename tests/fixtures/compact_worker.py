@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from inspect import isawaitable
 import json
 from pathlib import Path
 
@@ -29,7 +30,7 @@ class CompactLlm:
     async def __aexit__(self, *args):
         return None
 
-    async def chat(self, messages, model, *, tools=None):
+    async def chat(self, messages, model, *, tools=None, on_content_delta=None):
         names = {t["function"]["name"] for t in tools or []}
         if any("<self_handoff>" in str(m["content"]) for m in messages):
             request = self.workspace / "handoff_request.json"
@@ -85,6 +86,10 @@ class CompactLlm:
                 )
             else:
                 response = LLMResponse(content="正常回复", calls=())
+        if response.content and on_content_delta is not None:
+            emitted = on_content_delta(response.content)
+            if isawaitable(emitted):
+                await emitted
         return LLMCallResult(response, LLMUsage(input_tokens=0, output_tokens=5))
 
 

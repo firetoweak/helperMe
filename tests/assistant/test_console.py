@@ -69,6 +69,45 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(prompt.preferred_height(80, 24).min, 3)
             self.assertEqual(prompt.preferred_height(80, 24).max, 3)
 
+    def test_streaming_output_renders_in_layout_until_final_delivery(self):
+        from helperme.channels.tui.console import _StreamingConsoleOutput
+
+        rendered = []
+        written = []
+        output = _StreamingConsoleOutput(
+            lambda: rendered.append(output.render()),
+            written.append,
+        )
+
+        output.preview("session-1", "started", "output-1", None)
+        output.preview("session-1", "delta", "output-1", "你")
+        output.preview("session-1", "delta", "output-1", "好")
+
+        self.assertEqual(output.render(), "助手：你好")
+        self.assertEqual(written, [])
+
+        output.deliver("session-1", "output-1", "你好")
+
+        self.assertEqual(output.render(), "")
+        self.assertEqual(written, ["\n助手：你好"])
+        self.assertEqual(rendered[-1], "")
+
+    def test_aborted_stream_is_written_once_with_marker(self):
+        from helperme.channels.tui.console import _StreamingConsoleOutput
+
+        written = []
+        output = _StreamingConsoleOutput(lambda: None, written.append)
+        output.preview("session-1", "started", "output-1", None)
+        output.preview("session-1", "delta", "output-1", "部分内容")
+
+        output.preview("session-1", "aborted", "output-1", None)
+
+        self.assertEqual(output.render(), "")
+        self.assertEqual(
+            written,
+            ["\n助手：部分内容\n\n[输出已中止]"],
+        )
+
     def test_context_meter_tracks_only_the_selected_session(self):
         _BottomAnchoredPromptSession, ContextMeter, _read_console_input = _console()
         meter = ContextMeter()

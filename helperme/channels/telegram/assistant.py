@@ -1,14 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import (
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from aiogram.types import Message, Update
 
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.host.ipc import WorkerFailed
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import InitialConfigCreated, load_app_config
+
+
+_PREVIEW_EDIT_INTERVAL = 0.5
+
+
+@dataclass(slots=True)
+class _TelegramPreview:
+    content: str = ""
+    published: str = ""
+    message_id: int | None = None
+    flush: asyncio.Task | None = None
 
 
 class TelegramPairing:
@@ -47,10 +64,112 @@ class TelegramChannel:
         self._chat_id = chat_id
         self._session_id = session_id
         self._delivery_prefix = f"telegram-bot-{bot_id}-update-"
+        self._previews: dict[tuple[str, str], _TelegramPreview] = {}
+        self._delivered: dict[tuple[str, str], str] = {}
         self.owner = f"telegram-bot-{bot_id}-chat-{chat_id}"
 
     async def send(self, text: str) -> None:
         await self._bot.send_message(chat_id=self._chat_id, text=text)
+
+    async def deliver(self, session_id: str, output_id: str, text: str) -> None:
+        key = (session_id, output_id)
+        if key in self._delivered:
+            if self._delivered[key] != text:
+                raise RuntimeError("output_id was delivered with different text")
+            return
+        preview = self._previews.get(key)
+        if preview is None:
+            await self._retry(lambda: self.send(text))
+        else:
+            if preview.content.strip() != text:
+                raise RuntimeError("committed output differs from its preview")
+            await self._stop_flush(preview)
+            if preview.message_id is None:
+                await self._retry(lambda: self.send(text))
+            elif preview.published != text:
+                await self._retry(lambda: self._edit(preview.message_id, text))
+            del self._previews[key]
+        self._delivered[key] = text
+
+    async def preview(
+        self,
+        session_id: str,
+        phase: str,
+        output_id: str,
+        text: str | None,
+    ) -> None:
+        key = (session_id, output_id)
+        if phase == "started":
+            self._previews[key] = _TelegramPreview()
+            return
+        preview = self._previews[key]
+        if phase == "delta":
+            preview.content += text
+            if preview.message_id is None:
+                try:
+                    message = await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        text=preview.content,
+                    )
+                except (TelegramNetworkError, TelegramRetryAfter, TelegramServerError):
+                    return
+                preview.message_id = message.message_id
+                preview.published = preview.content
+            elif preview.flush is None:
+                preview.flush = asyncio.create_task(self._flush_later(key))
+            return
+        if phase == "aborted":
+            await self._stop_flush(preview)
+            del self._previews[key]
+            if preview.message_id is not None:
+                try:
+                    await self._edit(
+                        preview.message_id,
+                        preview.published + "\n\n[输出已中止]",
+                    )
+                except (
+                    TelegramNetworkError,
+                    TelegramRetryAfter,
+                    TelegramServerError,
+                ):
+                    pass
+            return
+        raise ValueError(f"unknown preview phase: {phase}")
+
+    async def _flush_later(self, key: tuple[str, str]) -> None:
+        preview = self._previews[key]
+        try:
+            await asyncio.sleep(_PREVIEW_EDIT_INTERVAL)
+            await self._edit(preview.message_id, preview.content)
+            preview.published = preview.content
+        except (TelegramNetworkError, TelegramRetryAfter, TelegramServerError):
+            pass
+        finally:
+            preview.flush = None
+
+    async def _stop_flush(self, preview: _TelegramPreview) -> None:
+        if preview.flush is None:
+            return
+        preview.flush.cancel()
+        await asyncio.gather(preview.flush, return_exceptions=True)
+        preview.flush = None
+
+    async def _edit(self, message_id: int, text: str) -> None:
+        await self._bot.edit_message_text(
+            chat_id=self._chat_id,
+            message_id=message_id,
+            text=text,
+        )
+
+    async def _retry(self, operation) -> None:
+        while True:
+            try:
+                await operation()
+                return
+            except TelegramRetryAfter as error:
+                await asyncio.sleep(error.retry_after)
+            except (TelegramNetworkError, TelegramServerError):
+                await asyncio.sleep(1)
 
     async def accept(self, update_id: int, message: Message) -> None:
         if message.chat.id != self._chat_id or message.text is None:
@@ -113,11 +232,24 @@ async def run_telegram_assistant() -> None:
 
         channel: TelegramChannel | None = None
 
-        async def send(_session_id: str, text: str) -> None:
+        async def send(session_id: str, output_id: str, text: str) -> None:
             assert channel is not None
-            await channel.send(text)
+            await channel.deliver(session_id, output_id, text)
 
-        async with bootstrap_assistant(send, app_config=app_config) as app:
+        async def preview(
+            session_id: str,
+            phase: str,
+            output_id: str,
+            text: str | None,
+        ) -> None:
+            assert channel is not None
+            await channel.preview(session_id, phase, output_id, text)
+
+        async with bootstrap_assistant(
+            send,
+            app_config=app_config,
+            preview_sink=preview,
+        ) as app:
             channel = await _open_chat_channel(
                 app.sessions,
                 bot,

@@ -70,7 +70,12 @@ class CharacterEstimator:
 def _deliver(text: str) -> ModelDecision:
     return ModelDecision(
         content=text,
-        command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("text", text),)),),
+        command_requests=(
+            InvokeTool(
+                DELIVER_TOOL_NAME,
+                (("output_id", f"output-{text}"), ("text", text)),
+            ),
+        ),
     )
 
 
@@ -222,7 +227,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(scripts),
-            {**tools, **deliver_binding(lambda _session_id, text: delivered.append(text))},
+            {**tools, **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text))},
             SequentialIds(),
         )
         for index, text in enumerate(users, start=1):
@@ -449,7 +454,7 @@ class ModelContextProjectorTest(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 "ping": ToolBinding(ping),
-                **deliver_binding(lambda _session_id, text: delivered.append(text)),
+                **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )

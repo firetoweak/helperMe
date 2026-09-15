@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from helperme.assistant.control import AssistantControlPlane
+from helperme.assistant.delivery import PreviewEmitter
 from helperme.assistant.failures import assistant_failure_message
 from helperme.assistant.management import ManagementSurface
 from helperme.assistant.toolsets import ToolSurface
@@ -45,6 +46,7 @@ class SessionScheduler:
             Callable[[str, CanonicalState], Awaitable[None] | None] | None
         ) = None,
         on_failed: Callable[[str, str], Awaitable[None] | None] | None = None,
+        preview: PreviewEmitter | None = None,
     ) -> None:
         self._runtime = runtime
         self._session_id = session_id
@@ -52,6 +54,7 @@ class SessionScheduler:
         self._notify = notify
         self._on_quiesced = on_quiesced
         self._on_failed = on_failed
+        self._preview = PreviewEmitter() if preview is None else preview
         self.before_advance = None
         self.propagate_failures = False
         self._task: asyncio.Task[bool] | None = None
@@ -88,6 +91,13 @@ class SessionScheduler:
         try:
             advance = await self._runtime.advance(session_id)
         except Exception as error:
+            try:
+                await self._preview.abort(session_id)
+            except BaseException as preview_error:
+                raise BaseExceptionGroup(
+                    "session advance and preview cleanup failed",
+                    [error, preview_error],
+                ) from None
             if self.propagate_failures:
                 raise
             message = assistant_failure_message(error)
@@ -98,6 +108,8 @@ class SessionScheduler:
             await self._emit(session_id, f"运行失败：{message}")
             await self._failed(session_id, message)
             return False
+        if advance.step is None and advance.status is not RuntimeStatus.RUNNABLE:
+            await self._preview.abort(session_id)
         if advance.step is not None:
             result = await self._control.after_committed_step(
                 session_id,

@@ -9,6 +9,26 @@ from helperme.llm.types import InvalidLLMResponse
 from helperme.paths import HelperMeHome
 
 
+class _AsyncStream:
+    def __init__(self, chunks):
+        self._chunks = iter(chunks)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+def _chunk(content=None):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(content=content))]
+    )
+
+
 class _Message:
     def __init__(self, data: dict[str, object]):
         self.data = data
@@ -61,14 +81,19 @@ class LiteLLMAdapterUsageTest(unittest.IsolatedAsyncioTestCase):
         from helperme.llm.adapter import LiteLLMAdapter
 
         adapter = object.__new__(LiteLLMAdapter)
-        adapter._completion = AsyncMock(return_value=SimpleNamespace(
+        adapter._read_attachment = None
+        completion = SimpleNamespace(
             choices=[SimpleNamespace(message=_Message({"content": "done"}))],
             usage=SimpleNamespace(
                 prompt_tokens=120,
                 completion_tokens=3,
                 prompt_tokens_details=SimpleNamespace(cached_tokens=96),
             ),
-        ))
+        )
+        adapter._litellm = SimpleNamespace(
+            stream_chunk_builder=Mock(return_value=completion),
+        )
+        adapter._completion = AsyncMock(return_value=_AsyncStream((_chunk("done"),)))
 
         result = await adapter.chat([], "model")
 
@@ -85,6 +110,7 @@ class LiteLLMAdapterUsageTest(unittest.IsolatedAsyncioTestCase):
             pass
 
         adapter = object.__new__(LiteLLMAdapter)
+        adapter._read_attachment = None
         adapter._litellm = SimpleNamespace(
             ContextWindowExceededError=OtherLiteLLMError,
             AuthenticationError=LiteLLMError,
@@ -95,11 +121,97 @@ class LiteLLMAdapterUsageTest(unittest.IsolatedAsyncioTestCase):
             InternalServerError=OtherLiteLLMError,
             ServiceUnavailableError=OtherLiteLLMError,
             APIError=OtherLiteLLMError,
+            stream_chunk_builder=Mock(),
         )
         adapter._completion = AsyncMock(side_effect=LiteLLMError("invalid api key"))
 
         with self.assertRaisesRegex(LLMAuthenticationError, "invalid api key"):
             await adapter.chat([], "model")
+
+
+class LiteLLMAdapterStreamingTest(unittest.IsolatedAsyncioTestCase):
+    def _adapter(self, chunks, response):
+        from helperme.llm.adapter import LiteLLMAdapter
+
+        class LiteLLMError(Exception):
+            pass
+
+        adapter = object.__new__(LiteLLMAdapter)
+        adapter._read_attachment = None
+        adapter._completion = AsyncMock(return_value=_AsyncStream(chunks))
+        adapter._litellm = SimpleNamespace(
+            stream_chunk_builder=Mock(return_value=response),
+            ContextWindowExceededError=LiteLLMError,
+            AuthenticationError=LiteLLMError,
+            PermissionDeniedError=LiteLLMError,
+            APIConnectionError=LiteLLMError,
+            Timeout=LiteLLMError,
+            RateLimitError=LiteLLMError,
+            InternalServerError=LiteLLMError,
+            ServiceUnavailableError=LiteLLMError,
+            APIError=LiteLLMError,
+        )
+        return adapter
+
+    @staticmethod
+    def _completion(message):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(
+                prompt_tokens=4,
+                completion_tokens=2,
+                prompt_tokens_details=None,
+            ),
+        )
+
+    async def test_emits_content_deltas_and_builds_one_final_response(self):
+        chunks = (_chunk("hel"), _chunk(None), _chunk("lo"))
+        completion = self._completion(_Message({"content": "hello"}))
+        adapter = self._adapter(chunks, completion)
+        emitted: list[str] = []
+
+        result = await adapter.chat([], "model", on_content_delta=emitted.append)
+
+        self.assertEqual(emitted, ["hel", "lo"])
+        self.assertEqual(result.response.content, "hello")
+        adapter._litellm.stream_chunk_builder.assert_called_once_with(
+            list(chunks),
+            messages=[],
+        )
+
+    async def test_tool_call_chunks_are_not_emitted_as_text(self):
+        chunks = (_chunk(None),)
+        completion = self._completion(_Message({
+            "content": None,
+            "tool_calls": [{
+                "id": "call-1",
+                "function": {"name": "read_file", "arguments": "{}"},
+            }],
+        }))
+        adapter = self._adapter(chunks, completion)
+        emitted: list[str] = []
+
+        result = await adapter.chat([], "model", on_content_delta=emitted.append)
+
+        self.assertEqual(emitted, [])
+        self.assertEqual(result.response.calls[0].name, "read_file")
+
+    async def test_rejects_content_that_differs_from_the_assembled_response(self):
+        completion = self._completion(_Message({"content": "different"}))
+        adapter = self._adapter((_chunk("shown"),), completion)
+
+        with self.assertRaisesRegex(InvalidLLMResponse, "does not match"):
+            await adapter.chat([], "model")
+
+    async def test_content_callback_failure_is_not_wrapped(self):
+        completion = self._completion(_Message({"content": "shown"}))
+        adapter = self._adapter((_chunk("shown"),), completion)
+
+        def fail(_content):
+            raise RuntimeError("preview failed")
+
+        with self.assertRaisesRegex(RuntimeError, "preview failed"):
+            await adapter.chat([], "model", on_content_delta=fail)
 
 
 class LiteLLMAdapterRequestTest(unittest.IsolatedAsyncioTestCase):
@@ -145,4 +257,6 @@ class LiteLLMAdapterRequestTest(unittest.IsolatedAsyncioTestCase):
             messages=[],
             tools=None,
             tool_choice=None,
+            stream=True,
+            stream_options={"include_usage": True},
         )

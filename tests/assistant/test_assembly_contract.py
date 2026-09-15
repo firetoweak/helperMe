@@ -14,8 +14,12 @@ from helperme.assistant.management import LOAD_MANAGEMENT_TOOLS
 from helperme.config import AssistantConfig
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage, ToolCall
 from helperme.paths import HelperMeHome
-from helperme.runtime import MemoryJournal, StepCommitted
-from tests.session_scheduler import build_settling_assistant, settle_session
+from helperme.runtime import DecisionCancelled, MemoryJournal, StepCommitted
+from tests.session_scheduler import (
+    SettlingScheduler,
+    build_settling_assistant,
+    settle_session,
+)
 
 
 class CapturingLlm:
@@ -48,6 +52,42 @@ class CapturingLlm:
             ),
             LLMUsage(input_tokens=1, output_tokens=1),
         )
+
+
+class StreamingLlm:
+    async def chat(
+        self,
+        _messages,
+        _model,
+        *,
+        tools=None,
+        on_content_delta=None,
+    ):
+        self.tools = tools
+        await on_content_delta("hel")
+        await on_content_delta("lo")
+        return LLMCallResult(
+            LLMResponse(content="hello"),
+            LLMUsage(input_tokens=1, output_tokens=1),
+        )
+
+
+class BlockingStreamingLlm:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def chat(
+        self,
+        _messages,
+        _model,
+        *,
+        tools=None,
+        on_content_delta=None,
+    ):
+        self.tools = tools
+        await on_content_delta("partial")
+        self.started.set()
+        await asyncio.Event().wait()
 
 
 class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
@@ -87,7 +127,7 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                     session_id = f"entry-{index}"
                     assembly = await factory(
                         config,
-                        lambda _session_id, _text: None,
+                        lambda _session_id, _output_id, _text: None,
                         journal,
                         session_id=session_id,
                     )
@@ -173,6 +213,131 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
 
 
 class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_model_call_aborts_its_preview(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            previews = []
+            llm = BlockingStreamingLlm()
+            journal = MemoryJournal()
+            with (
+                patch(
+                    "helperme.assistant.assembly.HelperMeHome.default",
+                    return_value=HelperMeHome(root / ".helperme"),
+                ),
+                patch(
+                    "helperme.assistant.assembly.runtime_data_root",
+                    return_value=root / "runtime",
+                ),
+            ):
+                assembly = await build_assistant_assembly(
+                    AssistantConfig(
+                        model_name="test-model",
+                        workspace_root=workspace,
+                        full_access=False,
+                        model_context_limit=200_000,
+                        input_budget_ratio=0.75,
+                        llm=llm,
+                    ),
+                    lambda *_values: None,
+                    journal,
+                    session_id="session",
+                    preview_sink=lambda *values: previews.append(values),
+                    scheduler_factory=SettlingScheduler,
+                )
+                try:
+                    trigger = await assembly.runtime.receive_user_message(
+                        "session",
+                        "wait",
+                        delivery_id="user-1",
+                    )
+                    await assembly.scheduler.wake("session")
+                    await asyncio.wait_for(llm.started.wait(), timeout=1)
+                    await assembly.sessions.cancel_turn("session")
+                    await assembly.scheduler.join()
+
+                    self.assertEqual(
+                        previews,
+                        [
+                            ("session", "started", trigger.event_id, None),
+                            ("session", "delta", trigger.event_id, "partial"),
+                            ("session", "aborted", trigger.event_id, None),
+                        ],
+                    )
+                    events = await journal.snapshot("session")
+                    self.assertTrue(
+                        any(
+                            isinstance(event.payload, DecisionCancelled)
+                            for event in events
+                        )
+                    )
+                    self.assertFalse(
+                        any(
+                            isinstance(event.payload, StepCommitted)
+                            for event in events
+                        )
+                    )
+                finally:
+                    await assembly.scheduler.close()
+
+    async def test_preview_and_delivery_share_the_trigger_output_id(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            previews = []
+            delivered = []
+            with (
+                patch(
+                    "helperme.assistant.assembly.HelperMeHome.default",
+                    return_value=HelperMeHome(root / ".helperme"),
+                ),
+                patch(
+                    "helperme.assistant.assembly.runtime_data_root",
+                    return_value=root / "runtime",
+                ),
+            ):
+                assembly = await build_assistant_assembly(
+                    AssistantConfig(
+                        model_name="test-model",
+                        workspace_root=workspace,
+                        full_access=False,
+                        model_context_limit=200_000,
+                        input_budget_ratio=0.75,
+                        llm=StreamingLlm(),
+                    ),
+                    lambda *values: delivered.append(values),
+                    MemoryJournal(),
+                    session_id="session",
+                    preview_sink=lambda *values: previews.append(values),
+                    scheduler_factory=SettlingScheduler,
+                )
+                try:
+                    trigger = await assembly.runtime.receive_user_message(
+                        "session",
+                        "hello",
+                        delivery_id="user-1",
+                    )
+                    await assembly.scheduler.wake("session")
+                    await assembly.scheduler.join()
+
+                    output_id = trigger.event_id
+                    self.assertEqual(
+                        previews,
+                        [
+                            ("session", "started", output_id, None),
+                            ("session", "delta", output_id, "hel"),
+                            ("session", "delta", output_id, "lo"),
+                        ],
+                    )
+                    self.assertEqual(
+                        delivered,
+                        [("session", output_id, "hello")],
+                    )
+                finally:
+                    await assembly.scheduler.close()
+
     async def test_session_endings_are_wired_to_the_subagent_host(self):
         """静止、失败、对外输出三条线都要落到 SubAgentHost。
 
@@ -206,7 +371,9 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                         input_budget_ratio=0.75,
                         llm=CapturingLlm(),
                     ),
-                    lambda session_id, text: delivered.append((session_id, text)),
+                    lambda session_id, _output_id, text: delivered.append(
+                        (session_id, text)
+                    ),
                     MemoryJournal(),
                     session_id="session",
                     subagent_activity_sink=(

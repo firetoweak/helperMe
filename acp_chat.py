@@ -16,9 +16,13 @@ async def async_main() -> None:
     def _push(coro) -> None:
         asyncio.get_running_loop().create_task(coro)
 
-    async def sink(session_id: str, text: str) -> None:
+    async def sink(session_id: str, output_id: str, text: str) -> None:
         assert agent is not None
-        await agent.deliver(session_id, text)
+        await agent.deliver(session_id, output_id, text)
+
+    async def preview(session_id: str, phase: str, output_id: str, text) -> None:
+        assert agent is not None
+        await agent.preview(session_id, phase, output_id, text)
 
     def report_usage(session_id: str, used: int, limit: int) -> None:
         assert agent is not None
@@ -32,6 +36,7 @@ async def async_main() -> None:
         sink,
         context_usage_sink=report_usage,
         tool_progress_sink=report_tool,
+        preview_sink=preview,
     ) as app:
         agent = HelperMeAcpAgent(app.sessions, app.config.workspace)
         try:

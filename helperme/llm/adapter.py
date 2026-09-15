@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 from importlib import import_module
+from inspect import isawaitable
 from typing import Any
 
 from helperme.llm.api import (
@@ -64,9 +65,32 @@ class LiteLLMAdapter:
     async def __aexit__(self, exc_type, exc, traceback) -> None:
         await self._litellm.close_litellm_async_clients()
 
-    async def chat(self, messages, model, tools=None) -> LLMCallResult:
+    async def chat(
+        self,
+        messages,
+        model,
+        tools=None,
+        *,
+        on_content_delta=None,
+    ) -> LLMCallResult:
+        request_messages = encode_images(messages, self._read_attachment)
+        content_parts: list[str] = []
         try:
-            completion = await self._completion(model, messages, tools)
+            stream = await self._completion(model, request_messages, tools)
+            chunks = []
+            async for chunk in stream:
+                chunks.append(chunk)
+                content = self._content_delta(chunk)
+                if content:
+                    content_parts.append(content)
+                    if on_content_delta is not None:
+                        emitted = on_content_delta(content)
+                        if isawaitable(emitted):
+                            await emitted
+            completion = self._litellm.stream_chunk_builder(
+                chunks,
+                messages=request_messages,
+            )
         except self._litellm.ContextWindowExceededError as exc:
             raise LLMContextLengthError(str(exc)) from exc
         except (
@@ -116,8 +140,14 @@ class LiteLLMAdapter:
             or (None if details is None else getattr(details, "cached_tokens", None))
             or 0
         )
+        response = self._parse_response(message)
+        if "".join(content_parts) != response.content:
+            raise InvalidLLMResponse(
+                "stream_content_mismatch",
+                "streamed content does not match the assembled response",
+            )
         return LLMCallResult(
-            response=self._parse_response(message),
+            response=response,
             usage=LLMUsage(input_tokens, output_tokens, cached_tokens),
         )
 
@@ -129,10 +159,44 @@ class LiteLLMAdapter:
     ) -> Any:
         return await self._router.acompletion(
             model=model,
-            messages=encode_images(messages, self._read_attachment),
+            messages=messages,
             tools=tools,
             tool_choice="auto" if tools else None,
+            stream=True,
+            stream_options={"include_usage": True},
         )
+
+    @staticmethod
+    def _content_delta(chunk: Any) -> str:
+        try:
+            choices = chunk.choices
+        except AttributeError as exc:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream chunk is missing choices",
+            ) from exc
+        if type(choices) is not list:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream chunk choices must be an array",
+            )
+        if not choices:
+            return ""
+        try:
+            content = choices[0].delta.content
+        except AttributeError as exc:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream choice delta is invalid",
+            ) from exc
+        if content is None:
+            return ""
+        if type(content) is not str:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream content delta must be str|null",
+            )
+        return content
 
     def _parse_response(self, message: Any) -> LLMResponse:
         try:

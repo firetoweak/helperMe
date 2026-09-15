@@ -83,7 +83,7 @@ class AcpChannelTest(unittest.IsolatedAsyncioTestCase):
         )
         await self.sessions.accepted.wait()
 
-        await self.agent.deliver(session_id, "world")
+        await self.agent.deliver(session_id, "output-1", "world")
         self.sessions.quiescent.set()
         response = await prompt
 
@@ -108,8 +108,8 @@ class AcpChannelTest(unittest.IsolatedAsyncioTestCase):
         )
         await self.sessions.accepted.wait()
 
-        await self.agent.deliver(session_id, "first")
-        await self.agent.deliver(session_id, "second")
+        await self.agent.deliver(session_id, "output-1", "first")
+        await self.agent.deliver(session_id, "output-2", "second")
         self.sessions.quiescent.set()
         await prompt
 
@@ -117,6 +117,35 @@ class AcpChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.content.text, "first")
         self.assertEqual(second.content.text, "second")
         self.assertNotEqual(first.message_id, second.message_id)
+
+    async def test_preview_chunks_share_message_and_final_is_not_duplicated(self) -> None:
+        from acp.schema import TextContentBlock
+
+        session_id = await self._new_session()
+        prompt = asyncio.create_task(
+            self.agent.prompt(
+                session_id,
+                [TextContentBlock(type="text", text="hello")],
+            )
+        )
+        await self.sessions.accepted.wait()
+
+        await self.agent.preview(session_id, "started", "output-1", None)
+        await self.agent.preview(session_id, "delta", "output-1", "wor")
+        await self.agent.preview(session_id, "delta", "output-1", "ld")
+        await self.agent.deliver(session_id, "output-1", "world")
+        self.sessions.quiescent.set()
+        await prompt
+
+        chunks = [item["update"] for item in self.client.updates]
+        self.assertEqual([chunk.content.text for chunk in chunks], ["wor", "ld"])
+        self.assertEqual(
+            {chunk.message_id for chunk in chunks},
+            {"message-output-1"},
+        )
+
+        await self.agent.deliver(session_id, "output-1", "world")
+        self.assertEqual(len(self.client.updates), 2)
 
     async def test_cancel_stops_decision_before_returning_cancelled(self) -> None:
         from acp.schema import TextContentBlock
@@ -136,7 +165,7 @@ class AcpChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.stop_reason, "cancelled")
         self.assertIn(("cancel_turn", session_id), self.sessions.calls)
 
-        await self.agent.deliver(session_id, "late output")
+        await self.agent.deliver(session_id, "output-1", "late output")
         self.assertEqual(self.client.updates, [])
 
     async def test_new_session_rejects_workspace_escape(self) -> None:

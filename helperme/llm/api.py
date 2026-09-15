@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from helperme.llm.types import (
@@ -11,6 +12,7 @@ from helperme.llm.types import (
 
 
 __all__ = [
+    "ContentDeltaSink",
     "InvalidLLMResponse",
     "LLMApi",
     "LLMAuthenticationError",
@@ -39,6 +41,9 @@ class LLMAuthenticationError(LLMProviderError):
     pass
 
 
+ContentDeltaSink = Callable[[str], Awaitable[None] | None]
+
+
 class LLMApi(Protocol):
     """Assistant 使用的最小模型调用协议。
 
@@ -52,5 +57,7 @@ class LLMApi(Protocol):
         messages: list[dict[str, object]],
         model: str,
         tools: list[dict[str, object]] | None = None,
+        *,
+        on_content_delta: ContentDeltaSink | None = None,
     ) -> LLMCallResult:
         ...

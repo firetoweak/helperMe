@@ -167,14 +167,14 @@ class ReadImageTest(unittest.IsolatedAsyncioTestCase):
                         ),
                         lambda _frame: ModelDecision(
                             command_requests=(
-                                InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),
+                                InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "done"))),
                             ),
                         ),
                     )
                 ),
                 {
                     "screenshot": ToolBinding(screenshot),
-                    **deliver_binding(lambda _session_id, _text: None),
+                    **deliver_binding(lambda _session_id, _output_id, _text: None),
                 },
                 SequentialIds(),
             )
@@ -212,14 +212,14 @@ class ReadImageTest(unittest.IsolatedAsyncioTestCase):
                         ),
                         lambda _frame: ModelDecision(
                             command_requests=(
-                                InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),
+                                InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "done"))),
                             ),
                         ),
                     )
                 ),
                 {
                     "screenshot": ToolBinding(screenshot),
-                    **deliver_binding(lambda _session_id, _text: None),
+                    **deliver_binding(lambda _session_id, _output_id, _text: None),
                 },
                 SequentialIds(),
             )
@@ -244,12 +244,12 @@ class ReadImageTest(unittest.IsolatedAsyncioTestCase):
                     (
                         lambda _frame: ModelDecision(
                             command_requests=(
-                                InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),
+                                InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "done"))),
                             ),
                         ),
                     )
                 ),
-                deliver_binding(lambda _session_id, _text: None),
+                deliver_binding(lambda _session_id, _output_id, _text: None),
                 SequentialIds(),
             )
             await runtime.receive_user_message(

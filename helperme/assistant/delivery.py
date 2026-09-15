@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from inspect import isawaitable
+from typing import Literal
 
 from helperme.runtime.dispatcher import AttemptContext, ToolBinding
 from helperme.runtime.model import (
@@ -14,11 +15,73 @@ from helperme.runtime.model import (
 DELIVER_TOOL_NAME = "deliver"
 
 
-DeliverySink = Callable[[str, str], Awaitable[None] | None]
+DeliverySink = Callable[[str, str, str], Awaitable[None] | None]
 """Route one Session's output. The Host decides where each Session lands."""
 
+PreviewPhase = Literal["started", "delta", "aborted"]
+PreviewSink = Callable[
+    [str, PreviewPhase, str, str | None],
+    Awaitable[None] | None,
+]
 
-def ensure_deliver(decision: ModelDecision) -> ModelDecision:
+
+@dataclass(slots=True)
+class PreviewEmitter:
+    """One disposable preview per Session; committed text still uses deliver."""
+
+    sink: PreviewSink | None = None
+    _active: dict[str, str] = field(default_factory=dict, init=False)
+
+    @property
+    def enabled(self) -> bool:
+        return self.sink is not None
+
+    async def start(self, session_id: str, output_id: str) -> None:
+        if self.sink is None:
+            return
+        self._active[session_id] = output_id
+        await _emit_preview(self.sink, session_id, "started", output_id, None)
+
+    async def append(self, session_id: str, output_id: str, text: str) -> None:
+        if self.sink is None:
+            return
+        if self._active[session_id] != output_id:
+            raise RuntimeError("preview output is not active")
+        await _emit_preview(self.sink, session_id, "delta", output_id, text)
+
+    async def abort(self, session_id: str) -> None:
+        if self.sink is None:
+            return
+        output_id = self._active.pop(session_id, None)
+        if output_id is not None:
+            await _emit_preview(
+                self.sink, session_id, "aborted", output_id, None
+            )
+
+    def finish(self, session_id: str, output_id: str) -> None:
+        if self.sink is None:
+            return
+        active = self._active.get(session_id)
+        if active is None:
+            return
+        if active != output_id:
+            raise RuntimeError("delivered output is not the active preview")
+        del self._active[session_id]
+
+
+async def _emit_preview(
+    sink: PreviewSink,
+    session_id: str,
+    phase: PreviewPhase,
+    output_id: str,
+    text: str | None,
+) -> None:
+    emitted = sink(session_id, phase, output_id, text)
+    if isawaitable(emitted):
+        await emitted
+
+
+def ensure_deliver(decision: ModelDecision, output_id: str) -> ModelDecision:
     """Map assistant text onto an Assistant-owned deliver Command.
 
     `deliver` is not a model-visible tool. Runtime does not promote
@@ -30,31 +93,51 @@ def ensure_deliver(decision: ModelDecision) -> ModelDecision:
         for request in decision.command_requests
     ):
         raise ValueError("deliver is a product command, not a model tool")
+    if type(output_id) is not str or not output_id:
+        raise ValueError("output_id must be a non-empty str")
     text = decision.content.strip()
     if not text:
         return decision
     return replace(
         decision,
         command_requests=decision.command_requests
-        + (InvokeTool(DELIVER_TOOL_NAME, (("text", text),)),),
+        + (
+            InvokeTool(
+                DELIVER_TOOL_NAME,
+                (("output_id", output_id), ("text", text)),
+            ),
+        ),
     )
 
 
-async def emit_delivery(sink: DeliverySink, session_id: str, text: str) -> None:
-    emitted = sink(session_id, text)
+async def emit_delivery(
+    sink: DeliverySink,
+    session_id: str,
+    output_id: str,
+    text: str,
+) -> None:
+    emitted = sink(session_id, output_id, text)
     if isawaitable(emitted):
         await emitted
 
 
-def deliver_binding(sink: DeliverySink) -> dict[str, ToolBinding]:
+def deliver_binding(
+    sink: DeliverySink,
+    preview: PreviewEmitter | None = None,
+) -> dict[str, ToolBinding]:
     async def handler(
         context: AttemptContext,
         arguments: Mapping[str, object],
     ) -> str:
+        output_id = arguments.get("output_id")
+        if type(output_id) is not str or not output_id:
+            raise ValueError("deliver output_id must be a non-empty str")
         text = arguments.get("text")
         if type(text) is not str or not text:
             raise ValueError("deliver text must be a non-empty str")
-        await emit_delivery(sink, context.session_id, text)
+        await emit_delivery(sink, context.session_id, output_id, text)
+        if preview is not None:
+            preview.finish(context.session_id, output_id)
         return text
 
     return {

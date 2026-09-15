@@ -162,6 +162,70 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sessions.method_calls, [])
         self.assertEqual(bot.method_calls, [])
 
+    async def test_preview_edits_one_message_and_final_is_idempotent(self) -> None:
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
+        bot = AsyncMock()
+        bot.send_message.return_value = SimpleNamespace(message_id=31)
+        channel = TelegramChannel(
+            AsyncMock(), bot, 7, "session-current", 101
+        )
+
+        await channel.preview("session-current", "started", "output-1", None)
+        await channel.preview("session-current", "delta", "output-1", "你")
+        await channel.preview("session-current", "delta", "output-1", "好")
+        await channel.deliver("session-current", "output-1", "你好")
+        await channel.deliver("session-current", "output-1", "你好")
+
+        bot.send_message.assert_awaited_once_with(chat_id=7, text="你")
+        bot.edit_message_text.assert_awaited_once_with(
+            chat_id=7,
+            message_id=31,
+            text="你好",
+        )
+
+    async def test_aborted_preview_is_marked_without_final_delivery(self) -> None:
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
+        bot = AsyncMock()
+        bot.send_message.return_value = SimpleNamespace(message_id=31)
+        channel = TelegramChannel(
+            AsyncMock(), bot, 7, "session-current", 101
+        )
+
+        await channel.preview("session-current", "started", "output-1", None)
+        await channel.preview("session-current", "delta", "output-1", "partial")
+        await channel.preview("session-current", "aborted", "output-1", None)
+
+        bot.edit_message_text.assert_awaited_once_with(
+            chat_id=7,
+            message_id=31,
+            text="partial\n\n[输出已中止]",
+        )
+
+    async def test_final_delivery_retries_transient_telegram_failure(self) -> None:
+        from aiogram.exceptions import TelegramNetworkError
+        from aiogram.methods import SendMessage
+
+        TelegramChannel, _TelegramPairing, _open_chat_channel = _telegram()
+        bot = AsyncMock()
+        bot.send_message.side_effect = (
+            TelegramNetworkError(
+                SendMessage(chat_id=7, text="done"),
+                "temporary failure",
+            ),
+            SimpleNamespace(message_id=31),
+        )
+        channel = TelegramChannel(
+            AsyncMock(), bot, 7, "session-current", 101
+        )
+
+        with patch(
+            "helperme.channels.telegram.assistant.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            await channel.deliver("session-current", "output-1", "done")
+
+        self.assertEqual(bot.send_message.await_count, 2)
+
 
 def _message(chat_id: int, text: str):
     return SimpleNamespace(chat=SimpleNamespace(id=chat_id), text=text)

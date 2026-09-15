@@ -171,14 +171,27 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.home = HelperMeHome(self.root / "home")
         self.store = SessionStore(self.home.runtime_sessions_root)
         self.output = []
+        self.output_ids = []
+        self.previews = []
+        self.delivery_order = []
         self.host = self.new_host()
 
     def new_host(self):
+        def deliver(session_id, output_id, text):
+            self.output.append((session_id, text))
+            self.output_ids.append(output_id)
+            self.delivery_order.append(("final", session_id, output_id, text))
+
+        def preview(*values):
+            self.previews.append(values)
+            self.delivery_order.append(("preview", *values))
+
         return HostSupervisor(
             self.store,
             partial(config_for, self.root),
             self.home,
-            lambda sid, text: self.output.append((sid, text)),
+            deliver,
+            preview_sink=preview,
         )
 
     async def asyncTearDown(self):
@@ -199,6 +212,19 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await self.host.receive_user_message("one", "hello", delivery_id="input")
         await until(lambda: not self.host.workers and not self.host.watchers)
         self.assertEqual(self.output, [("one", "done")])
+
+    async def test_preview_and_final_cross_worker_boundary_in_order(self):
+        await self.host.create("one")
+        await self.host.receive_user_message("one", "hello", delivery_id="input")
+        await until(lambda: self.output == [("one", "done")])
+
+        started, delta, final = self.delivery_order
+        self.assertEqual(started[:3], ("preview", "one", "started"))
+        self.assertEqual(delta[:3], ("preview", "one", "delta"))
+        self.assertEqual(delta[4], "done")
+        self.assertEqual(final[:2], ("final", "one"))
+        self.assertEqual(started[3], delta[3])
+        self.assertEqual(delta[3], final[2])
 
     async def test_selected_idle_worker_stays_until_owner_releases_it(self):
         await self.host.create("one")

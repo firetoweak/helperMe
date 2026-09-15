@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -9,6 +9,7 @@ from pathlib import Path
 from helperme.assistant.host.process_env import install_host_environment
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.host.supervisor import HostSupervisor
+from helperme.assistant.delivery import DeliverySink, PreviewSink
 from helperme.config import AppConfig, assistant_config_from_app, load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
 from helperme.paths import HelperMeHome
@@ -35,13 +36,14 @@ class BootstrappedAssistant:
 
 @asynccontextmanager
 async def bootstrap_assistant(
-    sink: Callable[[str, str], None],
+    sink: DeliverySink,
     *,
     app_config: AppConfig | None = None,
     context_usage_sink=None,
     subagent_activity_sink=None,
     conversation_status_sink=None,
     tool_progress_sink=None,
+    preview_sink: PreviewSink | None = None,
 ) -> AsyncIterator[BootstrappedAssistant]:
     install_host_environment()
     config = load_app_config() if app_config is None else app_config
@@ -57,6 +59,7 @@ async def bootstrap_assistant(
         subagent_activity_sink=subagent_activity_sink,
         conversation_status_sink=conversation_status_sink,
         tool_progress_sink=tool_progress_sink,
+        preview_sink=preview_sink,
     )
     # Channel management is product-level; session tools get their own clients.
     management_llm = LiteLLMAdapter(config.model, config.litellm)

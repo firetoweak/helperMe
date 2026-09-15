@@ -39,7 +39,13 @@ control confirmation 优先于 Command authorization。当前两类确认沿用�
 
 ## 输出
 
-Assistant 文本通过产品拥有的 `deliver` Command 到达 Channel sink。控制面审批提示由 Scheduler 在 Step 提交后的 Assistant 边界发送，不伪装成 Runtime Event。
+模型生成期间，Assistant 可以向 Channel 发 `started / delta / aborted` 三种 preview 信号。preview 只用于当前连接的展示：不写 Journal，不参与重放，也不表示正文已经提交。`started` 只建立一次输出的展示身份；没有正文 delta 时，Channel 不应画出空消息。
+
+一次 preview 使用当前 trigger event id 作为稳定 `output_id`。模型调用、响应校验或 Step 提交失败时发 `aborted`，不新增 assistant 正文事实；显式取消仍只提交既有的 `DecisionCancelled`。已经显示的部分正文由 Channel 标成中止或随入口的取消结果结束，不能提升为事实。
+
+Step 原子提交后，Assistant 正文仍通过产品拥有的 `deliver(output_id, text)` Command 到达 Channel sink。Channel 用同一 `output_id` 将最终正文与 preview 对齐，不重复显示；最终正文与 preview 不一致属于内部契约违规。投递失败不回滚 Step，也不重新调用模型或业务工具；重试和外部平台能够提供的幂等程度由 Channel 承担。Telegram 对明确的临时网络、服务端与限流错误重试，TUI 的本地写出同步完成；ACP stdio 连接断开后没有可重连的 reply route。
+
+控制面审批提示由 Scheduler 在 Step 提交后的 Assistant 边界发送，不伪装成 Runtime Event；它没有模型 preview，使用独立的 `output_id`。
 
 ## Session 操作
 

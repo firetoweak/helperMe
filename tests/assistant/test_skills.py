@@ -134,14 +134,14 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
                     lambda _frame: ModelDecision(
                         content="loaded",
                         command_requests=(
-                            InvokeTool(DELIVER_TOOL_NAME, (("text", "loaded"),)),
+                            InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "loaded"))),
                         ),
                     ),
                 )
             ),
             {
                 **self.adapter.bindings(),
-                **deliver_binding(lambda _session_id, text: delivered.append(text)),
+                **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
@@ -187,14 +187,14 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
                     lambda _frame: ModelDecision(
                         content="ok",
                         command_requests=(
-                            InvokeTool(DELIVER_TOOL_NAME, (("text", "ok"),)),
+                            InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "ok"))),
                         ),
                     ),
                 )
             ),
             {
                 **self.adapter.bindings(),
-                **deliver_binding(lambda _session_id, text: delivered.append(text)),
+                **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )

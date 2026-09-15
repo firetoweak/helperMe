@@ -156,7 +156,7 @@ class PromptVocabularyTests(unittest.IsolatedAsyncioTestCase):
                     input_budget_ratio=0.75,
                     llm=SilentLlm(),
                 ),
-                lambda _session_id, _text: None,
+                lambda _session_id, _output_id, _text: None,
                 MemoryJournal(),
                 session_id="parent/sub-vocabulary",
             )

@@ -13,7 +13,7 @@ HelperMeAcpAgent
     ▼
 AssistantSessions
     │
-    └── session/update  ← deliver / 用量 / 工具进度
+    └── session/update  ← preview + deliver / 用量 / 工具进度
 ```
 
 ## Client → Agent
@@ -31,7 +31,7 @@ AssistantSessions
 
 | `sessionUpdate` | 状态 | 内部来源 | 现在写什么 |
 |---|---|---|---|
-| `agent_message_chunk` | 已映射 | `deliver` | 对用户说的正文。每次 `deliver` 新 `message_id`，不把整轮拼成一条 |
+| `agent_message_chunk` | 已映射 | 模型 preview + `deliver` | 正文 delta 生成时立即发送；同一次输出共用 `message_id = message-{output_id}`。Step 提交后的 `deliver` 校验并完成该输出，不重复发送全文 |
 | `usage_update` | 已映射 | `context_usage_sink` | `used` + `size`（窗口上限） |
 | `tool_call` | 已映射 | 工具 `start` | `toolCallId` = `command_id`；`title` = 工具名；`kind` 按工具名归类；`status: in_progress`；`rawInput` |
 | `tool_call_update` | 已映射 | 工具 `finish` / `fail` | `completed` 或 `failed`；`rawOutput` 是完整结果；`content` **只在有错误字符串时**填文本 |

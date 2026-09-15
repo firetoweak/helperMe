@@ -117,7 +117,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 lambda _frame: ModelDecision(
                     content="done",
                     command_requests=(
-                        InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),
+                        InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "done"))),
                     ),
                 ),
             )
@@ -127,7 +127,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             decisions,
             {
                 **load_toolset_binding(surface),
-                **deliver_binding(lambda _session_id, text: delivered.append(text)),
+                **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
@@ -189,7 +189,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         def third(_frame):
             return ModelDecision(
                 content="done",
-                command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("text", "done"),)),),
+                command_requests=(InvokeTool(DELIVER_TOOL_NAME, (("output_id", "output-1"), ("text", "done"))),),
             )
 
         runtime = AgentRuntime(
@@ -197,7 +197,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             ScriptedDecisionMaker((first, second, third)),
             {
                 **load_toolset_binding(surface),
-                **deliver_binding(lambda _session_id, text: delivered.append(text)),
+                **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )
@@ -275,7 +275,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                         command_requests=(
                             InvokeTool(
                                 DELIVER_TOOL_NAME,
-                                (("text", "done"),),
+                                (("output_id", "output-1"), ("text", "done")),
                             ),
                         ),
                     ),
@@ -283,7 +283,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             ),
             {
                 **load_toolset_binding(surface),
-                **deliver_binding(lambda _session_id, text: delivered.append(text)),
+                **deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
             },
             SequentialIds(),
         )

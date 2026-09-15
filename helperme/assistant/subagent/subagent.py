@@ -490,10 +490,10 @@ class SubAgentHost:
     def routed_sink(self, sink: DeliverySink) -> DeliverySink:
         """子 Session 的 deliver 没有去处，内容留在它自己的 Journal 里。"""
 
-        async def routed(session_id: str, text: str) -> None:
+        async def routed(session_id: str, output_id: str, text: str) -> None:
             if self.is_subagent(session_id):
                 return
-            await emit_delivery(sink, session_id, text)
+            await emit_delivery(sink, session_id, output_id, text)
 
         return routed
 

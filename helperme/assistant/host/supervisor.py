@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass, field
+from inspect import isawaitable
 import multiprocessing
 import os
 
@@ -47,6 +48,7 @@ class HostSupervisor:
         subagent_activity_sink=None,
         conversation_status_sink=None,
         tool_progress_sink=None,
+        preview_sink=None,
     ):
         self.store = store
         self.config_factory = config_factory
@@ -56,6 +58,7 @@ class HostSupervisor:
         self.subagent_activity_sink = subagent_activity_sink
         self.conversation_status_sink = conversation_status_sink
         self.tool_progress_sink = tool_progress_sink
+        self.preview_sink = preview_sink
         self.workers: dict[str, Worker] = {}
         self.watchers: set[asyncio.Task] = set()
         self.locks: dict[str, asyncio.Lock] = {}
@@ -76,7 +79,12 @@ class HostSupervisor:
         if operation == "output":
             if self.compact.store.reader_job(session_id) is not None:
                 return None
-            await emit_delivery(self.sink, session_id, arguments["text"])
+            await emit_delivery(
+                self.sink,
+                session_id,
+                arguments["output_id"],
+                arguments["text"],
+            )
             return None
         if operation == "create_child":
             # Identity is stable; an existing child is resumed, never replaced.
@@ -123,6 +131,14 @@ class HostSupervisor:
                     and self.compact.store.reader_job(session_id) is None
                 ):
                     self.tool_progress_sink(*values)
+            elif kind == "preview":
+                if (
+                    self.preview_sink is not None
+                    and self.compact.store.reader_job(session_id) is None
+                ):
+                    emitted = self.preview_sink(*values)
+                    if isawaitable(emitted):
+                        await emitted
             elif kind == "idle":
                 worker.idle_revision = values[0]
                 worker.idle_has_active_subagents = values[1]

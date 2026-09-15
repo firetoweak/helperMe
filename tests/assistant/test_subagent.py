@@ -247,7 +247,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             bindings.update(
                 deliver_binding(
                     host.routed_sink(
-                        lambda session_id, text: delivered.append((session_id, text))
+                        lambda session_id, _output_id, text: delivered.append((session_id, text))
                     )
                 )
             )
@@ -260,8 +260,10 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         scheduler = LocalSessionRouter(
             runtime,
             notify=(
-                host.routed_sink(
-                    lambda session_id, text: delivered.append((session_id, text))
+                lambda session_id, text: (
+                    None
+                    if host.is_subagent(session_id)
+                    else delivered.append((session_id, text))
                 )
                 if delivered is not None
                 else None
@@ -680,10 +682,10 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             child_session_id = await self._child_session_id(runtime)
 
             routed = host.routed_sink(
-                lambda session_id, text: delivered.append((session_id, text))
+                lambda session_id, _output_id, text: delivered.append((session_id, text))
             )
-            await routed(child_session_id, "子 Agent 的中间过程")
-            await routed(self.PARENT, "给用户的结论")
+            await routed(child_session_id, "output-1", "子 Agent 的中间过程")
+            await routed(self.PARENT, "output-2", "给用户的结论")
 
             self.assertEqual(delivered, [(self.PARENT, "给用户的结论")])
         finally:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import asyncio
+from inspect import isawaitable
 from pathlib import Path
 import time
 
@@ -20,7 +21,7 @@ class ProcessLlm:
     async def __aexit__(self, *args):
         pass
 
-    async def chat(self, messages, model, *, tools=None):
+    async def chat(self, messages, model, *, tools=None, on_content_delta=None):
         images = [
             part
             for message in messages
@@ -55,8 +56,13 @@ class ProcessLlm:
                 ToolCall(f"delegate-{i}", "delegate", '{"task":"read something"}')
                 for i in range(2)
             )
+        content = "" if calls else "done"
+        if content and on_content_delta is not None:
+            emitted = on_content_delta(content)
+            if isawaitable(emitted):
+                await emitted
         return LLMCallResult(
-            LLMResponse(content="" if calls else "done", calls=calls),
+            LLMResponse(content=content, calls=calls),
             LLMUsage(input_tokens=10, output_tokens=5),
         )
 
@@ -73,9 +79,14 @@ def config_for(workspace: Path):
 
 
 class CancellableProcessLlm(ProcessLlm):
-    async def chat(self, messages, model, *, tools=None):
+    async def chat(self, messages, model, *, tools=None, on_content_delta=None):
         if "CANCEL_PROCESS" not in json.dumps(messages):
-            return await super().chat(messages, model, tools=tools)
+            return await super().chat(
+                messages,
+                model,
+                tools=tools,
+                on_content_delta=on_content_delta,
+            )
         (self.workspace / "cancel-started").touch()
         try:
             while True:

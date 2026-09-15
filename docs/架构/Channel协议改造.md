@@ -83,7 +83,7 @@ ACP v1 的 Prompt 生命周期是一轮长请求：HelperMe 仍先执行 `accept
 | `initialize` | 只接受并返回 `protocolVersion: 1`，只声明确实实现的能力 | 支持 |
 | `session/new` | 创建 HelperMe Session，选择 ACP owner | 支持 |
 | `session/prompt` | 先单次接纳输入，再等待 Session 为本轮重新静止并返回 `stopReason` | 支持；等待不能侵入 Runtime |
-| `session/update` | Assistant 输出与展示投影发送给当前 reply route | 已推 `agent_message_chunk`、`usage_update`、`tool_call` / `tool_call_update`。每次 `deliver` 使用新的 `message_id`，不把整轮 Step 拼成一条。`deliver` 仍只走正文，不重复报工具。权限询问与 `session/load` 另做 |
+| `session/update` | Assistant 输出与展示投影发送给当前 reply route | 已推 `agent_message_chunk`、`usage_update`、`tool_call` / `tool_call_update`。模型正文 preview 与提交后的 `deliver` 使用同一 `output_id` / `message_id`；`deliver` 不重复正文，也不重复报工具。权限询问与 `session/load` 另做 |
 | `session/request_permission` | UI 回答经 Assistant 应用边界提交 `CommandAuthorized` / `CommandRejected` | 目标支持，尚未接线；ACP 回答本身不是 Runtime 授权 |
 | `cwd` | 外部 Workspace 请求 | 只接受产品配置授权的绝对目录；不能静默替换当前 Workspace，也不能用 Client 的工作目录或环境变量定义本机执行环境 |
 | `mcpServers` | 客户端请求的能力配置 | 首期不接受注入；HelperMe 继续拥有 MCP Registry 与渐进加载 |
