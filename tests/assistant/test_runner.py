@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from helperme.assistant.control import AssistantControlPlane
 from helperme.assistant.decision import decision_from_llm
 from helperme.assistant.runner import SessionScheduler
-from helperme.llm.api import LLMProviderError
+from helperme.llm.api import InvalidLLMResponse, LLMProviderError
 from helperme.llm.types import LLMResponse, ToolCall
 from helperme.runtime import (
     AgentRuntime,
@@ -132,6 +132,38 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(notified), 1)
             self.assertEqual(notified[0][0], "session")
             self.assertIn("provider rejected request", notified[0][1])
+            self.assertIsNone(scheduler._failure)
+            self.assertEqual((await runtime.state("session")).status, RuntimeStatus.RUNNABLE)
+            await scheduler.wake("session")
+            await scheduler.join()
+            self.assertEqual((await runtime.state("session")).status, RuntimeStatus.WAITING)
+        finally:
+            await scheduler.close()
+
+    async def test_empty_model_response_can_retry_on_next_wake(self):
+        failure = InvalidLLMResponse(
+            "empty_model_response",
+            "model response contains neither tool calls nor non-empty text",
+        )
+
+        async def fail(_frame):
+            raise failure
+
+        model = ScriptedDecisionMaker((fail, lambda _frame: ModelDecision(content="ok")))
+        runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
+        notified = []
+        scheduler = SettlingScheduler(
+            runtime,
+            "session",
+            notify=lambda session_id, message: notified.append((session_id, message)),
+        )
+        await runtime.create_session("session")
+        await runtime.receive_user_message("session", "hello", delivery_id="user-1")
+        try:
+            await scheduler.wake("session")
+            await scheduler.join()
+            self.assertEqual(len(notified), 1)
+            self.assertIn("没有给出可用回复或工具调用", notified[0][1])
             self.assertIsNone(scheduler._failure)
             self.assertEqual((await runtime.state("session")).status, RuntimeStatus.RUNNABLE)
             await scheduler.wake("session")

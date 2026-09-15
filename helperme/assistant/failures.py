@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from helperme.llm.api import (
+    InvalidLLMResponse,
     LLMAuthenticationError,
     LLMContextLengthError,
     LLMProviderError,
@@ -20,4 +21,11 @@ def assistant_failure_message(error: BaseException) -> str | None:
         return f"模型输入超出上下文限制：{error}"
     if isinstance(error, LLMProviderError):
         return f"模型请求失败：{error}"
+    if isinstance(error, InvalidLLMResponse):
+        if error.code == "empty_model_response":
+            return (
+                "模型这一拍没有给出可用回复或工具调用。"
+                "下一条消息会从同一触发重试。"
+            )
+        return f"模型响应不符合约定：{error}"
     return None
