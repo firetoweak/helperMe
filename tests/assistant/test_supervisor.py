@@ -15,6 +15,8 @@ from helperme.assistant.subagent.subagent import project_delegations, project_re
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal
 from tests.fixtures.session_worker import (
+    CancellableProcessLlm,
+    ProcessLlm,
     cancellable_config,
     config_for,
     interrupted_read_config,
@@ -54,7 +56,9 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         received = json.loads(
             (self.root / "received-images.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(received[0]["id"], ref.attachment_id)
+        self.assertTrue(
+            received[0]["image_url"]["url"].startswith("data:image/png;base64,")
+        )
 
     async def persist_child(self):
         from datetime import datetime, timezone
@@ -191,6 +195,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
             partial(config_for, self.root),
             self.home,
             deliver,
+            llm=ProcessLlm(self.root),
             preview_sink=preview,
         )
 
@@ -252,6 +257,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         from helperme.runtime import DecisionCancelled
 
         self.host.config_factory = partial(cancellable_config, self.root)
+        self.host.llm = CancellableProcessLlm(self.root)
         await self.host.create("one")
         await self.host.select("acp", "one")
         await self.host.accept_input(

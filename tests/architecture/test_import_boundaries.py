@@ -121,6 +121,27 @@ class LayerImportBoundaryTest(unittest.TestCase):
             _imported_modules(BOOTSTRAP_PATH),
         )
 
+    def test_worker_config_does_not_construct_the_concrete_llm_client(self):
+        import inspect
+
+        from helperme.bootstrap import worker_config
+
+        self.assertNotIn("LiteLLMAdapter", inspect.getsource(worker_config))
+
+    def test_assistant_does_not_import_litellm(self):
+        offenders: list[str] = []
+        for path in sorted(ASSISTANT_ROOT.rglob("*.py")):
+            leaked = sorted(
+                module
+                for module in _imported_modules(path)
+                if module == "litellm" or module.startswith("litellm.")
+            )
+            if leaked:
+                offenders.append(
+                    f"{path.relative_to(ASSISTANT_ROOT)}: {', '.join(leaked)}"
+                )
+        self.assertEqual(offenders, [])
+
     def test_channels_do_not_import_runtime_or_infrastructure_layers(self):
         offenders: list[str] = []
         forbidden = {

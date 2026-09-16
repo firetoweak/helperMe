@@ -17,7 +17,7 @@ from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.assistant.artifacts import FileArtifactGateway
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal, StepCommitted, DomainFactCommitted
-from tests.fixtures.compact_worker import config_for, HANDOFF
+from tests.fixtures.compact_worker import CompactLlm, config_for, HANDOFF
 
 pytestmark = pytest.mark.process
 
@@ -43,6 +43,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
             partial(config_for, self.root),
             self.home,
             lambda sid, _output_id, text: self.outputs.append((sid, text)),
+            llm=CompactLlm(self.root),
         )
 
     async def asyncTearDown(self):

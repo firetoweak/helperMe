@@ -9,6 +9,7 @@ import os
 from helperme.assistant.compact.host import CompactHost
 from helperme.assistant.delivery import emit_delivery
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
+from helperme.assistant.host.llm_port import complete_llm_chat
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.subagent.subagent import persist_return, report_arguments, return_data
 from helperme.assistant.host.spawn import start_worker
@@ -44,6 +45,7 @@ class HostSupervisor:
         home,
         sink,
         *,
+        llm,
         context_usage_sink=None,
         subagent_activity_sink=None,
         conversation_status_sink=None,
@@ -55,6 +57,7 @@ class HostSupervisor:
         self.config_factory = config_factory
         self.home = home
         self.sink = sink
+        self.llm = llm
         self.context_usage_sink = context_usage_sink
         self.subagent_activity_sink = subagent_activity_sink
         self.conversation_status_sink = conversation_status_sink
@@ -74,6 +77,13 @@ class HostSupervisor:
         self.job = WindowsJob.create() if os.name == "nt" else None
 
     async def _route(self, operation, session_id, arguments):
+        if operation == "llm_chat":
+            worker = self.workers[session_id]
+
+            async def on_delta(text):
+                await worker.peer.send(("delta", worker.peer.active_request_id, text))
+
+            return await complete_llm_chat(self.llm, arguments, on_delta)
         if operation == "compact_boundary":
             return await self.compact.boundary(session_id, arguments)
         if operation == "compact_complete":

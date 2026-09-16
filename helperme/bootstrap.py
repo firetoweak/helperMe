@@ -19,11 +19,13 @@ from helperme.skills.composition import build_skills
 from helperme.skills.summarizer import LlmSkillDiffSummarizer
 
 
+class UnboundHostLlm:
+    async def chat(self, *args, **kwargs):
+        raise RuntimeError("Worker must bind the Host LLM port")
+
+
 def worker_config(app_config: AppConfig):
-    return assistant_config_from_app(
-        app_config,
-        LiteLLMAdapter(app_config.model, app_config.litellm),
-    )
+    return assistant_config_from_app(app_config, UnboundHostLlm())
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,11 +55,13 @@ async def bootstrap_assistant(
     home = HelperMeHome.default()
     home.initialize()
     store = SessionStore(home.runtime_sessions_root)
+    llm = LiteLLMAdapter(config.model, config.litellm)
     host = HostSupervisor(
         store,
         partial(worker_config, config),
         home,
         sink,
+        llm=llm,
         context_usage_sink=context_usage_sink,
         subagent_activity_sink=subagent_activity_sink,
         conversation_status_sink=conversation_status_sink,
@@ -65,13 +69,11 @@ async def bootstrap_assistant(
         preview_sink=preview_sink,
         session_activity_sink=session_activity_sink,
     )
-    # Channel management is product-level; session tools get their own clients.
-    management_llm = LiteLLMAdapter(config.model, config.litellm)
     mcp = build_mcp(home)
     skills = build_skills(
-        home, diff_summarizer=LlmSkillDiffSummarizer(management_llm, config.model.active)
+        home, diff_summarizer=LlmSkillDiffSummarizer(llm, config.model.active)
     )
-    async with management_llm, mcp.client_manager:
+    async with llm, mcp.client_manager:
         try:
             yield BootstrappedAssistant(
                 config,

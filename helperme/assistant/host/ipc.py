@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from inspect import isawaitable
 import traceback
 from uuid import uuid4
 
@@ -42,31 +43,56 @@ class PipePeer:
         self.handler = handler
         self.signal = signal
         self.pending: dict[str, asyncio.Future] = {}
+        self.delta_sinks: dict[str, object] = {}
+        self.inflight: dict[str, asyncio.Task] = {}
         self.tasks: set[asyncio.Task] = set()
         self.stopped = False
         self.failure: BaseException | None = None
         self.send_lock = asyncio.Lock()
+        self.active_request_id: str | None = None
 
     async def send(self, message) -> None:
         async with self.send_lock:
             await asyncio.to_thread(self.connection.send, message)
 
-    async def request(self, operation: str, session_id: str, arguments: dict):
+    async def request(
+        self,
+        operation: str,
+        session_id: str,
+        arguments: dict,
+        *,
+        on_delta=None,
+    ):
         request_id = uuid4().hex
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
+        if on_delta is not None:
+            self.delta_sinks[request_id] = on_delta
         try:
             await self.send(("request", request_id, operation, session_id, arguments))
             return await future
+        except asyncio.CancelledError:
+            await asyncio.shield(self.send(("abort", request_id)))
+            raise
         finally:
             del self.pending[request_id]
+            self.delta_sinks.pop(request_id, None)
 
     async def _handle(self, request_id, operation, session_id, arguments):
-        result = await self.handler(operation, session_id, arguments)
-        await self.send(("response", request_id, result))
+        self.active_request_id = request_id
+        try:
+            result = await self.handler(operation, session_id, arguments)
+            await self.send(("response", request_id, result))
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self.active_request_id == request_id:
+                self.active_request_id = None
 
-    def _done(self, task):
-        self.tasks.remove(task)
+    def _done(self, task, request_id=None):
+        self.tasks.discard(task)
+        if request_id is not None:
+            self.inflight.pop(request_id, None)
         if not task.cancelled() and task.exception() is not None:
             self.failure = task.exception()
 
@@ -89,12 +115,30 @@ class PipePeer:
                 continue
             kind, *payload = message
             if kind == "request":
+                request_id = payload[0]
                 task = asyncio.create_task(self._handle(*payload))
+                self.inflight[request_id] = task
                 self.tasks.add(task)
-                task.add_done_callback(self._done)
+                task.add_done_callback(
+                    lambda done, request_id=request_id: self._done(done, request_id)
+                )
+            elif kind == "abort":
+                (request_id,) = payload
+                task = self.inflight.get(request_id)
+                if task is not None:
+                    task.cancel()
+            elif kind == "delta":
+                request_id, text = payload
+                sink = self.delta_sinks.get(request_id)
+                if sink is not None:
+                    emitted = sink(text)
+                    if isawaitable(emitted):
+                        await emitted
             elif kind == "response":
                 request_id, result = payload
-                self.pending[request_id].set_result(result)
+                future = self.pending.get(request_id)
+                if future is not None and not future.done():
+                    future.set_result(result)
             else:
                 await self.signal(kind, *payload)
 

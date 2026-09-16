@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import multiprocessing
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import threading
 
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure
+from helperme.assistant.host.llm_port import WorkerLlmPort
 from helperme.assistant.subagent.subagent import (
     project_parent, record_interrupted_return, record_unexpected_return,
 )
@@ -33,7 +35,8 @@ async def run_worker(connection, session_id, path, config_factory, home_root):
 
 
 async def _run_session(connection, session_id, journal, config_factory, home_root):
-    # Each process owns all clients, caches and its single Journal.
+    # Each process owns execution clients, caches and its single Journal.
+    # The model implementation lives on the Host; this Worker only holds a Port.
     home = HelperMeHome(Path(home_root))
     await journal.prepare_recovery(session_id)
     await record_interrupted_return(journal, session_id)
@@ -97,6 +100,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
             assembly.scheduler.changed.set()
 
     peer = PipePeer(connection, handle, signal)
+    config = replace(config, llm=WorkerLlmPort(peer, session_id))
 
     async def sink(target, output_id, text):
         await peer.request(

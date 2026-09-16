@@ -7,10 +7,10 @@
 HelperMe 使用进程内 LiteLLM Router 作为模型适配层。LiteLLM 负责 Provider 配置、协议转换和未来可选的路由能力；Assistant 继续只依赖窄 `LLMApi`，Runtime、Journal 与 `ModelDecision` 不认识 LiteLLM 或厂商字段。
 
 ```text
-Assistant → LLMApi → LiteLLMAdapter → litellm.Router → Provider
+Assistant → LLMApi → Worker LLM Port → Host LLM Service → LiteLLMAdapter → litellm.Router → Provider
 ```
 
-本次接入解决已经发生的协议差异，不引入 LiteLLM Proxy，不接管 HelperMe 的 Agent 循环、工具执行、上下文投影或持久化。
+Router 由 Host 持有，跨 Session 复用。Worker 禁止 `import litellm`；附件编码、流式预览身份和 `cancel_turn` 仍留在 Worker。本次接入解决已经发生的协议差异，不引入 LiteLLM Proxy，不接管 HelperMe 的 Agent 循环、工具执行、上下文投影或持久化。
 
 ## 配置所有权
 
@@ -81,9 +81,9 @@ decision_metadata.message_extensions
 
 ## 异常与生命周期
 
-Adapter 只转换 LiteLLM 明确定义且 HelperMe 已有语义对应的异常：认证与权限、上下文超限、连接/超时/限流/服务端暂态错误及其他已知 Provider 错误。无确定对应关系的异常原样暴露，不以“模型不可用”或空响应继续运行。
+Adapter 只转换 LiteLLM 明确定义且 HelperMe 已有语义对应的异常：认证与权限、上下文超限、连接/超时/限流/服务端暂态错误及其他已知 Provider 错误。无确定对应关系的异常原样暴露，不以“模型不可用”或空响应继续运行。跨进程时这些异常收成 HelperMe 类型或带原始类型名与 traceback 的穿透异常；Worker 不反序列化 LiteLLM 类型。Provider 错误不得升级为 Host 进程失败。
 
-Router 随 Worker 生命周期创建和关闭。配置错误在装配边界暴露，不补默认 Provider、不猜测模型名、不降级到其他模型。
+Router 随 Host 生命周期创建和关闭。配置错误在装配边界暴露，不补默认 Provider、不猜测模型名、不降级到其他模型。Worker 退出或 `cancel_turn` 只中止对应调用，不关闭 Router。
 
 ## 版本与路由演进
 
@@ -109,5 +109,6 @@ LiteLLM 使用精确版本，不使用开放上界自动升级。每次升级单
 - Worker 重启后的 Journal 重放继续调用；
 - Compact 切换窗口后继续调用；
 - 使用上一固定 LiteLLM 版本产生的持久消息，通过候选新版本完成续拍。
+- Worker 进程不 import litellm；已知 LLM 错误经 IPC 保持类型；取消与 Worker 退出中止 Host 侧调用。
 
 前五项为机械边界测试；后四项使用真实模型或版本升级夹具验证。LiteLLM 的 Provider 数量和内部实现不在 HelperMe 单元测试中重复穷举。

@@ -5,7 +5,7 @@ import os
 import asyncio
 from inspect import isawaitable
 from pathlib import Path
-import time
+from uuid import uuid4
 
 from helperme.config import AssistantConfig
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage, ToolCall
@@ -27,7 +27,7 @@ class ProcessLlm:
             for message in messages
             if isinstance(message.get("content"), list)
             for part in message["content"]
-            if part["type"] == "image"
+            if part["type"] in ("image", "image_url")
         ]
         if images:
             (self.workspace / "received-images.json").write_text(
@@ -38,9 +38,9 @@ class ProcessLlm:
         if "CRASH_PROCESS" in text:
             raise RuntimeError("intentional worker crash")
         if "BLOCK_PROCESS" in text or "report" in names:
-            (self.workspace / f"blocked-{os.getpid()}").touch()
+            (self.workspace / f"blocked-{uuid4().hex}").touch()
             while not (self.workspace / "release").exists():
-                time.sleep(0.02)
+                await asyncio.sleep(0.02)
         calls = ()
         if "report" in names:
             if "READ_THEN_REPORT" in text and not any(
@@ -149,11 +149,12 @@ def failing_startup_config(workspace: Path, stage: str):
         worker.build_assistant_assembly = fail
     config = config_for(workspace)
     if stage == "client":
+        from helperme.mcp.client_manager import McpClientManager
 
         async def enter(self):
             raise RuntimeError("client initialization failed")
 
-        ProcessLlm.__aenter__ = enter
+        McpClientManager.__aenter__ = enter
     return config
 
 

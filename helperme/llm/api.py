@@ -3,6 +3,14 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from helperme.llm.codec import (
+    LLMRemoteError,
+    decode_llm_error,
+    decode_llm_result,
+    encode_llm_error,
+    encode_llm_result,
+)
+from helperme.llm.images import encode_images
 from helperme.llm.types import (
     InvalidLLMResponse,
     LLMCallResult,
@@ -19,9 +27,15 @@ __all__ = [
     "LLMCallResult",
     "LLMContextLengthError",
     "LLMProviderError",
+    "LLMRemoteError",
     "LLMResponse",
     "LLMTransientError",
     "ToolCall",
+    "decode_llm_error",
+    "decode_llm_result",
+    "encode_images",
+    "encode_llm_error",
+    "encode_llm_result",
 ]
 
 
@@ -49,7 +63,7 @@ class LLMApi(Protocol):
 
     content 为文本或有序内容块；图片块为
     {"type": "image", "id": 内容寻址 id, "mime": MIME 类型}。
-    Client 在请求边界读取字节，不修改上层消息或持久化 base64。
+    调用方在请求边界读取附件字节并编码；共享实现不持有 Session 附件闭包。
     """
 
     async def chat(
