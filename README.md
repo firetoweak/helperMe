@@ -55,7 +55,7 @@ python console_chat.py
 
 首次启动会创建 `~/.helperme/config.json`。按[模型配置指南](docs/模型配置.md)填写模型接口和工作区后重新启动，完整配置结构见 [config.example.json](config.example.json)。
 
-Web 入口只有一个：`python web_chat.py`，浏览器打开 `http://127.0.0.1:8765`。后端同时提供 API 和已构建的页面。
+普通 Web 入口是 `python web_chat.py`，浏览器打开 `http://127.0.0.1:8765`。后端同时提供 API 和已构建的页面。
 
 前端需要 Node.js。第一次使用或改过 `web/` 之后，先构建再启动：
 
@@ -67,14 +67,14 @@ cd ..
 python web_chat.py
 ```
 
-改前端时如果要用 Vite 热更新，先让上面的 Python 进程保持运行，再另开终端：
+开发前端时执行一个命令同时启动后端和 Vite：
 
 ```powershell
-cd web
-npm run dev
+python web_chat.py --dev
 ```
 
-然后打开 Vite 打印的本地地址。不要只开 Vite：页面会把 `/api` 转到 `127.0.0.1:8765`，后端不在就会一直报错。
+浏览器打开 Vite 输出的地址（通常是 `http://localhost:5173`），修改前端源码后页面会自动更新。`Ctrl+C` 会同时停止后端和 Vite。
+
 
 ## 文档
 

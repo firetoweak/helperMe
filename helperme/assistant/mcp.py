@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from helperme.assistant.attachments import AttachmentRejected, AttachmentStore
 from helperme.assistant.toolsets import (
     LoadedTool,
+    LoadedToolSnapshot,
     ToolsetDescriptor,
     ToolsetLoadError,
 )
@@ -33,7 +34,7 @@ class McpToolsetAdapter:
 
     async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
         try:
-            specs = await self._provider.tool_specs(toolset_id)
+            discovered = await self._provider.discover_tools(toolset_id)
         except ProviderLoadError as exc:
             raise ToolsetLoadError(
                 exc.code,
@@ -41,7 +42,37 @@ class McpToolsetAdapter:
                 hint=exc.hint,
                 data=exc.data,
             ) from exc
-        return tuple(_loaded_from_spec(spec, self._attachments) for spec in specs)
+        return tuple(
+            _loaded_from_spec(
+                item.spec,
+                self._attachments,
+                provider_data=item.provider_data,
+            )
+            for item in discovered
+        )
+
+    def restore(
+        self,
+        toolset_id: str,
+        revision: int,
+        tools: tuple[LoadedToolSnapshot, ...],
+    ) -> tuple[LoadedTool, ...]:
+        return tuple(
+            _loaded_from_spec(
+                self._provider.restore_spec(
+                    toolset_id=toolset_id,
+                    revision=revision,
+                    name=tool.name,
+                    description=tool.description,
+                    parameters=tool.parameters,
+                    requires_authorization=tool.requires_authorization,
+                    provider_data=tool.provider_data,
+                ),
+                self._attachments,
+                provider_data=tool.provider_data,
+            )
+            for tool in tools
+        )
 
 
 def extract_images(result: object, store: AttachmentStore) -> object:
@@ -90,7 +121,12 @@ def extract_images(result: object, store: AttachmentStore) -> object:
     return result
 
 
-def _loaded_from_spec(spec, attachments: AttachmentStore) -> LoadedTool:
+def _loaded_from_spec(
+    spec,
+    attachments: AttachmentStore,
+    *,
+    provider_data: Mapping[str, object],
+) -> LoadedTool:
     async def execute(arguments: Mapping[str, object]) -> object:
         return extract_images(
             runtime_tool_result(await spec.handler(arguments)),
@@ -103,4 +139,5 @@ def _loaded_from_spec(spec, attachments: AttachmentStore) -> LoadedTool:
         parameters=dict(spec.parameters.schema()),
         execute=execute,
         requires_authorization=spec.requires_authorization,
+        provider_data=provider_data,
     )

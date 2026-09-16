@@ -42,6 +42,22 @@ class _Sessions:
         self.calls.append(("cancel_turn", session_id))
         return SessionView("waiting", ("user_message",), (), False)
 
+    async def fork_and_accept_input(
+        self, owner, source_session_id, message_id, content, **kwargs
+    ):
+        self.calls.append(
+            (
+                "fork_and_accept_input",
+                owner,
+                source_session_id,
+                message_id,
+                content,
+                kwargs,
+            )
+        )
+        self.queries.record(kwargs["child_session_id"], content)
+        return SessionView("runnable", (), (), True)
+
     async def release(self, owner):
         self.calls.append(("release", owner))
 
@@ -224,3 +240,36 @@ class WebFirstSliceTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.sessions.calls, [("cancel_turn", "session-old")])
+
+    def test_editing_user_message_creates_and_selects_a_new_branch(self):
+        response = self.client.post(
+            "/api/sessions/session-old/forks",
+            json={
+                "connection_id": self.connection.connection_id,
+                "message_id": "user-1",
+                "delivery_id": "edit-1",
+                "text": "  修改后  ",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        child_session_id = response.json()["session_id"]
+        self.assertNotEqual(child_session_id, "session-old")
+        self.assertEqual(response.json()["items"][0]["text"], "修改后")
+        self.assertEqual(
+            self.sessions.calls,
+            [
+                (
+                    "fork_and_accept_input",
+                    self.connection.owner,
+                    "session-old",
+                    "user-1",
+                    "修改后",
+                    {
+                        "child_session_id": child_session_id,
+                        "delivery_id": "edit-1",
+                        "source": "web",
+                    },
+                )
+            ],
+        )

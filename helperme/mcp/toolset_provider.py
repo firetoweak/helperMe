@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import anyio
@@ -23,6 +25,12 @@ from helperme.mcp.adapter import (
 )
 from helperme.mcp.client_manager import McpClientError, McpClientManager
 from helperme.mcp.registry import McpRegistry
+
+
+@dataclass(frozen=True, slots=True)
+class McpDiscoveredTool:
+    spec: ToolSpec
+    provider_data: Mapping[str, object]
 
 
 class McpToolsetProvider:
@@ -53,6 +61,14 @@ class McpToolsetProvider:
         return tuple(descriptors)
 
     async def tool_specs(self, toolset_id: str) -> tuple[ToolSpec, ...]:
+        return tuple(
+            item.spec for item in await self.discover_tools(toolset_id)
+        )
+
+    async def discover_tools(
+        self,
+        toolset_id: str,
+    ) -> tuple[McpDiscoveredTool, ...]:
         server_id = parse_toolset_id(toolset_id)
         record = await self._registry.get(server_id)
         if record is None or not record.enabled:
@@ -84,7 +100,7 @@ class McpToolsetProvider:
                 data={"server_id": server_id},
             ) from exc
 
-        specs: list[ToolSpec] = []
+        discovered: list[McpDiscoveredTool] = []
         for tool in tools:
             parameters = build_parameters(tool.name, tool.input_schema)
             encoded = encode_tool_name(record.id, tool.name)
@@ -98,16 +114,66 @@ class McpToolsetProvider:
                 tool_name=tool.name,
                 output_validator=output_validator,
             )
-            specs.append(
-                ToolSpec(
-                    name=encoded,
-                    description=tool.description or tool.name,
-                    parameters=parameters,
-                    handler=handler,
+            spec = ToolSpec(
+                name=encoded,
+                description=tool.description or tool.name,
+                parameters=parameters,
+                handler=handler,
+            )
+            discovered.append(
+                McpDiscoveredTool(
+                    spec,
+                    {
+                        "tool_name": tool.name,
+                        "output_schema": (
+                            None
+                            if tool.output_schema is None
+                            else dict(tool.output_schema)
+                        ),
+                    },
                 )
             )
+        specs = [item.spec for item in discovered]
         ensure_unique_encoded_names(specs)
-        return tuple(specs)
+        return tuple(discovered)
+
+    def restore_spec(
+        self,
+        *,
+        toolset_id: str,
+        revision: int,
+        name: str,
+        description: str,
+        parameters: Mapping[str, object],
+        requires_authorization: bool,
+        provider_data: Mapping[str, object],
+    ) -> ToolSpec:
+        if set(provider_data) != {"tool_name", "output_schema"}:
+            raise ValueError("MCP tool provider_data 字段不匹配")
+        tool_name = provider_data["tool_name"]
+        output_schema = provider_data["output_schema"]
+        if type(tool_name) is not str or not tool_name:
+            raise ValueError("MCP tool_name 必须是非空字符串")
+        if output_schema is not None and not isinstance(output_schema, Mapping):
+            raise ValueError("MCP output_schema 必须是 object 或 null")
+        server_id = parse_toolset_id(toolset_id)
+        if encode_tool_name(server_id, tool_name) != name:
+            raise ValueError("MCP 工具快照名称与绑定身份不一致")
+        return ToolSpec(
+            name=name,
+            description=description,
+            parameters=build_parameters(tool_name, parameters),
+            handler=self._make_handler(
+                record_id=server_id,
+                expected_revision=revision,
+                tool_name=tool_name,
+                output_validator=build_output_validator(
+                    tool_name,
+                    output_schema,
+                ),
+            ),
+            requires_authorization=requires_authorization,
+        )
 
     def _make_handler(
         self,

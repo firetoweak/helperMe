@@ -35,6 +35,7 @@ class McpArgumentsTest(unittest.IsolatedAsyncioTestCase):
                     handler=handler,
                 ),
                 AttachmentStore(Path(directory)),
+                provider_data={},
             )
         effect = InvokeTool("browser", tuple(arguments.items()))
         self.assertEqual(

@@ -1,23 +1,29 @@
 import type { ConversationView, ToolStatus } from "../../api/contracts";
 import type { ActivePreview, LiveTool } from "../../realtime/runtimeSlice";
 
-export type VisibleMessage = {
+export type VisibleUser = {
   key: string;
-  kind: "user" | "assistant";
+  kind: "user";
   text: string;
-  pending: boolean;
 };
 
 export type VisibleTool = {
-  key: string;
-  kind: "tool";
   commandId: string;
   name: string;
   status: ToolStatus;
   error: string | null;
 };
 
-export type VisibleItem = VisibleMessage | VisibleTool;
+export type VisibleStep = {
+  key: string;
+  kind: "step";
+  outputId: string;
+  text: string | null;
+  pending: boolean;
+  tools: VisibleTool[];
+};
+
+export type VisibleItem = VisibleUser | VisibleStep;
 
 export function visibleTimeline(
   conversation: ConversationView,
@@ -27,69 +33,61 @@ export function visibleTimeline(
 ): VisibleItem[] {
   const journalOutputIds = new Set(
     conversation.items
-      .filter((item) => item.kind === "assistant")
+      .filter((item) => item.kind === "step")
       .map((item) => item.output_id),
   );
-  const journalCommandIds = new Set(
-    conversation.items
-      .filter((item) => item.kind === "tool")
-      .map((item) => item.command_id),
-  );
   const items: VisibleItem[] = conversation.items.map((item) => {
-    if (item.kind === "tool") {
-      const live = tools[item.command_id];
-      const status = item.status === "running" ? (live?.status ?? item.status) : item.status;
+    if (item.kind === "user") {
       return {
-        key: item.command_id,
-        kind: "tool",
-        commandId: item.command_id,
-        name: item.name,
-        status,
-        error: status === "failed" ? item.error : null,
+        key: item.message_id,
+        kind: "user",
+        text: item.text,
       };
     }
     return {
-      key: item.message_id,
-      kind: item.kind,
+      key: `output:${item.output_id}`,
+      kind: "step",
+      outputId: item.output_id,
       text: item.text,
       pending: false,
+      tools: item.tools.map((tool) => {
+        const live = tools[tool.command_id];
+        const terminal = tool.status === "succeeded" || tool.status === "failed";
+        const status = terminal ? tool.status : (live?.status ?? tool.status);
+        return {
+          commandId: tool.command_id,
+          name: tool.name,
+          status,
+          error: status === "failed" || status === "unknown" ? tool.error : null,
+        };
+      }),
     };
   });
-  for (const live of Object.values(tools)) {
-    if (journalCommandIds.has(live.commandId)) {
-      continue;
-    }
-    items.push({
-      key: live.commandId,
-      kind: "tool",
-      commandId: live.commandId,
-      name: live.name,
-      status: live.status,
-      error: null,
-    });
-  }
   for (const [outputId, text] of Object.entries(committed)) {
     if (journalOutputIds.has(outputId)) {
       continue;
     }
     items.push({
-      key: `committed:${outputId}`,
-      kind: "assistant",
+      key: `output:${outputId}`,
+      kind: "step",
+      outputId,
       text,
-      pending: false,
+      pending: true,
+      tools: [],
     });
   }
   if (
     preview !== null &&
-    preview.text !== "" &&
     !journalOutputIds.has(preview.outputId) &&
     committed[preview.outputId] === undefined
   ) {
     items.push({
-      key: `preview:${preview.outputId}`,
-      kind: "assistant",
+      key: `output:${preview.outputId}`,
+      kind: "step",
+      outputId: preview.outputId,
       text: preview.text,
       pending: true,
+      tools: [],
     });
   }
   return items;

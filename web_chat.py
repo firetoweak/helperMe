@@ -1,3 +1,7 @@
+import argparse
+import subprocess
+from pathlib import Path
+
 import uvicorn
 
 from helperme.channels.web import create_web_app
@@ -6,5 +10,37 @@ from helperme.channels.web import create_web_app
 app = create_web_app()
 
 
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="同时启动 Vite 开发服务器",
+    )
+    args = parser.parse_args(argv)
+
+    frontend = None
+    if args.dev:
+        web = Path(__file__).parent / "web"
+        frontend = subprocess.Popen(
+            ["node", web / "node_modules" / "vite" / "bin" / "vite.js"],
+            cwd=web,
+        )
+
+    try:
+        uvicorn.run(
+            "web_chat:app" if args.dev else app,
+            host="127.0.0.1",
+            port=8765,
+            reload=args.dev,
+            reload_dirs=[str(Path(__file__).parent)] if args.dev else None,
+            timeout_graceful_shutdown=1,
+        )
+    finally:
+        if frontend is not None and frontend.poll() is None:
+            frontend.terminate()
+            frontend.wait()
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8765, timeout_graceful_shutdown=1)
+    main()

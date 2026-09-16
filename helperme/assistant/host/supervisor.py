@@ -364,6 +364,32 @@ class HostSupervisor:
         async with self.locks.setdefault(session_id, asyncio.Lock()):
             await self.store.create(session_id)
 
+    async def fork_and_accept_input(
+        self,
+        owner,
+        source_session_id,
+        message_id,
+        edited_text,
+        *,
+        child_session_id,
+        delivery_id,
+        source="user",
+    ):
+        async with self.locks.setdefault(source_session_id, asyncio.Lock()):
+            original = await self.store.fork_before_message(
+                source_session_id,
+                message_id,
+                child_session_id,
+            )
+        await self.select(owner, child_session_id)
+        return await self.accept_input(
+            child_session_id,
+            edited_text,
+            delivery_id=delivery_id,
+            source=source,
+            artifact_refs=original.artifact_refs,
+        )
+
     async def select(self, owner, session_id):
         async with self.selection_locks.setdefault(owner, asyncio.Lock()):
             self.store.require(session_id)

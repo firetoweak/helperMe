@@ -665,6 +665,38 @@ class McpProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sessions["github"].calls, [("search", {"q": "mcp"})])
         self.assertEqual(self.sessions["jira"].calls, [])
 
+    async def test_restore_tool_contract_connects_only_on_first_call(self):
+        self.sessions["lazy"] = FakeMcpSession(tools=[_tool("search")])
+        await self.service.upsert_server(
+            server_id="lazy",
+            display_name="Lazy",
+            description="lazy restore",
+            transport="stdio",
+            transport_config={"command": "python", "args": ["lazy.py"]},
+            enabled=True,
+        )
+        discovered = (
+            await self.service.toolset_provider.discover_tools("mcp:lazy")
+        )[0]
+        await self.manager.invalidate("lazy")
+        replacement = FakeMcpSession(tools=[_tool("search")])
+        self.sessions["lazy"] = replacement
+
+        spec = self.service.toolset_provider.restore_spec(
+            toolset_id="mcp:lazy",
+            revision=1,
+            name=discovered.spec.name,
+            description=discovered.spec.description,
+            parameters=discovered.spec.parameters.schema(),
+            requires_authorization=discovered.spec.requires_authorization,
+            provider_data=discovered.provider_data,
+        )
+
+        self.assertFalse(replacement.initialized)
+        result = await spec.handler({"q": "mcp"})
+        self.assertTrue(replacement.initialized)
+        self.assertTrue(result["ok"])
+
     async def test_connection_factory_receives_resolved_secret_values(self):
         self.sessions["secure"] = FakeMcpSession(tools=[_tool("search")])
         await self.service.upsert_server(

@@ -10,6 +10,7 @@ from helperme.assistant.sessions import SessionView, session_view
 from helperme.assistant.subagent.subagent import project_parent, project_pending
 from helperme.runtime import (
     CommandOutcomeReceived,
+    DispatchAttemptStarted,
     Event,
     OutcomeStatus,
     SqliteJournal,
@@ -19,7 +20,9 @@ from helperme.runtime import (
 )
 
 
-ToolStatus = Literal["running", "succeeded", "failed"]
+ToolStatus = Literal["running", "succeeded", "failed", "unknown"]
+SessionActivity = Literal["running", "idle"]
+UNKNOWN_TOOL_ERROR = "执行中断，结果未知"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +30,7 @@ class SessionSummary:
     session_id: str
     title: str
     updated_at: datetime | None
-    activity: Literal["running", "idle"]
+    activity: SessionActivity
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,25 +42,24 @@ class UserItem:
 
 
 @dataclass(frozen=True, slots=True)
-class AssistantItem:
-    kind: Literal["assistant"]
-    message_id: str
-    output_id: str
-    text: str
-    occurred_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
 class ToolItem:
-    kind: Literal["tool"]
     command_id: str
     name: str
     status: ToolStatus
-    occurred_at: datetime
     error: str | None
 
 
-ConversationItem = UserItem | AssistantItem | ToolItem
+@dataclass(frozen=True, slots=True)
+class StepItem:
+    kind: Literal["step"]
+    step_id: str
+    output_id: str
+    text: str | None
+    tools: tuple[ToolItem, ...]
+    occurred_at: datetime
+
+
+ConversationItem = UserItem | StepItem
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,14 +118,19 @@ class AssistantQueries:
                 replay(session_id, events).state,
                 has_active_subagents=bool(project_pending(events)),
             )
-        return project_conversation(session_id, events, session=view)
+        return project_conversation(
+            session_id,
+            events,
+            session=view,
+            activity=self._sessions.activity(session_id),
+        )
 
 
 def project_session_summary(
     session_id: str,
     events: tuple[Event, ...],
     *,
-    activity: Literal["running", "idle"],
+    activity: SessionActivity,
 ) -> SessionSummary:
     title = "新会话"
     for event in events:
@@ -143,8 +150,10 @@ def project_conversation(
     events: tuple[Event, ...],
     *,
     session: SessionView,
+    activity: SessionActivity = "idle",
 ) -> ConversationView:
     outcomes = _command_outcomes(events)
+    started = _started_commands(events)
     items: list[ConversationItem] = []
     for event in events:
         payload = event.payload
@@ -156,28 +165,36 @@ def project_conversation(
         if not isinstance(payload, StepCommitted):
             continue
         text = payload.step.decision.content.strip()
-        if text:
-            items.append(
-                AssistantItem(
-                    "assistant",
-                    event.event_id,
-                    payload.step.trigger_event_id,
-                    text,
-                    event.occurred_at,
-                )
-            )
+        tools: list[ToolItem] = []
         for command in payload.step.commands:
             if command.effect.name == DELIVER_TOOL_NAME:
                 continue
-            status, error = outcomes.get(command.command_id, ("running", None))
-            items.append(
+            recorded = outcomes.get(command.command_id)
+            status, error = (
+                recorded
+                if recorded is not None
+                else _open_tool_status(
+                    command.command_id in started,
+                    activity,
+                )
+            )
+            tools.append(
                 ToolItem(
-                    "tool",
                     command.command_id,
                     command.effect.name,
                     status,
-                    event.occurred_at,
                     error,
+                )
+            )
+        if text or tools:
+            items.append(
+                StepItem(
+                    "step",
+                    payload.step.step_id,
+                    payload.step.trigger_event_id,
+                    text or None,
+                    tuple(tools),
+                    event.occurred_at,
                 )
             )
     return ConversationView(
@@ -186,6 +203,24 @@ def project_conversation(
         items=tuple(items),
         session=session,
     )
+
+
+def _open_tool_status(
+    attempt_started: bool,
+    activity: SessionActivity,
+) -> tuple[ToolStatus, str | None]:
+    if attempt_started and activity == "idle":
+        return ("unknown", UNKNOWN_TOOL_ERROR)
+    return ("running", None)
+
+
+def _started_commands(events: tuple[Event, ...]) -> frozenset[str]:
+    started: set[str] = set()
+    for event in events:
+        payload = event.payload
+        if isinstance(payload, DispatchAttemptStarted):
+            started.add(payload.command_id)
+    return frozenset(started)
 
 
 def _command_outcomes(

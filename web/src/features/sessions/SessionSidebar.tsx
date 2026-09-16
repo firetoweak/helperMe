@@ -1,4 +1,23 @@
-import { useNavigate, useParams } from "react-router-dom";
+import {
+  AppShell,
+  Badge,
+  Box,
+  Button,
+  Group,
+  NavLink,
+  ScrollArea,
+  Skeleton,
+  Stack,
+  Text,
+  ThemeIcon,
+  Tooltip,
+} from "@mantine/core";
+import {
+  IconMessageCircle,
+  IconPlus,
+  IconSparkles,
+} from "@tabler/icons-react";
+import { useMatch, useNavigate } from "react-router-dom";
 
 import {
   useCreateSessionMutation,
@@ -6,9 +25,13 @@ import {
 } from "../../api/helpermeApi";
 import { useAppSelector } from "../../app/hooks";
 
-export function SessionSidebar() {
+type SessionSidebarProps = {
+  onNavigate: () => void;
+};
+
+export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
   const navigate = useNavigate();
-  const { sessionId } = useParams();
+  const sessionId = useMatch("/sessions/:sessionId")?.params.sessionId;
   const connectionId = useAppSelector((state) => state.runtime.connectionId);
   const runtimes = useAppSelector((state) => state.runtime.sessions);
   const { data: sessions = [], isLoading } = useGetSessionsQuery();
@@ -18,47 +41,115 @@ export function SessionSidebar() {
     if (connectionId === null) return;
     const conversation = await createSession(connectionId).unwrap();
     navigate(`/sessions/${encodeURIComponent(conversation.session_id)}`);
+    onNavigate();
   }
 
   return (
-    <aside className="sidebar">
-      <div className="brand">HelperMe</div>
-      <button
-        className="new-session"
-        type="button"
-        disabled={connectionId === null || creation.isLoading}
-        onClick={create}
-      >
-        <span aria-hidden="true">＋</span>
-        新建会话
-      </button>
-      <div className="section-label">Sessions</div>
-      <nav className="session-list" aria-label="Sessions">
-        {isLoading ? <div className="sidebar-note">正在读取…</div> : null}
-        {sessions.map((session) => {
-          const runtime = runtimes[session.session_id];
-          const activity = runtime?.activity ?? session.activity;
-          const unread = runtime?.unread ?? 0;
-          return (
-            <button
-              className={
-                session.session_id === sessionId
-                  ? "session-item session-item-active"
-                  : "session-item"
-              }
-              key={session.session_id}
-              type="button"
-              onClick={() =>
-                navigate(`/sessions/${encodeURIComponent(session.session_id)}`)
-              }
-            >
-              <span className={`activity activity-${activity}`} />
-              <span className="session-title">{session.title}</span>
-              {unread > 0 ? <span className="unread">{unread}</span> : null}
-            </button>
-          );
-        })}
-      </nav>
-    </aside>
+    <Stack h="100%" gap="md">
+      <AppShell.Section>
+        <Group gap="sm" px={6} py={4}>
+          <ThemeIcon radius="md" size={34} variant="light">
+            <IconSparkles size={18} stroke={1.8} />
+          </ThemeIcon>
+          <Box>
+            <Text fw={700} lh={1.15} size="sm">
+              HelperMe
+            </Text>
+            <Text c="dimmed" fz={11}>
+              Personal agent
+            </Text>
+          </Box>
+        </Group>
+      </AppShell.Section>
+
+      <AppShell.Section>
+        <Button
+          fullWidth
+          justify="flex-start"
+          leftSection={<IconPlus size={17} />}
+          loading={creation.isLoading}
+          disabled={connectionId === null || creation.isLoading}
+          onClick={create}
+          radius="md"
+          variant="light"
+        >
+          新建会话
+        </Button>
+      </AppShell.Section>
+
+      <AppShell.Section grow className="session-section">
+        <Text c="dimmed" fw={700} fz={10} lts="0.09em" px={8} tt="uppercase">
+          Sessions
+        </Text>
+        <ScrollArea className="session-scroll" offsetScrollbars type="hover">
+          <Stack gap={3} mt="xs">
+            {isLoading ? (
+              <Stack gap={8} px={6}>
+                <Skeleton h={38} radius="md" />
+                <Skeleton h={38} radius="md" />
+                <Skeleton h={38} radius="md" />
+              </Stack>
+            ) : null}
+            {sessions.map((session) => {
+              const runtime = runtimes[session.session_id];
+              const activity = runtime?.activity ?? session.activity;
+              const unread = runtime?.unread ?? 0;
+              return (
+                <Tooltip
+                  key={session.session_id}
+                  label={session.title}
+                  openDelay={700}
+                  position="right"
+                >
+                  <NavLink
+                    active={session.session_id === sessionId}
+                    aria-label={session.title}
+                    color="sage"
+                    label={session.title}
+                    leftSection={
+                      <span
+                        className={`activity-dot activity-dot-${activity}`}
+                        aria-label={activity === "running" ? "运行中" : "空闲"}
+                      />
+                    }
+                    rightSection={
+                      unread > 0 ? (
+                        <Badge size="xs" variant="filled">
+                          {unread}
+                        </Badge>
+                      ) : null
+                    }
+                    onClick={() => {
+                      navigate(`/sessions/${encodeURIComponent(session.session_id)}`);
+                      onNavigate();
+                    }}
+                    py={9}
+                    px="sm"
+                    style={{ borderRadius: "var(--mantine-radius-md)" }}
+                    styles={{
+                      label: {
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      },
+                    }}
+                    variant="light"
+                  />
+                </Tooltip>
+              );
+            })}
+          </Stack>
+        </ScrollArea>
+      </AppShell.Section>
+
+      <AppShell.Section>
+        <Group gap="xs" px={8} py={4}>
+          <IconMessageCircle size={14} />
+          <Text c={connectionId === null ? "orange" : "dimmed"} fz={11}>
+            {connectionId === null ? "正在连接后端…" : "实时连接已建立"}
+          </Text>
+        </Group>
+      </AppShell.Section>
+    </Stack>
   );
 }

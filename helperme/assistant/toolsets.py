@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from helperme.assistant.artifacts import ArtifactGateway
@@ -86,6 +86,7 @@ class LoadedTool:
     parameters: dict[str, object]
     execute: Callable[[Mapping[str, object]], Awaitable[object]]
     requires_authorization: bool = False
+    provider_data: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if type(self.name) is not str or not self.name:
@@ -98,6 +99,8 @@ class LoadedTool:
             raise TypeError("loaded tool execute must be callable")
         if type(self.requires_authorization) is not bool:
             raise TypeError("requires_authorization must be bool")
+        if not isinstance(self.provider_data, Mapping):
+            raise TypeError("loaded tool provider_data must be a mapping")
 
     def schema(self) -> dict[str, object]:
         return {
@@ -117,6 +120,37 @@ class ToolsetProvider(Protocol):
     async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
         ...
 
+    def restore(
+        self,
+        toolset_id: str,
+        revision: int,
+        tools: tuple["LoadedToolSnapshot", ...],
+    ) -> tuple[LoadedTool, ...]:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedToolSnapshot:
+    """写入 Journal 的完整工具契约；不包含进程内 callable。"""
+
+    name: str
+    description: str
+    parameters: Mapping[str, object]
+    requires_authorization: bool
+    provider_data: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if type(self.name) is not str or not self.name:
+            raise ValueError("tool snapshot name must be a non-empty str")
+        if type(self.description) is not str or not self.description:
+            raise ValueError("tool snapshot description must be a non-empty str")
+        if not isinstance(self.parameters, Mapping):
+            raise TypeError("tool snapshot parameters must be a mapping")
+        if type(self.requires_authorization) is not bool:
+            raise TypeError("tool snapshot requires_authorization must be bool")
+        if not isinstance(self.provider_data, Mapping):
+            raise TypeError("tool snapshot provider_data must be a mapping")
+
 
 @dataclass
 class _LoadedSet:
@@ -132,6 +166,7 @@ class ToolsetActivation:
     toolset_id: str
     revision: int
     command_id: str
+    tools: tuple[LoadedToolSnapshot, ...]
 
     def __post_init__(self) -> None:
         if type(self.toolset_id) is not str or not self.toolset_id:
@@ -140,6 +175,8 @@ class ToolsetActivation:
             raise ValueError("activation revision must be a positive int")
         if type(self.command_id) is not str or not self.command_id:
             raise ValueError("activation command_id must be a non-empty str")
+        if type(self.tools) is not tuple:
+            raise TypeError("activation tools must be tuple")
 
 
 def project_toolset_activations(
@@ -194,18 +231,36 @@ def project_toolset_activations(
         ):
             raise ValueError("load_toolset outcome identity 无效")
         tools = data["tools"]
-        if not isinstance(tools, tuple) or any(
-            not isinstance(tool, Mapping)
-            or set(tool) != {"name", "description"}
-            or type(tool["name"]) is not str
-            or type(tool["description"]) is not str
-            for tool in tools
-        ):
+        if not isinstance(tools, tuple):
             raise ValueError("load_toolset outcome tools 无效")
+        snapshots: list[LoadedToolSnapshot] = []
+        for tool in tools:
+            if (
+                not isinstance(tool, Mapping)
+                or set(tool)
+                != {
+                    "name",
+                    "description",
+                    "parameters",
+                    "requires_authorization",
+                    "provider_data",
+                }
+            ):
+                raise ValueError("load_toolset outcome tools 无效")
+            snapshots.append(
+                LoadedToolSnapshot(
+                    name=tool["name"],
+                    description=tool["description"],
+                    parameters=tool["parameters"],
+                    requires_authorization=tool["requires_authorization"],
+                    provider_data=tool["provider_data"],
+                )
+            )
         activations[toolset_id] = ToolsetActivation(
             toolset_id,
             revision,
             payload.command_id,
+            tuple(snapshots),
         )
     return tuple(activations.values())
 
@@ -361,8 +416,10 @@ class ToolSurface:
                         "available_revision": descriptor.revision,
                     },
                 )
-            tools = await self._provider_for(activation.toolset_id).load(
-                activation.toolset_id
+            tools = self._provider_for(activation.toolset_id).restore(
+                activation.toolset_id,
+                activation.revision,
+                activation.tools,
             )
             conflict = self._conflicting_names(activation.toolset_id, tools)
             if conflict:
@@ -507,7 +564,13 @@ def _loaded_payload(
             "toolset_id": toolset_id,
             "revision": revision,
             "tools": [
-                {"name": tool.name, "description": tool.description}
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                    "requires_authorization": tool.requires_authorization,
+                    "provider_data": dict(tool.provider_data),
+                }
                 for tool in tools
             ],
         },

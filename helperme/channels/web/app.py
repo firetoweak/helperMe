@@ -10,6 +10,10 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
+from helperme.assistant.host.session_store import (
+    ForkMessageNotFoundError,
+    SessionForkUnavailableError,
+)
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.bootstrap import bootstrap_assistant
 from helperme.channels.web.channel import WebChannel
@@ -28,6 +32,10 @@ class InputRequest(BaseModel):
     connection_id: str
     delivery_id: str
     text: str
+
+
+class EditRequest(InputRequest):
+    message_id: str
 
 
 def create_web_app(
@@ -57,6 +65,18 @@ def create_web_app(
     @app.exception_handler(SessionNotFoundError)
     async def session_not_found(_request: Request, error: SessionNotFoundError):
         return JSONResponse(status_code=404, content={"detail": str(error)})
+
+    @app.exception_handler(ForkMessageNotFoundError)
+    async def fork_message_not_found(
+        _request: Request, error: ForkMessageNotFoundError
+    ):
+        return JSONResponse(status_code=404, content={"detail": str(error)})
+
+    @app.exception_handler(SessionForkUnavailableError)
+    async def fork_unavailable(
+        _request: Request, error: SessionForkUnavailableError
+    ):
+        return JSONResponse(status_code=409, content={"detail": str(error)})
 
     @app.get("/api/events", response_class=EventSourceResponse)
     async def stream_events(request: Request):
@@ -100,6 +120,20 @@ def create_web_app(
         return await _channel(request).accept_input(
             body.connection_id,
             session_id,
+            body.text,
+            body.delivery_id,
+        )
+
+    @app.post("/api/sessions/{session_id}/forks", status_code=201)
+    async def edit_and_fork(
+        session_id: str,
+        body: EditRequest,
+        request: Request,
+    ):
+        return await _channel(request).edit_and_fork(
+            body.connection_id,
+            session_id,
+            body.message_id,
             body.text,
             body.delivery_id,
         )

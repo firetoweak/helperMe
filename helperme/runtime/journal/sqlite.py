@@ -44,6 +44,7 @@ from helperme.runtime.journal.api import (
 from helperme.runtime.model import (
     CanonicalState,
 )
+from helperme.runtime.state import StateProjector
 
 
 _T = TypeVar("_T")
@@ -208,6 +209,76 @@ class SqliteJournal:
             return cursor.rowcount == 1
 
         return await self._write(create)
+
+    async def materialize_history(
+        self,
+        session_id: str,
+        events: tuple[Event, ...],
+    ) -> None:
+        """Create one Session from an immutable history prefix.
+
+        Event identities and facts stay unchanged.  Session-local envelope data
+        and Step basis hashes are rebuilt for the new Session identity.
+        """
+
+        self._validate_session_id(session_id)
+
+        def materialize(connection: sqlite3.Connection) -> None:
+            if connection.execute("SELECT 1 FROM sessions").fetchone() is not None:
+                raise ValueError("history target Journal must be empty")
+            connection.execute(
+                "INSERT INTO sessions(session_id, last_sequence) VALUES (?, 0)",
+                (session_id,),
+            )
+            copied: list[Event] = []
+            projector = StateProjector()
+            for source in events:
+                payload = source.payload
+                if isinstance(payload, StepCommitted):
+                    observed = tuple(
+                        event
+                        for event in copied
+                        if event.sequence <= payload.step.observed_journal_position
+                    )
+                    frame = projector.project(session_id, observed).next_decision
+                    if (
+                        frame is None
+                        or frame.trigger_event.event_id
+                        != payload.step.trigger_event_id
+                    ):
+                        raise ValueError(
+                            f"history Step basis is invalid: {payload.step.step_id}"
+                        )
+                    payload = replace(
+                        payload,
+                        step=replace(
+                            payload.step,
+                            basis_state_version=frame.basis_state_version,
+                        ),
+                    )
+                result = self._append_tx(
+                    connection,
+                    EventDraft(
+                        event_id=source.event_id,
+                        session_id=session_id,
+                        payload=payload,
+                        occurred_at=source.occurred_at,
+                        causation_id=source.causation_id,
+                        correlation_id=source.correlation_id,
+                        schema_version=source.schema_version,
+                        artifact_refs=source.artifact_refs,
+                        delivery=source.delivery,
+                    ),
+                    attempt_lease_expires_at=(
+                        0.0
+                        if isinstance(payload, DispatchAttemptStarted)
+                        else None
+                    ),
+                )
+                copied.append(result.event)
+            projector.project(session_id, tuple(copied))
+
+        await self._write(materialize)
 
     async def session_exists(self, session_id: str) -> bool:
         self._validate_session_id(session_id)

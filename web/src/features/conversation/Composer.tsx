@@ -1,3 +1,5 @@
+import { ActionIcon, Group, Paper, Textarea, Tooltip } from "@mantine/core";
+import { IconArrowUp, IconPlayerStopFilled } from "@tabler/icons-react";
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 
 type ComposerProps = {
@@ -30,6 +32,9 @@ export function Composer({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
@@ -37,30 +42,60 @@ export function Composer({
   }
 
   return (
-    <form className="composer" onSubmit={(event) => void submit(event)}>
-      <textarea
+    <Paper
+      component="form"
+      className="composer"
+      onSubmit={(event: FormEvent) => void submit(event)}
+      p={8}
+      pl="md"
+      radius="xl"
+      shadow="lg"
+      withBorder
+    >
+      <Textarea
+        aria-label="消息"
+        autosize
+        className="composer-input"
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="发送消息"
-        rows={1}
+        placeholder={disabled ? "正在连接…" : "输入消息，Enter 发送"}
+        minRows={1}
+        maxRows={7}
+        variant="unstyled"
         disabled={disabled}
       />
-      <div className="composer-actions">
+      <Group gap={6} wrap="nowrap">
         {running ? (
-          <button
-            type="button"
-            className="composer-stop"
-            disabled={cancelling}
-            onClick={onCancel}
-          >
-            停止
-          </button>
+          <Tooltip label="停止当前任务">
+            <ActionIcon
+              aria-label="停止当前任务"
+              color="red"
+              disabled={cancelling}
+              onClick={onCancel}
+              radius="xl"
+              size={38}
+              type="button"
+              variant="light"
+            >
+              <IconPlayerStopFilled size={16} />
+            </ActionIcon>
+          </Tooltip>
         ) : null}
-        <button type="submit" disabled={disabled || sending || text.trim() === ""}>
-          发送
-        </button>
-      </div>
-    </form>
+        <Tooltip label="发送">
+          <ActionIcon
+            aria-label="发送"
+            disabled={disabled || sending || text.trim() === ""}
+            loading={sending}
+            radius="xl"
+            size={38}
+            type="submit"
+            variant="filled"
+          >
+            <IconArrowUp size={18} stroke={2.2} />
+          </ActionIcon>
+        </Tooltip>
+      </Group>
+    </Paper>
   );
 }

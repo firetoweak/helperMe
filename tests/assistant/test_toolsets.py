@@ -8,6 +8,7 @@ from tests.session_scheduler import settle_session
 from helperme.assistant.toolsets import (
     LOAD_TOOLSET,
     LoadedTool,
+    LoadedToolSnapshot,
     ToolSurface,
     ToolsetDescriptor,
     ToolsetLoadError,
@@ -63,11 +64,14 @@ class FakeEchoProvider:
     ) -> None:
         self.revision = revision
         self.requires_authorization = requires_authorization
+        self.load_calls = 0
+        self.restore_calls = 0
 
     def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
         return (ToolsetDescriptor("demo", "echo tools", self.revision),)
 
     async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
+        self.load_calls += 1
         if toolset_id != "demo":
             raise ToolsetLoadError(
                 "TOOLSET_NOT_FOUND",
@@ -88,6 +92,38 @@ class FakeEchoProvider:
                 execute=ping,
                 requires_authorization=self.requires_authorization,
             ),
+        )
+
+    def restore(
+        self,
+        toolset_id: str,
+        revision: int,
+        tools: tuple[LoadedToolSnapshot, ...],
+    ) -> tuple[LoadedTool, ...]:
+        self.restore_calls += 1
+        if toolset_id != "demo" or revision != self.revision:
+            raise ToolsetLoadError(
+                "TOOLSET_NOT_FOUND",
+                f"Toolset {toolset_id} not found",
+            )
+
+        async def ping(arguments: Mapping[str, object]) -> object:
+            return {
+                "ok": True,
+                "code": "ECHO",
+                "data": {"echo": arguments.get("text", "")},
+            }
+
+        return tuple(
+            LoadedTool(
+                name=tool.name,
+                description=tool.description,
+                parameters=dict(tool.parameters),
+                execute=ping,
+                requires_authorization=tool.requires_authorization,
+                provider_data=tool.provider_data,
+            )
+            for tool in tools
         )
 
 
@@ -235,7 +271,8 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_loaded_toolset_cache_can_be_rehydrated_from_journal(self):
         events = await self._committed_load_events()
-        surface = ToolSurface(providers=(FakeEchoProvider(),))
+        provider = FakeEchoProvider()
+        surface = ToolSurface(providers=(provider,))
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(()),
@@ -254,6 +291,8 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             _schema_names(surface.schemas(self.SESSION_ID)),
             {LOAD_TOOLSET, "demo_ping"},
         )
+        self.assertEqual(provider.load_calls, 0)
+        self.assertEqual(provider.restore_calls, 1)
 
     async def test_failed_load_outcome_does_not_break_rehydrate(self):
         delivered: list[str] = []

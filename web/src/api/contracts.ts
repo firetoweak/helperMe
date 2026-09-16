@@ -29,7 +29,16 @@ export const sessionSummarySchema = z
   })
   .strict();
 
-export const toolStatusSchema = z.enum(["running", "succeeded", "failed"]);
+export const toolStatusSchema = z.enum(["running", "succeeded", "failed", "unknown"]);
+
+const toolItemSchema = z
+  .object({
+    command_id: z.string().min(1),
+    name: z.string().min(1),
+    status: toolStatusSchema,
+    error: z.string().min(1).nullable(),
+  })
+  .strict();
 
 export const conversationViewSchema = z
   .object({
@@ -47,21 +56,12 @@ export const conversationViewSchema = z
           .strict(),
         z
           .object({
-            kind: z.literal("assistant"),
-            message_id: z.string().min(1),
+            kind: z.literal("step"),
+            step_id: z.string().min(1),
             output_id: z.string().min(1),
-            text: z.string().min(1),
+            text: z.string().min(1).nullable(),
+            tools: z.array(toolItemSchema),
             occurred_at: z.string().datetime({ offset: true }),
-          })
-          .strict(),
-        z
-          .object({
-            kind: z.literal("tool"),
-            command_id: z.string().min(1),
-            name: z.string().min(1),
-            status: toolStatusSchema,
-            occurred_at: z.string().datetime({ offset: true }),
-            error: z.string().min(1).nullable(),
           })
           .strict(),
       ]),

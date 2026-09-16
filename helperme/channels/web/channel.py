@@ -69,6 +69,35 @@ class WebChannel:
         )
         return await self._queries.conversation(session_id, view=view)
 
+    async def edit_and_fork(
+        self,
+        connection_id: str,
+        source_session_id: str,
+        message_id: str,
+        text: str,
+        delivery_id: str,
+    ):
+        connection = self._require_connection(connection_id)
+        content = self._require_text(text)
+        for label, value in (
+            ("source_session_id", source_session_id),
+            ("message_id", message_id),
+            ("delivery_id", delivery_id),
+        ):
+            if type(value) is not str or not value:
+                raise ValueError(f"{label} must be a non-empty str")
+        child_session_id = f"session-{uuid4().hex}"
+        view = await self._sessions.fork_and_accept_input(
+            connection.owner,
+            source_session_id,
+            message_id,
+            content,
+            child_session_id=child_session_id,
+            delivery_id=delivery_id,
+            source="web",
+        )
+        return await self._queries.conversation(child_session_id, view=view)
+
     async def cancel(self, connection_id: str, session_id: str):
         self._require_connection(connection_id)
         if type(session_id) is not str or not session_id:

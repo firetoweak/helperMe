@@ -17,6 +17,10 @@ type SendInput = SelectSession & {
   text: string;
 };
 
+type EditAndFork = SendInput & {
+  messageId: string;
+};
+
 export const helpermeApi = createApi({
   reducerPath: "helpermeApi",
   baseQuery: fetchBaseQuery({ baseUrl: "/api" }),
@@ -83,6 +87,30 @@ export const helpermeApi = createApi({
         );
       },
     }),
+    editAndFork: build.mutation<ConversationView, EditAndFork>({
+      query: ({ connectionId, sessionId, messageId, deliveryId, text }) => ({
+        url: `/sessions/${encodeURIComponent(sessionId)}/forks`,
+        method: "POST",
+        body: {
+          connection_id: connectionId,
+          message_id: messageId,
+          delivery_id: deliveryId,
+          text,
+        },
+      }),
+      transformResponse: (value: unknown) => conversationViewSchema.parse(value),
+      invalidatesTags: ["Sessions"],
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        dispatch(
+          helpermeApi.util.upsertQueryData(
+            "getConversation",
+            data.session_id,
+            data,
+          ),
+        );
+      },
+    }),
     cancelTurn: build.mutation<ConversationView, SelectSession>({
       query: ({ connectionId, sessionId }) => ({
         url: `/sessions/${encodeURIComponent(sessionId)}/cancel`,
@@ -106,5 +134,6 @@ export const {
   useGetConversationQuery,
   useSelectSessionMutation,
   useSendInputMutation,
+  useEditAndForkMutation,
   useCancelTurnMutation,
 } = helpermeApi;
