@@ -126,9 +126,9 @@ class HostSupervisor:
                     self.context_usage_sink is not None
                     and self.compact.store.reader_job(session_id) is None
                 ):
-                    self.context_usage_sink(
-                        *values
-                    )
+                    emitted = self.context_usage_sink(*values)
+                    if isawaitable(emitted):
+                        await emitted
             elif kind == "activity":
                 if (
                     self.subagent_activity_sink is not None

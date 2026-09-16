@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  contextUsageEventSchema,
   conversationViewSchema,
   outputFinalEventSchema,
+  runtimeStatusSchema,
   toolProgressEventSchema,
 } from "./contracts";
 
@@ -27,6 +29,7 @@ describe("conversationViewSchema", () => {
           message_id: "user-event",
           text: "hello",
           occurred_at: "2026-09-15T08:00:00+00:00",
+          images: [],
         },
         {
           kind: "step",
@@ -73,11 +76,34 @@ describe("conversationViewSchema", () => {
             output_id: "wrong",
             text: "hello",
             occurred_at: "2026-09-15T08:00:00+00:00",
+            images: [],
           },
         ],
         session,
       }),
     ).toThrow();
+  });
+
+  it("carries image attachment ids on a user item", () => {
+    const attachmentId = `sha256:${"a".repeat(64)}`;
+    const parsed = conversationViewSchema.parse({
+      session_id: "session-1",
+      revision: 1,
+      items: [
+        {
+          kind: "user",
+          message_id: "user-event",
+          text: "[Image #1]",
+          occurred_at: "2026-09-15T08:00:00+00:00",
+          images: [attachmentId],
+        },
+      ],
+      session,
+    });
+    expect(parsed.items[0]).toMatchObject({
+      kind: "user",
+      images: [attachmentId],
+    });
   });
 });
 
@@ -128,6 +154,33 @@ describe("toolProgressEventSchema", () => {
     });
     expect(parsed.items[0]).toMatchObject({
       tools: [{ command_id: "cmd-1", status: "unknown" }],
+    });
+  });
+});
+
+describe("runtimeStatusSchema", () => {
+  it("requires a model name and a positive context window", () => {
+    expect(
+      runtimeStatusSchema.parse({ model: "assistant", context_limit: 200000 }),
+    ).toEqual({
+      model: "assistant",
+      context_limit: 200000,
+    });
+  });
+});
+
+describe("contextUsageEventSchema", () => {
+  it("identifies usage by session", () => {
+    expect(
+      contextUsageEventSchema.parse({
+        session_id: "session-1",
+        used: 1200,
+        limit: 200000,
+      }),
+    ).toEqual({
+      session_id: "session-1",
+      used: 1200,
+      limit: 200000,
     });
   });
 });

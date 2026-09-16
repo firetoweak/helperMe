@@ -1,19 +1,12 @@
-import {
-  ActionIcon,
-  AppShell,
-  Center,
-  Stack,
-  Text,
-  ThemeIcon,
-  Title,
-} from "@mantine/core";
+import { ActionIcon, AppShell } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { IconMenu2, IconSparkles } from "@tabler/icons-react";
+import { IconMenu2 } from "@tabler/icons-react";
 import { useEffect } from "react";
 import { Route, Routes } from "react-router-dom";
 
 import { useAppDispatch } from "./hooks";
-import { Conversation } from "../features/conversation/Conversation";
+import { SessionConversation } from "../features/conversation/SessionConversation";
+import { DraftRedirect } from "../features/sessions/DraftRedirect";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
 import { openEventBridge } from "../realtime/eventBridge";
 
@@ -51,28 +44,10 @@ export function App() {
           <IconMenu2 size={19} />
         </ActionIcon>
         <Routes>
-          <Route path="/" element={<EmptyState />} />
-          <Route path="/sessions/:sessionId" element={<Conversation />} />
+          <Route path="/" element={<DraftRedirect />} />
+          <Route path="/sessions/:sessionId" element={<SessionConversation />} />
         </Routes>
       </AppShell.Main>
     </AppShell>
-  );
-}
-
-function EmptyState() {
-  return (
-    <Center h="100%" px="xl">
-      <Stack align="center" gap="sm" ta="center">
-        <ThemeIcon radius="xl" size={52} variant="light">
-          <IconSparkles size={25} stroke={1.7} />
-        </ThemeIcon>
-        <Title order={1} fz={26} fw={650}>
-          HelperMe
-        </Title>
-        <Text c="dimmed" maw={360} size="sm">
-          选择一个会话继续，或从左侧创建新的 Session。
-        </Text>
-      </Stack>
-    </Center>
   );
 }

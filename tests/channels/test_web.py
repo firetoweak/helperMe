@@ -4,9 +4,14 @@ import asyncio
 import json
 import unittest
 from datetime import datetime, timezone
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
+from helperme.assistant.attachments import AttachmentGateway
 from helperme.assistant.conversations import (
     ConversationView,
     SessionSummary,
@@ -93,9 +98,14 @@ class _Queries:
 
 class WebFirstSliceTest(unittest.TestCase):
     def setUp(self):
+        self._directory = TemporaryDirectory()
         self.queries = _Queries()
         self.sessions = _Sessions(self.queries)
-        self.channel = WebChannel(self.sessions, self.queries)
+        self.channel = WebChannel(
+            self.sessions,
+            self.queries,
+            AttachmentGateway(Path(self._directory.name)),
+        )
         self.hub = WebEventHub()
         self.connection = self.channel.connect()
         self.client = TestClient(create_web_app(self.channel, self.hub))
@@ -103,6 +113,7 @@ class WebFirstSliceTest(unittest.TestCase):
 
     def tearDown(self):
         self.client.__exit__(None, None, None)
+        self._directory.cleanup()
 
     def test_lists_sessions_and_creates_selected_conversation(self):
         listed = self.client.get("/api/sessions")
@@ -186,6 +197,15 @@ class WebFirstSliceTest(unittest.TestCase):
         self.assertEqual(response.json()["session_id"], "session-old")
         self.assertEqual(response.json()["items"], [])
         self.assertEqual(self.sessions.calls, [])
+
+    def test_runtime_exposes_active_model_and_context_limit(self):
+        response = self.client.get("/api/runtime")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"model": "test", "context_limit": 200000},
+        )
 
     def test_selecting_unknown_session_is_a_client_error(self):
         response = self.client.post(
@@ -273,3 +293,61 @@ class WebFirstSliceTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_upload_and_send_image_forwards_session_refs(self):
+        uploaded = self.client.post(
+            "/api/sessions/session-old/attachments",
+            data={"connection_id": self.connection.connection_id},
+            files={"file": ("shot.png", _png_bytes(), "image/png")},
+        )
+
+        self.assertEqual(uploaded.status_code, 201)
+        attachment_id = uploaded.json()["attachment_id"]
+        self.assertEqual(uploaded.json()["mime"], "image/png")
+        downloaded = self.client.get(
+            f"/api/sessions/session-old/attachments/{attachment_id}"
+        )
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(downloaded.headers["content-type"], "image/png")
+        self.assertEqual(downloaded.content, _png_bytes())
+
+        sent = self.client.post(
+            "/api/sessions/session-old/inputs",
+            json={
+                "connection_id": self.connection.connection_id,
+                "delivery_id": "delivery-image",
+                "text": "[Image #1]",
+                "artifact_refs": [attachment_id],
+            },
+        )
+
+        self.assertEqual(sent.status_code, 200)
+        self.assertEqual(
+            self.sessions.calls[-1],
+            (
+                "accept_input",
+                "session-old",
+                "[Image #1]",
+                {
+                    "delivery_id": "delivery-image",
+                    "source": "web",
+                    "artifact_refs": (attachment_id,),
+                },
+            ),
+        )
+
+    def test_rejected_upload_is_a_client_error(self):
+        response = self.client.post(
+            "/api/sessions/session-old/attachments",
+            data={"connection_id": self.connection.connection_id},
+            files={"file": ("notes.txt", b"not an image", "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.json())
+
+
+def _png_bytes():
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(buffer, format="PNG")
+    return buffer.getvalue()

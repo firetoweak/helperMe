@@ -12,21 +12,30 @@ import {
 import { IconPencil } from "@tabler/icons-react";
 import { useState } from "react";
 
+import { AttachmentTile, attachmentUrl } from "./AttachmentTile";
+
+const IMAGE_TOKEN = /\[Image #\d+\]/g;
+
 type EditableUserMessageProps = {
+  sessionId: string;
   text: string;
+  images: string[];
   disabled: boolean;
   saving: boolean;
   onSave: (text: string) => Promise<void>;
 };
 
 export function EditableUserMessage({
+  sessionId,
   text,
+  images,
   disabled,
   saving,
   onSave,
 }: EditableUserMessageProps) {
   const [opened, setOpened] = useState(false);
   const [draft, setDraft] = useState(text);
+  const displayText = text.replace(IMAGE_TOKEN, "").trim();
 
   function close() {
     if (!saving) {
@@ -60,11 +69,27 @@ export function EditableUserMessage({
             <IconPencil size={14} />
           </ActionIcon>
         </Tooltip>
-        <Paper className="user-bubble" px="md" py="sm" radius="xl">
-          <Text className="message-text" lh={1.6} size="sm">
-            {text}
-          </Text>
-        </Paper>
+        <Stack align="flex-end" gap={8}>
+          {images.length === 0 ? null : (
+            <Group className="user-attachments" gap={8} justify="flex-end">
+              {images.map((attachmentId) => (
+                <AttachmentTile
+                  key={attachmentId}
+                  large={images.length === 1 && displayText === ""}
+                  name="图片"
+                  src={attachmentUrl(sessionId, attachmentId)}
+                />
+              ))}
+            </Group>
+          )}
+          {displayText === "" ? null : (
+            <Paper className="user-bubble" px="md" py="sm" radius="xl">
+              <Text className="message-text" lh={1.6} size="sm">
+                {displayText}
+              </Text>
+            </Paper>
+          )}
+        </Stack>
       </Group>
       <Modal
         centered
@@ -76,6 +101,17 @@ export function EditableUserMessage({
           <Text c="dimmed" size="xs">
             当前会话会保留；系统将在这条消息之前创建一个完整分支。
           </Text>
+          {images.length === 0 ? null : (
+            <Group gap={8}>
+              {images.map((attachmentId) => (
+                <AttachmentTile
+                  key={attachmentId}
+                  name="图片"
+                  src={attachmentUrl(sessionId, attachmentId)}
+                />
+              ))}
+            </Group>
+          )}
           <Textarea
             autosize
             autoFocus

@@ -26,7 +26,7 @@ import {
   useSendInputMutation,
 } from "../../api/helpermeApi";
 import { useAppDispatch, useAppSelector } from "../../app/hooks";
-import { viewing } from "../../realtime/runtimeSlice";
+import { lockDraft, viewing } from "../../realtime/runtimeSlice";
 import { Composer } from "./Composer";
 import { EditableUserMessage } from "./EditableUserMessage";
 import { ExecutionProcess } from "./ExecutionProcess";
@@ -38,17 +38,18 @@ import { visibleTimeline } from "./visibleTimeline";
 export function Conversation() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const { sessionId } = useParams();
+  const { sessionId: routeSessionId } = useParams();
+  const sessionId = routeSessionId ?? "";
   const connectionId = useAppSelector((state) => state.runtime.connectionId);
-  const runtime = useAppSelector((state) =>
-    sessionId === undefined ? undefined : state.runtime.sessions[sessionId],
-  );
+  const ownerSessionId = useAppSelector((state) => state.runtime.ownerSessionId);
+  const draftSessionId = useAppSelector((state) => state.runtime.draftSessionId);
+  const runtime = useAppSelector((state) => state.runtime.sessions[sessionId]);
   const followOutput = useFollowOutput(
-    sessionId,
+    routeSessionId,
     runtime?.activity === "running" || (runtime?.activePreview ?? null) !== null,
   );
-  const selected = useGetConversationQuery(sessionId ?? "", {
-    skip: sessionId === undefined,
+  const selected = useGetConversationQuery(sessionId, {
+    skip: routeSessionId === undefined,
   });
   const [selectSession] = useSelectSessionMutation();
   const [sendInput, sending] = useSendInputMutation();
@@ -56,20 +57,46 @@ export function Conversation() {
   const [cancelTurn, cancelling] = useCancelTurnMutation();
 
   useEffect(() => {
-    dispatch(viewing(sessionId ?? null));
+    dispatch(viewing(routeSessionId ?? null));
     return () => {
       dispatch(viewing(null));
     };
-  }, [dispatch, sessionId]);
+  }, [dispatch, routeSessionId]);
 
   useEffect(() => {
-    if (connectionId === null || sessionId === undefined) {
+    if (connectionId === null || routeSessionId === undefined) {
       return;
     }
-    void selectSession({ connectionId, sessionId });
-  }, [connectionId, sessionId, selectSession]);
+    if (ownerSessionId === routeSessionId) {
+      return;
+    }
+    void selectSession({ connectionId, sessionId: routeSessionId });
+  }, [connectionId, ownerSessionId, routeSessionId, selectSession]);
 
-  if (selected.isLoading || selected.isUninitialized) {
+  const conversation = selected.currentData;
+  useEffect(() => {
+    if (
+      conversation !== undefined &&
+      conversation.session_id === draftSessionId &&
+      conversation.items.some((item) => item.kind === "user")
+    ) {
+      dispatch(lockDraft(conversation.session_id));
+    }
+  }, [conversation, dispatch, draftSessionId]);
+  useEffect(() => {
+    if (
+      routeSessionId !== undefined &&
+      selected.isError &&
+      "status" in selected.error &&
+      selected.error.status === 404
+    ) {
+      dispatch(lockDraft(routeSessionId));
+    }
+  }, [dispatch, routeSessionId, selected.error, selected.isError]);
+  if (
+    conversation === undefined &&
+    (selected.isLoading || selected.isUninitialized || selected.isFetching)
+  ) {
     return (
       <Center h="100%">
         <Stack align="center" gap="sm">
@@ -81,7 +108,7 @@ export function Conversation() {
       </Center>
     );
   }
-  if (selected.isError || selected.data === undefined || sessionId === undefined) {
+  if (selected.isError || conversation === undefined) {
     const missing =
       selected.isError &&
       "status" in selected.error &&
@@ -94,9 +121,6 @@ export function Conversation() {
       </Center>
     );
   }
-
-  const conversation = selected.data;
-  const currentSessionId = sessionId;
   const items = visibleTimeline(
     conversation,
     runtime?.committed ?? {},
@@ -106,25 +130,27 @@ export function Conversation() {
   const turns = timelineTurns(items);
   const running = runtime?.activity === "running";
 
-  async function send(text: string) {
+  async function send(text: string, artifactRefs: string[]) {
     if (connectionId === null) {
-      return;
+      throw new Error("Web connection is not active");
     }
     await sendInput({
       connectionId,
-      sessionId: currentSessionId,
+      sessionId,
       deliveryId: `web-${crypto.randomUUID()}`,
       text,
+      artifactRefs,
     }).unwrap();
+    dispatch(lockDraft(sessionId));
   }
 
   async function edit(messageId: string, text: string) {
     if (connectionId === null) {
-      return;
+      throw new Error("Web connection is not active");
     }
     const fork = await editAndFork({
       connectionId,
-      sessionId: currentSessionId,
+      sessionId,
       messageId,
       deliveryId: `web-${crypto.randomUUID()}`,
       text,
@@ -144,7 +170,7 @@ export function Conversation() {
               开始新的会话
             </Title>
             <Text c="dimmed" ff="monospace" fz={11}>
-              {shortId(conversation.session_id)}
+              {shortId(sessionId)}
             </Text>
           </Stack>
         </Center>
@@ -162,8 +188,10 @@ export function Conversation() {
                   <Box component="article" className="message message-user">
                     <EditableUserMessage
                       disabled={connectionId === null}
+                      images={turn.user.images}
                       onSave={(text) => edit(turn.user!.key, text)}
                       saving={editing.isLoading}
+                      sessionId={sessionId}
                       text={turn.user.text}
                     />
                   </Box>
@@ -213,16 +241,18 @@ export function Conversation() {
           </Alert>
         ) : null}
         <Composer
+          sessionId={sessionId}
+          connectionId={connectionId}
           disabled={connectionId === null}
           sending={sending.isLoading}
-          running={running}
+          running={running === true}
           cancelling={cancelling.isLoading}
           onSend={send}
           onCancel={() => {
             if (connectionId === null) {
               return;
             }
-            void cancelTurn({ connectionId, sessionId: currentSessionId }).unwrap();
+            void cancelTurn({ connectionId, sessionId }).unwrap();
           }}
         />
       </Box>

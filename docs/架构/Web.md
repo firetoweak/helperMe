@@ -5,17 +5,26 @@ Assistant 应用操作和查询，不直接读取 Journal，也不承担 Session
 
 ## 当前切片
 
-界面有 Session 侧栏、当前会话时间线、输入框和停止按钮。时间线按用户轮次展示
-Step 与其工具调用。页面级 SSE 与当前选中的 Session 解耦：切换只改变 Host owner 的
-选择和中间栏，不取消仍在运行的 Session，也不打断后台工具。
+界面有 Session 侧栏、当前会话时间线和输入框。「新建会话」绑定一个未锁定草稿
+Session（`create` 后进入 `/sessions/:id`）。尚未发出用户消息时再点「新建会话」仍是
+它；发出第一条用户消息后这条 Session 锁定，下一次「新建会话」才再绑一个新草稿。
+侧栏只列出已经锁定的会话。草稿可以贴图，但不因此锁定。
+输入框底部展示当前逻辑模型与输入上下文占用。Composer 的图片入口：加号打开文件选择、
+粘贴或拖入图片后以缩略图 tile 挂在输入框上，不把 `[Image #n]` 写进可见正文。发送时
+Channel 仍按既有附件契约写入 token 与 `artifact_refs`。时间线按用户轮次展示 Step 与其工具调用。页面级 SSE 与当前选中的
+Session 解耦：切换只改变 Host owner 的选择和中间栏，不取消仍在运行的 Session，也不
+打断后台工具。
 
 后台 Session 完成后可以从 Journal 投影恢复最终正文和工具终态；preview 与运行中
 的工具进度仍是可丢的进程内展示，刷新后分别由 `output_final` / Journal 补齐。
 
 ```text
-输入消息
-→ POST /api/sessions/{id}/inputs
-→ accept_input(delivery_id, text)
+点「新建会话」：若已有未锁定草稿则进入它，否则 POST /api/sessions
+→ 空白时间线（Journal 尚无 UserMessageReceived，不出现在侧栏）
+→ POST /api/sessions/{id}/attachments（若有图；不锁定）
+→ POST /api/sessions/{id}/inputs  （text 含 [Image #n]，artifact_refs 为附件 id）
+→ accept_input(delivery_id, text, artifact_refs)
+→ Session 锁定，进入侧栏
 → session_activity: running
 → StepCommitted 投影助手正文与非 deliver 工具卡
 → tool_progress: running / succeeded / failed
@@ -32,14 +41,16 @@ React UI ── HTTP / SSE ── Web Channel / Event Hub ── Assistant / Hos
 前端采用 React、TypeScript、Vite、Mantine、`@ai-markdown/react-mantine`、Redux
 Toolkit、RTK Query、React Router 和 Zod。Mantine 只提供布局与视觉组件；聊天界面可参考 assistant-ui 的
 交互样例，但不接入其 Runtime、Thread 或 Adapter 模型。RTK Query 保存服务端投影；独立 runtime slice 按 Session 保存 activity、
-activePreview、unread、committed cache 与按 `command_id` 索引的 live tools；
+activePreview、unread、committed cache、按 `command_id` 索引的 live tools，以及当前未锁定草稿
+和当前页面 owner 绑在哪条 Session 上。
 组件本地状态只保存输入框、滚动与侧栏开合等纯 UI 状态。
 Session 运行或存在活动 preview 时，时间线跟随内容尺寸变化固定到最底部；运行结束后
 解除跟随，用户可以自由查看历史。
 
 ## 查询投影
 
-- `list_sessions()` 从各 Journal 投影顶层 Session 摘要，不列出 SubAgent Session。
+- `list_sessions()` 从各 Journal 投影顶层 Session 摘要，不列出 SubAgent Session，
+  也不列出尚无 `UserMessageReceived` 的空 Journal。
 - `GET /api/sessions/{id}` 只从 Journal 投影时间线，不 `resume` Worker。刷新后
   的历史恢复走这条读路径；`POST .../select` 只在页面 SSE 连上后绑定 Host owner。
 - `conversation(session_id)` 投影统一时间线 `items`：`UserMessageReceived` 为
@@ -57,11 +68,15 @@ Session 运行或存在活动 preview 时，时间线跟随内容尺寸变化固
 `GET /api/events` 建立页面级 SSE，并分配瞬时 connection identity。该 identity
 映射为 Host owner；SSE 断开时释放 owner，但不取消任何 Session，也不使
 `deliver` 失败。新建或选择 Session 时由 Web Channel 调用
-`select(owner, session_id)`。
+`select(owner, session_id)`。点「新建会话」时：当前已是未锁定草稿则保持；否则复用
+已有未锁定草稿，或 `create` 一个新的。发出第一条用户消息后草稿锁定。
 
 Event Hub 向所有页面连接广播带 `session_id` 的事件，每个 Session 只保存一个
 活动 preview。Host 在 busy/idle 转换时发送 `session_activity`。最终正文走
-`output_final`，与 preview 共用 `output_id`，前端不得重复显示。
+`output_final`，与 preview 共用 `output_id`，前端不得重复显示。输入框底部展示
+当前逻辑模型名，以及该 Session 的输入上下文占用：请求前为估算值，响应后为
+LLM 返回的实际 input tokens，分母为配置的 `model_context_limit`。占用随
+`context_usage` 实时更新，刷新后回到 0，直到下一次决策。
 
 `tool_progress` 只携带 `command_id`、工具名和状态，不广播工具参数或返回值。
 前端用 `command_id` 合并实时事件与 Journal 卡片：Journal 成功/失败终态优先；
@@ -93,7 +108,9 @@ committed cache 和 Journal Step 使用同一 `output_id` 作为显示身份，�
 
 
 
-## 那下一片应做 **授权交互**。当前工具卡把“等待授权”误显示成“运行中”，这是现有闭环里最明显的语义缺口。
+## 下一片
+
+应做 **授权交互**。当前工具卡把“等待授权”误显示成“运行中”，这是现有闭环里最明显的语义缺口。
 
 建议只完成这一条纵向链路：
 

@@ -5,6 +5,7 @@ export type VisibleUser = {
   key: string;
   kind: "user";
   text: string;
+  images: string[];
 };
 
 export type VisibleTool = {
@@ -42,6 +43,7 @@ export function visibleTimeline(
         key: item.message_id,
         kind: "user",
         text: item.text,
+        images: item.images,
       };
     }
     return {

@@ -66,3 +66,16 @@ class WebEventHubTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(finished.data["status"], "succeeded")
         self.hub.unsubscribe(queue)
+
+    async def test_context_usage_is_session_scoped(self):
+        queue = self.hub.subscribe()
+
+        await self.hub.context_usage("session-a", 1200, 200000)
+        event = await queue.get()
+
+        self.assertEqual(event.name, "context_usage")
+        self.assertEqual(
+            event.data,
+            {"session_id": "session-a", "used": 1200, "limit": 200000},
+        )
+        self.hub.unsubscribe(queue)

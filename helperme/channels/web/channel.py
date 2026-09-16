@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import uuid4
 
+from helperme.assistant.attachments import (
+    AttachmentGateway,
+    AttachmentRejected,
+    is_valid_attachment_id,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class WebConnection:
@@ -14,9 +20,15 @@ class WebConnection:
 
 
 class WebChannel:
-    def __init__(self, sessions, queries) -> None:
+    def __init__(
+        self,
+        sessions,
+        queries,
+        attachments: AttachmentGateway | None = None,
+    ) -> None:
         self._sessions = sessions
         self._queries = queries
+        self._attachments = attachments
         self._connections: set[str] = set()
 
     def connect(self) -> WebConnection:
@@ -48,12 +60,42 @@ class WebChannel:
         view = await self._sessions.select(connection.owner, session_id)
         return await self._queries.conversation(session_id, view=view)
 
+    async def save_image(
+        self,
+        connection_id: str,
+        session_id: str,
+        data: bytes,
+        mime: str,
+    ):
+        self._require_connection(connection_id)
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        if type(data) is not bytes:
+            raise TypeError("image data must be bytes")
+        if type(mime) is not str or not mime:
+            raise AttachmentRejected("缺少图片 MIME")
+        await self.conversation(session_id)
+        return self._store().for_session(session_id).save_image(data, mime)
+
+    async def attachment_file(self, session_id: str, attachment_id: str):
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        if not is_valid_attachment_id(attachment_id):
+            raise AttachmentRejected("attachment id 格式无效")
+        await self.conversation(session_id)
+        store = self._store().for_session(session_id)
+        path = store.path(attachment_id)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        return path, store.inspect(attachment_id).mime
+
     async def accept_input(
         self,
         connection_id: str,
         session_id: str,
         text: str,
         delivery_id: str,
+        artifact_refs: tuple[str, ...] = (),
     ):
         self._require_connection(connection_id)
         content = self._require_text(text)
@@ -61,11 +103,13 @@ class WebChannel:
             raise ValueError("delivery_id must be a non-empty str")
         if type(session_id) is not str or not session_id:
             raise ValueError("session_id must be a non-empty str")
+        refs = self._require_refs(session_id, artifact_refs)
         view = await self._sessions.accept_input(
             session_id,
             content,
             delivery_id=delivery_id,
             source="web",
+            **({"artifact_refs": refs} if refs else {}),
         )
         return await self._queries.conversation(session_id, view=view)
 
@@ -104,6 +148,26 @@ class WebChannel:
             raise ValueError("session_id must be a non-empty str")
         view = await self._sessions.cancel_turn(session_id)
         return await self._queries.conversation(session_id, view=view)
+
+    def _store(self) -> AttachmentGateway:
+        if self._attachments is None:
+            raise RuntimeError("WebChannel 未装配附件网关")
+        return self._attachments
+
+    def _require_refs(
+        self, session_id: str, artifact_refs: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        if type(artifact_refs) is not tuple:
+            raise TypeError("artifact_refs must be tuple")
+        if not artifact_refs:
+            return ()
+        store = self._store().for_session(session_id)
+        for ref in artifact_refs:
+            if not is_valid_attachment_id(ref):
+                raise AttachmentRejected("artifact_refs 必须是 sha256 附件 id")
+            if not store.path(ref).is_file():
+                raise AttachmentRejected("附件不存在")
+        return artifact_refs
 
     def _require_connection(self, connection_id: str) -> WebConnection:
         if type(connection_id) is not str or not connection_id:

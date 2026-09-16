@@ -24,7 +24,7 @@ from helperme.runtime import (
 )
 
 
-def event(sequence, event_id, payload, causation_id=None):
+def event(sequence, event_id, payload, causation_id=None, artifact_refs=()):
     return Event(
         event_id=event_id,
         session_id="session-1",
@@ -34,7 +34,7 @@ def event(sequence, event_id, payload, causation_id=None):
         causation_id=causation_id,
         correlation_id=None,
         schema_version=5,
-        artifact_refs=(),
+        artifact_refs=artifact_refs,
     )
 
 
@@ -170,3 +170,56 @@ class ConversationProjectionTest(unittest.TestCase):
         self.assertEqual(summary.title, "第一行")
         self.assertEqual(summary.updated_at, events[-1].occurred_at)
         self.assertEqual(summary.activity, "running")
+
+    def test_user_message_carries_image_refs(self):
+        attachment_id = "sha256:" + "a" * 64
+        conversation = project_conversation(
+            "session-1",
+            (
+                event(
+                    1,
+                    "user-1",
+                    UserMessageReceived("[Image #1]"),
+                    artifact_refs=(attachment_id,),
+                ),
+            ),
+            session=SessionView("waiting", ("user_message",), (), False),
+        )
+
+        self.assertEqual(conversation.items[0].kind, "user")
+        self.assertEqual(conversation.items[0].text, "[Image #1]")
+        self.assertEqual(conversation.items[0].images, (attachment_id,))
+
+
+class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_omits_journals_without_user_messages(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from helperme.assistant.conversations import AssistantQueries
+        from helperme.assistant.host.session_store import SessionStore
+        from helperme.runtime import SqliteJournal
+        from helperme.runtime.events import DeliveryIdentity, EventDraft
+
+        class Idle:
+            def activity(self, session_id):
+                return "idle"
+
+        with TemporaryDirectory() as directory:
+            store = SessionStore(Path(directory))
+            queries = AssistantQueries(store, Idle())
+            await store.create("empty")
+            await store.create("spoken")
+            await SqliteJournal(store.require("spoken")).accept_delivery(
+                EventDraft(
+                    event_id="user-1",
+                    session_id="spoken",
+                    payload=UserMessageReceived("你好"),
+                    occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+                    delivery=DeliveryIdentity("web", "d1"),
+                )
+            )
+            listed = await queries.list_sessions()
+
+        self.assertEqual([item.session_id for item in listed], ["spoken"])
+        self.assertEqual(listed[0].title, "你好")

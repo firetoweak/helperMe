@@ -19,10 +19,7 @@ import {
 } from "@tabler/icons-react";
 import { useMatch, useNavigate } from "react-router-dom";
 
-import {
-  useCreateSessionMutation,
-  useGetSessionsQuery,
-} from "../../api/helpermeApi";
+import { useGetSessionsQuery } from "../../api/helpermeApi";
 import { useAppSelector } from "../../app/hooks";
 
 type SessionSidebarProps = {
@@ -33,14 +30,21 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
   const navigate = useNavigate();
   const sessionId = useMatch("/sessions/:sessionId")?.params.sessionId;
   const connectionId = useAppSelector((state) => state.runtime.connectionId);
+  const draftSessionId = useAppSelector((state) => state.runtime.draftSessionId);
   const runtimes = useAppSelector((state) => state.runtime.sessions);
   const { data: sessions = [], isLoading } = useGetSessionsQuery();
-  const [createSession, creation] = useCreateSessionMutation();
 
-  async function create() {
-    if (connectionId === null) return;
-    const conversation = await createSession(connectionId).unwrap();
-    navigate(`/sessions/${encodeURIComponent(conversation.session_id)}`);
+  function openDraft() {
+    if (sessionId !== undefined && sessionId === draftSessionId) {
+      onNavigate();
+      return;
+    }
+    if (draftSessionId !== null) {
+      navigate(`/sessions/${encodeURIComponent(draftSessionId)}`);
+      onNavigate();
+      return;
+    }
+    navigate("/");
     onNavigate();
   }
 
@@ -67,11 +71,10 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
           fullWidth
           justify="flex-start"
           leftSection={<IconPlus size={17} />}
-          loading={creation.isLoading}
-          disabled={connectionId === null || creation.isLoading}
-          onClick={create}
+          disabled={connectionId === null}
+          onClick={openDraft}
           radius="md"
-          variant="light"
+          variant={sessionId === draftSessionId ? "filled" : "light"}
         >
           新建会话
         </Button>
@@ -120,7 +123,9 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
                       ) : null
                     }
                     onClick={() => {
-                      navigate(`/sessions/${encodeURIComponent(session.session_id)}`);
+                      navigate(
+                        `/sessions/${encodeURIComponent(session.session_id)}`,
+                      );
                       onNavigate();
                     }}
                     py={9}

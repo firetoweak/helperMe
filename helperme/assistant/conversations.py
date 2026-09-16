@@ -39,6 +39,7 @@ class UserItem:
     message_id: str
     text: str
     occurred_at: datetime
+    images: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +85,10 @@ class AssistantQueries:
             session_id = await journal.session_identity()
             events = await journal.snapshot(session_id)
             if project_parent(events) is not None:
+                continue
+            if not any(
+                isinstance(event.payload, UserMessageReceived) for event in events
+            ):
                 continue
             summaries.append(
                 project_session_summary(
@@ -159,7 +164,13 @@ def project_conversation(
         payload = event.payload
         if isinstance(payload, UserMessageReceived):
             items.append(
-                UserItem("user", event.event_id, payload.content, event.occurred_at)
+                UserItem(
+                    "user",
+                    event.event_id,
+                    payload.content,
+                    event.occurred_at,
+                    event.artifact_refs,
+                )
             )
             continue
         if not isinstance(payload, StepCommitted):

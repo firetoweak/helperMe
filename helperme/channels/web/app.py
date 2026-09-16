@@ -4,12 +4,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from helperme.assistant.attachments import (
+    AttachmentGateway,
+    AttachmentRejected,
+    is_valid_attachment_id,
+)
 from helperme.assistant.host.session_store import (
     ForkMessageNotFoundError,
     SessionForkUnavailableError,
@@ -32,6 +37,15 @@ class InputRequest(BaseModel):
     connection_id: str
     delivery_id: str
     text: str
+    artifact_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("artifact_refs")
+    @classmethod
+    def attachment_ids(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not is_valid_attachment_id(item):
+                raise ValueError("artifact_refs 必须是 sha256 附件 id")
+        return value
 
 
 class EditRequest(InputRequest):
@@ -49,6 +63,7 @@ def create_web_app(
         app.state.hub = events
         if channel is not None:
             app.state.channel = channel
+            app.state.runtime = {"model": "test", "context_limit": 200000}
             yield
             return
         async with bootstrap_assistant(
@@ -56,8 +71,17 @@ def create_web_app(
             preview_sink=events.preview,
             session_activity_sink=events.session_activity,
             tool_progress_sink=events.tool_progress,
+            context_usage_sink=events.context_usage,
         ) as assistant:
-            app.state.channel = WebChannel(assistant.sessions, assistant.queries)
+            app.state.channel = WebChannel(
+                assistant.sessions,
+                assistant.queries,
+                AttachmentGateway(assistant.sessions_root),
+            )
+            app.state.runtime = {
+                "model": assistant.config.model.active,
+                "context_limit": assistant.config.runtime.model_context_limit,
+            }
             yield
 
     app = FastAPI(lifespan=lifespan)
@@ -78,6 +102,10 @@ def create_web_app(
     ):
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
+    @app.exception_handler(AttachmentRejected)
+    async def attachment_rejected(_request: Request, error: AttachmentRejected):
+        return JSONResponse(status_code=400, content={"detail": str(error)})
+
     @app.get("/api/events", response_class=EventSourceResponse)
     async def stream_events(request: Request):
         web = _channel(request)
@@ -94,6 +122,10 @@ def create_web_app(
         finally:
             _hub(request).unsubscribe(queue)
             await web.disconnect(connection)
+
+    @app.get("/api/runtime")
+    async def runtime(request: Request):
+        return request.app.state.runtime
 
     @app.get("/api/sessions")
     async def sessions(request: Request):
@@ -115,6 +147,44 @@ def create_web_app(
     ):
         return await _channel(request).select(body.connection_id, session_id)
 
+    @app.post("/api/sessions/{session_id}/attachments", status_code=201)
+    async def upload_attachment(
+        session_id: str,
+        request: Request,
+        connection_id: str = Form(),
+        file: UploadFile = File(),
+    ):
+        mime = (file.content_type or "").split(";", 1)[0].strip().lower()
+        if mime == "image/jpg":
+            mime = "image/jpeg"
+        ref = await _channel(request).save_image(
+            connection_id,
+            session_id,
+            await file.read(),
+            mime,
+        )
+        return {
+            "attachment_id": ref.attachment_id,
+            "mime": ref.mime,
+            "width": ref.width,
+            "height": ref.height,
+        }
+
+    @app.get("/api/sessions/{session_id}/attachments/{attachment_id:path}")
+    async def download_attachment(
+        session_id: str,
+        attachment_id: str,
+        request: Request,
+    ):
+        try:
+            path, mime = await _channel(request).attachment_file(
+                session_id,
+                attachment_id,
+            )
+        except FileNotFoundError as error:
+            return JSONResponse(status_code=404, content={"detail": str(error)})
+        return FileResponse(path, media_type=mime)
+
     @app.post("/api/sessions/{session_id}/inputs")
     async def accept_input(session_id: str, body: InputRequest, request: Request):
         return await _channel(request).accept_input(
@@ -122,6 +192,7 @@ def create_web_app(
             session_id,
             body.text,
             body.delivery_id,
+            tuple(body.artifact_refs),
         )
 
     @app.post("/api/sessions/{session_id}/forks", status_code=201)

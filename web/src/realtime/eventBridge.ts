@@ -1,5 +1,6 @@
 import {
   connectedEventSchema,
+  contextUsageEventSchema,
   outputFinalEventSchema,
   previewAbortedEventSchema,
   previewDeltaEventSchema,
@@ -11,6 +12,7 @@ import { helpermeApi } from "../api/helpermeApi";
 import type { AppDispatch } from "../app/store";
 import {
   connected,
+  contextUsage,
   disconnected,
   outputFinal,
   previewAborted,
@@ -33,6 +35,16 @@ export function openEventBridge(dispatch: AppDispatch): () => void {
       sessionActivity({
         sessionId: payload.session_id,
         activity: payload.activity,
+      }),
+    );
+  });
+  source.addEventListener("context_usage", (event) => {
+    const payload = contextUsageEventSchema.parse(JSON.parse(event.data));
+    dispatch(
+      contextUsage({
+        sessionId: payload.session_id,
+        used: payload.used,
+        limit: payload.limit,
       }),
     );
   });

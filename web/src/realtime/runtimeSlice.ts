@@ -21,17 +21,22 @@ export type SessionRuntime = {
   unread: number;
   committed: Record<string, string>;
   tools: Record<string, LiveTool>;
+  contextUsage: { used: number; limit: number } | null;
 };
 
 type RuntimeState = {
   connectionId: string | null;
   viewingSessionId: string | null;
+  ownerSessionId: string | null;
+  draftSessionId: string | null;
   sessions: Record<string, SessionRuntime>;
 };
 
 const initialState: RuntimeState = {
   connectionId: null,
   viewingSessionId: null,
+  ownerSessionId: null,
+  draftSessionId: null,
   sessions: {},
 };
 
@@ -46,6 +51,7 @@ function runtimeOf(state: RuntimeState, sessionId: string): SessionRuntime {
     unread: 0,
     committed: {},
     tools: {},
+    contextUsage: null,
   };
   state.sessions[sessionId] = created;
   return created;
@@ -60,12 +66,24 @@ const runtimeSlice = createSlice({
     },
     disconnected(state) {
       state.connectionId = null;
+      state.ownerSessionId = null;
     },
     viewing(state, action: PayloadAction<string | null>) {
       state.viewingSessionId = action.payload;
       if (action.payload !== null) {
         runtimeOf(state, action.payload).unread = 0;
       }
+    },
+    setDraftSession(state, action: PayloadAction<string>) {
+      state.draftSessionId = action.payload;
+    },
+    lockDraft(state, action: PayloadAction<string>) {
+      if (state.draftSessionId === action.payload) {
+        state.draftSessionId = null;
+      }
+    },
+    bindOwner(state, action: PayloadAction<string>) {
+      state.ownerSessionId = action.payload;
     },
     sessionActivity(
       state,
@@ -133,6 +151,15 @@ const runtimeSlice = createSlice({
         status: action.payload.status,
       };
     },
+    contextUsage(
+      state,
+      action: PayloadAction<{ sessionId: string; used: number; limit: number }>,
+    ) {
+      runtimeOf(state, action.payload.sessionId).contextUsage = {
+        used: action.payload.used,
+        limit: action.payload.limit,
+      };
+    },
   },
 });
 
@@ -140,11 +167,15 @@ export const {
   connected,
   disconnected,
   viewing,
+  setDraftSession,
+  lockDraft,
+  bindOwner,
   sessionActivity,
   previewStarted,
   previewDelta,
   previewAborted,
   outputFinal,
   toolProgress,
+  contextUsage,
 } = runtimeSlice.actions;
 export default runtimeSlice.reducer;

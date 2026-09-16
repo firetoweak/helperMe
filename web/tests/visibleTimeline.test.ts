@@ -23,6 +23,7 @@ const conversation: ConversationView = {
       message_id: "user-1",
       text: "hi",
       occurred_at: "2026-09-15T08:00:00+00:00",
+      images: [],
     },
     {
       kind: "step",
