@@ -120,9 +120,8 @@ class WebEventHub:
 
     async def output_final(self, session_id: str, output_id: str, text: str) -> None:
         preview = self._previews.get(session_id)
-        if preview is not None and preview.output_id != output_id:
-            raise RuntimeError("delivered output is not the active preview")
-        self._previews.pop(session_id, None)
+        if preview is not None and preview.output_id == output_id:
+            del self._previews[session_id]
         await self._broadcast(
             "output_final",
             {

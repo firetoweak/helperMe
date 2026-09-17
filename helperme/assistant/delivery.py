@@ -70,14 +70,17 @@ class PreviewEmitter:
             )
 
     def finish(self, session_id: str, output_id: str) -> None:
+        """Retire this output's preview, if it still owns the stream.
+
+        deliver 在 Step 之外执行，而它的 decision_on_outcome 为 false，
+        不拦续跑。所以交付回到这里时，预览槽位可能已经被下一次决策接管；
+        那条旧预览早就被顶掉了，这里没有东西要收。
+        """
+
         if self.sink is None:
             return
-        active = self._active.get(session_id)
-        if active is None:
-            return
-        if active != output_id:
-            raise RuntimeError("delivered output is not the active preview")
-        del self._active[session_id]
+        if self._active.get(session_id) == output_id:
+            del self._active[session_id]
 
     async def start_thinking(self, session_id: str, output_id: str) -> None:
         if self.thinking_sink is None or session_id in self._thinking:

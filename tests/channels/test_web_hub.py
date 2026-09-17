@@ -42,6 +42,26 @@ class WebEventHubTest(unittest.IsolatedAsyncioTestCase):
         await self.hub.preview("session-a", "delta", "out-2", "x")
         self.hub.unsubscribe(queue)
 
+    async def test_final_of_a_superseded_output_still_lands(self):
+        queue = self.hub.subscribe()
+
+        await self.hub.preview("session-a", "started", "out-1", None)
+        await self.hub.preview("session-a", "started", "out-2", None)
+        await self.hub.output_final("session-a", "out-1", "旧的")
+        await self.hub.preview("session-a", "delta", "out-2", "新的")
+
+        names = [(await queue.get()).name for _ in range(4)]
+        self.assertEqual(
+            names,
+            [
+                "preview.started",
+                "preview.started",
+                "output_final",
+                "preview.delta",
+            ],
+        )
+        self.hub.unsubscribe(queue)
+
     async def test_tool_progress_merges_by_command_identity_without_payload(self):
         queue = self.hub.subscribe()
 

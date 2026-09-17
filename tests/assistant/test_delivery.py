@@ -52,6 +52,31 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_superseded_delivery_does_not_disturb_the_newer_preview(self):
+        """deliver 回来时预览槽位可能已经换人了。
+
+        deliver 在 Step 之外执行且不拦续跑，所以下一次决策可以在它还在
+        飞的时候开始。旧交付完成时不该炸，也不该把新预览一起清掉。
+        """
+
+        preview = PreviewEmitter(lambda *_values: None)
+        binding = deliver_binding(
+            lambda _session_id, _output_id, _text: None,
+            preview,
+        )[DELIVER_TOOL_NAME]
+
+        await preview.start(self.SESSION_ID, "output-1")
+        await preview.start(self.SESSION_ID, "output-2")
+        await binding.handler(
+            AttemptContext(self.SESSION_ID, "command-1", "attempt-1", 1),
+            {"output_id": "output-1", "text": "旧的"},
+        )
+
+        await preview.append(self.SESSION_ID, "output-2", "新的")
+        preview.finish(self.SESSION_ID, "output-2")
+        with self.assertRaises(KeyError):
+            await preview.append(self.SESSION_ID, "output-2", "已经收了")
+
     async def test_thinking_is_a_parallel_stream_and_survives_preview_abort(self):
         previews = []
         thoughts = []
