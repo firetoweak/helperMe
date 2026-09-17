@@ -48,9 +48,12 @@ Session 运行或存在活动 preview 时，时间线跟随内容尺寸变化固
 解除跟随，用户可以自由查看历史。
 
 运行中输入框显示「暂停」：当前 Step 和已派发 Command 继续跑完，之后 Scheduler
-不再因 outcome 自动进入下一拍。`paused && should_wake` 且非 running 时显示
-「继续」。Agent 自然停在等用户输入时，两按钮都不出现。这不是 `cancel_turn`。
-有 `lastError` 时横幅「再试」取代「继续」。
+不再因 outcome 自动进入下一拍。`should_wake` 且非 running 时显示「继续」：
+人按过暂停、或 Worker 已不在但 Journal 仍是 RUNNABLE，都走同一颗按钮。
+点「继续」调用 `POST .../retry`（若暂停则顺手清掉暂停并 wake；否则只
+`resume` / wake），不写用户消息。Agent 自然停在等用户输入时
+`should_wake` 为 false，两按钮都不出现。这不是 `cancel_turn`。
+有 `lastError` 时横幅「再试」取代「继续」，仍走同一条 retry。
 `SessionView.paused` 与自动授权同级，存在 `sessions_root/paused.json`，**不进
 Journal**。缺省 false，只在人拨过时写入；创建和 Fork 不写。刷新走 GET 投影，Host
 直接补字段，不 resume Worker。新用户消息会清掉暂停。端点
@@ -82,7 +85,9 @@ Journal**。缺省 false，只在人拨过时写入；创建和 Fork 不写。�
 已有未锁定草稿，或 `create` 一个新的。发出第一条用户消息后草稿锁定。
 
 Event Hub 向所有页面连接广播带 `session_id` 的事件，每个 Session 只保存一个
-活动 preview。Host 在 busy/idle 转换时发送 `session_activity`。已识别的模型失败
+活动 preview。Host 在 busy/idle 转换时发送 `session_activity`。前端收到
+`session_activity` 后重拉该 Session 投影，让 `should_wake` 与工具终态跟上
+Journal。已识别的模型失败
 走 `session_failed`，记在 Session 的瞬时 `lastError` 上，用输入框上方提示展示，
 不进 `output_final`、committed cache 或 Journal。提示旁「再试」调用
 `POST /api/sessions/{id}/retry`，只 `wake` 当前 Session：不写用户消息、不 fork、
@@ -99,7 +104,12 @@ Journal 仍为运行中或中断时采用更新的实时状态。切换 Session 
 上的工具。
 
 前端按事实做两层展示归约：有工具的已提交 Step 属于执行过程，每个 Step 可独立
-折叠。Step 标题展示工具名和一段短参数，而不是序号；工具参数默认收起，Step
+折叠。Step 标题回答“这一步在做什么”，而不是“调了哪些工具”：优先展示该步的意图正文
+（`decision.content` 的首个非空行，截断到一行）；没有意图正文时退回调用预览——工具名加第一个
+字符串参数，与展开态里工具的紧凑写法一致；该步仍在输出思考、尚无正文与工具时显示「思考中」。
+标题只放一行，完整正文在展开态给出（正文排在思考块之前）。
+所有 Step 默认折叠，标题承担“在做什么”的表达；要分析执行细节（思考块、工具与参数）时由用户
+自己展开，只有等待授权这类需要用户操作的状态才自动展开。工具参数默认收起，Step
 结束后自动折上，待授权时展开。流式 preview 先在框外按正文样式展示。当前轮次已在运行、还没有正文或
 进行中的工具时，显示「思考中」。模型 `reasoning_content` 增量走独立的
 `thinking.started` / `thinking.delta` / `thinking.finished`，落到可折叠的思考块，
@@ -129,7 +139,14 @@ committed cache 和 Journal Step 使用同一 `output_id` 作为显示身份，�
 旁路。截止点后的 Step、工具结果和能力加载不进入新分支，已经完成的历史 Command 只
 作为事实重放，不重新执行。编辑后的消息保留原消息的附件引用。
 
-Command 授权已按 [Command 授权](Command授权.md) 落地。本切片仍不包含 SubAgent 展示或 Session 管理。
+Command 授权已按 [Command 授权](Command授权.md) 落地。
+
+父时间线把 `delegate` / `reclaim` 从普通工具卡分出，作为 SubAgent 调用入口。
+`delegate` 的命令终态仍是派出回执，不改写成子生命线。父 idle 且
+`has_active_subagents` 时，当前轮次在「思考中」同一层画「子 Agent 执行中」；
+这是 Channel 活动指示，不把父标成 `running`，也不改变 Host「父可以先退、
+报告再唤醒父」的生命周期。当前仍不展示子 Session 过程或 `subagent.report`
+正文。这张卡是以后展开子思考、工具与结论的埋点。不包含 Session 管理。
 
 
 

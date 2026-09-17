@@ -54,6 +54,12 @@ export function openEventBridge(dispatch: AppDispatch): () => void {
         activity: payload.activity,
       }),
     );
+    dispatch(
+      helpermeApi.util.invalidateTags([
+        { type: "Conversation", id: payload.session_id },
+        "Sessions",
+      ]),
+    );
   });
   source.addEventListener("session_failed", (event) => {
     const payload = sessionFailedEventSchema.parse(JSON.parse(event.data));

@@ -20,12 +20,24 @@ from helperme.assistant.host.session_store import (
     ForkMessageNotFoundError,
     SessionForkUnavailableError,
 )
+from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.bootstrap import bootstrap_assistant
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
 
 SSE_KEEPALIVE_SECONDS = 15
+
+
+async def report_worker_failures(host: HostSupervisor, events: WebEventHub) -> None:
+    """Worker 进程失败不是 Command outcome，Host 只把它放进队列等人来取。"""
+
+    while True:
+        failure = await host.wait_failure()
+        await events.session_failed(
+            failure.session_id,
+            f"Session 进程失败：{failure.failure.render()}",
+        )
 
 
 class ConnectionRequest(BaseModel):
@@ -109,7 +121,15 @@ def create_web_app(
                 "model": assistant.config.model.active,
                 "context_limit": assistant.config.runtime.model_context_limit,
             }
-            yield
+            failures = asyncio.create_task(
+                report_worker_failures(assistant.sessions, events),
+                name="web-assistant-failure",
+            )
+            try:
+                yield
+            finally:
+                failures.cancel()
+                await asyncio.gather(failures, return_exceptions=True)
 
     app = FastAPI(lifespan=lifespan)
 

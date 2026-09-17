@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { stepHeading } from "../src/features/conversation/stepHeading";
-import type { VisibleTool } from "../src/features/conversation/visibleTimeline";
+import type {
+  VisibleStep,
+  VisibleTool,
+} from "../src/features/conversation/visibleTimeline";
+
+type HeadingStep = Pick<VisibleStep, "text" | "tools" | "thinkingPending">;
+
+function step(overrides: Partial<HeadingStep> = {}): HeadingStep {
+  return { text: null, tools: [], thinkingPending: false, ...overrides };
+}
 
 function tool(
   name: string,
@@ -17,21 +26,82 @@ function tool(
 }
 
 describe("stepHeading", () => {
-  it("uses tool names and a short argument instead of a generic step number", () => {
+  it("prefers the step intent over the call preview", () => {
     expect(
-      stepHeading({
-        text: "ignored when tools exist",
-        tools: [tool("read_file", { path: "a.py" }), tool("grep", { pattern: "foo" })],
-      }),
+      stepHeading(
+        step({
+          text: "先确认工作区结构，再定位会话存储",
+          tools: [tool("read_file", { path: "a.py" })],
+        }),
+      ),
+    ).toBe("先确认工作区结构，再定位会话存储");
+  });
+
+  it("falls back to the call preview when the step says nothing", () => {
+    expect(
+      stepHeading(
+        step({
+          tools: [
+            tool("execute_command", {
+              command: "Get-ChildItem -Recurse D:\\w",
+            }),
+          ],
+        }),
+      ),
+    ).toBe("execute_command  Get-ChildItem -Recurse D:\\w");
+  });
+
+  it("keeps only the first string argument of a tool", () => {
+    expect(
+      stepHeading(
+        step({ tools: [tool("read_file", { path: "a.py", other: "b.py" })] }),
+      ),
+    ).toBe("read_file  a.py");
+  });
+
+  it("uses the bare tool name when it has no string argument", () => {
+    expect(stepHeading(step({ tools: [tool("get_changes", { patch: 3 })] }))).toBe(
+      "get_changes",
+    );
+  });
+
+  it("joins several tool calls in order", () => {
+    expect(
+      stepHeading(
+        step({
+          tools: [
+            tool("read_file", { path: "a.py" }),
+            tool("grep", { pattern: "foo" }),
+          ],
+        }),
+      ),
     ).toBe("read_file  a.py · grep  foo");
   });
 
-  it("falls back to clipped step text when a process step has no tools", () => {
+  it("clips the tool hint", () => {
     expect(
-      stepHeading({
-        text: `${"x".repeat(50)}`,
-        tools: [],
-      }),
-    ).toBe(`${"x".repeat(47)}…`);
+      stepHeading(step({ tools: [tool("grep", { pattern: "x".repeat(80) })] })),
+    ).toBe(`grep  ${"x".repeat(47)}…`);
+  });
+
+  it("uses the first non-empty line of the intent and strips list markers", () => {
+    expect(stepHeading(step({ text: "\n- 先看目录\n再看别的" }))).toBe(
+      "先看目录",
+    );
+  });
+
+  it("clips a long intent on one line", () => {
+    expect(stepHeading(step({ text: "x".repeat(80) }))).toBe(
+      `${"x".repeat(59)}…`,
+    );
+  });
+
+  it("shows 思考中 while a step is still only outputting thinking", () => {
+    expect(stepHeading(step({ thinkingPending: true }))).toBe("思考中");
+  });
+
+  it("falls back to a generic label when there is nothing to say", () => {
+    expect(stepHeading(step({ text: "   " }))).toBe("Step");
+    expect(stepHeading(step())).toBe("Step");
   });
 });

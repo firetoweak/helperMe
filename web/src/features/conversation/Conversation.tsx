@@ -44,6 +44,7 @@ import { EditableUserMessage } from "./EditableUserMessage";
 import { ExecutionProcess } from "./ExecutionProcess";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { turnNeedsSubagentHint } from "./subagent";
 import { timelineTurns, turnNeedsThinkingHint, type TimelineTurn } from "./timelineTurns";
 import { useFollowOutput } from "./useFollowOutput";
 import { visibleTimeline } from "./visibleTimeline";
@@ -152,6 +153,7 @@ export function Conversation() {
   const turns = timelineTurns(items);
   const running = runtime?.activity === "running";
   const lastTurnKey = turns.at(-1)?.key;
+  const subagentsActive = conversation.session.has_active_subagents;
 
   async function send(text: string, artifactRefs: string[]) {
     if (connectionId === null) {
@@ -263,22 +265,7 @@ export function Conversation() {
                   latest: turn.key === lastTurnKey,
                   running,
                 }) ? (
-                  <Box
-                    component="article"
-                    className="message message-assistant"
-                  >
-                    <Group align="center" gap="sm" wrap="nowrap">
-                      <ThemeIcon radius="xl" size={28} variant="subtle">
-                        <IconSparkles size={15} />
-                      </ThemeIcon>
-                      <Group gap={8} wrap="nowrap">
-                        <Loader color="sage" size={12} />
-                        <Text c="dimmed" size="sm">
-                          思考中
-                        </Text>
-                      </Group>
-                    </Group>
-                  </Box>
+                  <RunningHint label="思考中" />
                 ) : showReply(turn) ? (
                   <Box
                     component="article"
@@ -296,6 +283,12 @@ export function Conversation() {
                     </Group>
                   </Box>
                 ) : null}
+                {turnNeedsSubagentHint(
+                  turn.key === lastTurnKey,
+                  subagentsActive,
+                ) ? (
+                  <RunningHint label="子 Agent 执行中" />
+                ) : null}
               </Stack>
               );
             })}
@@ -311,7 +304,9 @@ export function Conversation() {
             py="xs"
           >
             <Group gap="sm" justify="space-between" wrap="nowrap">
-              <Text size="sm">{runtime.lastError}</Text>
+              <Text className="pre-wrap" ff="monospace" fz={11}>
+                {runtime.lastError}
+              </Text>
               <Button
                 disabled={connectionId === null}
                 loading={retrying.isLoading}
@@ -357,10 +352,17 @@ export function Conversation() {
             conversation.session.should_wake && runtime?.lastError == null
           }
           pauseBusy={pausing.isLoading}
+          retryBusy={retrying.isLoading}
           autoAuthorize={conversation.session.auto_authorize}
           autoAuthorizeBusy={autoAuthorizing.isLoading}
           onToggleAutoAuthorize={toggleAutoAuthorize}
           onSend={send}
+          onRetry={() => {
+            if (connectionId === null) {
+              return;
+            }
+            void retryTurn({ connectionId, sessionId }).unwrap();
+          }}
           onSetPaused={(nextPaused) => {
             if (connectionId === null) {
               return;
@@ -419,6 +421,24 @@ export function Conversation() {
           </Stack>
         )}
       </Modal>
+    </Box>
+  );
+}
+
+function RunningHint({ label }: { label: string }) {
+  return (
+    <Box component="article" className="message message-assistant">
+      <Group align="center" gap="sm" wrap="nowrap">
+        <ThemeIcon radius="xl" size={28} variant="subtle">
+          <IconSparkles size={15} />
+        </ThemeIcon>
+        <Group gap={8} wrap="nowrap">
+          <Loader color="sage" size={12} />
+          <Text c="dimmed" size="sm">
+            {label}
+          </Text>
+        </Group>
+      </Group>
     </Box>
   );
 }

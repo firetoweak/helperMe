@@ -54,11 +54,13 @@ type ComposerProps = {
   paused: boolean;
   shouldWake: boolean;
   pauseBusy: boolean;
+  retryBusy: boolean;
   autoAuthorize: boolean;
   autoAuthorizeBusy: boolean;
   onToggleAutoAuthorize: (enabled: boolean) => void;
   onSend: (text: string, artifactRefs: string[]) => Promise<void>;
   onSetPaused: (paused: boolean) => void;
+  onRetry: () => void;
 };
 
 export function Composer({
@@ -70,11 +72,13 @@ export function Composer({
   paused,
   shouldWake,
   pauseBusy,
+  retryBusy,
   autoAuthorize,
   autoAuthorizeBusy,
   onToggleAutoAuthorize,
   onSend,
   onSetPaused,
+  onRetry,
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [pending, setPending] = useState<PendingImage[]>([]);
@@ -309,13 +313,13 @@ export function Composer({
               </ActionIcon>
             </Tooltip>
           ) : null}
-          {paused && shouldWake && !running ? (
+          {shouldWake && !running ? (
             <Tooltip label="继续">
               <ActionIcon
                 aria-label="继续"
                 color="blue"
-                disabled={pauseBusy || connectionId === null}
-                onClick={() => onSetPaused(false)}
+                disabled={pauseBusy || retryBusy || connectionId === null}
+                onClick={onRetry}
                 radius="xl"
                 size={36}
                 type="button"

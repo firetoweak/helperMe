@@ -25,6 +25,8 @@ import { useEffect, useState } from "react";
 
 import type { ToolStatus } from "../../api/contracts";
 import { stepHeading } from "./stepHeading";
+import { isSubagentTool } from "./subagent";
+import { SubagentCallCard } from "./SubagentCallCard";
 import type { VisibleStep, VisibleTool } from "./visibleTimeline";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -122,14 +124,11 @@ function StepDisclosure({
   const [opened, setOpened] = useState(awaiting);
 
   useEffect(() => {
-    if (awaiting) {
-      setOpened(true);
-      return;
-    }
-    if (status !== "running") {
-      setOpened(false);
-    }
-  }, [awaiting, status]);
+    // 默认一律折叠：标题已经给出这一步的意图，够用户判断执行有没有走偏；
+    // 想看执行细节（思考块、工具与参数）由用户自己展开。
+    // 只有等待授权这类需要用户操作的状态才自动展开。
+    setOpened(awaiting);
+  }, [awaiting]);
 
   return (
     <div className="step-panel">
@@ -156,22 +155,26 @@ function StepDisclosure({
       <Collapse expanded={opened}>
         {opened ? (
           <Stack className="step-content" gap="xs">
+            {step.text === null ? null : (
+              <MarkdownMessage content={step.text} streaming={step.pending} />
+            )}
             {step.thinking === null ? null : (
               <ThinkingBlock
                 streaming={step.thinkingPending}
                 text={step.thinking}
               />
             )}
-            {step.text === null ? null : (
-              <MarkdownMessage content={step.text} streaming={step.pending} />
+            {step.tools.map((tool) =>
+              isSubagentTool(tool.name) ? (
+                <SubagentCallCard key={tool.commandId} tool={tool} />
+              ) : (
+                <ToolCard
+                  key={tool.commandId}
+                  onAuthorize={onAuthorize}
+                  tool={tool}
+                />
+              ),
             )}
-            {step.tools.map((tool) => (
-              <ToolCard
-                key={tool.commandId}
-                onAuthorize={onAuthorize}
-                tool={tool}
-              />
-            ))}
           </Stack>
         ) : null}
       </Collapse>
