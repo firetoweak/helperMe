@@ -203,12 +203,14 @@ def create_file_write_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
             description=APPLY_PATCH_DESCRIPTION,
             parameters=PydanticParameters(ApplyPatchInput),
             handler=apply_patch,
+            requires_authorization=True,
         ),
         ToolSpec(
             name="replace_all",
             description=REPLACE_ALL_DESCRIPTION,
             parameters=PydanticParameters(ReplaceAllInput),
             handler=replace_all,
+            requires_authorization=True,
         ),
     ]
 

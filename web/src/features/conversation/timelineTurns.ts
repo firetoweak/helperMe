@@ -42,3 +42,30 @@ export function timelineTurns(items: VisibleItem[]): TimelineTurn[] {
 function isFinal(step: VisibleStep): boolean {
   return !step.pending && step.text !== null && step.tools.length === 0;
 }
+
+function turnHasThinking(turn: TimelineTurn): boolean {
+  return [turn.active, turn.final, ...turn.process].some(
+    (step) => step !== null && (step.thinking ?? "").trim() !== "",
+  );
+}
+
+export function turnNeedsThinkingHint(
+  turn: TimelineTurn,
+  options: { running: boolean; latest: boolean },
+): boolean {
+  if (turnHasThinking(turn)) {
+    return false;
+  }
+  if (turn.active !== null) {
+    return !(turn.active.text ?? "").trim();
+  }
+  if (!options.running || !options.latest || turn.final !== null) {
+    return false;
+  }
+  return !turn.process.some((step) =>
+    step.tools.some(
+      (tool) =>
+        tool.status === "running" || tool.status === "awaiting_authorization",
+    ),
+  );
+}

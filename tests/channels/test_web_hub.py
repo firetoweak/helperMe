@@ -79,3 +79,64 @@ class WebEventHubTest(unittest.IsolatedAsyncioTestCase):
             {"session_id": "session-a", "used": 1200, "limit": 200000},
         )
         self.hub.unsubscribe(queue)
+
+    async def test_thinking_is_a_separate_stream_from_preview(self):
+        queue = self.hub.subscribe()
+
+        await self.hub.thinking("session-a", "started", "out-1", None)
+        await self.hub.thinking("session-a", "delta", "out-1", "想")
+        await self.hub.preview("session-a", "started", "out-1", None)
+        await self.hub.preview("session-a", "delta", "out-1", "答")
+        await self.hub.thinking("session-a", "finished", "out-1", None)
+
+        names = [(await queue.get()).name for _ in range(5)]
+        self.assertEqual(
+            names,
+            [
+                "thinking.started",
+                "thinking.delta",
+                "preview.started",
+                "preview.delta",
+                "thinking.finished",
+            ],
+        )
+        self.hub.unsubscribe(queue)
+
+    async def test_session_failed_is_session_scoped(self):
+        queue = self.hub.subscribe()
+
+        await self.hub.session_failed("session-a", "运行失败：模型服务暂时不可用")
+        event = await queue.get()
+
+        self.assertEqual(event.name, "session_failed")
+        self.assertEqual(
+            event.data,
+            {
+                "session_id": "session-a",
+                "message": "运行失败：模型服务暂时不可用",
+            },
+        )
+        self.hub.unsubscribe(queue)
+
+    async def test_authorization_required_carries_command_arguments(self):
+        queue = self.hub.subscribe()
+
+        await self.hub.authorization_required(
+            "session-a",
+            "cmd-1",
+            "write_file",
+            {"path": "a.md"},
+        )
+        event = await queue.get()
+
+        self.assertEqual(event.name, "authorization_required")
+        self.assertEqual(
+            event.data,
+            {
+                "session_id": "session-a",
+                "command_id": "cmd-1",
+                "name": "write_file",
+                "arguments": {"path": "a.md"},
+            },
+        )
+        self.hub.unsubscribe(queue)

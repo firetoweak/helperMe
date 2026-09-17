@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -10,6 +11,7 @@ from helperme.assistant.sessions import SessionView, session_view
 from helperme.assistant.subagent.subagent import project_parent, project_pending
 from helperme.runtime import (
     CommandOutcomeReceived,
+    CommandRejected,
     DispatchAttemptStarted,
     Event,
     OutcomeStatus,
@@ -20,7 +22,14 @@ from helperme.runtime import (
 )
 
 
-ToolStatus = Literal["running", "succeeded", "failed", "unknown"]
+ToolStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "unknown",
+    "awaiting_authorization",
+    "rejected",
+]
 SessionActivity = Literal["running", "idle"]
 UNKNOWN_TOOL_ERROR = "执行中断，结果未知"
 
@@ -48,6 +57,7 @@ class ToolItem:
     name: str
     status: ToolStatus
     error: str | None
+    arguments: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +68,7 @@ class StepItem:
     text: str | None
     tools: tuple[ToolItem, ...]
     occurred_at: datetime
+    thinking: str | None = None
 
 
 ConversationItem = UserItem | StepItem
@@ -122,6 +133,8 @@ class AssistantQueries:
             view = session_view(
                 replay(session_id, events).state,
                 has_active_subagents=bool(project_pending(events)),
+                auto_authorize=self._sessions.web_auto_authorize(session_id),
+                paused=self._sessions.is_paused(session_id),
             )
         return project_conversation(
             session_id,
@@ -159,6 +172,7 @@ def project_conversation(
 ) -> ConversationView:
     outcomes = _command_outcomes(events)
     started = _started_commands(events)
+    rejected = _rejected_commands(events)
     items: list[ConversationItem] = []
     for event in events:
         payload = event.payload
@@ -176,28 +190,33 @@ def project_conversation(
         if not isinstance(payload, StepCommitted):
             continue
         text = payload.step.decision.content.strip()
+        thinking = _step_thinking(payload.decision_metadata)
         tools: list[ToolItem] = []
         for command in payload.step.commands:
             if command.effect.name == DELIVER_TOOL_NAME:
                 continue
             recorded = outcomes.get(command.command_id)
-            status, error = (
-                recorded
-                if recorded is not None
-                else _open_tool_status(
+            if recorded is not None:
+                status, error = recorded
+            elif command.command_id in rejected:
+                status, error = ("rejected", None)
+            elif command.command_id in session.pending_authorization_ids:
+                status, error = ("awaiting_authorization", None)
+            else:
+                status, error = _open_tool_status(
                     command.command_id in started,
                     activity,
                 )
-            )
             tools.append(
                 ToolItem(
                     command.command_id,
                     command.effect.name,
                     status,
                     error,
+                    command.effect.argument_dict(),
                 )
             )
-        if text or tools:
+        if text or tools or thinking:
             items.append(
                 StepItem(
                     "step",
@@ -206,6 +225,7 @@ def project_conversation(
                     text or None,
                     tuple(tools),
                     event.occurred_at,
+                    thinking,
                 )
             )
     return ConversationView(
@@ -214,6 +234,19 @@ def project_conversation(
         items=tuple(items),
         session=session,
     )
+
+
+def _step_thinking(metadata: object) -> str | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    extensions = metadata.get("message_extensions")
+    if not isinstance(extensions, Mapping):
+        return None
+    text = extensions.get("reasoning_content")
+    if type(text) is not str:
+        return None
+    stripped = text.strip()
+    return stripped or None
 
 
 def _open_tool_status(
@@ -232,6 +265,15 @@ def _started_commands(events: tuple[Event, ...]) -> frozenset[str]:
         if isinstance(payload, DispatchAttemptStarted):
             started.add(payload.command_id)
     return frozenset(started)
+
+
+def _rejected_commands(events: tuple[Event, ...]) -> frozenset[str]:
+    rejected: set[str] = set()
+    for event in events:
+        payload = event.payload
+        if isinstance(payload, CommandRejected):
+            rejected.add(payload.command_id)
+    return frozenset(rejected)
 
 
 def _command_outcomes(

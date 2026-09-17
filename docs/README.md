@@ -54,6 +54,7 @@
 | [ACP 映射](架构/ACP映射.md) | 当前 ACP v1 已接线 / 未接线清单 |
 | [Channel 协议改造](架构/Channel协议改造.md) | 架构方向：TUI / Web / ACP / Satori 平级，Satori 暂缓 |
 | [Web](架构/Web.md) | Web Channel、前端状态边界与首版纵向切片 |
+| [Command 授权](架构/Command授权.md) | Command Authorization 首版切片契约 |
 | [多活跃会话](架构/多活跃会话.md) | 每 Session 进程、Host、进程身份与父子唤醒 |
 | [SubAgent](架构/SubAgent.md) | 委派、回收、只读边界 |
 

@@ -5,6 +5,7 @@ import {
   conversationViewSchema,
   outputFinalEventSchema,
   runtimeStatusSchema,
+  sessionFailedEventSchema,
   toolProgressEventSchema,
 } from "./contracts";
 
@@ -16,6 +17,8 @@ const session = {
   has_active_subagents: false,
   control_approval: null,
   control_message: null,
+  auto_authorize: false,
+  paused: false,
 };
 
 describe("conversationViewSchema", () => {
@@ -36,12 +39,14 @@ describe("conversationViewSchema", () => {
           step_id: "step-event",
           output_id: "user-event",
           text: "world",
+          thinking: null,
           tools: [
             {
               command_id: "cmd-1",
               name: "read_file",
               status: "succeeded",
               error: null,
+              arguments: { path: "README.md" },
             },
           ],
           occurred_at: "2026-09-15T08:00:01+00:00",
@@ -107,6 +112,31 @@ describe("conversationViewSchema", () => {
   });
 });
 
+describe("conversation thinking field", () => {
+  it("accepts reasoning text on a step without treating it as reply text", () => {
+    const parsed = conversationViewSchema.parse({
+      session_id: "session-1",
+      revision: 1,
+      items: [
+        {
+          kind: "step",
+          step_id: "step-event",
+          output_id: "user-event",
+          text: "world",
+          thinking: "先确认目标",
+          tools: [],
+          occurred_at: "2026-09-15T08:00:01+00:00",
+        },
+      ],
+      session,
+    });
+    expect(parsed.items[0]).toMatchObject({
+      text: "world",
+      thinking: "先确认目标",
+    });
+  });
+});
+
 describe("outputFinalEventSchema", () => {
   it("requires a session and the same output identity used by preview", () => {
     const parsed = outputFinalEventSchema.parse({
@@ -139,12 +169,14 @@ describe("toolProgressEventSchema", () => {
           step_id: "step-event",
           output_id: "user-event",
           text: null,
+          thinking: null,
           tools: [
             {
               command_id: "cmd-1",
               name: "glob",
               status: "unknown",
               error: "执行中断，结果未知",
+              arguments: { pattern: "*.py" },
             },
           ],
           occurred_at: "2026-09-15T08:00:01+00:00",
@@ -165,6 +197,20 @@ describe("runtimeStatusSchema", () => {
     ).toEqual({
       model: "assistant",
       context_limit: 200000,
+    });
+  });
+});
+
+describe("sessionFailedEventSchema", () => {
+  it("identifies a recognised run failure by session", () => {
+    expect(
+      sessionFailedEventSchema.parse({
+        session_id: "session-1",
+        message: "运行失败：模型服务暂时不可用",
+      }),
+    ).toEqual({
+      session_id: "session-1",
+      message: "运行失败：模型服务暂时不可用",
     });
   });
 });

@@ -52,6 +52,30 @@ class AssistantDeliveryTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_thinking_is_a_parallel_stream_and_survives_preview_abort(self):
+        previews = []
+        thoughts = []
+        preview = PreviewEmitter(
+            lambda *values: previews.append(values),
+            thinking_sink=lambda *values: thoughts.append(values),
+        )
+
+        await preview.start(self.SESSION_ID, "output-1")
+        await preview.start_thinking(self.SESSION_ID, "output-1")
+        await preview.append_thinking(self.SESSION_ID, "output-1", "想")
+        await preview.abort(self.SESSION_ID)
+        await preview.finish_thinking(self.SESSION_ID, "output-1")
+
+        self.assertEqual(
+            thoughts,
+            [
+                (self.SESSION_ID, "started", "output-1", None),
+                (self.SESSION_ID, "delta", "output-1", "想"),
+                (self.SESSION_ID, "finished", "output-1", None),
+            ],
+        )
+        self.assertEqual(previews[-1], (self.SESSION_ID, "aborted", "output-1", None))
+
     async def test_deliver_routes_its_session_id_to_the_sink(self):
         routed: list[tuple[str, str, str]] = []
         binding = deliver_binding(

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from inspect import isawaitable
 import multiprocessing
 import os
 
+from helperme.assistant.auto_authorize import (
+    AutoAuthorizeStore,
+    auto_grant_for_owners,
+)
+from helperme.assistant.session_pause import SessionPauseStore
 from helperme.assistant.compact.host import CompactHost
 from helperme.assistant.delivery import emit_delivery
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
@@ -50,8 +55,11 @@ class HostSupervisor:
         subagent_activity_sink=None,
         conversation_status_sink=None,
         tool_progress_sink=None,
+        authorization_required_sink=None,
         preview_sink=None,
+        thinking_sink=None,
         session_activity_sink=None,
+        session_failed_sink=None,
     ):
         self.store = store
         self.config_factory = config_factory
@@ -62,8 +70,11 @@ class HostSupervisor:
         self.subagent_activity_sink = subagent_activity_sink
         self.conversation_status_sink = conversation_status_sink
         self.tool_progress_sink = tool_progress_sink
+        self.authorization_required_sink = authorization_required_sink
         self.preview_sink = preview_sink
+        self.thinking_sink = thinking_sink
         self.session_activity_sink = session_activity_sink
+        self.session_failed_sink = session_failed_sink
         self.workers: dict[str, Worker] = {}
         self.watchers: set[asyncio.Task] = set()
         self.locks: dict[str, asyncio.Lock] = {}
@@ -75,6 +86,8 @@ class HostSupervisor:
         self.closed = False
         self.compact = CompactHost(self)
         self.job = WindowsJob.create() if os.name == "nt" else None
+        self._auto_authorize = AutoAuthorizeStore(store.root)
+        self._pause = SessionPauseStore(store.root)
 
     async def _route(self, operation, session_id, arguments):
         if operation == "llm_chat":
@@ -83,7 +96,14 @@ class HostSupervisor:
             async def on_delta(text):
                 await worker.peer.send(("delta", worker.peer.active_request_id, text))
 
-            return await complete_llm_chat(self.llm, arguments, on_delta)
+            async def on_reasoning_delta(text):
+                await worker.peer.send(
+                    ("reasoning_delta", worker.peer.active_request_id, text)
+                )
+
+            return await complete_llm_chat(
+                self.llm, arguments, on_delta, on_reasoning_delta
+            )
         if operation == "compact_boundary":
             return await self.compact.boundary(session_id, arguments)
         if operation == "compact_complete":
@@ -145,6 +165,14 @@ class HostSupervisor:
                     emitted = self.tool_progress_sink(*values)
                     if isawaitable(emitted):
                         await emitted
+            elif kind == "authorization":
+                if (
+                    self.authorization_required_sink is not None
+                    and self.compact.store.reader_job(session_id) is None
+                ):
+                    emitted = self.authorization_required_sink(*values)
+                    if isawaitable(emitted):
+                        await emitted
             elif kind == "preview":
                 if (
                     self.preview_sink is not None
@@ -153,6 +181,16 @@ class HostSupervisor:
                     emitted = self.preview_sink(*values)
                     if isawaitable(emitted):
                         await emitted
+            elif kind == "thinking":
+                if (
+                    self.thinking_sink is not None
+                    and self.compact.store.reader_job(session_id) is None
+                ):
+                    emitted = self.thinking_sink(*values)
+                    if isawaitable(emitted):
+                        await emitted
+            elif kind == "session_failed":
+                await self._emit_session_failed(*values)
             elif kind == "idle":
                 worker.idle_revision = values[0]
                 worker.idle_has_active_subagents = values[1]
@@ -332,6 +370,8 @@ class HostSupervisor:
     async def request(self, operation, session_id, arguments):
         assert not self.closed
         lock = self.locks.setdefault(session_id, asyncio.Lock())
+        just_started = False
+        became_running = False
         while True:
             async with lock:
                 if self.closed:
@@ -339,17 +379,68 @@ class HostSupervisor:
                 worker = self.workers.get(session_id)
                 if worker is None:
                     worker = await self._start(session_id)
+                    just_started = True
                 if not worker.stopping:
+                    became_running = (
+                        just_started or worker.idle_revision is not None
+                    )
                     worker.requests += 1
                     worker.idle_revision = None
                     break
             await worker.transition.wait()
         try:
+            if became_running:
+                await self._emit_session_activity(session_id, "running")
+            if just_started and operation != "apply_authorization_policy":
+                await worker.peer.request(
+                    "apply_authorization_policy",
+                    session_id,
+                    {
+                        "preference": self.web_auto_authorize(session_id),
+                        "grant": self._auto_grant(session_id),
+                    },
+                )
             return await worker.peer.request(operation, session_id, arguments)
         finally:
             worker.requests -= 1
             if not worker.exited.is_set():
                 await self._stop_idle(session_id, worker)
+
+    def web_auto_authorize(self, session_id):
+        return self._auto_authorize.get(session_id)
+
+    def is_paused(self, session_id):
+        return self._pause.get(session_id)
+
+    def _owners_of(self, session_id):
+        return tuple(
+            owner
+            for owner, selected in self.selections.items()
+            if selected == session_id
+        )
+
+    def _auto_grant(self, session_id):
+        return auto_grant_for_owners(
+            self._owners_of(session_id),
+            self.web_auto_authorize(session_id),
+        )
+
+    def _with_preference(self, view, session_id):
+        return replace(
+            view,
+            auto_authorize=self.web_auto_authorize(session_id),
+            paused=self.is_paused(session_id),
+        )
+
+    async def _push_authorization_policy(self, session_id):
+        return await self.request(
+            "apply_authorization_policy",
+            session_id,
+            {
+                "preference": self.web_auto_authorize(session_id),
+                "grant": self._auto_grant(session_id),
+            },
+        )
 
     def conversation_status(self, session_id):
         return self.compact.store.status(session_id)
@@ -367,6 +458,16 @@ class HostSupervisor:
         ):
             return
         emitted = self.session_activity_sink(session_id, activity)
+        if isawaitable(emitted):
+            await emitted
+
+    async def _emit_session_failed(self, session_id, message):
+        if (
+            self.session_failed_sink is None
+            or self.compact.store.reader_job(session_id) is not None
+        ):
+            return
+        emitted = self.session_failed_sink(session_id, message)
         if isawaitable(emitted):
             await emitted
 
@@ -405,9 +506,16 @@ class HostSupervisor:
             self.store.require(session_id)
             previous = self.selections.get(owner)
             self.selecting[owner] = session_id
+            self.selections[owner] = session_id
             try:
+                await self._push_authorization_policy(session_id)
                 view = await self.compact.application("resume", session_id, {})
-                self.selections[owner] = session_id
+            except BaseException:
+                if previous is None:
+                    self.selections.pop(owner, None)
+                else:
+                    self.selections[owner] = previous
+                raise
             finally:
                 del self.selecting[owner]
                 worker = self.workers.get(session_id)
@@ -416,8 +524,9 @@ class HostSupervisor:
             if previous is not None and previous != session_id:
                 worker = self.workers.get(previous)
                 if worker is not None:
+                    await self._push_authorization_policy(previous)
                     await self._stop_idle(previous, worker)
-            return view
+            return self._with_preference(view, session_id)
 
     async def release(self, owner):
         async with self.selection_locks.setdefault(owner, asyncio.Lock()):
@@ -426,27 +535,64 @@ class HostSupervisor:
                 return
             worker = self.workers.get(session_id)
             if worker is not None:
+                await self._push_authorization_policy(session_id)
                 await self._stop_idle(session_id, worker)
 
     async def resume(self, session_id):
-        return await self.compact.application("resume", session_id, {})
+        return self._with_preference(
+            await self.compact.application("resume", session_id, {}),
+            session_id,
+        )
+
+    async def retry(self, session_id):
+        if self.is_paused(session_id):
+            return await self.set_paused(session_id, False)
+        return await self.resume(session_id)
 
     async def view(self, session_id):
-        return await self.compact.application("view", session_id, {})
+        return self._with_preference(
+            await self.compact.application("view", session_id, {}),
+            session_id,
+        )
 
     async def receive_user_message(self, session_id, content, **kwargs):
+        if self._pause.get(session_id):
+            self._pause.set(session_id, False)
         await self.compact.application(
             "receive_user_message", session_id, dict(content=content, **kwargs)
         )
 
     async def accept_input(self, session_id, content, **kwargs):
-        return await self.compact.application(
+        view = await self.compact.application(
             "accept_input", session_id, dict(content=content, **kwargs)
+        )
+        self._pause.remember(session_id, view.paused)
+        return self._with_preference(view, session_id)
+
+    async def resolve_authorization(self, session_id, command_id, *, approved):
+        await self.compact.application(
+            "resolve_authorization",
+            session_id,
+            dict(command_id=command_id, approved=approved),
         )
 
     async def resolve_authorizations(self, session_id, *, approved):
         await self.compact.application(
             "resolve_authorizations", session_id, dict(approved=approved)
+        )
+
+    async def set_auto_authorize(self, session_id, enabled):
+        self._auto_authorize.set(session_id, enabled)
+        view = await self._push_authorization_policy(session_id)
+        return self._with_preference(view, session_id)
+
+    async def set_paused(self, session_id, paused):
+        self._pause.set(session_id, bool(paused))
+        return self._with_preference(
+            await self.compact.application(
+                "set_paused", session_id, {"paused": bool(paused)}
+            ),
+            session_id,
         )
 
     async def resolve_control(self, session_id, *, approved):
@@ -455,7 +601,10 @@ class HostSupervisor:
         )
 
     async def cancel_turn(self, session_id):
-        return await self.compact.application("cancel_turn", session_id, {})
+        return self._with_preference(
+            await self.compact.application("cancel_turn", session_id, {}),
+            session_id,
+        )
 
     async def wait_quiescent(self, session_id):
         worker = self.workers.get(session_id)

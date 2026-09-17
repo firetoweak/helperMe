@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +24,8 @@ from helperme.assistant.runner import SessionNotFoundError
 from helperme.bootstrap import bootstrap_assistant
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
+
+SSE_KEEPALIVE_SECONDS = 15
 
 
 class ConnectionRequest(BaseModel):
@@ -52,6 +55,27 @@ class EditRequest(InputRequest):
     message_id: str
 
 
+class AuthorizationRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    connection_id: str
+    approved: bool
+
+
+class AutoAuthorizeRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    connection_id: str
+    enabled: bool
+
+
+class PauseRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    connection_id: str
+    paused: bool
+
+
 def create_web_app(
     channel: WebChannel | None = None,
     hub: WebEventHub | None = None,
@@ -69,8 +93,11 @@ def create_web_app(
         async with bootstrap_assistant(
             events.output_final,
             preview_sink=events.preview,
+            thinking_sink=events.thinking,
             session_activity_sink=events.session_activity,
+            session_failed_sink=events.session_failed,
             tool_progress_sink=events.tool_progress,
+            authorization_required_sink=events.authorization_required,
             context_usage_sink=events.context_usage,
         ) as assistant:
             app.state.channel = WebChannel(
@@ -116,8 +143,15 @@ def create_web_app(
                 event="connected",
                 data={"connection_id": connection.connection_id},
             )
-            while True:
-                item = await queue.get()
+            while not await request.is_disconnected():
+                try:
+                    item = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=SSE_KEEPALIVE_SECONDS,
+                    )
+                except TimeoutError:
+                    yield ServerSentEvent(comment="keep-alive")
+                    continue
                 yield ServerSentEvent(event=item.name, data=item.data)
         finally:
             _hub(request).unsubscribe(queue)
@@ -216,6 +250,52 @@ def create_web_app(
         request: Request,
     ):
         return await _channel(request).cancel(body.connection_id, session_id)
+
+    @app.post("/api/sessions/{session_id}/retry")
+    async def retry_session(
+        session_id: str,
+        body: ConnectionRequest,
+        request: Request,
+    ):
+        return await _channel(request).retry(body.connection_id, session_id)
+
+    @app.post("/api/sessions/{session_id}/commands/{command_id}/authorize")
+    async def authorize_command(
+        session_id: str,
+        command_id: str,
+        body: AuthorizationRequest,
+        request: Request,
+    ):
+        return await _channel(request).authorize_command(
+            body.connection_id,
+            session_id,
+            command_id,
+            body.approved,
+        )
+
+    @app.post("/api/sessions/{session_id}/auto-authorize")
+    async def set_auto_authorize(
+        session_id: str,
+        body: AutoAuthorizeRequest,
+        request: Request,
+    ):
+        return await _channel(request).set_auto_authorize(
+            body.connection_id,
+            session_id,
+            body.enabled,
+        )
+
+    @app.post("/api/sessions/{session_id}/paused")
+    async def set_paused(
+        session_id: str,
+        body: PauseRequest,
+        request: Request,
+    ):
+        return await _channel(request).set_paused(
+            body.connection_id,
+            session_id,
+            body.paused,
+        )
 
     assets = Path(__file__).parents[3] / "web" / "dist"
     if assets.is_dir():

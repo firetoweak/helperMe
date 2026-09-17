@@ -25,6 +25,7 @@ from helperme.assistant.delivery import DELIVER_TOOL_NAME
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.runtime.events import (
     CommandOutcomeReceived,
+    CommandRejected,
     DomainFactCommitted,
     Event,
     StepCommitted,
@@ -145,6 +146,22 @@ def _tool_result_json(payload: Mapping[str, object]) -> str:
         # 附件引用是投影指令，必须在正文被外置之后继续存活。
         result["images"] = thaw_value(payload["images"])
     return json.dumps(result, ensure_ascii=False)
+
+
+def _rejection_text(command_id: str, tool_name: str) -> str:
+    """把拒绝投影成工具协议消息，明确是「用户拒绝」而非「工具失败」。"""
+    return _tool_result_json(
+        {
+            "ok": False,
+            "code": "COMMAND_REJECTED",
+            "data": None,
+            "error": (
+                f"用户拒绝执行该工具调用（command_id={command_id}，"
+                f"工具={tool_name}）。"
+            ),
+            "hint": "请勿原样重试；如需继续，请改用其他方式或先向用户解释。",
+        }
+    )
 
 
 def project_chat_messages(
@@ -283,6 +300,26 @@ def _translate_visible_events(
                         "role": "tool",
                         "tool_call_id": payload.command_id,
                         "content": outcome_text(payload.outcome),
+                    },
+                    "tool",
+                    payload.command_id,
+                    event.sequence,
+                )
+            )
+            continue
+        if isinstance(payload, CommandRejected):
+            effect = commands.get(payload.command_id)
+            if effect is None or effect.name == DELIVER_TOOL_NAME:
+                continue
+            items.append(
+                _Projected(
+                    {
+                        "role": "tool",
+                        "tool_call_id": payload.command_id,
+                        "content": _rejection_text(
+                            payload.command_id,
+                            effect.name,
+                        ),
                     },
                     "tool",
                     payload.command_id,

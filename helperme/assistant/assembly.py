@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -79,7 +79,10 @@ async def build_assistant_assembly(
     context_usage_sink: Callable[[str, int, int], None] | None = None,
     subagent_activity_sink: Callable[[str, bool], None] | None = None,
     tool_progress_sink=None,
+    authorization_required_sink=None,
     preview_sink=None,
+    thinking_sink=None,
+    session_failed_sink: Callable[[str, str], Awaitable[None] | None] | None = None,
     scheduler_factory=SessionScheduler,
     session_transport=None,
     home: HelperMeHome | None = None,
@@ -130,7 +133,7 @@ async def build_assistant_assembly(
     )
     skill_tools = SkillToolAdapter(skills, gateway, settings)
     subagents = SubAgentHost(subagent_activity_sink)
-    preview = PreviewEmitter(preview_sink)
+    preview = PreviewEmitter(preview_sink, thinking_sink)
     delivery_sink = subagents.routed_sink(sink)
 
     async def notify(session_id: str, text: str) -> None:
@@ -140,6 +143,13 @@ async def build_assistant_assembly(
             f"notification-{uuid4().hex}",
             text,
         )
+
+    async def report_session_failed(session_id: str, text: str) -> None:
+        if subagents.is_subagent(session_id) or session_failed_sink is None:
+            return
+        observed = session_failed_sink(session_id, text)
+        if isinstance(observed, Awaitable):
+            await observed
 
     surface = ToolSurface(
         providers=(McpToolsetAdapter(mcp, attachments),),
@@ -210,6 +220,7 @@ async def build_assistant_assembly(
         notify=notify,
         on_quiesced=subagents.on_quiesced,
         on_failed=subagents.on_failed,
+        session_failed=report_session_failed,
         preview=preview,
     )
     compact = None
@@ -222,13 +233,6 @@ async def build_assistant_assembly(
         scheduler.propagate_failures = compact_context.is_reader
     from helperme.assistant.catalog import sync_catalog
 
-    async def before_advance():
-        if not compact_context.is_reader and not subagents.is_subagent(session_id):
-            if not (await runtime.state(session_id)).waiting_command_ids:
-                await sync_catalog(runtime, session_id, surface, skill_tools, management)
-        return True if compact is None else await compact.before_advance()
-
-    scheduler.before_advance = before_advance
     subagents.attach(runtime, session_transport)
     sessions = AssistantSessions(
         runtime,
@@ -237,7 +241,20 @@ async def build_assistant_assembly(
         control=control,
         management=management,
         subagents=subagents,
+        meta_root=sessions_root,
     )
+
+    async def before_advance():
+        if sessions.is_paused(session_id):
+            return False
+        if not compact_context.is_reader and not subagents.is_subagent(session_id):
+            if not (await runtime.state(session_id)).waiting_command_ids:
+                await sync_catalog(runtime, session_id, surface, skill_tools, management)
+        return True if compact is None else await compact.before_advance()
+
+    scheduler.before_advance = before_advance
+    scheduler.auto_authorize = sessions.is_auto_authorized
+    scheduler.authorization_required = authorization_required_sink
     return AssistantAssembly(
         runtime=runtime,
         scheduler=scheduler,

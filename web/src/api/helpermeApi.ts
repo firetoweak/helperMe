@@ -2,7 +2,8 @@ import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 import { z } from "zod";
 
-import { bindOwner } from "../realtime/runtimeSlice";
+import { bindOwner, clearLiveOutput, supersedeSession } from "../realtime/runtimeSlice";
+import { truncateAfterUserMessage } from "./truncateAfterUserMessage";
 import {
   conversationViewSchema,
   runtimeStatusSchema,
@@ -31,6 +32,19 @@ type EditAndFork = SelectSession & {
 
 type UploadAttachment = SelectSession & {
   file: File;
+};
+
+type AuthorizeCommand = SelectSession & {
+  commandId: string;
+  approved: boolean;
+};
+
+type SetAutoAuthorize = SelectSession & {
+  enabled: boolean;
+};
+
+type SetPaused = SelectSession & {
+  paused: boolean;
 };
 
 const attachmentRefSchema = z
@@ -140,9 +154,32 @@ export const helpermeApi = createApi({
       }),
       transformResponse: (value: unknown) => conversationViewSchema.parse(value),
       invalidatesTags: ["Sessions"],
-      async onQueryStarted(_arg, { dispatch, getState, queryFulfilled }) {
-        const { data } = await queryFulfilled;
-        putConversation(dispatch, getState, data.session_id, data);
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const patch = dispatch(
+          helpermeApi.util.updateQueryData(
+            "getConversation",
+            arg.sessionId,
+            (draft) => {
+              const truncated = truncateAfterUserMessage(
+                draft,
+                arg.messageId,
+                arg.text.trim(),
+              );
+              draft.items = truncated.items;
+            },
+          ),
+        );
+        dispatch(clearLiveOutput(arg.sessionId));
+        try {
+          const { data } = await queryFulfilled;
+          dispatch(
+            supersedeSession({ from: arg.sessionId, to: data.session_id }),
+          );
+          dispatch(bindOwner(data.session_id));
+          putConversation(dispatch, getState, data.session_id, data);
+        } catch {
+          patch.undo();
+        }
       },
     }),
     uploadAttachment: build.mutation<AttachmentRef, UploadAttachment>({
@@ -170,6 +207,54 @@ export const helpermeApi = createApi({
         putConversation(dispatch, getState, arg.sessionId, data);
       },
     }),
+    authorizeCommand: build.mutation<ConversationView, AuthorizeCommand>({
+      query: ({ connectionId, sessionId, commandId, approved }) => ({
+        url: `/sessions/${encodeURIComponent(sessionId)}/commands/${encodeURIComponent(commandId)}/authorize`,
+        method: "POST",
+        body: { connection_id: connectionId, approved },
+      }),
+      transformResponse: (value: unknown) => conversationViewSchema.parse(value),
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        putConversation(dispatch, getState, arg.sessionId, data);
+      },
+    }),
+    setAutoAuthorize: build.mutation<ConversationView, SetAutoAuthorize>({
+      query: ({ connectionId, sessionId, enabled }) => ({
+        url: `/sessions/${encodeURIComponent(sessionId)}/auto-authorize`,
+        method: "POST",
+        body: { connection_id: connectionId, enabled },
+      }),
+      transformResponse: (value: unknown) => conversationViewSchema.parse(value),
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        putConversation(dispatch, getState, arg.sessionId, data);
+      },
+    }),
+    setPaused: build.mutation<ConversationView, SetPaused>({
+      query: ({ connectionId, sessionId, paused }) => ({
+        url: `/sessions/${encodeURIComponent(sessionId)}/paused`,
+        method: "POST",
+        body: { connection_id: connectionId, paused },
+      }),
+      transformResponse: (value: unknown) => conversationViewSchema.parse(value),
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        putConversation(dispatch, getState, arg.sessionId, data);
+      },
+    }),
+    retryTurn: build.mutation<ConversationView, SelectSession>({
+      query: ({ connectionId, sessionId }) => ({
+        url: `/sessions/${encodeURIComponent(sessionId)}/retry`,
+        method: "POST",
+        body: { connection_id: connectionId },
+      }),
+      transformResponse: (value: unknown) => conversationViewSchema.parse(value),
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        putConversation(dispatch, getState, arg.sessionId, data);
+      },
+    }),
   }),
 });
 
@@ -183,4 +268,8 @@ export const {
   useEditAndForkMutation,
   useUploadAttachmentMutation,
   useCancelTurnMutation,
+  useAuthorizeCommandMutation,
+  useSetAutoAuthorizeMutation,
+  useSetPausedMutation,
+  useRetryTurnMutation,
 } = helpermeApi;

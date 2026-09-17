@@ -245,10 +245,15 @@ async def run_telegram_assistant() -> None:
             assert channel is not None
             await channel.preview(session_id, phase, output_id, text)
 
+        async def session_failed(_session_id: str, message: str) -> None:
+            assert channel is not None
+            await channel.send(message)
+
         async with bootstrap_assistant(
             send,
             app_config=app_config,
             preview_sink=preview,
+            session_failed_sink=session_failed,
         ) as app:
             channel = await _open_chat_channel(
                 app.sessions,

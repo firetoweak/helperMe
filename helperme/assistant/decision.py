@@ -366,6 +366,12 @@ class JournalBackedLlmDecisionMaker:
         async def on_content_delta(text: str) -> None:
             await self._preview.append(frame.state.session_id, output_id, text)
 
+        async def on_reasoning_delta(text: str) -> None:
+            await self._preview.start_thinking(frame.state.session_id, output_id)
+            await self._preview.append_thinking(
+                frame.state.session_id, output_id, text
+            )
+
         try:
             if show_preview:
                 result = await self._llm.chat(
@@ -373,6 +379,7 @@ class JournalBackedLlmDecisionMaker:
                     model,
                     tools=schemas or None,
                     on_content_delta=on_content_delta,
+                    on_reasoning_delta=on_reasoning_delta,
                 )
             else:
                 result = await self._llm.chat(
@@ -383,12 +390,14 @@ class JournalBackedLlmDecisionMaker:
         except BaseException as error:
             try:
                 await self._preview.abort(frame.state.session_id)
+                await self._preview.abort_thinking(frame.state.session_id)
             except BaseException as preview_error:
                 raise BaseExceptionGroup(
                     "model call and preview cleanup failed",
                     [error, preview_error],
                 ) from None
             raise
+        await self._preview.finish_thinking(frame.state.session_id, output_id)
         usage = result.usage
         if self._context_usage_sink is not None:
             self._context_usage_sink(

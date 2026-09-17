@@ -1,11 +1,18 @@
 import { useLayoutEffect, useRef } from "react";
 
-export function useFollowOutput(sessionId: string | undefined, active: boolean) {
+export function useFollowOutput(
+  sessionId: string | undefined,
+  active: boolean,
+  attached: boolean,
+) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const lastSessionId = useRef<string | undefined>(undefined);
 
   useLayoutEffect(() => {
+    if (!attached) {
+      return;
+    }
     const viewport = viewportRef.current;
     const content = contentRef.current;
     if (viewport === null || content === null) {
@@ -27,7 +34,7 @@ export function useFollowOutput(sessionId: string | undefined, active: boolean) 
     const observer = new ResizeObserver(scrollToBottom);
     observer.observe(content);
     return () => observer.disconnect();
-  });
+  }, [active, attached, sessionId]);
 
   return { contentRef, viewportRef };
 }

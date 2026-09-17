@@ -80,6 +80,7 @@ class ConsoleInputTests(unittest.IsolatedAsyncioTestCase):
         )
 
         output.preview("session-1", "started", "output-1", None)
+        self.assertEqual(output.render(), "思考中")
         output.preview("session-1", "delta", "output-1", "你")
         output.preview("session-1", "delta", "output-1", "好")
 

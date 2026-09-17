@@ -21,7 +21,7 @@ class ProcessLlm:
     async def __aexit__(self, *args):
         pass
 
-    async def chat(self, messages, model, *, tools=None, on_content_delta=None):
+    async def chat(self, messages, model, *, tools=None, on_content_delta=None, on_reasoning_delta=None):
         images = [
             part
             for message in messages
@@ -79,7 +79,7 @@ def config_for(workspace: Path):
 
 
 class CancellableProcessLlm(ProcessLlm):
-    async def chat(self, messages, model, *, tools=None, on_content_delta=None):
+    async def chat(self, messages, model, *, tools=None, on_content_delta=None, on_reasoning_delta=None):
         if "CANCEL_PROCESS" not in json.dumps(messages):
             return await super().chat(
                 messages,

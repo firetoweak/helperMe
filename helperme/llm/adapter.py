@@ -72,6 +72,7 @@ class LiteLLMAdapter:
         tools=None,
         *,
         on_content_delta=None,
+        on_reasoning_delta=None,
     ) -> LLMCallResult:
         request_messages = encode_images(messages, self._read_attachment)
         content_parts: list[str] = []
@@ -87,6 +88,11 @@ class LiteLLMAdapter:
                         emitted = on_content_delta(content)
                         if isawaitable(emitted):
                             await emitted
+                reasoning = self._reasoning_delta(chunk)
+                if reasoning and on_reasoning_delta is not None:
+                    emitted = on_reasoning_delta(reasoning)
+                    if isawaitable(emitted):
+                        await emitted
             completion = self._litellm.stream_chunk_builder(
                 chunks,
                 messages=request_messages,
@@ -197,6 +203,39 @@ class LiteLLMAdapter:
                 "model stream content delta must be str|null",
             )
         return content
+
+    @staticmethod
+    def _reasoning_delta(chunk: Any) -> str:
+        try:
+            choices = chunk.choices
+        except AttributeError as exc:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream chunk is missing choices",
+            ) from exc
+        if type(choices) is not list:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream chunk choices must be an array",
+            )
+        if not choices:
+            return ""
+        try:
+            delta = choices[0].delta
+        except AttributeError as exc:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream choice delta is invalid",
+            ) from exc
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning is None:
+            return ""
+        if type(reasoning) is not str:
+            raise InvalidLLMResponse(
+                "invalid_llm_response",
+                "model stream reasoning delta must be str|null",
+            )
+        return reasoning
 
     def _parse_response(self, message: Any) -> LLMResponse:
         try:

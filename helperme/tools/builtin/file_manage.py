@@ -81,5 +81,6 @@ def create_file_manage_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
             description=WRITE_FILE_DESCRIPTION,
             parameters=PydanticParameters(WriteFileInput),
             handler=write_file,
+            requires_authorization=True,
         )
     ]

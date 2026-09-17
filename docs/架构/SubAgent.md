@@ -88,7 +88,7 @@ Scheduler 报告两种终局：静止（`on_quiesced`）与已识别的失败（
 
 `READONLY_TOOL_NAMES` 显式列举子 Session 能看见的全部工具，而不是排除写工具：新增任何工具默认进不来，要进必须有人明确加。`execute_command` 永远不在其中——一条命令是否只读无法静态判断。`delegate` 和 `reclaim` 也不在其中，递归委派和收回兄弟因此被同一份名单挡住。名单里没有 MCP 工具，`decision.py` 按 `tool_names` 过滤 schemas，所以子 Session 目前一个 MCP 工具都拿不到。
 
-**只读不是保守选择，是当前唯一的安全边界。** 内置工具全部使用 `ToolSpec.requires_authorization` 的默认值 `False`，只有 MCP 工具与控制面走授权闸；子 Session 一旦拿到写工具就是无闸直写。它不是授权难题的妥协解法。
+**只读不是保守选择，是当前唯一的安全边界。** 子 Session 仍只看见只读名单。父 Session 的写工具现在标了 `requires_authorization`，那是 Web 总闸的事，见 [Command 授权](Command授权.md)；子 Session 拿不到写工具，不能靠授权闸当安全边界。它不是授权难题的妥协解法。
 
 **单写者是委派树内的不变量，不是全局不变量。** 分界在于并行由谁制造：父决定开几个子，这个并行是 Agent 造的，用户没参与，Agent 必须为它负责；用户同时开两条顶层 Session 是在开两个完整任务，写冲突是用户的选择，Agent 不替他兜底。`get_changes` 的契约因此不需要改——它本就只报告工作区快照、明确不做变更归因；需要约束的只是子 Session 的工具白名单。
 

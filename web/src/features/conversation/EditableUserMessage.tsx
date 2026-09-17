@@ -1,16 +1,14 @@
 import {
   ActionIcon,
-  Button,
   Group,
-  Modal,
   Paper,
   Stack,
   Text,
   Textarea,
   Tooltip,
 } from "@mantine/core";
-import { IconPencil } from "@tabler/icons-react";
-import { useState } from "react";
+import { IconArrowUp, IconPencil, IconX } from "@tabler/icons-react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 
 import { AttachmentTile, attachmentUrl } from "./AttachmentTile";
 
@@ -33,107 +31,152 @@ export function EditableUserMessage({
   saving,
   onSave,
 }: EditableUserMessageProps) {
-  const [opened, setOpened] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
   const displayText = text.replace(IMAGE_TOKEN, "").trim();
+  const canSend = !disabled && !saving && draft.trim() !== "";
 
-  function close() {
-    if (!saving) {
-      setOpened(false);
+  useEffect(() => {
+    if (!editing) {
       setDraft(text);
     }
+  }, [editing, text]);
+
+  function close() {
+    if (saving) {
+      return;
+    }
+    setEditing(false);
+    setDraft(text);
   }
 
   async function save() {
     const content = draft.trim();
-    if (!content || content === text) {
+    if (!canSend) {
       return;
     }
     await onSave(content);
-    setOpened(false);
+    setEditing(false);
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void save();
+    }
+  }
+
+  if (editing) {
+    return (
+      <Stack className="user-message-row user-message-editing" gap={8}>
+        {images.length === 0 ? null : (
+          <Group className="user-attachments" gap={8} justify="flex-end">
+            {images.map((attachmentId) => (
+              <AttachmentTile
+                key={attachmentId}
+                name="图片"
+                src={attachmentUrl(sessionId, attachmentId)}
+              />
+            ))}
+          </Group>
+        )}
+        <Paper className="user-edit" px="sm" py={6} radius="lg" withBorder>
+          <Group align="flex-end" gap={8} wrap="nowrap">
+            <Textarea
+              aria-label="编辑消息"
+              autosize
+              autoFocus
+              className="user-edit-input"
+              disabled={saving}
+              maxRows={12}
+              minRows={1}
+              onChange={(event) => setDraft(event.currentTarget.value)}
+              onKeyDown={onKeyDown}
+              value={draft}
+              variant="unstyled"
+            />
+            <Group gap={6} wrap="nowrap">
+              <Tooltip label="取消">
+                <ActionIcon
+                  aria-label="取消编辑"
+                  disabled={saving}
+                  onClick={close}
+                  radius="xl"
+                  size={32}
+                  type="button"
+                  variant="subtle"
+                >
+                  <IconX size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="从这里创建分支并执行">
+                <ActionIcon
+                  aria-label="从这里创建分支并执行"
+                  disabled={!canSend}
+                  loading={saving}
+                  onClick={() => void save()}
+                  radius="xl"
+                  size={32}
+                  type="button"
+                  variant="filled"
+                >
+                  <IconArrowUp size={16} stroke={2.2} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+          </Group>
+        </Paper>
+        <Text c="dimmed" size="xs" ta="right">
+          当前会话会保留；发送后从这条消息之前创建新分支。
+        </Text>
+      </Stack>
+    );
   }
 
   return (
-    <>
-      <Group className="user-message-row" align="flex-start" gap={6} wrap="nowrap">
-        <Tooltip label={disabled ? "连接建立后可编辑" : "编辑并从这里重新执行"}>
-          <ActionIcon
-            aria-label="编辑消息"
-            className="edit-message-button"
-            disabled={disabled}
-            onClick={() => setOpened(true)}
-            radius="xl"
-            size="sm"
-            variant="subtle"
-          >
-            <IconPencil size={14} />
-          </ActionIcon>
-        </Tooltip>
-        <Stack align="flex-end" gap={8}>
-          {images.length === 0 ? null : (
-            <Group className="user-attachments" gap={8} justify="flex-end">
-              {images.map((attachmentId) => (
-                <AttachmentTile
-                  key={attachmentId}
-                  large={images.length === 1 && displayText === ""}
-                  name="图片"
-                  src={attachmentUrl(sessionId, attachmentId)}
-                />
-              ))}
-            </Group>
-          )}
-          {displayText === "" ? null : (
-            <Paper className="user-bubble" px="md" py="sm" radius="xl">
-              <Text className="message-text" lh={1.6} size="sm">
-                {displayText}
-              </Text>
-            </Paper>
-          )}
-        </Stack>
-      </Group>
-      <Modal
-        centered
-        onClose={close}
-        opened={opened}
-        title="编辑消息并重新执行"
-      >
-        <Stack>
-          <Text c="dimmed" size="xs">
-            当前会话会保留；系统将在这条消息之前创建一个完整分支。
-          </Text>
-          {images.length === 0 ? null : (
-            <Group gap={8}>
-              {images.map((attachmentId) => (
-                <AttachmentTile
-                  key={attachmentId}
-                  name="图片"
-                  src={attachmentUrl(sessionId, attachmentId)}
-                />
-              ))}
-            </Group>
-          )}
-          <Textarea
-            autosize
-            autoFocus
-            maxRows={12}
-            minRows={4}
-            onChange={(event) => setDraft(event.currentTarget.value)}
-            value={draft}
-          />
-          <Group justify="flex-end">
-            <Button disabled={saving} onClick={close} variant="subtle">
-              取消
-            </Button>
-            <Button
-              disabled={!draft.trim() || draft.trim() === text}
-              loading={saving}
-              onClick={() => void save()}
-            >
-              创建分支并执行
-            </Button>
+    <Group className="user-message-row" align="flex-start" gap={6} wrap="nowrap">
+      <Tooltip label={disabled ? "连接建立后可编辑" : "编辑或原文重发"}>
+        <ActionIcon
+          aria-label="编辑消息"
+          className="edit-message-button"
+          disabled={disabled}
+          onClick={() => setEditing(true)}
+          radius="xl"
+          size="sm"
+          variant="subtle"
+        >
+          <IconPencil size={14} />
+        </ActionIcon>
+      </Tooltip>
+      <Stack align="flex-end" gap={8}>
+        {images.length === 0 ? null : (
+          <Group className="user-attachments" gap={8} justify="flex-end">
+            {images.map((attachmentId) => (
+              <AttachmentTile
+                key={attachmentId}
+                large={images.length === 1 && displayText === ""}
+                name="图片"
+                src={attachmentUrl(sessionId, attachmentId)}
+              />
+            ))}
           </Group>
-        </Stack>
-      </Modal>
-    </>
+        )}
+        {displayText === "" ? null : (
+          <Paper className="user-bubble" px="md" py="sm" radius="xl">
+            <Text className="message-text" lh={1.6} size="sm">
+              {displayText}
+            </Text>
+          </Paper>
+        )}
+      </Stack>
+    </Group>
   );
 }

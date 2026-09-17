@@ -75,7 +75,8 @@ class _StreamingConsoleOutput:
 
     def render(self) -> str:
         return "\n\n".join(
-            f"助手：{text}" for text in self._previews.values() if text
+            f"助手：{text}" if text else "思考中"
+            for text in self._previews.values()
         )
 
     def cursor_position(self) -> Point:
@@ -108,6 +109,9 @@ class _StreamingConsoleOutput:
         self._previews.pop((session_id, output_id), None)
         self._invalidate()
         self._write(f"\n助手：{text}")
+
+    def note(self, text: str) -> None:
+        self._write(f"\n{text}")
 
 
 class _ContextMeter:
@@ -221,6 +225,7 @@ async def run_runtime_console() -> None:
         subagent_activity_sink=context_meter.update_subagent_activity,
         conversation_status_sink=context_meter.update_conversation_status,
         preview_sink=stream_output.preview,
+        session_failed_sink=lambda _session_id, message: stream_output.note(message),
     ) as app:
         config = app.config
         image_paste = ImagePaste(AttachmentGateway(app.sessions_root))

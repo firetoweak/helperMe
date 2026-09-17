@@ -112,6 +112,9 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
     async def preview_sink(target, phase, output_id, text):
         await peer.send(("preview", target, phase, output_id, text))
 
+    async def thinking_sink(target, phase, output_id, text):
+        await peer.send(("thinking", target, phase, output_id, text))
+
     # These callbacks only affect display; queue their IPC in the same event loop.
     notifications: set[asyncio.Task] = set()
 
@@ -134,7 +137,10 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
         context_usage_sink=lambda *values: notify("usage", *values),
         subagent_activity_sink=lambda *values: notify("activity", *values),
         tool_progress_sink=lambda *values: notify("tool", *values),
+        authorization_required_sink=lambda *values: notify("authorization", *values),
+        session_failed_sink=lambda *values: notify("session_failed", *values),
         preview_sink=preview_sink,
+        thinking_sink=thinking_sink,
         session_transport=peer.request,
         home=home,
     )

@@ -1,9 +1,11 @@
 import {
   Alert,
   Box,
+  Button,
   Center,
   Group,
   Loader,
+  Modal,
   ScrollArea,
   Stack,
   Text,
@@ -12,66 +14,84 @@ import {
 } from "@mantine/core";
 import {
   IconAlertCircle,
+  IconCheck,
   IconMessageCircle,
   IconSparkles,
+  IconX,
 } from "@tabler/icons-react";
 import { useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
 import {
-  useCancelTurnMutation,
+  useAuthorizeCommandMutation,
   useEditAndForkMutation,
   useGetConversationQuery,
   useSelectSessionMutation,
   useSendInputMutation,
+  useSetAutoAuthorizeMutation,
+  useSetPausedMutation,
+  useRetryTurnMutation,
 } from "../../api/helpermeApi";
 import { useAppDispatch, useAppSelector } from "../../app/hooks";
-import { lockDraft, viewing } from "../../realtime/runtimeSlice";
+import {
+  authorizationResolved,
+  liveSessionId,
+  lockDraft,
+  viewing,
+} from "../../realtime/runtimeSlice";
 import { Composer } from "./Composer";
 import { EditableUserMessage } from "./EditableUserMessage";
 import { ExecutionProcess } from "./ExecutionProcess";
 import { MarkdownMessage } from "./MarkdownMessage";
-import { timelineTurns } from "./timelineTurns";
+import { ThinkingBlock } from "./ThinkingBlock";
+import { timelineTurns, turnNeedsThinkingHint, type TimelineTurn } from "./timelineTurns";
 import { useFollowOutput } from "./useFollowOutput";
 import { visibleTimeline } from "./visibleTimeline";
 
 export function Conversation() {
   const dispatch = useAppDispatch();
-  const navigate = useNavigate();
   const { sessionId: routeSessionId } = useParams();
-  const sessionId = routeSessionId ?? "";
+  const routeId = routeSessionId ?? "";
   const connectionId = useAppSelector((state) => state.runtime.connectionId);
   const ownerSessionId = useAppSelector((state) => state.runtime.ownerSessionId);
   const draftSessionId = useAppSelector((state) => state.runtime.draftSessionId);
+  const superseded = useAppSelector((state) => state.runtime.supersededSessions);
+  const sessionId = liveSessionId(routeId, superseded);
   const runtime = useAppSelector((state) => state.runtime.sessions[sessionId]);
-  const followOutput = useFollowOutput(
-    routeSessionId,
-    runtime?.activity === "running" || (runtime?.activePreview ?? null) !== null,
-  );
   const selected = useGetConversationQuery(sessionId, {
     skip: routeSessionId === undefined,
   });
+  const followOutput = useFollowOutput(
+    routeSessionId,
+    runtime?.activity === "running" ||
+      (runtime?.activePreview ?? null) !== null ||
+      (runtime?.activeThinking ?? null) !== null,
+    selected.currentData !== undefined,
+  );
   const [selectSession] = useSelectSessionMutation();
   const [sendInput, sending] = useSendInputMutation();
   const [editAndFork, editing] = useEditAndForkMutation();
-  const [cancelTurn, cancelling] = useCancelTurnMutation();
+  const [authorizeCommand, authorizing] = useAuthorizeCommandMutation();
+  const [setAutoAuthorize, autoAuthorizing] = useSetAutoAuthorizeMutation();
+  const [setPaused, pausing] = useSetPausedMutation();
+  const [retryTurn, retrying] = useRetryTurnMutation();
 
   useEffect(() => {
-    dispatch(viewing(routeSessionId ?? null));
+    dispatch(viewing(sessionId === "" ? null : sessionId));
     return () => {
       dispatch(viewing(null));
     };
-  }, [dispatch, routeSessionId]);
+  }, [dispatch, sessionId]);
 
   useEffect(() => {
     if (connectionId === null || routeSessionId === undefined) {
       return;
     }
-    if (ownerSessionId === routeSessionId) {
+    if (ownerSessionId === sessionId) {
       return;
     }
-    void selectSession({ connectionId, sessionId: routeSessionId });
-  }, [connectionId, ownerSessionId, routeSessionId, selectSession]);
+    void selectSession({ connectionId, sessionId });
+  }, [connectionId, ownerSessionId, routeSessionId, selectSession, sessionId]);
 
   const conversation = selected.currentData;
   useEffect(() => {
@@ -126,9 +146,12 @@ export function Conversation() {
     runtime?.committed ?? {},
     runtime?.activePreview ?? null,
     runtime?.tools ?? {},
+    runtime?.committedThinking ?? {},
+    runtime?.activeThinking ?? null,
   );
   const turns = timelineTurns(items);
   const running = runtime?.activity === "running";
+  const lastTurnKey = turns.at(-1)?.key;
 
   async function send(text: string, artifactRefs: string[]) {
     if (connectionId === null) {
@@ -148,15 +171,40 @@ export function Conversation() {
     if (connectionId === null) {
       throw new Error("Web connection is not active");
     }
-    const fork = await editAndFork({
+    await editAndFork({
       connectionId,
       sessionId,
       messageId,
       deliveryId: `web-${crypto.randomUUID()}`,
       text,
     }).unwrap();
-    navigate(`/sessions/${fork.session_id}`);
   }
+
+  async function authorize(commandId: string, approved: boolean) {
+    if (connectionId === null) {
+      return;
+    }
+    try {
+      await authorizeCommand({
+        connectionId,
+        sessionId,
+        commandId,
+        approved,
+      }).unwrap();
+    } finally {
+      dispatch(authorizationResolved({ sessionId, commandId }));
+    }
+  }
+
+  async function toggleAutoAuthorize(enabled: boolean) {
+    if (connectionId === null) {
+      return;
+    }
+    await setAutoAuthorize({ connectionId, sessionId, enabled }).unwrap();
+  }
+
+  const pendingAuthorizations = Object.values(runtime?.authorizations ?? {});
+  const activeAuthorization = pendingAuthorizations[0];
 
   return (
     <Box component="section" className="conversation">
@@ -182,7 +230,9 @@ export function Conversation() {
           viewportRef={followOutput.viewportRef}
         >
           <Stack className="timeline" gap="lg" ref={followOutput.contentRef}>
-            {turns.map((turn) => (
+            {turns.map((turn) => {
+              const thinking = replyThinking(turn);
+              return (
               <Stack gap="lg" key={turn.key}>
                 {turn.user === null ? null : (
                   <Box component="article" className="message message-user">
@@ -199,10 +249,37 @@ export function Conversation() {
                 {turn.process.length === 0 ? null : (
                   <ExecutionProcess
                     complete={turn.final !== null}
+                    onAuthorize={authorize}
                     steps={turn.process}
                   />
                 )}
-                {turn.active === null && turn.final === null ? null : (
+                {thinking === null ? null : (
+                  <ThinkingBlock
+                    streaming={thinking.thinkingPending}
+                    text={thinking.thinking}
+                  />
+                )}
+                {turnNeedsThinkingHint(turn, {
+                  latest: turn.key === lastTurnKey,
+                  running,
+                }) ? (
+                  <Box
+                    component="article"
+                    className="message message-assistant"
+                  >
+                    <Group align="center" gap="sm" wrap="nowrap">
+                      <ThemeIcon radius="xl" size={28} variant="subtle">
+                        <IconSparkles size={15} />
+                      </ThemeIcon>
+                      <Group gap={8} wrap="nowrap">
+                        <Loader color="sage" size={12} />
+                        <Text c="dimmed" size="sm">
+                          思考中
+                        </Text>
+                      </Group>
+                    </Group>
+                  </Box>
+                ) : showReply(turn) ? (
                   <Box
                     component="article"
                     className="message message-assistant"
@@ -218,14 +295,41 @@ export function Conversation() {
                       />
                     </Group>
                   </Box>
-                )}
+                ) : null}
               </Stack>
-            ))}
+              );
+            })}
           </Stack>
         </ScrollArea>
       )}
       <Box className="composer-dock">
-        {sending.isError || editing.isError ? (
+        {runtime?.lastError == null ? null : (
+          <Alert
+            className="composer-error"
+            color="red"
+            icon={<IconAlertCircle size={16} />}
+            py="xs"
+          >
+            <Group gap="sm" justify="space-between" wrap="nowrap">
+              <Text size="sm">{runtime.lastError}</Text>
+              <Button
+                disabled={connectionId === null}
+                loading={retrying.isLoading}
+                onClick={() => {
+                  if (connectionId === null) {
+                    return;
+                  }
+                  void retryTurn({ connectionId, sessionId }).unwrap();
+                }}
+                size="compact-xs"
+                variant="white"
+              >
+                再试
+              </Button>
+            </Group>
+          </Alert>
+        )}
+        {sending.isError || editing.isError || retrying.isError ? (
           <Alert
             className="composer-error"
             color="red"
@@ -237,7 +341,9 @@ export function Conversation() {
                   editing.error,
                   "消息编辑失败，未能从这条消息创建新分支。",
                 )
-              : "消息发送失败，请确认后端连接后重试。"}
+              : retrying.isError
+                ? requestErrorMessage(retrying.error, "再试失败，请确认后端连接后重试。")
+                : "消息发送失败，请确认后端连接后重试。"}
           </Alert>
         ) : null}
         <Composer
@@ -246,18 +352,88 @@ export function Conversation() {
           disabled={connectionId === null}
           sending={sending.isLoading}
           running={running === true}
-          cancelling={cancelling.isLoading}
+          paused={conversation.session.paused}
+          shouldWake={
+            conversation.session.should_wake && runtime?.lastError == null
+          }
+          pauseBusy={pausing.isLoading}
+          autoAuthorize={conversation.session.auto_authorize}
+          autoAuthorizeBusy={autoAuthorizing.isLoading}
+          onToggleAutoAuthorize={toggleAutoAuthorize}
           onSend={send}
-          onCancel={() => {
+          onSetPaused={(nextPaused) => {
             if (connectionId === null) {
               return;
             }
-            void cancelTurn({ connectionId, sessionId }).unwrap();
+            void setPaused({
+              connectionId,
+              sessionId,
+              paused: nextPaused,
+            }).unwrap();
           }}
         />
       </Box>
+      <Modal
+        centered
+        closeOnClickOutside={false}
+        onClose={() => {
+          if (activeAuthorization !== undefined) {
+            dispatch(
+              authorizationResolved({
+                sessionId,
+                commandId: activeAuthorization.commandId,
+              }),
+            );
+          }
+        }}
+        opened={activeAuthorization !== undefined}
+        title="等待授权"
+      >
+        {activeAuthorization === undefined ? null : (
+          <Stack gap="md">
+            <Text ff="monospace" fw={600}>
+              {activeAuthorization.name}
+            </Text>
+            <Text c="dimmed" className="pre-wrap" ff="monospace" fz={12}>
+              {JSON.stringify(activeAuthorization.arguments, null, 2)}
+            </Text>
+            <Group justify="flex-end" gap="xs">
+              <Button
+                color="gray"
+                disabled={authorizing.isLoading}
+                leftSection={<IconX size={14} />}
+                onClick={() => authorize(activeAuthorization.commandId, false)}
+              >
+                拒绝
+              </Button>
+              <Button
+                color="sage"
+                disabled={authorizing.isLoading}
+                leftSection={<IconCheck size={14} />}
+                loading={authorizing.isLoading}
+                onClick={() => authorize(activeAuthorization.commandId, true)}
+              >
+                允许
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
     </Box>
   );
+}
+
+function replyThinking(turn: TimelineTurn) {
+  const step = turn.active ?? turn.final;
+  if (step === null || step.thinking === null) {
+    return null;
+  }
+  return { thinking: step.thinking, thinkingPending: step.thinkingPending };
+}
+
+function showReply(turn: TimelineTurn) {
+  const step = turn.active ?? turn.final;
+  return step !== null && (step.text ?? "").trim() !== "";
 }
 
 function shortId(id: string) {

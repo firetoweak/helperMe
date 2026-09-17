@@ -73,5 +73,6 @@ class LLMApi(Protocol):
         tools: list[dict[str, object]] | None = None,
         *,
         on_content_delta: ContentDeltaSink | None = None,
+        on_reasoning_delta: ContentDeltaSink | None = None,
     ) -> LLMCallResult:
         ...

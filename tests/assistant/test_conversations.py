@@ -13,6 +13,7 @@ from helperme.runtime import (
     Command,
     CommandOutcome,
     CommandOutcomeReceived,
+    CommandRejected,
     DispatchAttemptStarted,
     Event,
     InvokeTool,
@@ -93,6 +94,38 @@ class ConversationProjectionTest(unittest.TestCase):
         self.assertEqual(step.tools[0].command_id, "cmd-read")
         self.assertEqual(step.tools[0].name, "read_file")
         self.assertEqual(step.tools[0].status, "succeeded")
+        self.assertIsNone(step.thinking)
+
+    def test_projects_reasoning_content_as_step_thinking(self):
+        events = (
+            event(1, "user-1", UserMessageReceived("你好")),
+            event(
+                2,
+                "step-1",
+                StepCommitted(
+                    Step(
+                        step_id="decision-1",
+                        trigger_event_id="user-1",
+                        decision_cursor=1,
+                        basis_state_version="basis",
+                        observed_journal_position=1,
+                        decision=ModelDecision("世界"),
+                        commands=(),
+                    ),
+                    {
+                        "message_extensions": {
+                            "reasoning_content": "  先确认目标  ",
+                        }
+                    },
+                ),
+            ),
+        )
+        conversation = project_conversation(
+            "session-1",
+            events,
+            session=SessionView("waiting", ("user_message",), (), False),
+        )
+        self.assertEqual(conversation.items[1].thinking, "先确认目标")
 
     def test_tool_without_outcome_is_running_and_failed_outcome_keeps_error(self):
         search = Command("cmd-search", InvokeTool("web_search"))
@@ -190,6 +223,39 @@ class ConversationProjectionTest(unittest.TestCase):
         self.assertEqual(conversation.items[0].text, "[Image #1]")
         self.assertEqual(conversation.items[0].images, (attachment_id,))
 
+    def test_pending_authorization_and_rejection_are_distinct_statuses(self):
+        write = Command(
+            "cmd-write",
+            InvokeTool("write_file", (("path", "a.md"), ("content", "x"))),
+            requires_authorization=True,
+        )
+        events = (
+            event(
+                1,
+                "step-1",
+                committed_step("decision-1", "user-1", "", (write,)),
+            ),
+        )
+        waiting = project_conversation(
+            "session-1",
+            events,
+            session=SessionView(
+                "waiting",
+                ("authorization:cmd-write",),
+                ("cmd-write",),
+                False,
+            ),
+        )
+        self.assertEqual(waiting.items[0].tools[0].status, "awaiting_authorization")
+        self.assertEqual(waiting.items[0].tools[0].arguments, {"path": "a.md", "content": "x"})
+
+        rejected = project_conversation(
+            "session-1",
+            events + (event(2, "reject-1", CommandRejected("cmd-write")),),
+            session=SessionView("waiting", ("user_message",), (), False),
+        )
+        self.assertEqual(rejected.items[0].tools[0].status, "rejected")
+
 
 class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
     async def test_omits_journals_without_user_messages(self):
@@ -204,6 +270,12 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
         class Idle:
             def activity(self, session_id):
                 return "idle"
+
+            def web_auto_authorize(self, session_id):
+                return session_id == "spoken"
+
+            def is_paused(self, session_id):
+                return session_id == "spoken"
 
         with TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
@@ -220,6 +292,9 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
                 )
             )
             listed = await queries.list_sessions()
+            spoken = await queries.conversation("spoken")
 
         self.assertEqual([item.session_id for item in listed], ["spoken"])
         self.assertEqual(listed[0].title, "你好")
+        self.assertTrue(spoken.session.auto_authorize)
+        self.assertTrue(spoken.session.paused)

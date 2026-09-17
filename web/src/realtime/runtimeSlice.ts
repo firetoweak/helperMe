@@ -15,12 +15,23 @@ export type LiveTool = {
   status: ToolStatus;
 };
 
+export type PendingAuthorization = {
+  sessionId: string;
+  commandId: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
 export type SessionRuntime = {
-  activity: SessionActivity;
+  activity: SessionActivity | null;
+  lastError: string | null;
   activePreview: ActivePreview | null;
+  activeThinking: ActivePreview | null;
   unread: number;
   committed: Record<string, string>;
+  committedThinking: Record<string, string>;
   tools: Record<string, LiveTool>;
+  authorizations: Record<string, PendingAuthorization>;
   contextUsage: { used: number; limit: number } | null;
 };
 
@@ -29,6 +40,7 @@ type RuntimeState = {
   viewingSessionId: string | null;
   ownerSessionId: string | null;
   draftSessionId: string | null;
+  supersededSessions: Record<string, string>;
   sessions: Record<string, SessionRuntime>;
 };
 
@@ -37,6 +49,7 @@ const initialState: RuntimeState = {
   viewingSessionId: null,
   ownerSessionId: null,
   draftSessionId: null,
+  supersededSessions: {},
   sessions: {},
 };
 
@@ -46,15 +59,39 @@ function runtimeOf(state: RuntimeState, sessionId: string): SessionRuntime {
     return current;
   }
   const created: SessionRuntime = {
-    activity: "idle",
+    activity: null,
+    lastError: null,
     activePreview: null,
+    activeThinking: null,
     unread: 0,
     committed: {},
+    committedThinking: {},
     tools: {},
+    authorizations: {},
     contextUsage: null,
   };
   state.sessions[sessionId] = created;
   return created;
+}
+
+export function liveSessionId(
+  sessionId: string,
+  superseded: Record<string, string>,
+): string {
+  let current = sessionId;
+  const seen = new Set<string>();
+  while (superseded[current] !== undefined && !seen.has(current)) {
+    seen.add(current);
+    current = superseded[current];
+  }
+  return current;
+}
+
+export function isForkIdentity(
+  sessionId: string,
+  superseded: Record<string, string>,
+): boolean {
+  return Object.values(superseded).includes(sessionId);
 }
 
 const runtimeSlice = createSlice({
@@ -85,11 +122,41 @@ const runtimeSlice = createSlice({
     bindOwner(state, action: PayloadAction<string>) {
       state.ownerSessionId = action.payload;
     },
+    hydrateSuperseded(state, action: PayloadAction<Record<string, string>>) {
+      state.supersededSessions = action.payload;
+    },
+    supersedeSession(
+      state,
+      action: PayloadAction<{ from: string; to: string }>,
+    ) {
+      state.supersededSessions[action.payload.from] = action.payload.to;
+    },
+    clearLiveOutput(state, action: PayloadAction<string>) {
+      const session = runtimeOf(state, action.payload);
+      session.lastError = null;
+      session.activePreview = null;
+      session.activeThinking = null;
+      session.committed = {};
+      session.committedThinking = {};
+      session.tools = {};
+      session.authorizations = {};
+      session.contextUsage = null;
+    },
     sessionActivity(
       state,
       action: PayloadAction<{ sessionId: string; activity: SessionActivity }>,
     ) {
-      runtimeOf(state, action.payload.sessionId).activity = action.payload.activity;
+      const session = runtimeOf(state, action.payload.sessionId);
+      session.activity = action.payload.activity;
+      if (action.payload.activity === "running") {
+        session.lastError = null;
+      }
+    },
+    sessionFailed(
+      state,
+      action: PayloadAction<{ sessionId: string; message: string }>,
+    ) {
+      runtimeOf(state, action.payload.sessionId).lastError = action.payload.message;
     },
     previewStarted(
       state,
@@ -122,6 +189,42 @@ const runtimeSlice = createSlice({
         session.activePreview = null;
       }
     },
+    thinkingStarted(
+      state,
+      action: PayloadAction<{ sessionId: string; outputId: string }>,
+    ) {
+      runtimeOf(state, action.payload.sessionId).activeThinking = {
+        outputId: action.payload.outputId,
+        text: "",
+      };
+    },
+    thinkingDelta(
+      state,
+      action: PayloadAction<{ sessionId: string; outputId: string; text: string }>,
+    ) {
+      const session = runtimeOf(state, action.payload.sessionId);
+      if (
+        session.activeThinking === null ||
+        session.activeThinking.outputId !== action.payload.outputId
+      ) {
+        return;
+      }
+      session.activeThinking.text += action.payload.text;
+    },
+    thinkingClosed(
+      state,
+      action: PayloadAction<{ sessionId: string; outputId: string }>,
+    ) {
+      const session = runtimeOf(state, action.payload.sessionId);
+      if (session.activeThinking?.outputId !== action.payload.outputId) {
+        return;
+      }
+      if (session.activeThinking.text.trim() !== "") {
+        session.committedThinking[action.payload.outputId] =
+          session.activeThinking.text;
+      }
+      session.activeThinking = null;
+    },
     outputFinal(
       state,
       action: PayloadAction<{ sessionId: string; outputId: string; text: string }>,
@@ -151,6 +254,29 @@ const runtimeSlice = createSlice({
         status: action.payload.status,
       };
     },
+    authorizationRequired(
+      state,
+      action: PayloadAction<PendingAuthorization>,
+    ) {
+      const { sessionId, commandId, name, arguments: args } = action.payload;
+      const session = runtimeOf(state, sessionId);
+      session.authorizations[commandId] = {
+        sessionId,
+        commandId,
+        name,
+        arguments: args,
+      };
+      if (state.viewingSessionId !== sessionId) {
+        session.unread += 1;
+      }
+    },
+    authorizationResolved(
+      state,
+      action: PayloadAction<{ sessionId: string; commandId: string }>,
+    ) {
+      const session = runtimeOf(state, action.payload.sessionId);
+      delete session.authorizations[action.payload.commandId];
+    },
     contextUsage(
       state,
       action: PayloadAction<{ sessionId: string; used: number; limit: number }>,
@@ -170,12 +296,21 @@ export const {
   setDraftSession,
   lockDraft,
   bindOwner,
+  hydrateSuperseded,
+  supersedeSession,
+  clearLiveOutput,
   sessionActivity,
+  sessionFailed,
   previewStarted,
   previewDelta,
   previewAborted,
+  thinkingStarted,
+  thinkingDelta,
+  thinkingClosed,
   outputFinal,
   toolProgress,
+  authorizationRequired,
+  authorizationResolved,
   contextUsage,
 } = runtimeSlice.actions;
 export default runtimeSlice.reducer;

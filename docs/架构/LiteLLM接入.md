@@ -54,11 +54,11 @@ LiteLLM 对象、Pydantic 类型和异常类型不得越过 `helperme/llm`。Ada
 
 ## 流式调用
 
-`LiteLLMAdapter` 默认使用 LiteLLM 流式调用，不保留另一条非流式主链路。`LLMApi.chat()` 可以接收可选的 `on_content_delta`；它只观察标准化后的正文增量，Compact、Skill 摘要等不需要展示的调用不传入观察者。
+`LiteLLMAdapter` 默认使用 LiteLLM 流式调用，不保留另一条非流式主链路。`LLMApi.chat()` 可以接收可选的 `on_content_delta` 与 `on_reasoning_delta`。前者只观察标准化后的正文增量；后者只观察 `reasoning_content` 增量，不混入正文。Compact、Skill 摘要等不需要展示的调用不传入观察者。
 
 所有 chunk 仍由 LiteLLM 的 `stream_chunk_builder` 组装为一次完整响应，再进入现有 `LLMResponse`、usage 与 `message_extensions` 校验。HelperMe 不自行拼接工具调用、推理字段或 Provider 扩展。已经交给观察者的正文增量拼接后必须与最终 `LLMResponse.content` 完全一致，否则整次响应无效。
 
-正文增量只是调用期间的可丢弃观察结果，不是 Event、ModelDecision 或第二事实源。Assistant 用当前 trigger event id 作为稳定 `output_id`，经 Worker → Host 的单向 preview 信号送到 Channel；Runtime API、Event 和状态投影均不感知流式展示。
+正文与思考增量都是调用期间的可丢弃观察结果，不是 Event、ModelDecision 或第二事实源。Assistant 用当前 trigger event id 作为稳定 `output_id`，正文经 Worker → Host 的单向 preview 信号送到 Channel，思考走并行的 thinking 信号。Runtime API、Event 和状态投影均不感知流式展示。Web 用专用思考块呈现思考流，不把它写成助手回复。
 
 ## 持久化与重放
 

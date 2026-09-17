@@ -10,7 +10,15 @@ import reducer, {
   previewDelta,
   previewStarted,
   sessionActivity,
+  sessionFailed,
+  thinkingClosed,
+  thinkingDelta,
+  thinkingStarted,
   setDraftSession,
+  supersedeSession,
+  liveSessionId,
+  isForkIdentity,
+  clearLiveOutput,
   toolProgress,
   viewing,
 } from "./runtimeSlice";
@@ -35,6 +43,43 @@ describe("runtimeSlice", () => {
     expect(state.sessions.s1.activePreview).toBeNull();
     expect(state.sessions.s1.committed.out).toBe("你好");
     expect(state.sessions.s1.unread).toBe(1);
+  });
+
+  it("streams thinking separately from assistant preview text", () => {
+    let state = reducer(
+      undefined,
+      thinkingStarted({ sessionId: "s1", outputId: "out" }),
+    );
+    state = reducer(
+      state,
+      thinkingDelta({ sessionId: "s1", outputId: "out", text: "想" }),
+    );
+    expect(state.sessions.s1.activeThinking).toEqual({
+      outputId: "out",
+      text: "想",
+    });
+    expect(state.sessions.s1.activePreview).toBeNull();
+
+    state = reducer(state, thinkingClosed({ sessionId: "s1", outputId: "out" }));
+    expect(state.sessions.s1.activeThinking).toBeNull();
+    expect(state.sessions.s1.committedThinking.out).toBe("想");
+  });
+
+  it("does not treat preview or thinking as an idle activity overlay", () => {
+    let state = reducer(
+      undefined,
+      thinkingStarted({ sessionId: "s1", outputId: "out" }),
+    );
+    expect(state.sessions.s1.activity).toBeNull();
+
+    state = reducer(state, previewStarted({ sessionId: "s1", outputId: "out" }));
+    expect(state.sessions.s1.activity).toBeNull();
+
+    state = reducer(
+      state,
+      sessionActivity({ sessionId: "s1", activity: "running" }),
+    );
+    expect(state.sessions.s1.activity).toBe("running");
   });
 
   it("marks unread only when the session is not being viewed", () => {
@@ -85,6 +130,33 @@ describe("runtimeSlice", () => {
     expect(state.sessions.s1.unread).toBe(0);
   });
 
+  it("keeps a run failure off the timeline and clears it when the session runs again", () => {
+    let state = reducer(
+      undefined,
+      sessionFailed({
+        sessionId: "s1",
+        message: "运行失败：模型服务暂时不可用",
+      }),
+    );
+    expect(state.sessions.s1.lastError).toBe("运行失败：模型服务暂时不可用");
+    expect(state.sessions.s1.committed).toEqual({});
+
+    state = reducer(
+      state,
+      sessionFailed({
+        sessionId: "s1",
+        message: "运行失败：模型请求失败",
+      }),
+    );
+    expect(state.sessions.s1.lastError).toBe("运行失败：模型请求失败");
+
+    state = reducer(state, sessionActivity({ sessionId: "s1", activity: "idle" }));
+    expect(state.sessions.s1.lastError).toBe("运行失败：模型请求失败");
+
+    state = reducer(state, sessionActivity({ sessionId: "s1", activity: "running" }));
+    expect(state.sessions.s1.lastError).toBeNull();
+  });
+
   it("stores context usage on the owning session", () => {
     let state = reducer(undefined, viewing("s2"));
     state = reducer(
@@ -112,5 +184,25 @@ describe("runtimeSlice", () => {
     expect(state.connectionId).toBeNull();
     expect(state.ownerSessionId).toBeNull();
     expect(state.draftSessionId).toBe("draft-1");
+  });
+
+  it("follows a fork chain to the live session and marks fork identities", () => {
+    let state = reducer(
+      undefined,
+      supersedeSession({ from: "parent", to: "child" }),
+    );
+    state = reducer(state, supersedeSession({ from: "child", to: "grandchild" }));
+    expect(liveSessionId("parent", state.supersededSessions)).toBe("grandchild");
+    expect(isForkIdentity("parent", state.supersededSessions)).toBe(false);
+    expect(isForkIdentity("child", state.supersededSessions)).toBe(true);
+    expect(isForkIdentity("grandchild", state.supersededSessions)).toBe(true);
+  });
+
+  it("clears live output so a truncated edit does not keep later previews", () => {
+    let state = reducer(undefined, previewStarted({ sessionId: "s1", outputId: "out" }));
+    state = reducer(state, outputFinal({ sessionId: "s1", outputId: "out", text: "old" }));
+    state = reducer(state, clearLiveOutput("s1"));
+    expect(state.sessions.s1.activePreview).toBeNull();
+    expect(state.sessions.s1.committed).toEqual({});
   });
 });

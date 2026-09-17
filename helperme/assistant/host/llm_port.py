@@ -35,6 +35,7 @@ class WorkerLlmPort:
         tools=None,
         *,
         on_content_delta=None,
+        on_reasoning_delta=None,
     ):
         request_messages = encode_images(messages, self._read_attachment)
 
@@ -42,6 +43,13 @@ class WorkerLlmPort:
             if on_content_delta is None:
                 return
             emitted = on_content_delta(text)
+            if isawaitable(emitted):
+                await emitted
+
+        async def on_reasoning(text: str) -> None:
+            if on_reasoning_delta is None:
+                return
+            emitted = on_reasoning_delta(text)
             if isawaitable(emitted):
                 await emitted
 
@@ -53,21 +61,28 @@ class WorkerLlmPort:
                 "model": model,
                 "tools": tools,
                 "stream": on_content_delta is not None,
+                "stream_reasoning": on_reasoning_delta is not None,
             },
             on_delta=on_delta if on_content_delta is not None else None,
+            on_reasoning_delta=(
+                on_reasoning if on_reasoning_delta is not None else None
+            ),
         )
         if payload["ok"]:
             return decode_llm_result(payload["result"])
         raise decode_llm_error(payload["error"])
 
 
-async def complete_llm_chat(llm, arguments, on_delta):
+async def complete_llm_chat(llm, arguments, on_delta, on_reasoning_delta=None):
     try:
         result = await llm.chat(
             arguments["messages"],
             arguments["model"],
             tools=arguments["tools"],
             on_content_delta=on_delta if arguments["stream"] else None,
+            on_reasoning_delta=(
+                on_reasoning_delta if arguments.get("stream_reasoning") else None
+            ),
         )
     except Exception as error:
         return {"ok": False, "error": encode_llm_error(error)}

@@ -178,6 +178,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.output_ids = []
         self.previews = []
         self.delivery_order = []
+        self.activities = []
         self.host = self.new_host()
 
     def new_host(self):
@@ -190,6 +191,9 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
             self.previews.append(values)
             self.delivery_order.append(("preview", *values))
 
+        def session_activity(session_id, activity):
+            self.activities.append((session_id, activity))
+
         return HostSupervisor(
             self.store,
             partial(config_for, self.root),
@@ -197,6 +201,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
             deliver,
             llm=ProcessLlm(self.root),
             preview_sink=preview,
+            session_activity_sink=session_activity,
         )
 
     async def asyncTearDown(self):
@@ -208,6 +213,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await until(lambda: not self.host.workers and not self.host.watchers)
         await self.host.receive_user_message("one", "hello", delivery_id="input")
         await until(lambda: self.output)
+        self.assertEqual(self.activities[0], ("one", "running"))
         await until(lambda: not self.host.workers and not self.host.watchers)
         await self.host.close()
         self.host = self.new_host()

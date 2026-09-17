@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 
+from helperme.assistant.auto_authorize import AutoAuthorizeStore
+from helperme.assistant.session_pause import SessionPauseStore
 from helperme.assistant.control import (
     AssistantControlPlane,
     ControlApprovalView,
@@ -27,6 +30,8 @@ class SessionView:
     has_active_subagents: bool = False
     control_approval: ControlApprovalView | None = None
     control_message: str | None = None
+    auto_authorize: bool = False
+    paused: bool = False
 
 
 def session_view(
@@ -35,6 +40,8 @@ def session_view(
     control_approval: ControlApprovalView | None = None,
     control_message: str | None = None,
     has_active_subagents: bool = False,
+    auto_authorize: bool = False,
+    paused: bool = False,
 ) -> SessionView:
     return SessionView(
         status=state.status.value,
@@ -49,6 +56,8 @@ def session_view(
         has_active_subagents=has_active_subagents,
         control_approval=control_approval,
         control_message=control_message,
+        auto_authorize=auto_authorize,
+        paused=paused,
     )
 
 
@@ -64,6 +73,7 @@ class AssistantSessions:
         control: AssistantControlPlane,
         management: ManagementSurface,
         subagents: SubAgentHost | None = None,
+        meta_root: Path | None = None,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
@@ -71,6 +81,9 @@ class AssistantSessions:
         self._control = control
         self._management = management
         self._subagents = subagents
+        self._auto_authorize = AutoAuthorizeStore(meta_root)
+        self._pause = SessionPauseStore(meta_root)
+        self._auto_grant: dict[str, bool] = {}
 
     def _view(
         self,
@@ -84,6 +97,8 @@ class AssistantSessions:
             control_approval=self._control.pending_view(state.session_id),
             control_message=control_message,
             has_active_subagents=has_active_subagents,
+            auto_authorize=self._auto_authorize.get(state.session_id),
+            paused=self._pause.get(state.session_id),
         )
 
     async def create(self, session_id: str) -> SessionView:
@@ -104,7 +119,7 @@ class AssistantSessions:
             pending_subagents = await self._subagents.rehydrate(session_id)
         if self._subagents is not None and self._subagents.has_returned(session_id):
             return self._view(state)
-        if self._view(state).should_wake:
+        if self._view(state).should_wake and not self._pause.get(session_id):
             await self._scheduler.wake(session_id)
         elif self._subagents is not None:
             await self._subagents.on_quiesced(session_id, state)
@@ -142,6 +157,8 @@ class AssistantSessions:
         source: str = "user",
         artifact_refs: tuple[str, ...] = (),
     ) -> None:
+        if self._pause.get(session_id):
+            self._pause.set(session_id, False)
         await self._runtime.receive_user_message(
             session_id,
             content,
@@ -183,6 +200,19 @@ class AssistantSessions:
         )
         return await self.view(session_id)
 
+    async def resolve_authorization(
+        self,
+        session_id: str,
+        command_id: str,
+        *,
+        approved: bool,
+    ) -> None:
+        if approved:
+            await self._runtime.grant_command(session_id, command_id)
+        else:
+            await self._runtime.reject_command(session_id, command_id)
+        await self._scheduler.wake(session_id)
+
     async def resolve_authorizations(
         self,
         session_id: str,
@@ -196,6 +226,57 @@ class AssistantSessions:
             else:
                 await self._runtime.reject_command(session_id, command_id)
         await self._scheduler.wake(session_id)
+
+    def web_auto_authorize(self, session_id: str) -> bool:
+        return self._auto_authorize.get(session_id)
+
+    def is_auto_authorized(self, session_id: str) -> bool:
+        return self._auto_grant.get(session_id, False)
+
+    async def set_auto_authorize(
+        self,
+        session_id: str,
+        enabled: bool,
+    ) -> SessionView:
+        self._auto_authorize.set(session_id, enabled)
+        return await self.apply_authorization_policy(
+            session_id,
+            preference=bool(enabled),
+            grant=bool(enabled),
+        )
+
+    async def apply_authorization_policy(
+        self,
+        session_id: str,
+        *,
+        preference: bool,
+        grant: bool,
+    ) -> SessionView:
+        self._auto_authorize.remember(session_id, preference)
+        self._auto_grant[session_id] = bool(grant)
+        if grant:
+            await self._grant_pending(session_id)
+        return await self.view(session_id)
+
+    async def _grant_pending(self, session_id: str) -> None:
+        state = await self._runtime.state(session_id)
+        pending = pending_authorization_ids(state)
+        if not pending:
+            return
+        for command_id in pending:
+            await self._runtime.grant_command(session_id, command_id)
+        await self._scheduler.wake(session_id)
+
+    def is_paused(self, session_id: str) -> bool:
+        return self._pause.get(session_id)
+
+    async def set_paused(self, session_id: str, *, paused: bool) -> SessionView:
+        self._pause.set(session_id, paused)
+        if not paused:
+            state = await self._runtime.state(session_id)
+            if self._view(state).should_wake:
+                await self._scheduler.wake(session_id)
+        return await self.view(session_id)
 
     async def cancel_turn(self, session_id: str) -> SessionView:
         await self._scheduler.cancel_turn(session_id)

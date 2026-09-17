@@ -257,17 +257,16 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             bindings,
             SequentialIds(),
         )
+        def _surface(session_id, text):
+            if delivered is None or host.is_subagent(session_id):
+                return None
+            delivered.append((session_id, text))
+            return None
+
         scheduler = LocalSessionRouter(
             runtime,
-            notify=(
-                lambda session_id, text: (
-                    None
-                    if host.is_subagent(session_id)
-                    else delivered.append((session_id, text))
-                )
-                if delivered is not None
-                else None
-            ),
+            notify=_surface,
+            session_failed=_surface,
             on_quiesced=host.on_quiesced,
             on_failed=host.on_failed,
         )

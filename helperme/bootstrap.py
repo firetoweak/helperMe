@@ -47,8 +47,11 @@ async def bootstrap_assistant(
     subagent_activity_sink=None,
     conversation_status_sink=None,
     tool_progress_sink=None,
+    authorization_required_sink=None,
     preview_sink: PreviewSink | None = None,
+    thinking_sink=None,
     session_activity_sink=None,
+    session_failed_sink=None,
 ) -> AsyncIterator[BootstrappedAssistant]:
     install_host_environment()
     config = load_app_config() if app_config is None else app_config
@@ -66,8 +69,11 @@ async def bootstrap_assistant(
         subagent_activity_sink=subagent_activity_sink,
         conversation_status_sink=conversation_status_sink,
         tool_progress_sink=tool_progress_sink,
+        authorization_required_sink=authorization_required_sink,
         preview_sink=preview_sink,
+        thinking_sink=thinking_sink,
         session_activity_sink=session_activity_sink,
+        session_failed_sink=session_failed_sink,
     )
     mcp = build_mcp(home)
     skills = build_skills(

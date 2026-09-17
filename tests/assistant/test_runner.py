@@ -119,19 +119,25 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         model = ScriptedDecisionMaker((fail, lambda _frame: ModelDecision(content="ok")))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
         notified = []
+        failed = []
         scheduler = SettlingScheduler(
             runtime,
             "session",
             notify=lambda session_id, message: notified.append((session_id, message)),
+            session_failed=lambda session_id, message: failed.append(
+                (session_id, message)
+            ),
         )
         await runtime.create_session("session")
         await runtime.receive_user_message("session", "hello", delivery_id="user-1")
         try:
             await scheduler.wake("session")
             await scheduler.join()
-            self.assertEqual(len(notified), 1)
-            self.assertEqual(notified[0][0], "session")
-            self.assertIn("provider rejected request", notified[0][1])
+            self.assertEqual(notified, [])
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(failed[0][0], "session")
+            self.assertIn("provider rejected request", failed[0][1])
+            self.assertTrue(failed[0][1].startswith("运行失败："))
             self.assertIsNone(scheduler._failure)
             self.assertEqual((await runtime.state("session")).status, RuntimeStatus.RUNNABLE)
             await scheduler.wake("session")
@@ -152,18 +158,24 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         model = ScriptedDecisionMaker((fail, lambda _frame: ModelDecision(content="ok")))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
         notified = []
+        failed = []
         scheduler = SettlingScheduler(
             runtime,
             "session",
             notify=lambda session_id, message: notified.append((session_id, message)),
+            session_failed=lambda session_id, message: failed.append(
+                (session_id, message)
+            ),
         )
         await runtime.create_session("session")
         await runtime.receive_user_message("session", "hello", delivery_id="user-1")
         try:
             await scheduler.wake("session")
             await scheduler.join()
-            self.assertEqual(len(notified), 1)
-            self.assertIn("没有给出可用回复或工具调用", notified[0][1])
+            self.assertEqual(notified, [])
+            self.assertEqual(len(failed), 1)
+            self.assertIn("没有给出可用回复或工具调用", failed[0][1])
+            self.assertTrue(failed[0][1].startswith("运行失败："))
             self.assertIsNone(scheduler._failure)
             self.assertEqual((await runtime.state("session")).status, RuntimeStatus.RUNNABLE)
             await scheduler.wake("session")

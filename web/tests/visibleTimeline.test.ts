@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ConversationView } from "../src/api/contracts";
-import { timelineTurns } from "../src/features/conversation/timelineTurns";
+import {
+  timelineTurns,
+  turnNeedsThinkingHint,
+} from "../src/features/conversation/timelineTurns";
 import { visibleTimeline } from "../src/features/conversation/visibleTimeline";
 
 const session = {
@@ -12,6 +15,8 @@ const session = {
   has_active_subagents: false,
   control_approval: null,
   control_message: null,
+  auto_authorize: false,
+  paused: false,
 };
 
 const conversation: ConversationView = {
@@ -30,12 +35,14 @@ const conversation: ConversationView = {
       step_id: "step-1",
       output_id: "user-1",
       text: "journal",
+      thinking: null,
       tools: [
         {
           command_id: "cmd-1",
           name: "read_file",
           status: "running",
           error: null,
+          arguments: { path: "a.py" },
         },
       ],
       occurred_at: "2026-09-15T08:00:01+00:00",
@@ -164,6 +171,27 @@ describe("visibleTimeline", () => {
       tools: [{ commandId: "cmd-1", status: "failed", error: "执行中断，结果未知" }],
     });
   });
+
+  it("streams thinking onto the matching output identity", () => {
+    const empty: ConversationView = {
+      ...conversation,
+      revision: 1,
+      items: [conversation.items[0]],
+    };
+    const visible = visibleTimeline(
+      empty,
+      {},
+      { outputId: "user-1", text: "" },
+      {},
+      {},
+      { outputId: "user-1", text: "先看目录" },
+    );
+    expect(visible[1]).toMatchObject({
+      outputId: "user-1",
+      thinking: "先看目录",
+      thinkingPending: true,
+    });
+  });
 });
 
 describe("timelineTurns", () => {
@@ -178,6 +206,7 @@ describe("timelineTurns", () => {
             step_id: "step-2",
             output_id: "out-1",
             text: "final",
+            thinking: null,
             tools: [],
             occurred_at: "2026-09-15T08:00:02+00:00",
           },
@@ -208,5 +237,147 @@ describe("timelineTurns", () => {
       active: { key: "output:user-1", pending: true },
       final: null,
     });
+  });
+});
+
+describe("turnNeedsThinkingHint", () => {
+  const user = {
+    key: "user-1",
+    kind: "user" as const,
+    text: "hi",
+    images: [],
+  };
+
+  it("shows thinking while the latest turn is running without text or tools", () => {
+    expect(
+      turnNeedsThinkingHint(
+        {
+          key: "user-1",
+          user,
+          process: [],
+          active: null,
+          final: null,
+        },
+        { running: true, latest: true },
+      ),
+    ).toBe(true);
+  });
+
+  it("shows thinking for an empty live preview", () => {
+    expect(
+      turnNeedsThinkingHint(
+        {
+          key: "user-1",
+          user,
+          process: [],
+          active: {
+            key: "output:user-1",
+            kind: "step",
+            outputId: "user-1",
+            text: "",
+            thinking: null,
+            thinkingPending: false,
+            pending: true,
+            tools: [],
+          },
+          final: null,
+        },
+        { running: true, latest: true },
+      ),
+    ).toBe(true);
+  });
+
+  it("hides the hint once streamed thinking text exists", () => {
+    expect(
+      turnNeedsThinkingHint(
+        {
+          key: "user-1",
+          user,
+          process: [],
+          active: {
+            key: "output:user-1",
+            kind: "step",
+            outputId: "user-1",
+            text: "",
+            thinking: "先看目录",
+            thinkingPending: true,
+            pending: true,
+            tools: [],
+          },
+          final: null,
+        },
+        { running: true, latest: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("hides thinking once streamed text or a running tool appears", () => {
+    expect(
+      turnNeedsThinkingHint(
+        {
+          key: "user-1",
+          user,
+          process: [],
+          active: {
+            key: "output:user-1",
+            kind: "step",
+            outputId: "user-1",
+            text: "正在写",
+            thinking: null,
+            thinkingPending: false,
+            pending: true,
+            tools: [],
+          },
+          final: null,
+        },
+        { running: true, latest: true },
+      ),
+    ).toBe(false);
+    expect(
+      turnNeedsThinkingHint(
+        {
+          key: "user-1",
+          user,
+          process: [
+            {
+              key: "output:user-1",
+              kind: "step",
+              outputId: "user-1",
+              text: null,
+              thinking: null,
+              thinkingPending: false,
+              pending: false,
+              tools: [
+                {
+                  commandId: "cmd-1",
+                  name: "read_file",
+                  status: "running",
+                  error: null,
+                  arguments: {},
+                },
+              ],
+            },
+          ],
+          active: null,
+          final: null,
+        },
+        { running: true, latest: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not leave thinking on an earlier turn", () => {
+    expect(
+      turnNeedsThinkingHint(
+        {
+          key: "user-1",
+          user,
+          process: [],
+          active: null,
+          final: null,
+        },
+        { running: true, latest: false },
+      ),
+    ).toBe(false);
   });
 });

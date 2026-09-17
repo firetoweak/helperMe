@@ -149,6 +149,60 @@ class WebChannel:
         view = await self._sessions.cancel_turn(session_id)
         return await self._queries.conversation(session_id, view=view)
 
+    async def retry(self, connection_id: str, session_id: str):
+        self._require_connection(connection_id)
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        view = await self._sessions.retry(session_id)
+        return await self._queries.conversation(session_id, view=view)
+
+    async def authorize_command(
+        self,
+        connection_id: str,
+        session_id: str,
+        command_id: str,
+        approved: bool,
+    ):
+        self._require_connection(connection_id)
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        if type(command_id) is not str or not command_id:
+            raise ValueError("command_id must be a non-empty str")
+        await self._sessions.resolve_authorization(
+            session_id,
+            command_id,
+            approved=approved,
+        )
+        view = await self._sessions.view(session_id)
+        return await self._queries.conversation(session_id, view=view)
+
+    async def set_auto_authorize(
+        self,
+        connection_id: str,
+        session_id: str,
+        enabled: bool,
+    ):
+        self._require_connection(connection_id)
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        view = await self._sessions.set_auto_authorize(
+            session_id,
+            bool(enabled),
+        )
+        return await self._queries.conversation(session_id, view=view)
+
+    async def set_paused(
+        self,
+        connection_id: str,
+        session_id: str,
+        paused: bool,
+    ):
+        self._require_connection(connection_id)
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        view = await self._sessions.set_paused(session_id, bool(paused))
+        return await self._queries.conversation(session_id, view=view)
+
     def _store(self) -> AttachmentGateway:
         if self._attachments is None:
             raise RuntimeError("WebChannel 未装配附件网关")

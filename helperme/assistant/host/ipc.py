@@ -44,6 +44,7 @@ class PipePeer:
         self.signal = signal
         self.pending: dict[str, asyncio.Future] = {}
         self.delta_sinks: dict[str, object] = {}
+        self.reasoning_delta_sinks: dict[str, object] = {}
         self.inflight: dict[str, asyncio.Task] = {}
         self.tasks: set[asyncio.Task] = set()
         self.stopped = False
@@ -62,12 +63,15 @@ class PipePeer:
         arguments: dict,
         *,
         on_delta=None,
+        on_reasoning_delta=None,
     ):
         request_id = uuid4().hex
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
         if on_delta is not None:
             self.delta_sinks[request_id] = on_delta
+        if on_reasoning_delta is not None:
+            self.reasoning_delta_sinks[request_id] = on_reasoning_delta
         try:
             await self.send(("request", request_id, operation, session_id, arguments))
             return await future
@@ -77,6 +81,7 @@ class PipePeer:
         finally:
             del self.pending[request_id]
             self.delta_sinks.pop(request_id, None)
+            self.reasoning_delta_sinks.pop(request_id, None)
 
     async def _handle(self, request_id, operation, session_id, arguments):
         self.active_request_id = request_id
@@ -130,6 +135,13 @@ class PipePeer:
             elif kind == "delta":
                 request_id, text = payload
                 sink = self.delta_sinks.get(request_id)
+                if sink is not None:
+                    emitted = sink(text)
+                    if isawaitable(emitted):
+                        await emitted
+            elif kind == "reasoning_delta":
+                request_id, text = payload
+                sink = self.reasoning_delta_sinks.get(request_id)
                 if sink is not None:
                     emitted = sink(text)
                     if isawaitable(emitted):

@@ -1,6 +1,7 @@
 import {
   Alert,
   Badge,
+  Button,
   Collapse,
   Group,
   Loader,
@@ -18,18 +19,23 @@ import {
   IconChevronRight,
   IconCode,
   IconSparkles,
+  IconX,
 } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 
 import type { ToolStatus } from "../../api/contracts";
+import { stepHeading } from "./stepHeading";
 import type { VisibleStep, VisibleTool } from "./visibleTimeline";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { ThinkingBlock } from "./ThinkingBlock";
 
 const STATUS_LABEL: Record<ToolStatus, string> = {
   running: "运行中",
   succeeded: "完成",
   failed: "失败",
   unknown: "中断",
+  awaiting_authorization: "待授权",
+  rejected: "已拒绝",
 };
 
 const STATUS_COLOR: Record<ToolStatus, string> = {
@@ -37,14 +43,21 @@ const STATUS_COLOR: Record<ToolStatus, string> = {
   succeeded: "gray",
   failed: "red",
   unknown: "yellow",
+  awaiting_authorization: "orange",
+  rejected: "gray",
 };
 
 interface ExecutionProcessProps {
   complete: boolean;
   steps: VisibleStep[];
+  onAuthorize: (commandId: string, approved: boolean) => void;
 }
 
-export function ExecutionProcess({ complete, steps }: ExecutionProcessProps) {
+export function ExecutionProcess({
+  complete,
+  steps,
+  onAuthorize,
+}: ExecutionProcessProps) {
   const [opened, setOpened] = useState(!complete);
   const running = steps.some(stepStatusIsRunning);
   const toolCount = steps.reduce((count, step) => count + step.tools.length, 0);
@@ -56,33 +69,36 @@ export function ExecutionProcess({ complete, steps }: ExecutionProcessProps) {
   }, [complete]);
 
   return (
-    <Paper className="execution-process" radius="lg" withBorder>
+    <Paper className="execution-process" radius="md" withBorder>
       <UnstyledButton
         aria-expanded={opened}
         className="execution-toggle"
         onClick={() => setOpened((value) => !value)}
       >
-        <Group justify="space-between" wrap="nowrap">
-          <Group gap="sm" wrap="nowrap">
-            <ThemeIcon color="gray" radius="md" size={30} variant="light">
-              {running ? <Loader color="sage" size={14} /> : <IconSparkles size={16} />}
+        <Group justify="space-between" wrap="nowrap" gap="xs">
+          <Group gap={8} wrap="nowrap">
+            <ThemeIcon color="gray" radius="sm" size={22} variant="light">
+              {running ? <Loader color="sage" size={12} /> : <IconSparkles size={13} />}
             </ThemeIcon>
-            <div>
-              <Text fw={600} size="sm">
-                执行过程
-              </Text>
-              <Text c="dimmed" fz={11}>
-                {steps.length} 个 Step · {toolCount} 次工具调用
-              </Text>
-            </div>
+            <Text fw={600} size="sm">
+              执行过程
+            </Text>
+            <Text c="dimmed" fz={11}>
+              {steps.length} 步 · {toolCount} 次工具
+            </Text>
           </Group>
-          {opened ? <IconChevronDown size={17} /> : <IconChevronRight size={17} />}
+          {opened ? <IconChevronDown size={15} /> : <IconChevronRight size={15} />}
         </Group>
       </UnstyledButton>
       <Collapse expanded={opened}>
-        <Stack className="execution-steps" gap="sm">
+        <Stack className="execution-steps" gap={4}>
           {steps.map((step, index) => (
-            <StepDisclosure index={index} key={step.key} step={step} />
+            <StepDisclosure
+              index={index}
+              key={step.key}
+              onAuthorize={onAuthorize}
+              step={step}
+            />
           ))}
         </Stack>
       </Collapse>
@@ -90,82 +106,163 @@ export function ExecutionProcess({ complete, steps }: ExecutionProcessProps) {
   );
 }
 
-function StepDisclosure({ index, step }: { index: number; step: VisibleStep }) {
+function StepDisclosure({
+  index,
+  step,
+  onAuthorize,
+}: {
+  index: number;
+  step: VisibleStep;
+  onAuthorize: (commandId: string, approved: boolean) => void;
+}) {
   const status = stepStatus(step);
-  const [opened, setOpened] = useState(status === "running");
+  const awaiting = step.tools.some(
+    (tool) => tool.status === "awaiting_authorization",
+  );
+  const [opened, setOpened] = useState(awaiting);
+
+  useEffect(() => {
+    if (awaiting) {
+      setOpened(true);
+      return;
+    }
+    if (status !== "running") {
+      setOpened(false);
+    }
+  }, [awaiting, status]);
 
   return (
-    <Paper className="step-panel" radius="md" withBorder>
+    <div className="step-panel">
       <UnstyledButton
         aria-expanded={opened}
         className="step-toggle"
         onClick={() => setOpened((value) => !value)}
       >
-        <Group justify="space-between" wrap="nowrap">
-          <Group gap="xs" wrap="nowrap">
-            {opened ? <IconChevronDown size={15} /> : <IconChevronRight size={15} />}
-            <Text fw={600} size="sm">
-              Step {index + 1}
+        <Group justify="space-between" wrap="nowrap" gap="xs">
+          <Group gap={8} wrap="nowrap" maw="100%" style={{ minWidth: 0 }}>
+            {opened ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+            <Text c="dimmed" fz={11} w={16} ta="right">
+              {index + 1}
             </Text>
-            <Text c="dimmed" fz={11}>
-              {step.tools.length} 个工具
+            <Text className="step-heading" size="sm" truncate>
+              {stepHeading(step)}
             </Text>
           </Group>
-          <Badge color={STATUS_COLOR[status]} size="sm" variant="light">
+          <Badge color={STATUS_COLOR[status]} size="xs" variant="light">
             {STATUS_LABEL[status]}
           </Badge>
         </Group>
       </UnstyledButton>
       <Collapse expanded={opened}>
-        <Stack className="step-content" gap="sm">
-          {step.text === null ? null : (
-            <MarkdownMessage content={step.text} streaming={step.pending} />
-          )}
-          {step.tools.map((tool) => (
-            <ToolCard key={tool.commandId} tool={tool} />
-          ))}
-        </Stack>
+        {opened ? (
+          <Stack className="step-content" gap="xs">
+            {step.thinking === null ? null : (
+              <ThinkingBlock
+                streaming={step.thinkingPending}
+                text={step.thinking}
+              />
+            )}
+            {step.text === null ? null : (
+              <MarkdownMessage content={step.text} streaming={step.pending} />
+            )}
+            {step.tools.map((tool) => (
+              <ToolCard
+                key={tool.commandId}
+                onAuthorize={onAuthorize}
+                tool={tool}
+              />
+            ))}
+          </Stack>
+        ) : null}
       </Collapse>
-    </Paper>
+    </div>
   );
 }
 
-function ToolCard({ tool }: { tool: VisibleTool }) {
+function ToolCard({
+  tool,
+  onAuthorize,
+}: {
+  tool: VisibleTool;
+  onAuthorize: (commandId: string, approved: boolean) => void;
+}) {
+  const awaiting = tool.status === "awaiting_authorization";
+  const hasArguments = Object.keys(tool.arguments).length > 0;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
   return (
-    <Paper className="tool-card" px="md" py="sm" radius="md" withBorder>
-      <Group justify="space-between" wrap="nowrap">
-        <Group gap="sm" wrap="nowrap">
-          <ThemeIcon
+    <Paper className="tool-card" px="sm" py={6} radius="sm" withBorder>
+      <UnstyledButton
+        className="tool-toggle"
+        onClick={() => {
+          if (hasArguments) {
+            setDetailsOpen((value) => !value);
+          }
+        }}
+      >
+        <Group justify="space-between" wrap="nowrap" gap="xs">
+          <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+            <ThemeIcon
+              color={STATUS_COLOR[tool.status]}
+              radius="sm"
+              size={22}
+              variant="light"
+            >
+              {tool.status === "running" ? (
+                <Loader color="sage" size={11} />
+              ) : tool.status === "failed" ? (
+                <IconAlertCircle size={13} />
+              ) : tool.status === "unknown" ? (
+                <IconAlertTriangle size={13} />
+              ) : (
+                <IconCode size={13} />
+              )}
+            </ThemeIcon>
+            <Text ff="monospace" fw={600} size="sm" truncate>
+              {tool.name}
+            </Text>
+          </Group>
+          <Badge
             color={STATUS_COLOR[tool.status]}
-            radius="md"
-            size={28}
+            leftSection={
+              tool.status === "succeeded" ? <IconCheck size={10} /> : undefined
+            }
+            size="xs"
             variant="light"
           >
-            {tool.status === "running" ? (
-              <Loader color="sage" size={13} />
-            ) : tool.status === "failed" ? (
-              <IconAlertCircle size={15} />
-            ) : tool.status === "unknown" ? (
-              <IconAlertTriangle size={15} />
-            ) : (
-              <IconCode size={15} />
-            )}
-          </ThemeIcon>
-          <Text ff="monospace" fw={600} size="sm" truncate>
-            {tool.name}
-          </Text>
+            {STATUS_LABEL[tool.status]}
+          </Badge>
         </Group>
-        <Badge
-          color={STATUS_COLOR[tool.status]}
-          leftSection={tool.status === "succeeded" ? <IconCheck size={11} /> : undefined}
-          size="sm"
-          variant="light"
-        >
-          {STATUS_LABEL[tool.status]}
-        </Badge>
-      </Group>
+      </UnstyledButton>
+      {detailsOpen && hasArguments ? (
+        <Text c="dimmed" className="pre-wrap" ff="monospace" fz={11} mt={6}>
+          {formatArguments(tool.arguments)}
+        </Text>
+      ) : null}
+      {awaiting ? (
+        <Group gap="xs" mt="xs">
+          <Button
+            color="sage"
+            leftSection={<IconCheck size={14} />}
+            onClick={() => onAuthorize(tool.commandId, true)}
+            size="compact-sm"
+            variant="light"
+          >
+            允许
+          </Button>
+          <Button
+            color="gray"
+            leftSection={<IconX size={14} />}
+            onClick={() => onAuthorize(tool.commandId, false)}
+            size="compact-sm"
+            variant="light"
+          >
+            拒绝
+          </Button>
+        </Group>
+      ) : null}
       {tool.error === null ? null : (
-        <Alert color={STATUS_COLOR[tool.status]} mt="sm" py="xs" variant="light">
+        <Alert color={STATUS_COLOR[tool.status]} mt="xs" py="xs" variant="light">
           <Text ff="monospace" fz={12} className="pre-wrap">
             {tool.error}
           </Text>
@@ -175,19 +272,31 @@ function ToolCard({ tool }: { tool: VisibleTool }) {
   );
 }
 
+function formatArguments(arguments_: Record<string, unknown>) {
+  return JSON.stringify(arguments_, null, 2);
+}
+
 function stepStatus(step: VisibleStep): ToolStatus {
+  if (step.tools.some((tool) => tool.status === "awaiting_authorization")) {
+    return "awaiting_authorization";
+  }
   if (step.pending || step.tools.some((tool) => tool.status === "running")) {
     return "running";
   }
   if (step.tools.some((tool) => tool.status === "unknown")) {
     return "unknown";
   }
-  if (step.tools.some((tool) => tool.status === "failed")) {
-    return "failed";
+  if (
+    step.tools.some(
+      (tool) => tool.status === "failed" || tool.status === "rejected",
+    )
+  ) {
+    return "rejected";
   }
   return "succeeded";
 }
 
 function stepStatusIsRunning(step: VisibleStep): boolean {
-  return stepStatus(step) === "running";
+  const status = stepStatus(step);
+  return status === "running" || status === "awaiting_authorization";
 }

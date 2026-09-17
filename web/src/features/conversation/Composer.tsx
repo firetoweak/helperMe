@@ -1,5 +1,18 @@
-import { ActionIcon, Group, Paper, Text, Textarea, Tooltip } from "@mantine/core";
-import { IconArrowUp, IconPlayerStopFilled, IconPlus } from "@tabler/icons-react";
+import {
+  ActionIcon,
+  Group,
+  Paper,
+  Switch,
+  Text,
+  Textarea,
+  Tooltip,
+} from "@mantine/core";
+import {
+  IconArrowUp,
+  IconPlayerPauseFilled,
+  IconPlayerPlayFilled,
+  IconPlus,
+} from "@tabler/icons-react";
 import {
   useEffect,
   useRef,
@@ -38,9 +51,14 @@ type ComposerProps = {
   disabled: boolean;
   sending: boolean;
   running: boolean;
-  cancelling: boolean;
+  paused: boolean;
+  shouldWake: boolean;
+  pauseBusy: boolean;
+  autoAuthorize: boolean;
+  autoAuthorizeBusy: boolean;
+  onToggleAutoAuthorize: (enabled: boolean) => void;
   onSend: (text: string, artifactRefs: string[]) => Promise<void>;
-  onCancel: () => void;
+  onSetPaused: (paused: boolean) => void;
 };
 
 export function Composer({
@@ -49,9 +67,14 @@ export function Composer({
   disabled,
   sending,
   running,
-  cancelling,
+  paused,
+  shouldWake,
+  pauseBusy,
+  autoAuthorize,
+  autoAuthorizeBusy,
+  onToggleAutoAuthorize,
   onSend,
-  onCancel,
+  onSetPaused,
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [pending, setPending] = useState<PendingImage[]>([]);
@@ -270,19 +293,35 @@ export function Composer({
           disabled={disabled}
         />
         <Group gap={6} wrap="nowrap">
-          {running ? (
-            <Tooltip label="停止当前任务">
+          {running && !paused ? (
+            <Tooltip label="暂停">
               <ActionIcon
-                aria-label="停止当前任务"
-                color="red"
-                disabled={cancelling}
-                onClick={onCancel}
+                aria-label="暂停"
+                color="gray"
+                disabled={pauseBusy || connectionId === null}
+                onClick={() => onSetPaused(true)}
                 radius="xl"
                 size={36}
                 type="button"
                 variant="light"
               >
-                <IconPlayerStopFilled size={16} />
+                <IconPlayerPauseFilled size={16} />
+              </ActionIcon>
+            </Tooltip>
+          ) : null}
+          {paused && shouldWake && !running ? (
+            <Tooltip label="继续">
+              <ActionIcon
+                aria-label="继续"
+                color="blue"
+                disabled={pauseBusy || connectionId === null}
+                onClick={() => onSetPaused(false)}
+                radius="xl"
+                size={36}
+                type="button"
+                variant="light"
+              >
+                <IconPlayerPlayFilled size={16} />
               </ActionIcon>
             </Tooltip>
           ) : null}
@@ -300,6 +339,16 @@ export function Composer({
             </ActionIcon>
           </Tooltip>
         </Group>
+      </Group>
+      <Group className="composer-authorize" justify="flex-start" px="xs" py={4}>
+        <Switch
+          checked={autoAuthorize}
+          disabled={autoAuthorizeBusy || connectionId === null}
+          label="自动放行写文件等工具"
+          labelPosition="left"
+          onChange={(event) => onToggleAutoAuthorize(event.currentTarget.checked)}
+          size="xs"
+        />
       </Group>
       {runtime === undefined ? null : (
         <Group className="composer-meta" justify="space-between" wrap="nowrap">

@@ -17,6 +17,8 @@ const sessionViewSchema = z
     has_active_subagents: z.boolean(),
     control_approval: controlApprovalSchema.nullable(),
     control_message: z.string().nullable(),
+    auto_authorize: z.boolean(),
+    paused: z.boolean(),
   })
   .strict();
 
@@ -29,7 +31,14 @@ export const sessionSummarySchema = z
   })
   .strict();
 
-export const toolStatusSchema = z.enum(["running", "succeeded", "failed", "unknown"]);
+export const toolStatusSchema = z.enum([
+  "running",
+  "succeeded",
+  "failed",
+  "unknown",
+  "awaiting_authorization",
+  "rejected",
+]);
 
 const toolItemSchema = z
   .object({
@@ -37,6 +46,7 @@ const toolItemSchema = z
     name: z.string().min(1),
     status: toolStatusSchema,
     error: z.string().min(1).nullable(),
+    arguments: z.record(z.string(), z.unknown()),
   })
   .strict();
 
@@ -61,6 +71,7 @@ export const conversationViewSchema = z
             step_id: z.string().min(1),
             output_id: z.string().min(1),
             text: z.string().min(1).nullable(),
+            thinking: z.string().min(1).nullable(),
             tools: z.array(toolItemSchema),
             occurred_at: z.string().datetime({ offset: true }),
           })
@@ -79,6 +90,13 @@ export const sessionActivityEventSchema = z
   .object({
     session_id: z.string().min(1),
     activity: z.enum(["running", "idle"]),
+  })
+  .strict();
+
+export const sessionFailedEventSchema = z
+  .object({
+    session_id: z.string().min(1),
+    message: z.string().min(1),
   })
   .strict();
 
@@ -104,6 +122,10 @@ export const previewAbortedEventSchema = z
   })
   .strict();
 
+export const thinkingStartedEventSchema = previewStartedEventSchema;
+export const thinkingDeltaEventSchema = previewDeltaEventSchema;
+export const thinkingFinishedEventSchema = previewAbortedEventSchema;
+
 export const outputFinalEventSchema = z
   .object({
     session_id: z.string().min(1),
@@ -118,6 +140,15 @@ export const toolProgressEventSchema = z
     command_id: z.string().min(1),
     name: z.string().min(1),
     status: toolStatusSchema,
+  })
+  .strict();
+
+export const authorizationRequiredEventSchema = z
+  .object({
+    session_id: z.string().min(1),
+    command_id: z.string().min(1),
+    name: z.string().min(1),
+    arguments: z.record(z.string(), z.unknown()),
   })
   .strict();
 
@@ -141,3 +172,6 @@ export type ConversationView = z.infer<typeof conversationViewSchema>;
 export type ConversationItem = ConversationView["items"][number];
 export type ToolStatus = z.infer<typeof toolStatusSchema>;
 export type RuntimeStatus = z.infer<typeof runtimeStatusSchema>;
+export type AuthorizationRequiredEvent = z.infer<
+  typeof authorizationRequiredEventSchema
+>;

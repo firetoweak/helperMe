@@ -23,9 +23,13 @@ class _AsyncStream:
             raise StopAsyncIteration from None
 
 
-def _chunk(content=None):
+def _chunk(content=None, reasoning=None):
     return SimpleNamespace(
-        choices=[SimpleNamespace(delta=SimpleNamespace(content=content))]
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=content, reasoning_content=reasoning)
+            )
+        ]
     )
 
 
@@ -178,6 +182,27 @@ class LiteLLMAdapterStreamingTest(unittest.IsolatedAsyncioTestCase):
             list(chunks),
             messages=[],
         )
+
+    async def test_emits_reasoning_deltas_without_mixing_them_into_content(self):
+        chunks = (_chunk(reasoning="想"), _chunk("答"))
+        completion = self._completion(
+            _Message({"content": "答", "reasoning_content": "想"})
+        )
+        adapter = self._adapter(chunks, completion)
+        content: list[str] = []
+        reasoning: list[str] = []
+
+        result = await adapter.chat(
+            [],
+            "model",
+            on_content_delta=content.append,
+            on_reasoning_delta=reasoning.append,
+        )
+
+        self.assertEqual(content, ["答"])
+        self.assertEqual(reasoning, ["想"])
+        self.assertEqual(result.response.content, "答")
+        self.assertEqual(result.response.message_extensions["reasoning_content"], "想")
 
     async def test_tool_call_chunks_are_not_emitted_as_text(self):
         chunks = (_chunk(None),)

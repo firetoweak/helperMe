@@ -30,7 +30,7 @@ class CompactLlm:
     async def __aexit__(self, *args):
         return None
 
-    async def chat(self, messages, model, *, tools=None, on_content_delta=None):
+    async def chat(self, messages, model, *, tools=None, on_content_delta=None, on_reasoning_delta=None):
         names = {t["function"]["name"] for t in tools or []}
         if any("<self_handoff>" in str(m["content"]) for m in messages):
             request = self.workspace / "handoff_request.json"

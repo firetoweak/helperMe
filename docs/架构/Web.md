@@ -47,6 +47,15 @@ activePreview、unread、committed cache、按 `command_id` 索引的 live tools
 Session 运行或存在活动 preview 时，时间线跟随内容尺寸变化固定到最底部；运行结束后
 解除跟随，用户可以自由查看历史。
 
+运行中输入框显示「暂停」：当前 Step 和已派发 Command 继续跑完，之后 Scheduler
+不再因 outcome 自动进入下一拍。`paused && should_wake` 且非 running 时显示
+「继续」。Agent 自然停在等用户输入时，两按钮都不出现。这不是 `cancel_turn`。
+有 `lastError` 时横幅「再试」取代「继续」。
+`SessionView.paused` 与自动授权同级，存在 `sessions_root/paused.json`，**不进
+Journal**。缺省 false，只在人拨过时写入；创建和 Fork 不写。刷新走 GET 投影，Host
+直接补字段，不 resume Worker。新用户消息会清掉暂停。端点
+`POST /api/sessions/{id}/paused`，body `{connection_id, paused}`。
+
 ## 查询投影
 
 - `list_sessions()` 从各 Journal 投影顶层 Session 摘要，不列出 SubAgent Session，
@@ -67,12 +76,18 @@ Session 运行或存在活动 preview 时，时间线跟随内容尺寸变化固
 
 `GET /api/events` 建立页面级 SSE，并分配瞬时 connection identity。该 identity
 映射为 Host owner；SSE 断开时释放 owner，但不取消任何 Session，也不使
-`deliver` 失败。新建或选择 Session 时由 Web Channel 调用
+`deliver` 失败。空闲时每 15 秒发一条 SSE 注释心跳，避免长思考期间代理因
+无事件断开页面连接；注释不进前端状态。新建或选择 Session 时由 Web Channel 调用
 `select(owner, session_id)`。点「新建会话」时：当前已是未锁定草稿则保持；否则复用
 已有未锁定草稿，或 `create` 一个新的。发出第一条用户消息后草稿锁定。
 
 Event Hub 向所有页面连接广播带 `session_id` 的事件，每个 Session 只保存一个
-活动 preview。Host 在 busy/idle 转换时发送 `session_activity`。最终正文走
+活动 preview。Host 在 busy/idle 转换时发送 `session_activity`。已识别的模型失败
+走 `session_failed`，记在 Session 的瞬时 `lastError` 上，用输入框上方提示展示，
+不进 `output_final`、committed cache 或 Journal。提示旁「再试」调用
+`POST /api/sessions/{id}/retry`，只 `wake` 当前 Session：不写用户消息、不 fork、
+不动 Journal；若当时暂停则顺手清掉暂停。下一次 `session_activity: running` 清掉
+失败提示；同一 Session 再次失败则覆盖。最终正文走
 `output_final`，与 preview 共用 `output_id`，前端不得重复显示。输入框底部展示
 当前逻辑模型名，以及该 Session 的输入上下文占用：请求前为估算值，响应后为
 LLM 返回的实际 input tokens，分母为配置的 `model_context_limit`。占用随
@@ -84,19 +99,29 @@ Journal 仍为运行中或中断时采用更新的实时状态。切换 Session 
 上的工具。
 
 前端按事实做两层展示归约：有工具的已提交 Step 属于执行过程，每个 Step 可独立
-折叠；流式 preview 先在框外按正文样式展示。Step 提交后，无工具则原地成为最终
+折叠。Step 标题展示工具名和一段短参数，而不是序号；工具参数默认收起，Step
+结束后自动折上，待授权时展开。流式 preview 先在框外按正文样式展示。当前轮次已在运行、还没有正文或
+进行中的工具时，显示「思考中」。模型 `reasoning_content` 增量走独立的
+`thinking.started` / `thinking.delta` / `thinking.finished`，落到可折叠的思考块，
+与 preview / `deliver` 正文分开。思考块只展示纯文本，流式时展开、结束后自动折上。刷新后可从 Step 的
+`decision_metadata.message_extensions.reasoning_content` 恢复已提交的思考。
+Step 提交后，无工具则原地成为最终
 回复，有工具才移入执行过程。最终回复出现后，整个执行过程自动折叠。preview、
 committed cache 和 Journal Step 使用同一 `output_id` 作为显示身份，阶段切换不重复
-挂载普通最终回复。助手正文由 `@ai-markdown/react-mantine` 渲染，网络增量先经
-`useSmoothStream` 平滑释放，并用 Remend 修复尚未闭合的流式 Markdown 尾部。
+挂载普通最终回复。助手正文由 `@ai-markdown/react-mantine` 渲染；preview 增量按动画帧
+合并后再进 Redux，流式期间不做代码高亮，结束后再高亮。Remend 只修尚未闭合的
+流式 Markdown 尾部。思考块只展示纯文本，流式时展开、结束后自动折上。
 
 ## 编辑消息与历史分支
 
-用户消息不原地修改。`POST /api/sessions/{id}/forks` 以目标
-`UserMessageReceived` 之前的完整事件前缀创建新 Session，随后把编辑后的文本作为
-新事实写入并执行。源 Session 是持续事件流，无须停止或结束；即使它仍在推进，已经
-提交的历史前缀也保持不可变，源分支可以继续独立运行。原 Session 保持不变，Web 自动
-选择新分支。
+用户消息不原地修改 Journal。时间线上点编辑后在气泡位置改字，发送走
+`POST /api/sessions/{id}/forks`：以目标 `UserMessageReceived` 之前的完整事件前缀
+创建新 Session，随后把编辑后的文本（可与原文相同）作为新事实写入并执行。原文重发
+与改字是同一条 fork，不是第二条协议。源 Session 是持续事件流，无须停止或结束；即使
+它仍在推进，已经提交的历史前缀也保持不可变，源分支可以继续独立运行。原 Session
+保持不变，Web 自动选择新分支。前端路由和侧栏仍停在用户原来点开的那一栏：编辑发出后
+立刻去掉该消息之后的渲染，新输出在原地开始。被 fork 出的新 identity 不作为新会话
+出现在顶层列表。Journal 仍是新 identity，不是改写旧会话。
 
 分支创建时物化完整事件前缀，并重建新 Session identity 对应的 Step basis；同时复制
 前缀可能引用的 Artifact 与附件抽屉。因而上下文、ToolSurface、动态加载的 Toolset、
@@ -104,11 +129,13 @@ committed cache 和 Journal Step 使用同一 `output_id` 作为显示身份，�
 旁路。截止点后的 Step、工具结果和能力加载不进入新分支，已经完成的历史 Command 只
 作为事实重放，不重新执行。编辑后的消息保留原消息的附件引用。
 
-本切片不包含授权卡片、SubAgent 展示或 Session 管理。
+Command 授权已按 [Command 授权](Command授权.md) 落地。本切片仍不包含 SubAgent 展示或 Session 管理。
 
 
 
 ## 下一片
+
+> Command Authorization 契约见 [Command 授权](Command授权.md)。以下为原始约束，保留备查。
 
 应做 **授权交互**。当前工具卡把“等待授权”误显示成“运行中”，这是现有闭环里最明显的语义缺口。
 

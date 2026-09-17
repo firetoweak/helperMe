@@ -1,0 +1,86 @@
+# Command 授权
+
+Command Authorization 是 Web Channel 首版纵向切片，解决「工具副作用需要用户确认」的交互。与 Control Approval（批准安装、更新等管理提案）分离，两者变化原因不同，不抽象成通用「审批框架」。
+
+## 语义
+
+- `requires_authorization`：工具 spec 的静态布尔，默认 `False`。表达「此工具天生有副作用，默认需人确认」。
+- Web 总闸 `auto_authorize`：仅 Web 有的 Session 级偏好。表达「这个 Session 我信任 agent，别再问」。没拨过就是关。
+- TUI 没有这把闸，也没有改配入口；这个入口上所有工具直接放行。
+- 需要拦 = 工具声明需要授权 **且** 当前 owner 是 Web **且** 总闸未开。
+- 授权是正交的派发 gate：`CommandPhase`（pending / unknown / terminal）只描述执行生命周期，是否派发由 `dispatch_eligible_by_event_id`（授权后设置）与 `authorization_rejected_by_event_id`（拒绝后设置）决定。
+
+## 契约
+
+### 1. 写工具标 `requires_authorization=True`
+
+- `helperme/tools/builtin/file_manage.py`：`ToolSpec(name="write_file", ...)`。
+- `helperme/tools/builtin/file_write.py`：`apply_patch`、`replace_all`。
+- 本版不拦 `execute_command`；只读工具（`read_file` / `glob` / `grep` / `get_changes`）保持 `False`。
+
+### 2. Web 总闸 `auto_authorize`
+
+- `SessionView.auto_authorize` 只表示 **Web 总闸偏好**，不是当前入口是否正在放行。
+- 存储：assistant 层会话元数据（`sessions_root/auto_authorize.json`），**不进 Journal**。模型无需知道。只在人拨过总闸时写入；创建 Session 不写 Channel 默认值。Fork 出的新 Session 未写入。
+- `GET /api/sessions/{id}` 不 resume Worker。Host 直接读这份元数据补 `SessionView.auto_authorize`，缺省 `false`。刷新不丢。
+- 端点：`POST /api/sessions/{session_id}/auto-authorize`，body `{connection_id, enabled}`（`strict=True, extra="forbid"`），返回更新后的对话投影（内含 `SessionView`）。打开总闸时，当前待授权命令一并 `grant_command`。
+- TUI 不读、不写、不暴露这把闸。Telegram / ACP 同样没有总闸入口。
+- Worker 是否自动 `grant` 看 **当前 owner**，不把文件里的布尔当全局答案：
+  - owner 是 `web:…`：看总闸，没拨过则不放行；
+  - owner 是其他入口（TUI 等）：一律放行；
+  - 没有 owner：不替人放行。
+- 自动放行挂在 `SessionScheduler` 的 quiesce 钩子，也在 Host 同步放行策略时补一次。有 pending 且应当放行则 `grant_command` 并 `wake`；Web 且总闸关闭则广播 `authorization_required`。
+
+### 3. 投影层状态判定
+
+`toolStatusSchema` 由 `running / succeeded / failed / unknown` 扩为增加 `awaiting_authorization`、`rejected`。
+
+对无终态 outcome 的命令，按优先级：
+
+1. 有 `CommandOutcomeReceived` → `succeeded` / `failed`
+2. `command_id` 出现在 `CommandRejected` 事件 → `rejected`
+3. `command_id ∈ pending_authorization_ids` → `awaiting_authorization`
+4. 已派发且会话 idle → `unknown`
+5. 其余 → `running`
+
+刷新后等待、拒绝和终态从 Journal 恢复。总闸不在 Journal 里，走第 2 块的元数据。
+
+### 4. 投影层拒绝反馈
+
+`context/projection.py` 的 `_translate_visible_events` 增加 `CommandRejected` 分支，生成一条 `role="tool"`、`tool_call_id=command_id` 的消息，例如：
+
+> 用户拒绝执行该工具调用（command_id=…，工具=write_file）。请勿原样重试；如需继续，请改用其他方式或先向用户解释。
+
+保证每个 tool_call 都有对应 tool 消息（Chat Completions 协议完整），并明确是「用户拒绝」而非「工具失败/超时」。
+
+### 5. Web 授权接口
+
+- `POST /api/sessions/{session_id}/commands/{command_id}/authorize`
+- body：`{connection_id, approved}`（`strict=True, extra="forbid"`）
+- Host 转发 `resolve_authorization(session_id, command_id, approved)`，只处理单个命令。
+- TUI 的 `yes/no` 仍一次性处理当前全部待授权命令（`resolve_authorizations`）。
+- 返回更新后的对话投影（内含 `SessionView`）。
+
+### 6. 前端
+
+- `contracts.ts`：`toolStatusSchema` 加两状态；`toolItemSchema` 加 `arguments`；`sessionSchema` 加 `auto_authorize`；新增 `authorization_required` 事件 schema。
+- `ExecutionProcess.tsx`：`ToolCard` 加参数展示与「允许 / 拒绝」按钮（仅 `awaiting_authorization` 显示）。
+- 浮窗：收到 `authorization_required` → 只在目标 Session 内弹（工具名 + 参数 + 允许 / 拒绝），并重拉该 Session 时间线，避免无正文的写工具卡仍停在「运行中」。
+- 输入框下方：Web 总闸开关，切换调第 2 块端点。
+- 当前不在该 Session：侧栏沿用未读角标，不另做顶栏。
+
+### 7. `authorization_required` 事件
+
+- SSE 事件名：`authorization_required`
+- payload：`{session_id, command_id, name, arguments}`
+- 广播时机：命令进入等待授权，且当前不应自动放行时；`arguments` 取自对应 `Command.effect.argument_dict()`。
+
+## 设计决策
+
+- 总闸是 Web Session 偏好，不是跨入口的任务事实，所以不进 Journal。
+- 创建时不把入口默认值落盘：TUI 全放行靠入口策略；Web 没拨过就是关。
+- 同一条 Session 从 Web 转到 TUI，TUI 照旧全放行；再回到 Web，仍用 Web 自己那份总闸。
+
+## 拒绝语义
+
+用户拒绝某次工具执行，**不是**把工具从 `surface.schemas` 移除。模型仍看得到工具，只是明确知道「这次调用被用户拒绝」，从而避免困惑、不会原样重试。

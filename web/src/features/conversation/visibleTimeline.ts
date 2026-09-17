@@ -13,6 +13,7 @@ export type VisibleTool = {
   name: string;
   status: ToolStatus;
   error: string | null;
+  arguments: Record<string, unknown>;
 };
 
 export type VisibleStep = {
@@ -20,6 +21,8 @@ export type VisibleStep = {
   kind: "step";
   outputId: string;
   text: string | null;
+  thinking: string | null;
+  thinkingPending: boolean;
   pending: boolean;
   tools: VisibleTool[];
 };
@@ -31,6 +34,8 @@ export function visibleTimeline(
   committed: Record<string, string>,
   preview: ActivePreview | null,
   tools: Record<string, LiveTool>,
+  committedThinking: Record<string, string> = {},
+  liveThinking: ActivePreview | null = null,
 ): VisibleItem[] {
   const journalOutputIds = new Set(
     conversation.items
@@ -61,8 +66,10 @@ export function visibleTimeline(
           name: tool.name,
           status,
           error: status === "failed" || status === "unknown" ? tool.error : null,
+          arguments: tool.arguments,
         };
       }),
+      ...resolveThinking(item.output_id, item.thinking, committedThinking, liveThinking),
     };
   });
   for (const [outputId, text] of Object.entries(committed)) {
@@ -76,6 +83,7 @@ export function visibleTimeline(
       text,
       pending: true,
       tools: [],
+      ...resolveThinking(outputId, null, committedThinking, liveThinking),
     });
   }
   if (
@@ -90,7 +98,51 @@ export function visibleTimeline(
       text: preview.text,
       pending: true,
       tools: [],
+      ...resolveThinking(preview.outputId, null, committedThinking, liveThinking),
+    });
+  }
+  const present = new Set(
+    items.filter((item) => item.kind === "step").map((item) => item.outputId),
+  );
+  for (const outputId of thinkingOutputIds(committedThinking, liveThinking)) {
+    if (present.has(outputId) || journalOutputIds.has(outputId)) {
+      continue;
+    }
+    items.push({
+      key: `output:${outputId}`,
+      kind: "step",
+      outputId,
+      text: null,
+      pending: true,
+      tools: [],
+      ...resolveThinking(outputId, null, committedThinking, liveThinking),
     });
   }
   return items;
+}
+
+function resolveThinking(
+  outputId: string,
+  journal: string | null,
+  committedThinking: Record<string, string>,
+  liveThinking: ActivePreview | null,
+): { thinking: string | null; thinkingPending: boolean } {
+  const live =
+    liveThinking?.outputId === outputId ? liveThinking.text : undefined;
+  const text = (live || committedThinking[outputId] || journal || "").trim();
+  return {
+    thinking: text || null,
+    thinkingPending: live !== undefined,
+  };
+}
+
+function thinkingOutputIds(
+  committedThinking: Record<string, string>,
+  liveThinking: ActivePreview | null,
+): string[] {
+  const ids = Object.keys(committedThinking);
+  if (liveThinking !== null) {
+    ids.push(liveThinking.outputId);
+  }
+  return ids;
 }

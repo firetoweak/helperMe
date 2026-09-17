@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from uuid import uuid4
 
 from acp import run_agent
 
@@ -32,11 +33,15 @@ async def async_main() -> None:
         assert agent is not None
         _push(agent.report_tool(*values))
 
+    async def session_failed(session_id: str, message: str) -> None:
+        await sink(session_id, f"session-failed-{uuid4().hex}", message)
+
     async with bootstrap_assistant(
         sink,
         context_usage_sink=report_usage,
         tool_progress_sink=report_tool,
         preview_sink=preview,
+        session_failed_sink=session_failed,
     ) as app:
         agent = HelperMeAcpAgent(app.sessions, app.config.workspace)
         try:

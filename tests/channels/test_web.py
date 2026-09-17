@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -19,6 +20,7 @@ from helperme.assistant.conversations import (
 )
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import SessionView
+from helperme.channels.web import app as web_app
 from helperme.channels.web.app import create_web_app
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
@@ -47,6 +49,10 @@ class _Sessions:
         self.calls.append(("cancel_turn", session_id))
         return SessionView("waiting", ("user_message",), (), False)
 
+    async def retry(self, session_id):
+        self.calls.append(("retry", session_id))
+        return SessionView("runnable", (), (), True)
+
     async def fork_and_accept_input(
         self, owner, source_session_id, message_id, content, **kwargs
     ):
@@ -65,6 +71,21 @@ class _Sessions:
 
     async def release(self, owner):
         self.calls.append(("release", owner))
+
+    async def view(self, session_id):
+        self.calls.append(("view", session_id))
+        return SessionView("waiting", ("user_message",), (), False)
+
+    async def resolve_authorization(self, session_id, command_id, *, approved):
+        self.calls.append(("resolve_authorization", session_id, command_id, approved))
+
+    async def set_auto_authorize(self, session_id, enabled):
+        self.calls.append(("set_auto_authorize", session_id, enabled))
+        return SessionView("waiting", ("user_message",), (), False, auto_authorize=enabled)
+
+    async def set_paused(self, session_id, paused):
+        self.calls.append(("set_paused", session_id, paused))
+        return SessionView("waiting", ("user_message",), (), False, paused=paused)
 
 
 class _Queries:
@@ -190,6 +211,49 @@ class WebFirstSliceTest(unittest.TestCase):
         self.assertNotIn(connection_id, self.channel._connections)
         self.assertIn(("release", f"web:{connection_id}"), self.sessions.calls)
 
+    def test_events_sends_keepalive_comments_while_idle(self):
+        body = bytearray()
+        saw_comment = asyncio.Event()
+
+        async def exercise():
+            async def receive():
+                await saw_comment.wait()
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                if message["type"] == "http.response.body":
+                    chunk = message.get("body") or b""
+                    body.extend(chunk)
+                    if b"keep-alive" in chunk:
+                        saw_comment.set()
+
+            with patch.object(web_app, "SSE_KEEPALIVE_SECONDS", 0.05):
+                async with asyncio.timeout(2):
+                    await self.client.app(
+                        {
+                            "type": "http",
+                            "asgi": {"version": "3.0", "spec_version": "2.3"},
+                            "http_version": "1.1",
+                            "method": "GET",
+                            "scheme": "http",
+                            "path": "/api/events",
+                            "raw_path": b"/api/events",
+                            "root_path": "",
+                            "query_string": b"",
+                            "headers": [],
+                            "client": ("testclient", 50000),
+                            "server": ("testserver", 80),
+                        },
+                        receive,
+                        send,
+                    )
+
+        self.client.portal.call(exercise)
+        self.assertIn(b"keep-alive", body)
+        self.assertTrue(
+            any(call[0] == "release" for call in self.sessions.calls),
+        )
+
     def test_reads_conversation_without_starting_a_worker(self):
         response = self.client.get("/api/sessions/session-old")
 
@@ -260,6 +324,15 @@ class WebFirstSliceTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.sessions.calls, [("cancel_turn", "session-old")])
+
+    def test_retry_wakes_the_requested_session(self):
+        response = self.client.post(
+            "/api/sessions/session-old/retry",
+            json={"connection_id": self.connection.connection_id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.sessions.calls, [("retry", "session-old")])
 
     def test_editing_user_message_creates_and_selects_a_new_branch(self):
         response = self.client.post(
@@ -334,6 +407,56 @@ class WebFirstSliceTest(unittest.TestCase):
                     "artifact_refs": (attachment_id,),
                 },
             ),
+        )
+
+    def test_authorize_command_is_per_command(self):
+        response = self.client.post(
+            "/api/sessions/session-old/commands/cmd-1/authorize",
+            json={
+                "connection_id": self.connection.connection_id,
+                "approved": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.sessions.calls,
+            [
+                ("resolve_authorization", "session-old", "cmd-1", True),
+                ("view", "session-old"),
+            ],
+        )
+
+    def test_auto_authorize_updates_session_preference(self):
+        response = self.client.post(
+            "/api/sessions/session-old/auto-authorize",
+            json={
+                "connection_id": self.connection.connection_id,
+                "enabled": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["session"]["auto_authorize"])
+        self.assertEqual(
+            self.sessions.calls,
+            [("set_auto_authorize", "session-old", True)],
+        )
+
+    def test_paused_updates_session_hold(self):
+        response = self.client.post(
+            "/api/sessions/session-old/paused",
+            json={
+                "connection_id": self.connection.connection_id,
+                "paused": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["session"]["paused"])
+        self.assertEqual(
+            self.sessions.calls,
+            [("set_paused", "session-old", True)],
         )
 
     def test_rejected_upload_is_a_client_error(self):

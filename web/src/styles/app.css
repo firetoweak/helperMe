@@ -107,30 +107,64 @@ body {
   border-color: rgba(255, 255, 255, 0.075);
 }
 
+.thinking-block {
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.014);
+  border-color: rgba(255, 255, 255, 0.055);
+}
+
+.thinking-toggle,
 .execution-toggle,
 .step-toggle {
   width: 100%;
-  padding: 12px 14px;
+  padding: 8px 10px;
 }
 
+.thinking-toggle {
+  padding: 10px 12px;
+}
+
+.step-toggle {
+  padding: 5px 8px;
+}
+
+.step-heading {
+  min-width: 0;
+  font-weight: 500;
+}
+
+.tool-toggle {
+  width: 100%;
+}
+
+.thinking-content {
+  padding: 0 14px 12px;
+  color: var(--mantine-color-dimmed);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thinking-toggle:hover,
 .execution-toggle:hover,
 .step-toggle:hover {
   background: rgba(255, 255, 255, 0.025);
 }
 
 .execution-steps {
-  padding: 0 12px 12px;
+  padding: 0 8px 8px;
 }
 
 .step-panel {
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.12);
-  border-color: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.step-panel + .step-panel {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .step-content {
-  padding: 12px 14px 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  padding: 6px 8px 8px 28px;
 }
 
 .message {
@@ -144,6 +178,30 @@ body {
 
 .user-message-row {
   max-width: min(78%, 700px);
+}
+
+.user-message-editing {
+  width: min(100%, 700px);
+}
+
+.user-edit {
+  width: 100%;
+  background: #1b1e1c;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.user-edit:focus-within {
+  border-color: rgba(145, 181, 106, 0.5);
+  box-shadow: 0 0 0 1px rgba(145, 181, 106, 0.12);
+}
+
+.user-edit-input {
+  flex: 1;
+}
+
+.user-edit-input textarea {
+  padding-block: 7px;
+  line-height: 1.55;
 }
 
 .edit-message-button {

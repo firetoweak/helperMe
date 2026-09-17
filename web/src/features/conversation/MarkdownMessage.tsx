@@ -1,11 +1,9 @@
-import {
-  createRemendPreprocessor,
-  useSmoothStream,
-} from "@ai-markdown/react";
+import { createRemendPreprocessor } from "@ai-markdown/react";
 import MantineAIMarkdown from "@ai-markdown/react-mantine";
 import hljs from "highlight.js/lib/common";
+import { memo } from "react";
 
-const codeBlock = {
+const highlightedCodeBlock = {
   autoDetectUnknownLanguage: true,
   highlightJs: hljs,
 } as const;
@@ -16,21 +14,19 @@ interface MarkdownMessageProps {
   streaming: boolean;
 }
 
-export function MarkdownMessage({ content, streaming }: MarkdownMessageProps) {
-  const smooth = useSmoothStream({ content, streaming, pacing: "smooth" });
-
+export const MarkdownMessage = memo(function MarkdownMessage({
+  content,
+  streaming,
+}: MarkdownMessageProps) {
   return (
-    <div
-      className="markdown-message"
-      data-streaming={smooth.streaming || undefined}
-    >
+    <div className="markdown-message" data-streaming={streaming || undefined}>
       <MantineAIMarkdown
-        codeBlock={codeBlock}
-        content={smooth.content}
+        codeBlock={streaming ? undefined : highlightedCodeBlock}
+        content={content}
         contentPreprocessors={contentPreprocessors}
         fontSize={14}
-        streaming={smooth.streaming}
+        streaming={streaming}
       />
     </div>
   );
-}
+});

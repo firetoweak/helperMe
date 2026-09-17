@@ -23,14 +23,25 @@ PreviewSink = Callable[
     [str, PreviewPhase, str, str | None],
     Awaitable[None] | None,
 ]
+ThinkingPhase = Literal["started", "delta", "finished", "aborted"]
+ThinkingSink = Callable[
+    [str, ThinkingPhase, str, str | None],
+    Awaitable[None] | None,
+]
 
 
 @dataclass(slots=True)
 class PreviewEmitter:
-    """One disposable preview per Session; committed text still uses deliver."""
+    """One disposable preview per Session; committed text still uses deliver.
+
+    Thinking is a parallel, Channel-only stream. It is not deliver and does
+    not become assistant text.
+    """
 
     sink: PreviewSink | None = None
+    thinking_sink: ThinkingSink | None = None
     _active: dict[str, str] = field(default_factory=dict, init=False)
+    _thinking: dict[str, str] = field(default_factory=dict, init=False)
 
     @property
     def enabled(self) -> bool:
@@ -68,11 +79,63 @@ class PreviewEmitter:
             raise RuntimeError("delivered output is not the active preview")
         del self._active[session_id]
 
+    async def start_thinking(self, session_id: str, output_id: str) -> None:
+        if self.thinking_sink is None or session_id in self._thinking:
+            return
+        self._thinking[session_id] = output_id
+        await _emit_thinking(
+            self.thinking_sink, session_id, "started", output_id, None
+        )
+
+    async def append_thinking(
+        self, session_id: str, output_id: str, text: str
+    ) -> None:
+        if self.thinking_sink is None:
+            return
+        if self._thinking.get(session_id) != output_id:
+            raise RuntimeError("thinking output is not active")
+        await _emit_thinking(
+            self.thinking_sink, session_id, "delta", output_id, text
+        )
+
+    async def finish_thinking(self, session_id: str, output_id: str) -> None:
+        if self.thinking_sink is None:
+            return
+        active = self._thinking.pop(session_id, None)
+        if active is None:
+            return
+        if active != output_id:
+            raise RuntimeError("finished thinking is not the active stream")
+        await _emit_thinking(
+            self.thinking_sink, session_id, "finished", output_id, None
+        )
+
+    async def abort_thinking(self, session_id: str) -> None:
+        if self.thinking_sink is None:
+            return
+        output_id = self._thinking.pop(session_id, None)
+        if output_id is not None:
+            await _emit_thinking(
+                self.thinking_sink, session_id, "aborted", output_id, None
+            )
+
 
 async def _emit_preview(
     sink: PreviewSink,
     session_id: str,
     phase: PreviewPhase,
+    output_id: str,
+    text: str | None,
+) -> None:
+    emitted = sink(session_id, phase, output_id, text)
+    if isawaitable(emitted):
+        await emitted
+
+
+async def _emit_thinking(
+    sink: ThinkingSink,
+    session_id: str,
+    phase: ThinkingPhase,
     output_id: str,
     text: str | None,
 ) -> None:

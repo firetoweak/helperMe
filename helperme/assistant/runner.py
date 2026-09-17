@@ -46,6 +46,7 @@ class SessionScheduler:
             Callable[[str, CanonicalState], Awaitable[None] | None] | None
         ) = None,
         on_failed: Callable[[str, str], Awaitable[None] | None] | None = None,
+        session_failed: Callable[[str, str], Awaitable[None] | None] | None = None,
         preview: PreviewEmitter | None = None,
     ) -> None:
         self._runtime = runtime
@@ -54,8 +55,11 @@ class SessionScheduler:
         self._notify = notify
         self._on_quiesced = on_quiesced
         self._on_failed = on_failed
+        self._session_failed = session_failed
         self._preview = PreviewEmitter() if preview is None else preview
         self.before_advance = None
+        self.auto_authorize = None
+        self.authorization_required = None
         self.propagate_failures = False
         self._task: asyncio.Task[bool] | None = None
         self._pending_wake = False
@@ -93,6 +97,7 @@ class SessionScheduler:
         except Exception as error:
             try:
                 await self._preview.abort(session_id)
+                await self._preview.abort_thinking(session_id)
             except BaseException as preview_error:
                 raise BaseExceptionGroup(
                     "session advance and preview cleanup failed",
@@ -104,12 +109,14 @@ class SessionScheduler:
             if message is None:
                 raise
             # 已识别的模型失败只停这条 Session：它仍是 RUNNABLE，
-            # 下一条外部事实会从同一个 trigger 重试。
-            await self._emit(session_id, f"运行失败：{message}")
+            # 下一条外部事实会从同一个 trigger 重试。失败是这次推进的
+            # 瞬时状态，不走 deliver，避免被 Channel 当成助手回复留下。
+            await self._emit_session_failed(session_id, f"运行失败：{message}")
             await self._failed(session_id, message)
             return False
         if advance.step is None and advance.status is not RuntimeStatus.RUNNABLE:
             await self._preview.abort(session_id)
+            await self._preview.abort_thinking(session_id)
         if advance.step is not None:
             result = await self._control.after_committed_step(
                 session_id,
@@ -128,15 +135,56 @@ class SessionScheduler:
         if isinstance(notified, Awaitable):
             await notified
 
+    async def _emit_session_failed(self, session_id: str, message: str) -> None:
+        if self._session_failed is None:
+            return
+        observed = self._session_failed(session_id, message)
+        if isinstance(observed, Awaitable):
+            await observed
+
     async def _quiesced(self, session_id: str) -> None:
         """本次推进没有留下待办。订阅者自己判断这是否算一件事做完了。"""
 
+        if (
+            self.auto_authorize is None
+            and self.authorization_required is None
+            and self._on_quiesced is None
+        ):
+            return
+        state = await self._runtime.state(session_id)
+        pending = pending_authorization_ids(state)
+        if pending:
+            should_auto = False
+            if self.auto_authorize is not None:
+                should_auto = self.auto_authorize(session_id)
+                if isinstance(should_auto, Awaitable):
+                    should_auto = await should_auto
+            if should_auto:
+                for command_id in pending:
+                    await self._runtime.grant_command(session_id, command_id)
+                await self.wake(session_id)
+                return
+            if self.authorization_required is not None:
+                by_id = {
+                    command_state.command.command_id: command_state
+                    for command_state in state.commands
+                }
+                for command_id in pending:
+                    command_state = by_id.get(command_id)
+                    if command_state is None:
+                        continue
+                    effect = command_state.command.effect
+                    observed = self.authorization_required(
+                        session_id,
+                        command_id,
+                        effect.name,
+                        effect.argument_dict(),
+                    )
+                    if isinstance(observed, Awaitable):
+                        await observed
         if self._on_quiesced is None:
             return
-        observed = self._on_quiesced(
-            session_id,
-            await self._runtime.state(session_id),
-        )
+        observed = self._on_quiesced(session_id, state)
         if isinstance(observed, Awaitable):
             await observed
 

@@ -62,6 +62,7 @@ class StreamingLlm:
         *,
         tools=None,
         on_content_delta=None,
+        on_reasoning_delta=None,
     ):
         self.tools = tools
         await on_content_delta("hel")
@@ -83,6 +84,7 @@ class BlockingStreamingLlm:
         *,
         tools=None,
         on_content_delta=None,
+        on_reasoning_delta=None,
     ):
         self.tools = tools
         await on_content_delta("partial")
@@ -351,6 +353,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             home = HelperMeHome(root / ".helperme")
             delivered: list[tuple[str, str]] = []
+            failed: list[tuple[str, str]] = []
             activity: list[tuple[str, bool]] = []
             with (
                 patch(
@@ -376,6 +379,11 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     MemoryJournal(),
                     session_id="session",
+                    session_failed_sink=(
+                        lambda session_id, message: failed.append(
+                            (session_id, message)
+                        )
+                    ),
                     subagent_activity_sink=(
                         lambda session_id, active: activity.append(
                             (session_id, active)
@@ -396,12 +404,60 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     assembly.subagents._parents["parent/sub-1"] = "parent"
                     await scheduler._emit("parent/sub-1", "运行失败：上游 500")
                     await scheduler._emit("parent", "父转述后的判断")
+                    await scheduler._emit_session_failed(
+                        "parent/sub-1", "运行失败：上游 500"
+                    )
+                    await scheduler._emit_session_failed(
+                        "parent", "运行失败：父自己的错误"
+                    )
 
                     assembly.subagents._visible_pending["parent"] = {"parent/sub-1"}
                     assembly.subagents._publish_activity("parent")
                     await asyncio.sleep(0)
 
                     self.assertEqual(delivered, [("parent", "父转述后的判断")])
+                    self.assertEqual(failed, [("parent", "运行失败：父自己的错误")])
                     self.assertEqual(activity, [("parent", True)])
+                finally:
+                    await assembly.scheduler.close()
+
+    async def test_paused_session_does_not_advance(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with (
+                patch(
+                    "helperme.assistant.assembly.HelperMeHome.default",
+                    return_value=HelperMeHome(root / ".helperme"),
+                ),
+                patch(
+                    "helperme.assistant.assembly.runtime_data_root",
+                    return_value=root / "runtime",
+                ),
+            ):
+                assembly = await build_assistant_assembly(
+                    AssistantConfig(
+                        model_name="test-model",
+                        workspace_root=workspace,
+                        full_access=False,
+                        model_context_limit=200_000,
+                        input_budget_ratio=0.75,
+                        llm=CapturingLlm(),
+                    ),
+                    lambda *_values: None,
+                    MemoryJournal(),
+                    session_id="session",
+                    scheduler_factory=SettlingScheduler,
+                )
+                try:
+                    await assembly.runtime.receive_user_message(
+                        "session",
+                        "hello",
+                        delivery_id="user-1",
+                    )
+                    self.assertTrue(await assembly.scheduler.before_advance())
+                    await assembly.sessions.set_paused("session", paused=True)
+                    self.assertFalse(await assembly.scheduler.before_advance())
                 finally:
                     await assembly.scheduler.close()
