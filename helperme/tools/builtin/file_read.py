@@ -24,17 +24,19 @@ from helperme.tools.spec import PydanticParameters, ToolSpec
 
 
 GLOB_DESCRIPTION = """
-用途：在当前 Environment 的可见工作区域中按名称模式查找文件或目录。
+用途：在当前 Environment 的 Workspace View 内按名称模式查找文件或目录。
 何时使用：不知道目标文件位置、需要按扩展名或目录层级定位时使用；搜索文件内容用 grep，读取已知文件用 read_file。
-关键限制：相对 path 以当前 Environment cwd 为基准，绝对 path 使用 Environment 原生语义；pattern 相对搜索起点；结果必须位于 Workspace View 内。
-失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path、pattern、kind、max_depth；GLOB_PARTIAL 与 complete=false 表示结果可用但搜索不完整。
+默认范围：使用 rg 默认过滤：跳过隐藏文件/目录（名称以 . 开头，含 .git）以及 gitignore / .ignore / .rgignore 匹配项。需要搜索隐藏文件时设 include_hidden=true，需要搜索 gitignore 匹配项时设 include_ignored=true，两者可同时设置；把 path 直接指到被跳过的目录会进入该目录，进入后上述过滤规则依然生效。无论 include_hidden 还是 include_ignored 为 true 都不进入 .git，除非 path 已在 .git 内。
+关键限制：相对 path 以当前 Environment cwd 为基准，绝对 path 使用 Environment 原生语义；pattern 不含 / 时递归匹配文件名，含 / 时匹配相对搜索起点的路径；结果必须位于 Workspace View 内。
+失败/截断后：truncated=true 时用返回的 next_offset 作为下次调用的 offset 继续，或缩小 path、pattern、kind、max_depth；hint 会说明本次跳过了哪些过滤；RG_TIMEOUT/RG_NOT_FOUND/RG_FAILED 时不能假定没有匹配。
 """.strip()
 
 GREP_DESCRIPTION = """
-用途：在当前 Environment 的可见文件或目录内按关键词或正则搜索文本，返回每个匹配行的位置和内容。
+用途：在当前 Environment 的 Workspace View 内用正则搜索文本，返回每个匹配行的位置和内容。
 何时使用：不知道内容出现在哪个文件、修改前需要定位原文时使用；找文件名用 glob，阅读匹配位置的完整上下文用 read_file。
-关键限制：相对 path 以当前 Environment cwd 为基准，绝对 path 使用 Environment 原生语义；query 按正则解释；一条 hit 表示一行匹配。
-失败/截断后：truncated=true 时使用 next_offset 继续，或缩小 path/query；content_truncated=true 时用 read_file 查看该行；RG_TIMEOUT/RG_NOT_FOUND/RG_FAILED 时不能假定没有匹配。
+默认范围：使用 rg 默认过滤：跳过隐藏文件/目录（名称以 . 开头，含 .git）以及 gitignore / .ignore / .rgignore 匹配项。需要搜索隐藏文件时设 include_hidden=true，需要搜索 gitignore 匹配项时设 include_ignored=true，两者可同时设置；把 path 直接指到被跳过的文件或目录会搜索该路径，对目录而言进入后上述过滤规则依然生效。无论 include_hidden 还是 include_ignored 为 true 都不进入 .git，除非 path 已在 .git 内。
+关键限制：相对 path 以当前 Environment cwd 为基准，绝对 path 使用 Environment 原生语义；query 始终按正则解释，字面匹配需转义正则元字符；一条 hit 表示一行匹配。
+失败/截断后：truncated=true 时用返回的 next_offset 作为下次调用的 offset 继续，或缩小 path/query；content_truncated=true 时用 read_file 查看该行；RG_TIMEOUT/RG_NOT_FOUND/RG_FAILED 时不能假定没有匹配。
 """.strip()
 
 READ_FILE_DESCRIPTION = """
@@ -51,7 +53,6 @@ MAX_GREP_HIT_CHARS = 2_000
 MAX_GREP_PAGE_CHARS = 8_000
 MAX_GREP_SUBMATCHES = 100
 MAX_RG_ERROR_CHARS = 4_000
-MAX_GLOB_INACCESSIBLE_PATHS = 100
 GREP_TIMEOUT_SECONDS = 30
 GREP_SHUTDOWN_TIMEOUT_SECONDS = 5
 
@@ -61,6 +62,14 @@ class GlobInput(BaseModel):
     path: str = Field(default=".", description="搜索起点；相对路径基于当前 Environment cwd")
     kind: Literal["file", "dir", "any"] = Field(default="any", description="结果类型：file 仅文件、dir 仅目录、any 两者都要")
     max_depth: int | None = Field(default=None, ge=1, description="相对搜索起点的深度限制；默认不限制，1 表示只看当前层")
+    include_hidden: bool = Field(
+        default=False,
+        description="为 true 时包含隐藏文件/目录（名称以 . 开头）；默认跳过。.git 仍会跳过，除非 path 已在 .git 内",
+    )
+    include_ignored: bool = Field(
+        default=False,
+        description="为 true 时包含 gitignore / .ignore / .rgignore 匹配项；默认跳过。把 path 指到被忽略目录也会进入",
+    )
     offset: int = Field(default=0, ge=0, description="跳过的匹配结果数量，从 0 开始")
     max_results: int = Field(default=10, ge=1, le=100, description="最多返回的结果数量，范围 1 到 100")
 
@@ -72,8 +81,16 @@ class ReadFileInput(BaseModel):
 
 
 class GrepInput(BaseModel):
-    query: str = Field(description="搜索关键词或正则表达式")
+    query: str = Field(description="正则表达式；字面匹配需转义正则元字符")
     path: str = Field(default=".", description="搜索路径；相对路径基于当前 Environment cwd")
+    include_hidden: bool = Field(
+        default=False,
+        description="为 true 时搜索隐藏文件/目录（名称以 . 开头）；默认跳过。.git 仍会跳过，除非 path 已在 .git 内",
+    )
+    include_ignored: bool = Field(
+        default=False,
+        description="为 true 时搜索 gitignore / .ignore / .rgignore 匹配项；默认跳过。把 path 指到被忽略文件或目录也会搜索",
+    )
     offset: int = Field(default=0, ge=0, description="跳过的匹配行数量，从 0 开始")
     max_results: int = Field(default=10, ge=1, le=100, description="最多返回的匹配数量，范围 1 到 100")
 
@@ -110,35 +127,48 @@ def _require_existing(
     return resolved, None
 
 
-def _walk_entries(
-    root: Path,
-    max_depth: int | None,
-    inaccessible: list[Path],
-    depth: int = 1,
-):
-    try:
-        with os.scandir(root) as iterator:
-            entries = sorted(iterator, key=lambda entry: entry.name)
-    except OSError:
-        if len(inaccessible) <= MAX_GLOB_INACCESSIBLE_PATHS:
-            inaccessible.append(root)
-        return
-    for entry in entries:
-        candidate = Path(entry.path)
-        yield candidate
-        try:
-            is_dir = entry.is_dir(follow_symlinks=False)
-        except OSError:
-            if len(inaccessible) <= MAX_GLOB_INACCESSIBLE_PATHS:
-                inaccessible.append(candidate)
-            continue
-        if is_dir and (max_depth is None or depth < max_depth):
-            yield from _walk_entries(
-                candidate,
-                max_depth,
-                inaccessible,
-                depth + 1,
-            )
+def _is_within_git_dir(path: Path) -> bool:
+    return any(part == ".git" for part in path.parts)
+
+
+def _rg_scope_args(
+    native_path: Path,
+    *,
+    include_hidden: bool,
+    include_ignored: bool,
+) -> list[str]:
+    args: list[str] = []
+    if include_hidden:
+        args.append("--hidden")
+    if include_ignored:
+        args.append("--no-ignore")
+    if include_hidden and not _is_within_git_dir(native_path):
+        args.extend(["--glob", "!.git/"])
+    return args
+
+
+def _rg_scope_hint(
+    native_path: Path,
+    *,
+    include_hidden: bool,
+    include_ignored: bool,
+) -> str | None:
+    skipped: list[str] = []
+    if not include_hidden:
+        skipped.append("隐藏文件/目录")
+    elif not _is_within_git_dir(native_path):
+        skipped.append(".git")
+    if not include_ignored:
+        skipped.append("gitignore 匹配项")
+    if not skipped:
+        return None
+    knobs: list[str] = []
+    if not include_hidden:
+        knobs.append("include_hidden=true")
+    if not include_ignored:
+        knobs.append("include_ignored=true")
+    knobs.append("或把 path 指到目标目录")
+    return f"已跳过{'、'.join(skipped)}。需要时设 {' / '.join(knobs)}。"
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
@@ -148,79 +178,106 @@ def _matches_glob(path: str, pattern: str) -> bool:
     return PurePosixPath(f"/{path}").match(f"/{pattern}")
 
 
-def _scan_glob(
-    resolver: WorkspacePathResolver,
-    raw: GlobInput,
-    resolved_search: ResolvedEnvironmentPath,
-    pattern: str,
-) -> dict[str, Any]:
-    search_root = resolved_search.native_path
-    matches = []
-    skipped = 0
-    inaccessible: list[Path] = []
-    for candidate in _walk_entries(
-        search_root,
-        raw.max_depth,
-        inaccessible,
-    ):
+def _glob_relative_entries(
+    file_paths: list[Path],
+    search_root: Path,
+    max_depth: int | None,
+) -> list[tuple[str, Literal["file", "dir"]]]:
+    files: set[str] = set()
+    dirs: set[str] = set()
+    root = search_root.resolve()
+    for path in file_paths:
         try:
-            resolved_candidate = resolver.resolve(str(candidate))
-            absolute_candidate = resolved_candidate.native_path
-        except EnvironmentInputError:
+            relative = path.resolve().relative_to(root)
+        except ValueError:
             continue
-        try:
-            if not absolute_candidate.exists():
-                continue
-            candidate_kind = "dir" if absolute_candidate.is_dir() else "file"
-        except OSError:
-            if len(inaccessible) < MAX_GLOB_INACCESSIBLE_PATHS:
-                inaccessible.append(absolute_candidate)
+        parts = relative.parts
+        if not parts:
             continue
-        if raw.kind != "any" and candidate_kind != raw.kind:
-            continue
-
-        relative_search_path = candidate.relative_to(search_root).as_posix()
-        if not _matches_glob(relative_search_path, pattern):
-            continue
-
-        if skipped < raw.offset:
-            skipped += 1
-            continue
-        matches.append({
-            **resolved_candidate.result_fields(),
-            "path": resolved_candidate.workspace_membership.display_path,
-            "kind": candidate_kind,
-        })
-        if len(matches) > raw.max_results:
-            break
-
-    truncated = len(matches) > raw.max_results
-    page = matches[:raw.max_results]
-    inaccessible_paths = [
-        resolver.resolve(str(path)).workspace_membership.display_path
-        for path in inaccessible[:MAX_GLOB_INACCESSIBLE_PATHS]
+        if max_depth is None or len(parts) <= max_depth:
+            files.add(relative.as_posix())
+        for depth in range(1, len(parts)):
+            if max_depth is None or depth <= max_depth:
+                dirs.add(PurePosixPath(*parts[:depth]).as_posix())
+    entries: list[tuple[str, Literal["file", "dir"]]] = [
+        *((item, "dir") for item in dirs),
+        *((item, "file") for item in files),
     ]
-    complete = not inaccessible
-    return {
-        "ok": True,
-        "code": "GLOB_COMPLETED" if complete else "GLOB_PARTIAL",
-        "pattern": raw.pattern,
-        "path": raw.path,
-        **resolved_search.result_fields(),
-        "matches": page,
-        "complete": complete,
-        "inaccessible_paths": inaccessible_paths,
-        "inaccessible_paths_truncated": (
-            len(inaccessible) > MAX_GLOB_INACCESSIBLE_PATHS
-        ),
-        "truncated": truncated,
-        "next_offset": raw.offset + len(page) if truncated else None,
-        "hint": (
-            "结果不完整；检查 inaccessible_paths，并在需要完整结论时缩小 path。"
-            if not complete
-            else None
-        ),
-    }
+    entries.sort(key=lambda item: item[0])
+    return entries
+
+
+async def _stop_process(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), GREP_SHUTDOWN_TIMEOUT_SECONDS)
+    except TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            return
+        await proc.wait()
+
+
+async def _rg_file_paths(search_root: Path, scope_args: list[str]) -> dict[str, Any]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "rg",
+            "--files",
+            "-0",
+            *scope_args,
+            "--",
+            str(search_root),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=MAX_READ_FILE_SIZE_BYTES,
+        )
+    except OSError as exc:
+        return _filesystem_failure("RG_FAILED", str(search_root), exc)
+    timed_out = False
+    try:
+        try:
+            async with asyncio.timeout(GREP_TIMEOUT_SECONDS):
+                stdout, stderr = await proc.communicate()
+        except TimeoutError:
+            timed_out = True
+            await _stop_process(proc)
+            stdout, stderr = b"", b""
+    except BaseException:
+        cleanup = asyncio.create_task(_stop_process(proc))
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            await cleanup
+        raise
+    if timed_out:
+        return {
+            "ok": False,
+            "code": "RG_TIMEOUT",
+            "error": f"rg 搜索超过 {GREP_TIMEOUT_SECONDS} 秒",
+        }
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()[:MAX_RG_ERROR_CHARS]
+    if proc.returncode == 2:
+        return {
+            "ok": False,
+            "code": "RG_FAILED",
+            "error": stderr_text or "rg 执行失败",
+        }
+    paths: list[Path] = []
+    for raw in stdout.split(b"\0"):
+        if not raw:
+            continue
+        candidate = Path(os.fsdecode(raw))
+        if not candidate.is_absolute():
+            candidate = search_root / candidate
+        paths.append(candidate)
+    return {"ok": True, "paths": paths}
 
 
 def create_file_read_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
@@ -253,14 +310,61 @@ def create_file_read_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
                 "code": "EMPTY_PATTERN",
                 **resolved_search.result_fields(),
             }
+        if shutil.which("rg") is None:
+            return {"ok": False, "code": "RG_NOT_FOUND", "error": "未找到 rg"}
 
-        return await asyncio.to_thread(
-            _scan_glob,
-            resolver,
-            raw,
-            resolved_search,
-            pattern,
+        search_root = resolved_search.native_path
+        scope_args = _rg_scope_args(
+            search_root,
+            include_hidden=raw.include_hidden,
+            include_ignored=raw.include_ignored,
         )
+        listed = await _rg_file_paths(search_root, scope_args)
+        if not listed.get("ok"):
+            return {
+                **listed,
+                "path": raw.path,
+                **resolved_search.result_fields(),
+            }
+
+        selected = [
+            item
+            for item in _glob_relative_entries(
+                listed["paths"],
+                search_root,
+                raw.max_depth,
+            )
+            if (raw.kind == "any" or item[1] == raw.kind)
+            and _matches_glob(item[0], pattern)
+        ]
+        page = selected[raw.offset:raw.offset + raw.max_results]
+        truncated = len(selected) > raw.offset + raw.max_results
+        matches = []
+        for relative, candidate_kind in page:
+            try:
+                resolved_candidate = resolver.resolve(str(search_root / relative))
+            except EnvironmentInputError:
+                continue
+            matches.append({
+                **resolved_candidate.result_fields(),
+                "path": resolved_candidate.workspace_membership.display_path,
+                "kind": candidate_kind,
+            })
+        return {
+            "ok": True,
+            "code": "GLOB_COMPLETED",
+            "pattern": raw.pattern,
+            "path": raw.path,
+            **resolved_search.result_fields(),
+            "matches": matches,
+            "truncated": truncated,
+            "next_offset": raw.offset + len(page) if truncated else None,
+            "hint": _rg_scope_hint(
+                search_root,
+                include_hidden=raw.include_hidden,
+                include_ignored=raw.include_ignored,
+            ),
+        }
 
     async def grep(raw: GrepInput) -> dict[str, Any]:
         if not raw.query.strip():
@@ -290,6 +394,11 @@ def create_file_read_specs(binding: EnvironmentBinding) -> list[ToolSpec]:
                 "--json",
                 "--sort",
                 "path",
+                *_rg_scope_args(
+                    path,
+                    include_hidden=raw.include_hidden,
+                    include_ignored=raw.include_ignored,
+                ),
                 "--",
                 raw.query,
                 str(path),
