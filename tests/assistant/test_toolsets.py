@@ -127,6 +127,53 @@ class FakeEchoProvider:
         )
 
 
+class NestedSchemaProvider(FakeEchoProvider):
+    """形状同真实 MCP Toolset：参数 Schema 与 provider_data 都含嵌套对象。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.snapshots: tuple[LoadedToolSnapshot, ...] = ()
+
+    async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
+        if toolset_id != "demo":
+            raise ToolsetLoadError(
+                "TOOLSET_NOT_FOUND",
+                f"Toolset {toolset_id} not found",
+            )
+
+        async def ping(arguments: Mapping[str, object]) -> object:
+            return {"ok": True, "code": "ECHO", "data": {"echo": arguments.get("text", "")}}
+
+        return (
+            LoadedTool(
+                name="demo_ping",
+                description="echo text",
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                execute=ping,
+                provider_data={
+                    "tool_name": "demo_ping",
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {"echo": {"type": "string"}},
+                    },
+                },
+            ),
+        )
+
+    def restore(
+        self,
+        toolset_id: str,
+        revision: int,
+        tools: tuple[LoadedToolSnapshot, ...],
+    ) -> tuple[LoadedTool, ...]:
+        self.snapshots = tools
+        return super().restore(toolset_id, revision, tools)
+
+
 def _schema_names(schemas: list[dict[str, object]]) -> set[str]:
     names: set[str] = set()
     for schema in schemas:
@@ -139,9 +186,11 @@ def _schema_names(schemas: list[dict[str, object]]) -> set[str]:
 class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
     SESSION_ID = "toolset-session"
 
-    async def _committed_load_events(self):
+    async def _committed_load_events(self, provider: FakeEchoProvider | None = None):
         delivered: list[str] = []
-        surface = ToolSurface(providers=(FakeEchoProvider(),))
+        surface = ToolSurface(
+            providers=(FakeEchoProvider() if provider is None else provider,),
+        )
         decisions = ScriptedDecisionMaker(
             (
                 lambda _frame: ModelDecision(
@@ -293,6 +342,26 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(provider.load_calls, 0)
         self.assertEqual(provider.restore_calls, 1)
+
+    async def test_rehydrate_hands_plain_json_containers_to_provider(self):
+        events = await self._committed_load_events(NestedSchemaProvider())
+        provider = NestedSchemaProvider()
+        surface = ToolSurface(providers=(provider,))
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker(()),
+            load_toolset_binding(surface),
+            SequentialIds(),
+        )
+        surface.attach(runtime)
+
+        await surface.rehydrate(self.SESSION_ID, events)
+
+        snapshot = provider.snapshots[0]
+        self.assertIs(type(snapshot.parameters), dict)
+        self.assertIs(type(snapshot.parameters["properties"]), dict)
+        self.assertIs(type(snapshot.provider_data), dict)
+        self.assertIs(type(snapshot.provider_data["output_schema"]), dict)
 
     async def test_failed_load_outcome_does_not_break_rehydrate(self):
         delivered: list[str] = []

@@ -21,6 +21,7 @@ from helperme.runtime import (
     ToolBinding,
 )
 from helperme.runtime.dispatcher import AttemptContext
+from helperme.runtime.json_values import thaw_value
 from helperme.runtime.model import DecisionState
 
 
@@ -131,7 +132,10 @@ class ToolsetProvider(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class LoadedToolSnapshot:
-    """写入 Journal 的完整工具契约；不包含进程内 callable。"""
+    """写入 Journal 的完整工具契约；不包含进程内 callable。
+
+    Journal 事实值在 Runtime 内被递归冻结，这里保存已还原的普通 JSON 容器。
+    """
 
     name: str
     description: str
@@ -251,9 +255,10 @@ def project_toolset_activations(
                 LoadedToolSnapshot(
                     name=tool["name"],
                     description=tool["description"],
-                    parameters=tool["parameters"],
+                    # Journal 事实值在 Runtime 内被递归冻结；交给 Provider 的契约必须是普通 JSON 容器。
+                    parameters=thaw_value(tool["parameters"]),
                     requires_authorization=tool["requires_authorization"],
-                    provider_data=tool["provider_data"],
+                    provider_data=thaw_value(tool["provider_data"]),
                 )
             )
         activations[toolset_id] = ToolsetActivation(
