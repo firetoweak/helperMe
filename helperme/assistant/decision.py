@@ -312,7 +312,7 @@ class JournalBackedLlmDecisionMaker:
             for event in journal_tail
             if event.sequence <= frame.observed_journal_position
         )
-        visible = frame.state.visible_event_ids
+        visible = frame.state
         if self._compact is not None and self._compact.is_reader:
             prepared = await self._compact.prepare_reader(events, visible)
         else:

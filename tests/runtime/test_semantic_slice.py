@@ -395,6 +395,71 @@ class RuntimeSemanticSliceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(model.frames), 3)
 
+    async def test_second_burst_fact_sees_first_fact_step_outcomes(self):
+        """一批外部事实里，为前一条提交的 Step 也要带着自己的命令终局出现。
+
+        该 Step 因果上早于后一条事实，却是在它到达之后才提交的，
+        观测位置因此越过了它。两者必须一起可见，否则冻结出的这一帧
+        会带着一个没有结果的工具调用。
+        """
+
+        tool = RecordingTool("work")
+        model = ScriptedDecisionMaker(
+            (
+                lambda _frame: ModelDecision(
+                    command_requests=(InvokeTool("work"),),
+                ),
+                lambda _frame: ModelDecision(
+                    command_requests=(InvokeTool("work"),),
+                ),
+                lambda _frame: ModelDecision(content="done"),
+            )
+        )
+        runtime = runtime_for(tool, model)
+        await runtime.create_session("session")
+        await runtime.receive_user_message("session", "go", delivery_id="user-1")
+        await runtime.advance("session")
+        await asyncio.wait_for(tool.started.wait(), timeout=1)
+        for index in (1, 2):
+            await runtime.receive_domain_fact(
+                "session",
+                "subagent.report",
+                {"child_session_id": f"child-{index}"},
+                delivery_id=f"report-{index}",
+                source="subagent",
+                requests_decision=True,
+            )
+        tool.release.set()
+        while runtime.dispatcher.active_count:
+            await asyncio.sleep(0)
+
+        second = await runtime.advance("session")
+        self.assertEqual(
+            model.frames[1].trigger_event.payload.data["child_session_id"],
+            "child-1",
+        )
+        command_id = second.step.commands[0].command_id
+        while runtime.dispatcher.active_count:
+            await asyncio.sleep(0)
+
+        await runtime.advance("session")
+
+        frame = model.frames[2]
+        self.assertEqual(
+            frame.trigger_event.payload.data["child_session_id"],
+            "child-2",
+        )
+        events = await runtime.snapshot("session")
+        outcome_ids = {
+            event.event_id
+            for event in events
+            if isinstance(event.payload, CommandOutcomeReceived)
+            and event.payload.command_id == command_id
+        }
+        self.assertEqual(len(outcome_ids), 1)
+        self.assertTrue(outcome_ids <= set(frame.state.visible_event_ids))
+        self.assertIsNotNone(frame.state.command(command_id).outcome)
+
     async def test_later_user_message_after_group_closes_still_owns_next_step(self):
         tool = RecordingTool("work")
         model = ScriptedDecisionMaker(

@@ -8,7 +8,7 @@ from helperme.assistant.compact.core import (
     save_document,
 )
 from helperme.assistant.context.projection import ModelContextProjector
-from helperme.runtime import AgentRuntime, MemoryJournal
+from helperme.runtime import AgentRuntime, MemoryJournal, StateProjector
 from helperme.assistant.toolsets import ToolSurface
 from tests.assistant.test_toolsets import FakeEchoProvider
 
@@ -134,15 +134,14 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("handoff 1", evidence["data"]["content"])
 
-        self.assertEqual(
-            restored.visible(events, tuple(e.event_id for e in events)), ()
-        )
+        def restored_visible(events):
+            whole = StateProjector().project_visible("b", events)
+            return restored.visible(events, whole).visible_event_ids
+
+        self.assertEqual(restored_visible(events), ())
         await runtime.receive_user_message("b", "new", delivery_id="new")
         events = await runtime.snapshot("b")
-        self.assertEqual(
-            restored.visible(events, tuple(e.event_id for e in events)),
-            (events[-1].event_id,),
-        )
+        self.assertEqual(restored_visible(events), (events[-1].event_id,))
         with self.assertRaisesRegex(ValueError, "stale"):
             await boundary.publish(
                 {**args, "window": {**args["window"], "id": "stale", "parent": None}}

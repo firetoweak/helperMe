@@ -19,6 +19,7 @@ from helperme.runtime import (
     InvokeTool,
     ModelDecision,
     OutcomeStatus,
+    StateProjector,
     Step,
     StepCommitted,
     UserMessageReceived,
@@ -37,6 +38,12 @@ def event(sequence, event_id, payload, causation_id=None, artifact_refs=()):
         schema_version=5,
         artifact_refs=artifact_refs,
     )
+
+
+def timeline(events):
+    """时间线消费的是归约后的回合，不是裸事件流。"""
+
+    return StateProjector().project_visible("session-1", events).steps
 
 
 def committed_step(event_id, trigger, content, commands):
@@ -71,19 +78,28 @@ class ConversationProjectionTest(unittest.TestCase):
             ),
             event(
                 3,
+                "attempt-1",
+                DispatchAttemptStarted("att-1", "cmd-read"),
+                causation_id="step-1",
+            ),
+            event(
+                4,
                 "out-1",
                 CommandOutcomeReceived(
                     "cmd-read",
                     "att-1",
                     CommandOutcome(OutcomeStatus.SUCCEEDED, value="ok"),
                 ),
+                causation_id="attempt-1",
             ),
         )
         view = SessionView("waiting", ("user_message",), (), False)
 
-        conversation = project_conversation("session-1", events, session=view)
+        conversation = project_conversation(
+            "session-1", events, timeline(events), session=view
+        )
 
-        self.assertEqual(conversation.revision, 3)
+        self.assertEqual(conversation.revision, 4)
         self.assertEqual(conversation.items[0].kind, "user")
         step = conversation.items[1]
         self.assertEqual(step.kind, "step")
@@ -123,6 +139,7 @@ class ConversationProjectionTest(unittest.TestCase):
         conversation = project_conversation(
             "session-1",
             events,
+            timeline(events),
             session=SessionView("waiting", ("user_message",), (), False),
         )
         self.assertEqual(conversation.items[1].thinking, "先确认目标")
@@ -138,26 +155,33 @@ class ConversationProjectionTest(unittest.TestCase):
         )
         view = SessionView("waiting", ("user_message",), (), False)
 
-        running = project_conversation("session-1", events, session=view)
+        running = project_conversation(
+            "session-1", events, timeline(events), session=view
+        )
         self.assertEqual(running.items[0].kind, "step")
         self.assertEqual(running.items[0].tools[0].status, "running")
         self.assertIsNone(running.items[0].tools[0].error)
 
-        failed = project_conversation(
-            "session-1",
-            events
-            + (
-                event(
-                    2,
-                    "out-1",
-                    CommandOutcomeReceived(
-                        "cmd-search",
-                        "att-1",
-                        CommandOutcome(OutcomeStatus.FAILED, error_message="boom"),
-                    ),
-                ),
+        ran = events + (
+            event(
+                2,
+                "attempt-1",
+                DispatchAttemptStarted("att-1", "cmd-search"),
+                causation_id="step-1",
             ),
-            session=view,
+            event(
+                3,
+                "out-1",
+                CommandOutcomeReceived(
+                    "cmd-search",
+                    "att-1",
+                    CommandOutcome(OutcomeStatus.FAILED, error_message="boom"),
+                ),
+                causation_id="attempt-1",
+            ),
+        )
+        failed = project_conversation(
+            "session-1", ran, timeline(ran), session=view
         )
         self.assertEqual(failed.items[0].tools[0].status, "failed")
         self.assertEqual(failed.items[0].tools[0].error, "boom")
@@ -179,13 +203,16 @@ class ConversationProjectionTest(unittest.TestCase):
         )
         view = SessionView("waiting", ("command:cmd-search",), (), False)
 
-        idle = project_conversation("session-1", events, session=view)
+        idle = project_conversation(
+            "session-1", events, timeline(events), session=view
+        )
         self.assertEqual(idle.items[0].tools[0].status, "unknown")
         self.assertEqual(idle.items[0].tools[0].error, UNKNOWN_TOOL_ERROR)
 
         busy = project_conversation(
             "session-1",
             events,
+            timeline(events),
             session=view,
             activity="running",
         )
@@ -206,16 +233,18 @@ class ConversationProjectionTest(unittest.TestCase):
 
     def test_user_message_carries_image_refs(self):
         attachment_id = "sha256:" + "a" * 64
+        events = (
+            event(
+                1,
+                "user-1",
+                UserMessageReceived("[Image #1]"),
+                artifact_refs=(attachment_id,),
+            ),
+        )
         conversation = project_conversation(
             "session-1",
-            (
-                event(
-                    1,
-                    "user-1",
-                    UserMessageReceived("[Image #1]"),
-                    artifact_refs=(attachment_id,),
-                ),
-            ),
+            events,
+            timeline(events),
             session=SessionView("waiting", ("user_message",), (), False),
         )
 
@@ -239,6 +268,7 @@ class ConversationProjectionTest(unittest.TestCase):
         waiting = project_conversation(
             "session-1",
             events,
+            timeline(events),
             session=SessionView(
                 "waiting",
                 ("authorization:cmd-write",),
@@ -249,9 +279,13 @@ class ConversationProjectionTest(unittest.TestCase):
         self.assertEqual(waiting.items[0].tools[0].status, "awaiting_authorization")
         self.assertEqual(waiting.items[0].tools[0].arguments, {"path": "a.md", "content": "x"})
 
+        turned_down = events + (
+            event(2, "reject-1", CommandRejected("cmd-write"), causation_id="step-1"),
+        )
         rejected = project_conversation(
             "session-1",
-            events + (event(2, "reject-1", CommandRejected("cmd-write")),),
+            turned_down,
+            timeline(turned_down),
             session=SessionView("waiting", ("user_message",), (), False),
         )
         self.assertEqual(rejected.items[0].tools[0].status, "rejected")

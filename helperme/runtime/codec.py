@@ -30,13 +30,14 @@ from helperme.runtime.model import (
     OutcomeStatus,
     RuntimeStatus,
     Step,
+    StepState,
 )
 
 
 EVENT_SCHEMA_VERSION = 5
 DELIVERY_FINGERPRINT_VERSION = 3
 STATE_CODEC_VERSION = 6
-STATE_PROJECTION_VERSION = "canonical-state-v3"
+STATE_PROJECTION_VERSION = "canonical-state-v4"
 
 _USER_MESSAGE = "user.message.received"
 _STEP_COMMITTED = "step.committed"
@@ -199,6 +200,33 @@ def _step_from_data(data: dict[str, object]) -> Step:
         observed_journal_position=data["observed_journal_position"],
         decision=_decision_from_data(data["decision"]),
         commands=tuple(_command_from_data(command) for command in data["commands"]),
+    )
+
+
+def _step_state_to_data(state: StepState) -> dict[str, object]:
+    return {
+        "step": _step_to_data(state.step),
+        "committed_event_id": state.committed_event_id,
+        "sequence": state.sequence,
+        "decision_metadata": thaw_value(state.decision_metadata),
+        "commands": [_command_state_to_data(command) for command in state.commands],
+    }
+
+
+def _step_state_from_data(data: dict[str, object]) -> StepState:
+    _require_object(
+        data,
+        {"step", "committed_event_id", "sequence", "decision_metadata", "commands"},
+        "step state",
+    )
+    return StepState(
+        step=_step_from_data(data["step"]),
+        committed_event_id=data["committed_event_id"],
+        sequence=data["sequence"],
+        decision_metadata=data["decision_metadata"],
+        commands=tuple(
+            _command_state_from_data(command) for command in data["commands"]
+        ),
     )
 
 
@@ -425,7 +453,7 @@ def encode_state(state: CanonicalState) -> str:
                 "commands": [
                     _command_state_to_data(command) for command in state.commands
                 ],
-                "steps": [_step_to_data(step) for step in state.steps],
+                "steps": [_step_state_to_data(step) for step in state.steps],
                 "next_trigger_event_id": state.next_trigger_event_id,
                 "waiting_command_ids": list(state.waiting_command_ids),
                 "waiting_for": list(state.waiting_for),
@@ -467,7 +495,7 @@ def decode_state(state_json: str) -> CanonicalState:
         commands=tuple(
             _command_state_from_data(command) for command in data["commands"]
         ),
-        steps=tuple(_step_from_data(step) for step in data["steps"]),
+        steps=tuple(_step_state_from_data(step) for step in data["steps"]),
         next_trigger_event_id=data["next_trigger_event_id"],
         waiting_command_ids=tuple(data["waiting_command_ids"]),
         waiting_for=tuple(data["waiting_for"]),

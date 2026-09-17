@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from hashlib import sha256
 
@@ -26,6 +27,7 @@ from helperme.runtime.model import (
     DecisionState,
     RuntimeStatus,
     Step,
+    StepState,
 )
 
 
@@ -49,7 +51,7 @@ class _StateBuilder:
         self.session_id = session_id
         self.user_messages: list[str] = []
         self.commands: dict[str, CommandState] = {}
-        self.steps: list[Step] = []
+        self.step_events: list[Event] = []
         self.step_ids: set[str] = set()
         self.visible_event_ids: list[str] = []
         self.attempt_event_ids: dict[tuple[str, str], str] = {}
@@ -64,6 +66,31 @@ class _StateBuilder:
         ).encode("utf-8")
         return sha256(content).hexdigest()
 
+    def step_states(
+        self,
+        commands: Mapping[str, CommandState],
+    ) -> tuple[StepState, ...]:
+        """按提交顺序把回合装配成聚合根。
+
+        命令来源必须显式给出：冻结帧看到的命令可能停在触发点之前，而
+        CanonicalState 报告的是最新终局。同一份状态里混用两者，同一个
+        命令会带着两个 phase 出现在两个地方。
+        """
+
+        return tuple(
+            StepState(
+                step=event.payload.step,
+                committed_event_id=event.event_id,
+                sequence=event.sequence,
+                decision_metadata=event.payload.decision_metadata,
+                commands=tuple(
+                    commands[command.command_id]
+                    for command in event.payload.step.commands
+                ),
+            )
+            for event in self.step_events
+        )
+
     def decision_state(
         self,
         consumed_trigger_event_ids: tuple[str, ...],
@@ -73,7 +100,7 @@ class _StateBuilder:
             version=self.version(),
             user_messages=tuple(self.user_messages),
             commands=tuple(self.commands.values()),
-            prior_steps=tuple(self.steps),
+            steps=self.step_states(self.commands),
             visible_event_ids=tuple(self.visible_event_ids),
             consumed_trigger_event_ids=consumed_trigger_event_ids,
         )
@@ -250,7 +277,7 @@ class _StateBuilder:
                     None if command.requires_authorization else event.event_id
                 ),
             )
-        self.steps.append(step)
+        self.step_events.append(event)
         self.step_ids.add(step.step_id)
         self.visible_event_ids.append(event.event_id)
 
@@ -320,8 +347,6 @@ class StateProjector:
                         events,
                         event,
                         operational,
-                        event_sequences,
-                        issuing_observed,
                         until_sequence=step.observed_journal_position,
                     )
                 expected_cursor = len(consumed) + 1
@@ -369,8 +394,6 @@ class StateProjector:
                     events,
                     event,
                     operational,
-                    event_sequences,
-                    issuing_observed,
                     until_sequence=events[-1].sequence,
                 )
             break
@@ -443,7 +466,7 @@ class StateProjector:
                 else RuntimeStatus.WAITING
             ),
             commands=command_states,
-            steps=tuple(decision.steps),
+            steps=decision.step_states(operational.commands),
             next_trigger_event_id=(
                 next_trigger.event_id if next_trigger is not None else None
             ),
@@ -451,6 +474,31 @@ class StateProjector:
             waiting_for=waiting_for,
         )
         return RuntimeProjection(state=state, next_decision=next_frame)
+
+    def project_visible(
+        self,
+        session_id: str,
+        events: tuple[Event, ...],
+        visible_event_ids: tuple[str, ...] | None = None,
+    ) -> DecisionState:
+        """把一个已经选定的可见集合归约成结构化视图，默认全可见。
+
+        哪个 Step 发起了哪个 Command、Command 终局没有，是确定性的事实
+        归约，归 Runtime。下游若自己从事件流重建，得到的是一份没有这些
+        约束的复制品：可见集合里出现一个 Step 不可见的 Outcome 时，这里
+        会当场炸，重建版本只会安静地少一条消息。
+        """
+
+        visible = None if visible_event_ids is None else set(visible_event_ids)
+        builder = _StateBuilder(session_id)
+        for event in events:
+            if visible is not None and event.event_id not in visible:
+                continue
+            if isinstance(event.payload, StepCommitted):
+                builder.apply_step(event)
+            else:
+                builder.apply_regular(event)
+        return builder.decision_state(())
 
     @staticmethod
     def _validate_session(session_id: str, events: tuple[Event, ...]) -> None:
@@ -591,6 +639,17 @@ class StateProjector:
         operational: _StateBuilder,
         issuing_observed: dict[str, int],
     ) -> bool:
+        """Whether this external fact must wait for Commands that precede it.
+
+        Deliberately asymmetric with `_is_waited_follow_up`. This asks
+        whether the trigger should wait, so it compares journal positions:
+        a Step committed after the fact arrived is not that fact's business.
+        That one asks what a frozen frame must show, so it follows the
+        decision's causal order: the same Step, once visible, still has to
+        carry its own Command outcomes. Unifying them would deadlock this
+        fact behind a Step it never waited for.
+        """
+
         for command_state in operational.commands.values():
             if (
                 issuing_observed[command_state.issued_by_event_id]
@@ -610,8 +669,6 @@ class StateProjector:
         events: tuple[Event, ...],
         trigger: Event,
         operational: _StateBuilder,
-        event_sequences: dict[str, int],
-        issuing_observed: dict[str, int],
         until_sequence: int,
     ) -> None:
         past_trigger = False
@@ -625,51 +682,38 @@ class StateProjector:
                 return
             if event.event_id in decision.visible_event_ids:
                 continue
-            if not _is_waited_follow_up(
-                event,
-                trigger.sequence,
-                operational,
-                issuing_observed,
-            ):
+            if not _is_waited_follow_up(event, decision):
                 continue
             decision.apply_regular(event)
-            if _waited_batch_complete(
-                decision,
-                trigger.sequence,
-                operational,
-                issuing_observed,
-            ):
+            if _waited_batch_complete(decision, operational):
                 return
 
 
 def _is_waited_follow_up(
     event: Event,
-    trigger_sequence: int,
-    operational: _StateBuilder,
-    issuing_observed: dict[str, int],
+    decision: _StateBuilder,
 ) -> bool:
+    """Whether this fact closes a Command the decision state can already see.
+
+    Membership follows the decision's causal order, not journal position.
+    A Step that consumed an earlier trigger is visible here even when it
+    committed after this trigger arrived; its Commands must close with it.
+    """
+
     payload = event.payload
     if isinstance(payload, (DispatchAttemptStarted, CommandOutcomeReceived)):
-        command_state = operational.commands[payload.command_id]
-        return (
-            issuing_observed[command_state.issued_by_event_id] < trigger_sequence
-        )
+        return payload.command_id in decision.commands
     return False
 
 
 def _waited_batch_complete(
     decision: _StateBuilder,
-    trigger_sequence: int,
     operational: _StateBuilder,
-    issuing_observed: dict[str, int],
 ) -> bool:
-    for command_state in operational.commands.values():
-        if issuing_observed[command_state.issued_by_event_id] >= trigger_sequence:
+    for command_id, frozen in decision.commands.items():
+        if not operational.commands[command_id].attempts:
             continue
-        if not command_state.attempts:
-            continue
-        frozen = decision.commands.get(command_state.command.command_id)
-        if frozen is None or frozen.phase is not CommandPhase.TERMINAL:
+        if frozen.phase is not CommandPhase.TERMINAL:
             return False
     return True
 

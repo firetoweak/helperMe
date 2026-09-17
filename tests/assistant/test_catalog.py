@@ -4,7 +4,12 @@ import unittest
 from helperme.assistant.catalog import sync_catalog, CATALOG
 from helperme.assistant.context.projection import project_chat_messages
 from helperme.assistant.toolsets import ToolsetDescriptor
-from helperme.runtime import AgentRuntime, MemoryJournal, DomainFactCommitted
+from helperme.runtime import (
+    AgentRuntime,
+    MemoryJournal,
+    DomainFactCommitted,
+    StateProjector,
+)
 
 
 class CatalogTest(unittest.IsolatedAsyncioTestCase):
@@ -41,8 +46,9 @@ class CatalogTest(unittest.IsolatedAsyncioTestCase):
                 for e in updated
             )
         )
-        before = project_chat_messages(initial, tuple(e.event_id for e in initial))
-        after = project_chat_messages(updated, tuple(e.event_id for e in updated))
+        projector = StateProjector()
+        before = project_chat_messages(initial, projector.project_visible("s", initial))
+        after = project_chat_messages(updated, projector.project_visible("s", updated))
         self.assertEqual(after[: len(before)], before)
         self.assertIn("<capability_catalog>", after[-1]["content"])
         await sync_catalog(runtime, "s", surface, skills, management)

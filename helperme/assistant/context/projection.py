@@ -24,8 +24,6 @@ from helperme.assistant.context.budget import (
 from helperme.assistant.delivery import DELIVER_TOOL_NAME
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.runtime.events import (
-    CommandOutcomeReceived,
-    CommandRejected,
     DomainFactCommitted,
     Event,
     StepCommitted,
@@ -33,8 +31,12 @@ from helperme.runtime.events import (
 )
 from helperme.runtime.model import (
     CommandOutcome,
+    CommandPhase,
+    CommandState,
+    DecisionState,
     InvokeTool,
     OutcomeStatus,
+    StepState,
 )
 
 
@@ -164,9 +166,35 @@ def _rejection_text(command_id: str, tool_name: str) -> str:
     )
 
 
+def _outstanding_text(state: CommandState, tool_name: str) -> str:
+    """未终局的 Command 也要有工具协议表示，否则这一帧的 tool_calls 配不平。
+
+    ok 为 null 而非 false：它既没成功也没失败。事实说到这里为止，接下来
+    是等、是改道还是告诉用户，交给模型判断。
+    """
+
+    if state.phase is CommandPhase.UNKNOWN:
+        # 起过 attempt 却没有结果。Journal 分不出「还在跑」和「已中断」，
+        # 那是进程事实，不在事件里，所以这里只说到它知道的为止。
+        code = "NO_RESULT_YET"
+        error = f"该调用已开始执行但还没有结果（工具={tool_name}）。"
+        hint = "可能仍在执行，也可能已中断；重试前先确认副作用。"
+    elif state.dispatch_eligible_by_event_id is None:
+        code = "AWAITING_AUTHORIZATION"
+        error = f"该调用正在等待用户授权（工具={tool_name}）。"
+        hint = "尚未执行。除非用户已表态，否则不要假设结果。"
+    else:
+        code = "NOT_STARTED"
+        error = f"该调用已发起但还没有开始执行（工具={tool_name}）。"
+        hint = "不要重复发起同一调用。"
+    return _tool_result_json(
+        {"ok": None, "code": code, "data": None, "error": error, "hint": hint}
+    )
+
+
 def project_chat_messages(
     events: tuple[Event, ...],
-    visible_event_ids: tuple[str, ...],
+    state: DecisionState,
     system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
     attachments: AttachmentStore | None = None,
 ) -> list[dict[str, object]]:
@@ -175,7 +203,7 @@ def project_chat_messages(
         item.message
         for item in _translate_visible_events(
             events,
-            visible_event_ids,
+            state,
             system_prompt,
             attachments,
         )
@@ -197,19 +225,18 @@ def _user_content(
 
 def _translate_visible_events(
     events: tuple[Event, ...],
-    visible_event_ids: tuple[str, ...],
+    state: DecisionState,
     system_prompt: str,
     attachments: AttachmentStore | None = None,
 ) -> list[_Projected]:
-    visible = set(visible_event_ids)
+    visible = set(state.visible_event_ids)
+    steps = {step.committed_event_id: step for step in state.steps}
     items: list[_Projected] = [
         _Projected(
             {"role": "system", "content": system_prompt},
             "system",
         ),
     ]
-    commands: dict[str, InvokeTool] = {}
-    command_ranks: dict[str, tuple[int, int]] = {}
     for event in events:
         if event.event_id not in visible:
             continue
@@ -241,92 +268,84 @@ def _translate_visible_events(
             ))
             continue
         if isinstance(payload, StepCommitted):
-            metadata = payload.decision_metadata
-            if metadata is not None and "loop_guard_notice" in metadata:
-                items.append(_Projected(
-                    {"role": "user", "content": metadata["loop_guard_notice"]["text"]},
-                    "user", sequence=event.sequence,
-                ))
-            shown: list[dict[str, object]] = []
-            for command_index, command in enumerate(payload.step.commands):
-                effect = command.effect
-                commands[command.command_id] = effect
-                command_ranks[command.command_id] = (
-                    event.sequence,
-                    command_index,
-                )
-                if not isinstance(effect, InvokeTool):
-                    continue
-                if effect.name == DELIVER_TOOL_NAME:
-                    continue
-                shown.append(
-                    {
-                        "id": command.command_id,
-                        "type": "function",
-                        "function": {
-                            "name": effect.name,
-                            "arguments": json.dumps(
-                                effect.argument_dict(),
-                                ensure_ascii=False,
-                            ),
-                        },
-                    }
-                )
-            content = payload.step.decision.content
-            if not content and not shown:
-                continue
-            message: dict[str, object] = (
-                {}
-                if metadata is None or MESSAGE_EXTENSIONS not in metadata
-                else thaw_value(metadata[MESSAGE_EXTENSIONS])
+            items.extend(_project_step(steps[event.event_id]))
+    return _hoist_tool_images(items)
+
+
+def _shown_tool(state: CommandState) -> InvokeTool | None:
+    """模型看得见的工具调用；deliver 是投递通道，不进对话。"""
+
+    effect = state.command.effect
+    if not isinstance(effect, InvokeTool) or effect.name == DELIVER_TOOL_NAME:
+        return None
+    return effect
+
+
+def _project_step(step: StepState) -> list[_Projected]:
+    """一个回合译成一组消息：assistant 及其每个命令的表示，缺一不可。
+
+    以回合为单位生成，而不是等 Outcome 事件在流里漂过来。配平因此是构造
+    出来的性质，不是碰巧对齐；未终局的命令也必须在这里给出表示。
+    """
+
+    metadata = step.decision_metadata
+    items: list[_Projected] = []
+    if metadata is not None and "loop_guard_notice" in metadata:
+        items.append(_Projected(
+            {"role": "user", "content": metadata["loop_guard_notice"]["text"]},
+            "user", sequence=step.sequence,
+        ))
+    shown = [
+        (state, effect)
+        for state in step.commands
+        if (effect := _shown_tool(state)) is not None
+    ]
+    content = step.step.decision.content
+    if not content and not shown:
+        return items
+    message: dict[str, object] = (
+        {}
+        if metadata is None or MESSAGE_EXTENSIONS not in metadata
+        else thaw_value(metadata[MESSAGE_EXTENSIONS])
+    )
+    message.update({"role": "assistant", "content": content or None})
+    if shown:
+        message["tool_calls"] = [
+            {
+                "id": state.command.command_id,
+                "type": "function",
+                "function": {
+                    "name": effect.name,
+                    "arguments": json.dumps(
+                        effect.argument_dict(),
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+            for state, effect in shown
+        ]
+    items.append(_Projected(message, "assistant", sequence=step.sequence))
+    for state, effect in shown:
+        command_id = state.command.command_id
+        if state.authorization_rejected_by_event_id is not None:
+            content = _rejection_text(command_id, effect.name)
+        elif state.outcome is not None:
+            content = outcome_text(state.outcome)
+        else:
+            content = _outstanding_text(state, effect.name)
+        items.append(
+            _Projected(
+                {
+                    "role": "tool",
+                    "tool_call_id": command_id,
+                    "content": content,
+                },
+                "tool",
+                command_id,
+                step.sequence,
             )
-            message.update({
-                "role": "assistant",
-                "content": content or None,
-            })
-            if shown:
-                message["tool_calls"] = shown
-            items.append(_Projected(message, "assistant", sequence=event.sequence))
-            continue
-        if isinstance(payload, CommandOutcomeReceived):
-            effect = commands[payload.command_id]
-            if not isinstance(effect, InvokeTool):
-                continue
-            if effect.name == DELIVER_TOOL_NAME:
-                continue
-            items.append(
-                _Projected(
-                    {
-                        "role": "tool",
-                        "tool_call_id": payload.command_id,
-                        "content": outcome_text(payload.outcome),
-                    },
-                    "tool",
-                    payload.command_id,
-                    event.sequence,
-                )
-            )
-            continue
-        if isinstance(payload, CommandRejected):
-            effect = commands.get(payload.command_id)
-            if effect is None or effect.name == DELIVER_TOOL_NAME:
-                continue
-            items.append(
-                _Projected(
-                    {
-                        "role": "tool",
-                        "tool_call_id": payload.command_id,
-                        "content": _rejection_text(
-                            payload.command_id,
-                            effect.name,
-                        ),
-                    },
-                    "tool",
-                    payload.command_id,
-                    event.sequence,
-                )
-            )
-    return _hoist_tool_images(_canonicalize_tool_result_runs(items, command_ranks))
+        )
+    return items
 
 
 def _images_of(content: object) -> list[dict[str, object]]:
@@ -384,31 +403,6 @@ def _hoist_tool_images(items: list[_Projected]) -> list[_Projected]:
             )
         start = end
     return hoisted
-
-
-def _canonicalize_tool_result_runs(
-    items: list[_Projected],
-    command_ranks: Mapping[str, tuple[int, int]],
-) -> list[_Projected]:
-    """稳定模型序列化；不改变 Journal 的真实 Outcome 到达顺序。"""
-
-    start = 0
-    while start < len(items):
-        if items[start].kind != "tool":
-            start += 1
-            continue
-        end = start + 1
-        while end < len(items) and items[end].kind == "tool":
-            end += 1
-
-        def rank(item: _Projected) -> tuple[int, int]:
-            if item.command_id is None:
-                raise ValueError("projected tool message lacks command id")
-            return command_ranks[item.command_id]
-
-        items[start:end] = sorted(items[start:end], key=rank)
-        start = end
-    return items
 
 
 def _externalized_meta(content: object) -> dict[str, object] | None:
@@ -564,7 +558,7 @@ class ModelContextProjector:
     def prepare(
         self,
         events: tuple[Event, ...],
-        visible_event_ids: tuple[str, ...],
+        state: DecisionState,
         session_id: str,
         system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
         tools: list[dict[str, object]] | None = None,
@@ -578,7 +572,7 @@ class ModelContextProjector:
             )
             for item in _translate_visible_events(
                 events,
-                visible_event_ids,
+                state,
                 system_prompt,
                 None
                 if self._attachments is None

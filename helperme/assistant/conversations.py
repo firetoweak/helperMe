@@ -10,13 +10,13 @@ from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.sessions import SessionView, session_view
 from helperme.assistant.subagent.subagent import project_parent, project_pending
 from helperme.runtime import (
-    CommandOutcomeReceived,
-    CommandRejected,
-    DispatchAttemptStarted,
+    CommandPhase,
+    CommandState,
     Event,
     OutcomeStatus,
     SqliteJournal,
     StepCommitted,
+    StepState,
     UserMessageReceived,
     replay,
 )
@@ -129,9 +129,10 @@ class AssistantQueries:
         events = await SqliteJournal(
             self._store.require(session_id)
         ).snapshot(session_id)
+        state = replay(session_id, events).state
         if view is None:
             view = session_view(
-                replay(session_id, events).state,
+                state,
                 has_active_subagents=bool(project_pending(events)),
                 auto_authorize=self._sessions.web_auto_authorize(session_id),
                 paused=self._sessions.is_paused(session_id),
@@ -139,6 +140,7 @@ class AssistantQueries:
         return project_conversation(
             session_id,
             events,
+            state.steps,
             session=view,
             activity=self._sessions.activity(session_id),
         )
@@ -166,13 +168,12 @@ def project_session_summary(
 def project_conversation(
     session_id: str,
     events: tuple[Event, ...],
+    steps: tuple[StepState, ...],
     *,
     session: SessionView,
     activity: SessionActivity = "idle",
 ) -> ConversationView:
-    outcomes = _command_outcomes(events)
-    started = _started_commands(events)
-    rejected = _rejected_commands(events)
+    by_event = {step.committed_event_id: step for step in steps}
     items: list[ConversationItem] = []
     for event in events:
         payload = event.payload
@@ -189,31 +190,22 @@ def project_conversation(
             continue
         if not isinstance(payload, StepCommitted):
             continue
-        text = payload.step.decision.content.strip()
-        thinking = _step_thinking(payload.decision_metadata)
+        step = by_event[event.event_id]
+        text = step.step.decision.content.strip()
+        thinking = _step_thinking(step.decision_metadata)
         tools: list[ToolItem] = []
-        for command in payload.step.commands:
-            if command.effect.name == DELIVER_TOOL_NAME:
+        for command_state in step.commands:
+            effect = command_state.command.effect
+            if effect.name == DELIVER_TOOL_NAME:
                 continue
-            recorded = outcomes.get(command.command_id)
-            if recorded is not None:
-                status, error = recorded
-            elif command.command_id in rejected:
-                status, error = ("rejected", None)
-            elif command.command_id in session.pending_authorization_ids:
-                status, error = ("awaiting_authorization", None)
-            else:
-                status, error = _open_tool_status(
-                    command.command_id in started,
-                    activity,
-                )
+            status, error = _tool_status(command_state, activity)
             tools.append(
                 ToolItem(
-                    command.command_id,
-                    command.effect.name,
+                    command_state.command.command_id,
+                    effect.name,
                     status,
                     error,
-                    command.effect.argument_dict(),
+                    effect.argument_dict(),
                 )
             )
         if text or tools or thinking:
@@ -249,46 +241,27 @@ def _step_thinking(metadata: object) -> str | None:
     return stripped or None
 
 
-def _open_tool_status(
-    attempt_started: bool,
+def _tool_status(
+    state: CommandState,
     activity: SessionActivity,
 ) -> tuple[ToolStatus, str | None]:
-    if attempt_started and activity == "idle":
-        return ("unknown", UNKNOWN_TOOL_ERROR)
+    """工具在时间线上的状态，除 unknown 外全部来自 Runtime 的确定事实。
+
+    起过 attempt 却没有结果时，Journal 分不出「还在跑」和「已中断」——
+    那是进程事实，只有 activity 知道。
+    """
+
+    outcome = state.outcome
+    if outcome is not None:
+        if outcome.status is OutcomeStatus.SUCCEEDED:
+            return ("succeeded", None)
+        return ("failed", outcome.error_message)
+    if state.authorization_rejected_by_event_id is not None:
+        return ("rejected", None)
+    if state.phase is CommandPhase.UNKNOWN:
+        if activity == "idle":
+            return ("unknown", UNKNOWN_TOOL_ERROR)
+        return ("running", None)
+    if state.dispatch_eligible_by_event_id is None:
+        return ("awaiting_authorization", None)
     return ("running", None)
-
-
-def _started_commands(events: tuple[Event, ...]) -> frozenset[str]:
-    started: set[str] = set()
-    for event in events:
-        payload = event.payload
-        if isinstance(payload, DispatchAttemptStarted):
-            started.add(payload.command_id)
-    return frozenset(started)
-
-
-def _rejected_commands(events: tuple[Event, ...]) -> frozenset[str]:
-    rejected: set[str] = set()
-    for event in events:
-        payload = event.payload
-        if isinstance(payload, CommandRejected):
-            rejected.add(payload.command_id)
-    return frozenset(rejected)
-
-
-def _command_outcomes(
-    events: tuple[Event, ...],
-) -> dict[str, tuple[ToolStatus, str | None]]:
-    outcomes: dict[str, tuple[ToolStatus, str | None]] = {}
-    for event in events:
-        payload = event.payload
-        if not isinstance(payload, CommandOutcomeReceived):
-            continue
-        if payload.outcome.status is OutcomeStatus.SUCCEEDED:
-            outcomes[payload.command_id] = ("succeeded", None)
-        else:
-            outcomes[payload.command_id] = (
-                "failed",
-                payload.outcome.error_message,
-            )
-    return outcomes

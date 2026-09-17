@@ -14,7 +14,14 @@ from helperme.assistant.loop_guard_strategies import Action, ConsecutiveActions
 from helperme.config import AssistantConfig
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage, ToolCall
 from helperme.paths import HelperMeHome
-from helperme.runtime import Event, InvokeTool, ModelDecision, SqliteJournal, StepCommitted
+from helperme.runtime import (
+    Event,
+    InvokeTool,
+    ModelDecision,
+    SqliteJournal,
+    StateProjector,
+    StepCommitted,
+)
 from helperme.runtime.json_values import thaw_value
 from helperme.runtime.codec import EVENT_SCHEMA_VERSION
 from helperme.runtime.model import Command, Step
@@ -85,7 +92,9 @@ class LoopGuardTest(unittest.TestCase):
         self.assertEqual(len(notice["evidence"]), 2)
         notice["text"] = "<loop_guard_notice>historical wording</loop_guard_notice>"
         events += (event(3, names=(), notice=notice),)
-        messages = project_chat_messages(events, tuple(e.event_id for e in events), "sys")
+        messages = project_chat_messages(
+            events, StateProjector().project_visible("s", events), "sys"
+        )
         self.assertEqual(messages[-2]["content"], notice["text"])
 
 
@@ -164,7 +173,10 @@ class LoopGuardIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     },
                 })
                 rolled = await journal.snapshot("s")
-                self.assertEqual(maker._compact.visible(rolled, tuple(e.event_id for e in rolled)), ())
+                rolled_state = StateProjector().project_visible("s", rolled)
+                self.assertEqual(
+                    maker._compact.visible(rolled, rolled_state).visible_event_ids, ()
+                )
                 self.assertIsNone(LoopGuard().inspect(rolled, rolled[-1].sequence))
             finally:
                 await assembly.scheduler.close()

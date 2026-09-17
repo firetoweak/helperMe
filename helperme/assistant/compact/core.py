@@ -20,6 +20,7 @@ from helperme.assistant.context.projection import (
 from helperme.assistant.subagent.subagent import project_parent
 from helperme.llm.api import InvalidLLMResponse
 from helperme.runtime import DomainFactCommitted, ToolBinding
+from helperme.runtime.state import StateProjector
 
 TASK = "compact.task"
 CREATED = "compact.handoff_created"
@@ -155,7 +156,10 @@ class CompactContext:
     def schemas(self):
         return deepcopy(self.request["tools"]) if self.is_reader else [READ_SCHEMA]
 
-    def visible(self, events, ids):
+    def visible(self, events, state):
+        # 按 sequence 硬切不会把一个回合切成两半：cutover 取自 snapshot 时的
+        # journal_position，而 snapshot 在还有命令未终局时直接拒绝，所以截断点
+        # 之前的每个 Step 连同它的全部命令事件都已落盘。
         self.refresh(events)
         cutoff = 0 if self.window is None else self.window["cutover"]
         allowed = {
@@ -167,7 +171,11 @@ class CompactContext:
                 and e.payload.fact_type in (WINDOW, CREATED)
             )
         }
-        return tuple(x for x in ids if x in allowed)
+        return StateProjector().project_visible(
+            state.session_id,
+            events,
+            tuple(x for x in state.visible_event_ids if x in allowed),
+        )
 
     def bindings(self):
         return {
@@ -192,8 +200,8 @@ class CompactContext:
             )
         }
 
-    async def prepare_reader(self, events, visible):
-        own = _translate_visible_events(events, visible, "")[1:]
+    async def prepare_reader(self, events, state):
+        own = _translate_visible_events(events, state, "")[1:]
         messages = deepcopy(self.request["messages"])
         for item in own:
             if item.sequence == 1:
@@ -290,8 +298,8 @@ class CompactContext:
 
 
 def frozen_bundle(projector, events, session_id, context, prepared=None):
-    ids = tuple(e.event_id for e in events)
-    visible = context.visible(events, ids)
+    whole = StateProjector().project_visible(session_id, events)
+    visible = context.visible(events, whole)
     if prepared is None:
         prepared = projector.prepare(
             events, visible, session_id, "", prefix=context.prefix, enforce_budget=False
@@ -301,7 +309,7 @@ def frozen_bundle(projector, events, session_id, context, prepared=None):
         for seq, message in zip(prepared.source_sequences[1:], prepared.messages[1:])
     ]
     raw = {}
-    for item in _translate_visible_events(events, ids, ""):
+    for item in _translate_visible_events(events, whole, ""):
         if item.sequence:
             raw.setdefault(str(item.sequence), []).append(item.message)
     artifacts = set()
@@ -347,7 +355,9 @@ class CompactBoundary:
         state = self.runtime.projector.project(sid, events).state
         if state.waiting_command_ids or self.control.pending_view(sid) is not None:
             return {"safe": False}
-        visible = self.context.visible(events, tuple(e.event_id for e in events))
+        visible = self.context.visible(
+            events, StateProjector().project_visible(sid, events)
+        )
         prompt = self.decision.prompt_for(state)
         tools = self.decision.schemas_for(state)[0]
         prepared = self.context.projector.prepare(

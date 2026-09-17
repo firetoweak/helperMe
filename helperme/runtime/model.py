@@ -301,12 +301,43 @@ class CommandState:
         )
 
 @dataclass(frozen=True, slots=True)
+class StepState:
+    """一个回合在历史里的完整形态。
+
+    payload 里的 Step 只记录决策的起点：它提交时命令刚发出，结果还是之后
+    才会到的另一批事件。回合因此是一段跨越多个事件的跨度，完整形态只能由
+    投影给出，payload 无论加多少字段都到不了。
+    """
+
+    step: Step
+    committed_event_id: str
+    sequence: int
+    decision_metadata: object
+    commands: tuple[CommandState, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.step) is not Step:
+            raise TypeError("step state step is invalid")
+        _require_str(self.committed_event_id, "committed event id")
+        if type(self.sequence) is not int or self.sequence < 1:
+            raise ValueError("step sequence must be positive")
+        if type(self.commands) is not tuple or any(
+            type(state) is not CommandState for state in self.commands
+        ):
+            raise TypeError("step state commands are invalid")
+        if tuple(state.command.command_id for state in self.commands) != tuple(
+            command.command_id for command in self.step.commands
+        ):
+            raise ValueError("step state commands do not match the step")
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionState:
     session_id: str
     version: str
     user_messages: tuple[str, ...]
     commands: tuple[CommandState, ...]
-    prior_steps: tuple[Step, ...]
+    steps: tuple[StepState, ...]
     visible_event_ids: tuple[str, ...]
     consumed_trigger_event_ids: tuple[str, ...]
 
@@ -318,10 +349,10 @@ class DecisionState:
             type(command) is not CommandState for command in self.commands
         ):
             raise TypeError("decision commands are invalid")
-        if type(self.prior_steps) is not tuple or any(
-            type(step) is not Step for step in self.prior_steps
+        if type(self.steps) is not tuple or any(
+            type(step) is not StepState for step in self.steps
         ):
-            raise TypeError("decision prior steps are invalid")
+            raise TypeError("decision steps are invalid")
         _require_str_tuple(self.visible_event_ids, "visible event ids")
         _require_str_tuple(
             self.consumed_trigger_event_ids,
@@ -347,7 +378,7 @@ class CanonicalState:
     decision_cursor: int
     status: RuntimeStatus
     commands: tuple[CommandState, ...]
-    steps: tuple[Step, ...]
+    steps: tuple[StepState, ...]
     next_trigger_event_id: str | None
     waiting_command_ids: tuple[str, ...]
     waiting_for: tuple[str, ...]
@@ -363,7 +394,7 @@ class CanonicalState:
         ):
             raise TypeError("canonical commands are invalid")
         if type(self.steps) is not tuple or any(
-            type(step) is not Step for step in self.steps
+            type(step) is not StepState for step in self.steps
         ):
             raise TypeError("canonical steps are invalid")
         _require_optional_str(

@@ -1086,6 +1086,7 @@ class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
             state=SimpleNamespace(
                 session_id=self.PARENT,
                 visible_event_ids=(),
+                steps=(),
             ),
             trigger_event=SimpleNamespace(event_id="trigger-1"),
             decision_cursor=1,

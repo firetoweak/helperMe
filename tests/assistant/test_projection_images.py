@@ -24,6 +24,7 @@ from helperme.runtime import (
     InvokeTool,
     MemoryJournal,
     ModelDecision,
+    StateProjector,
     ToolBinding,
 )
 from tests.assistant.test_context import CharacterEstimator
@@ -96,7 +97,7 @@ class ToolImageProjectionTest(unittest.IsolatedAsyncioTestCase):
         image = _image("one")
         events = await self._history((_shot(image),))
         messages = project_chat_messages(
-            events, tuple(event.event_id for event in events), "sys"
+            events, StateProjector().project_visible(self.SESSION, events), "sys"
         )
         tool = next(message for message in messages if message["role"] == "tool")
         payload = json.loads(tool["content"])
@@ -133,7 +134,7 @@ class ToolImageProjectionTest(unittest.IsolatedAsyncioTestCase):
             ),
         ).prepare(
             events,
-            tuple(event.event_id for event in events),
+            StateProjector().project_visible(self.SESSION, events),
             self.SESSION,
             "sys",
         )
@@ -183,7 +184,7 @@ class ToolImageProjectionTest(unittest.IsolatedAsyncioTestCase):
             events = await runtime._journal.snapshot(self.SESSION)
             messages = project_chat_messages(
                 events,
-                tuple(event.event_id for event in events),
+                StateProjector().project_visible(self.SESSION, events),
                 "sys",
                 store,
             )

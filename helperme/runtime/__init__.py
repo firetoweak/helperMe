@@ -44,6 +44,7 @@ from helperme.runtime.model import (
     OutcomeStatus,
     RuntimeStatus,
     Step,
+    StepState,
 )
 from helperme.runtime.projections import (
     ArtifactResolution,
@@ -102,6 +103,7 @@ __all__ = [
     "SqliteJournal",
     "StateProjector",
     "Step",
+    "StepState",
     "StepContinuationCancelled",
     "StepCommitted",
     "StepClaimRequest",
