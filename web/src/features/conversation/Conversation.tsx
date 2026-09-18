@@ -14,6 +14,7 @@ import {
 } from "@mantine/core";
 import {
   IconAlertCircle,
+  IconArrowDown,
   IconCheck,
   IconMessageCircle,
   IconSparkles,
@@ -296,6 +297,17 @@ export function Conversation() {
         </ScrollArea>
       )}
       <Box className="composer-dock">
+        {items.length === 0 || followOutput.following ? null : (
+          <Button
+            className="jump-to-latest"
+            leftSection={<IconArrowDown size={14} />}
+            onClick={followOutput.scrollToBottom}
+            size="compact-sm"
+            variant="default"
+          >
+            跳到最新
+          </Button>
+        )}
         {runtime?.lastError == null ? null : (
           <Alert
             className="composer-error"

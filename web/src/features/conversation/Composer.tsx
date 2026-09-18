@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Button,
   Group,
   Paper,
   Switch,
@@ -12,6 +13,7 @@ import {
   IconPlayerPauseFilled,
   IconPlayerPlayFilled,
   IconPlus,
+  IconTrash,
 } from "@tabler/icons-react";
 import {
   useEffect,
@@ -30,6 +32,13 @@ import {
 } from "../../api/helpermeApi";
 import { useAppSelector } from "../../app/hooks";
 import { AttachmentTile } from "./AttachmentTile";
+import {
+  composeSendContent,
+  parkedPreviewText,
+  restoreParkedDraft,
+  type ComposerDraft,
+  type ComposerImage,
+} from "./parkDraft";
 
 const ACCEPTED_IMAGE_TYPES = new Set([
   "image/png",
@@ -37,14 +46,6 @@ const ACCEPTED_IMAGE_TYPES = new Set([
   "image/webp",
   "image/gif",
 ]);
-
-type PendingImage = {
-  localId: string;
-  name: string;
-  previewUrl: string;
-  attachmentId: string | null;
-  state: "uploading" | "done" | "error";
-};
 
 type ComposerProps = {
   sessionId: string;
@@ -84,9 +85,17 @@ export function Composer({
   onRetry,
 }: ComposerProps) {
   const [text, setText] = useState("");
-  const [pending, setPending] = useState<PendingImage[]>([]);
+  const [pending, setPending] = useState<ComposerImage[]>([]);
+  const [parked, setParked] = useState<ComposerDraft | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const parkedRef = useRef<ComposerDraft | null>(null);
+  const flushingRef = useRef(false);
+  const wasRunningRef = useRef(running);
+  const onSendRef = useRef(onSend);
+  parkedRef.current = parked;
+  onSendRef.current = onSend;
   const { data: runtime } = useGetRuntimeQuery();
   const { data: workspaces = [] } = useGetWorkspacesQuery();
   const workspacePath = workspaces.find(
@@ -95,6 +104,8 @@ export function Composer({
   const [uploadAttachment] = useUploadAttachmentMutation();
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
+  const parkedPendingRef = useRef(parked?.pending ?? []);
+  parkedPendingRef.current = parked?.pending ?? [];
   const usage = useAppSelector(
     (state) => state.runtime.sessions[sessionId]?.contextUsage ?? null,
   );
@@ -106,36 +117,107 @@ export function Composer({
     (item) => item.state === "done" && item.attachmentId !== null,
   );
   const busy = disabled || sending || uploading;
-  const canSend = !busy && (text.trim() !== "" || ready.length > 0);
+  const canSend =
+    !busy && parked === null && (text.trim() !== "" || ready.length > 0);
 
   useEffect(() => {
     return () => {
       for (const item of pendingRef.current) {
         URL.revokeObjectURL(item.previewUrl);
       }
+      for (const item of parkedPendingRef.current) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
     };
   }, []);
+
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (sessionIdRef.current === sessionId) {
+      return;
+    }
+    sessionIdRef.current = sessionId;
+    const previous = parkedRef.current;
+    if (previous !== null) {
+      for (const item of previous.pending) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+    }
+    parkedRef.current = null;
+    setParked(null);
+    flushingRef.current = false;
+  }, [sessionId]);
+
+  useEffect(() => {
+    const wasRunning = wasRunningRef.current;
+    wasRunningRef.current = running;
+    if (wasRunning && !running && parked !== null && !sending) {
+      void dispatchParked();
+    }
+  }, [running, parked, sending]);
+
+  async function sendDraft(draft: ComposerDraft) {
+    const done = draft.pending.filter(
+      (item) => item.state === "done" && item.attachmentId !== null,
+    );
+    const content = composeSendContent(draft.text, done.length);
+    const artifactRefs = done.map((item) => item.attachmentId as string);
+    await onSendRef.current(content, artifactRefs);
+    for (const item of draft.pending) {
+      URL.revokeObjectURL(item.previewUrl);
+    }
+  }
+
+  async function dispatchParked() {
+    const draft = parkedRef.current;
+    if (draft === null || flushingRef.current) {
+      return;
+    }
+    flushingRef.current = true;
+    parkedRef.current = null;
+    setParked(null);
+    try {
+      await sendDraft(draft);
+    } catch {
+      parkedRef.current = draft;
+      setParked(draft);
+    } finally {
+      flushingRef.current = false;
+    }
+  }
 
   async function submit(event?: FormEvent) {
     event?.preventDefault();
     if (!canSend) {
       return;
     }
-    const tokens = ready.map((_, index) => `[Image #${index + 1}]`);
-    const content = [text.trim(), ...tokens].filter(Boolean).join(" ");
-    const artifactRefs = ready.map((item) => item.attachmentId as string);
-    const toRevoke = pending;
+    const draft: ComposerDraft = { text, pending };
     setText("");
     setPending([]);
-    try {
-      await onSend(content, artifactRefs);
-      for (const item of toRevoke) {
-        URL.revokeObjectURL(item.previewUrl);
-      }
-    } catch {
-      setText(content);
-      setPending(toRevoke);
+    if (running) {
+      parkedRef.current = draft;
+      setParked(draft);
+      return;
     }
+    try {
+      await sendDraft(draft);
+    } catch {
+      setText(draft.text);
+      setPending(draft.pending);
+    }
+  }
+
+  function restoreParked() {
+    const draft = parkedRef.current;
+    if (draft === null || flushingRef.current) {
+      return;
+    }
+    parkedRef.current = null;
+    const restored = restoreParkedDraft(draft, { text, pending });
+    setParked(null);
+    setText(restored.text);
+    setPending(restored.pending);
+    textareaRef.current?.focus();
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -257,6 +339,39 @@ export function Composer({
         ref={fileRef}
         type="file"
       />
+      {parked === null ? null : (
+        <Group className="composer-parked" gap={8} wrap="nowrap">
+          <Text className="composer-parked-text" fz="sm" truncate>
+            {parkedPreviewText(parked)}
+          </Text>
+          <Group gap={4} wrap="nowrap">
+            <Button
+              disabled={sending || disabled}
+              loading={sending}
+              onClick={() => void dispatchParked()}
+              size="compact-xs"
+              type="button"
+              variant="subtle"
+            >
+              立即发送
+            </Button>
+            <Tooltip label="退回编辑栏">
+              <ActionIcon
+                aria-label="退回编辑栏"
+                color="gray"
+                disabled={sending || disabled}
+                onClick={restoreParked}
+                radius="xl"
+                size={28}
+                type="button"
+                variant="subtle"
+              >
+                <IconTrash size={14} />
+              </ActionIcon>
+            </Tooltip>
+          </Group>
+        </Group>
+      )}
       {pending.length === 0 ? null : (
         <Group className="composer-attachments" gap={8} wrap="wrap">
           {pending.map((item) => (
@@ -293,6 +408,7 @@ export function Composer({
           aria-label="消息"
           autosize
           className="composer-input"
+          ref={textareaRef}
           value={text}
           onChange={(event) => setText(event.currentTarget.value)}
           onKeyDown={onKeyDown}

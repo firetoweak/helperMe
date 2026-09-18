@@ -354,9 +354,19 @@ body {
 }
 
 .composer-dock {
+  position: relative;
   width: 100%;
   padding: 0 24px 20px;
   background: linear-gradient(180deg, transparent, #101211 24%);
+}
+
+.jump-to-latest {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  z-index: 5;
+  transform: translateX(-50%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 
 .composer,
@@ -379,6 +389,17 @@ body {
   box-shadow:
     0 12px 38px rgba(0, 0, 0, 0.24),
     0 0 0 1px rgba(145, 181, 106, 0.12);
+}
+
+.composer-parked {
+  min-width: 0;
+  padding: 4px 8px 6px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.composer-parked-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .composer-top {
