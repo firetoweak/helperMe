@@ -93,9 +93,6 @@ async def build_assistant_assembly(
     gateway = FileArtifactGateway(sessions_root)
     attachment_gateway = AttachmentGateway(sessions_root)
     attachments = attachment_gateway.for_session(session_id)
-    bind_reader = getattr(config.llm, "bind_attachment_reader", None)
-    if bind_reader is not None:
-        bind_reader(attachments.read)
     projector = ModelContextProjector(
         gateway=gateway,
         attachments=attachment_gateway,
@@ -181,6 +178,13 @@ async def build_assistant_assembly(
         projector,
         session_transport,
     )
+    bind_reader = getattr(config.llm, "bind_attachment_reader", None)
+    if bind_reader is not None:
+        bind_reader(
+            compact_context.read_attachment
+            if compact_context.is_reader
+            else attachments.read
+        )
     bindings = {
         **bind_executor_tools(builtin_tools, gateway, settings),
         **read_artifact_binding(gateway),

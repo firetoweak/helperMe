@@ -70,7 +70,7 @@ python web_chat.py
 开发前端时执行一个命令同时启动后端和 Vite：
 
 ```powershell
-python web_chat.py --dev
+    python web_chat.py --dev
 ```
 
 浏览器打开 Vite 输出的地址（通常是 `http://localhost:5173`），修改前端源码后页面会自动更新。`Ctrl+C` 会同时停止后端和 Vite。

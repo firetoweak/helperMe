@@ -43,6 +43,29 @@ body {
   flex: 1;
 }
 
+.workspace-group + .workspace-group {
+  margin-top: 4px;
+}
+
+.workspace-toggle {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--mantine-radius-md);
+  color: var(--mantine-color-dimmed);
+}
+
+.workspace-toggle:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.workspace-name {
+  min-width: 0;
+}
+
+.workspace-sessions {
+  padding: 2px 0 2px 4px;
+}
+
 .activity-dot {
   display: block;
   width: 7px;

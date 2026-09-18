@@ -2,13 +2,16 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 from contextlib import closing
+from io import BytesIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 import pytest
+from PIL import Image
 
+from helperme.assistant.attachments import AttachmentGateway
 from helperme.assistant.compact.core import (
     WINDOW,
 )
@@ -172,6 +175,26 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         notices = [s.decision_metadata["loop_guard_notice"] for s in steps if s.decision_metadata]
         self.assertEqual(len(notices), 3)
         self.assertTrue(all(n["evidence"][0]["new_count"] == 3 for n in notices))
+        self.assertTrue(self.host.failures.empty())
+
+    async def test_handoff_reads_frozen_prefix_attachments_from_source(self):
+        await self.host.create("chat")
+        buffer = BytesIO()
+        Image.new("RGB", (8, 8), "red").save(buffer, format="PNG")
+        ref = (
+            AttachmentGateway(self.store.root)
+            .for_session("chat")
+            .save_image(buffer.getvalue(), "image/png")
+        )
+        await self.host.receive_user_message(
+            "chat",
+            " history" * 31000,
+            delivery_id="first",
+            artifact_refs=(ref.attachment_id,),
+        )
+        await until(lambda: (self.root / "compact_started").exists())
+        (self.root / "release_compact").touch()
+        await until(lambda: self.host.conversation_status("chat").compact_count == 1)
         self.assertTrue(self.host.failures.empty())
 
     async def test_visible_write_schema_does_not_authorize_handoff_execution(self):

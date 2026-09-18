@@ -12,6 +12,7 @@ from helperme.assistant.artifacts import (
     is_valid_artifact_id,
     ArtifactOffsetOutOfRangeError,
 )
+from helperme.assistant.attachments import is_valid_attachment_id
 from helperme.assistant.context.projection import (
     ModelContextBudgetExceeded,
     _translate_visible_events,
@@ -96,6 +97,18 @@ def compact_seed(events):
     return TASK, data
 
 
+def attachment_ids_in_messages(messages):
+    ids = set()
+    for message in messages:
+        content = message.get("content")
+        if type(content) is not list:
+            continue
+        for part in content:
+            if type(part) is dict and is_valid_attachment_id(part.get("id")):
+                ids.add(part["id"])
+    return frozenset(ids)
+
+
 def load_document(gateway, session, reference):
     store = gateway.for_session(session)
     first = store.read(reference, 0, 1)
@@ -153,6 +166,18 @@ class CompactContext:
                 self.projector.gateway, self.session_id, self.window["context"]
             )["messages"]
 
+    def read_attachment(self, attachment_id):
+        source = (
+            self.seed[1]["source"]
+            if (
+                self.is_reader
+                and attachment_id
+                in attachment_ids_in_messages(self.request["messages"])
+            )
+            else self.session_id
+        )
+        return self.projector.attachments_for(source).read(attachment_id)
+
     def schemas(self):
         return deepcopy(self.request["tools"]) if self.is_reader else [READ_SCHEMA]
 
@@ -201,7 +226,12 @@ class CompactContext:
         }
 
     async def prepare_reader(self, events, state):
-        own = _translate_visible_events(events, state, "")[1:]
+        own = _translate_visible_events(
+            events,
+            state,
+            "",
+            self.projector.attachments_for(self.session_id),
+        )[1:]
         messages = deepcopy(self.request["messages"])
         for item in own:
             if item.sequence == 1:
@@ -309,7 +339,9 @@ def frozen_bundle(projector, events, session_id, context, prepared=None):
         for seq, message in zip(prepared.source_sequences[1:], prepared.messages[1:])
     ]
     raw = {}
-    for item in _translate_visible_events(events, whole, ""):
+    for item in _translate_visible_events(
+        events, whole, "", projector.attachments_for(session_id)
+    ):
         if item.sequence:
             raw.setdefault(str(item.sequence), []).append(item.message)
     artifacts = set()

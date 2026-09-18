@@ -555,6 +555,11 @@ class ModelContextProjector:
     def settings(self) -> ModelContextSettings:
         return self._settings
 
+    def attachments_for(self, session_id: str) -> AttachmentStore | None:
+        if self._attachments is None:
+            return None
+        return self._attachments.for_session(session_id)
+
     def prepare(
         self,
         events: tuple[Event, ...],
@@ -574,9 +579,7 @@ class ModelContextProjector:
                 events,
                 state,
                 system_prompt,
-                None
-                if self._attachments is None
-                else self._attachments.for_session(session_id),
+                self.attachments_for(session_id),
             )
         ]
         store = self._gateway.for_session(session_id)
