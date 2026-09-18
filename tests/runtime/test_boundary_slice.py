@@ -29,6 +29,7 @@ from helperme.runtime import (
     replay,
 )
 from helperme.runtime.events import EventPayload
+from helperme.runtime.model import AuthorizationPolicy
 
 
 NOW = datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc)
@@ -62,7 +63,12 @@ class ScriptedDecisionMaker:
 
 
 class RecordingTool:
-    def __init__(self, name: str, *, requires_authorization: bool = False) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        requires_authorization: bool | AuthorizationPolicy = False,
+    ) -> None:
         self.name = name
         self.requires_authorization = requires_authorization
         self.started = asyncio.Event()

@@ -4,19 +4,23 @@ Command Authorization 是 Web Channel 首版纵向切片，解决「工具副作
 
 ## 语义
 
-- `requires_authorization`：工具 spec 的静态布尔，默认 `False`。表达「此工具天生有副作用，默认需人确认」。
+- 授权判定：每个 Command 派发前经授权判定得出 verdict（`allow` / `ask`）。判定是纯函数，只看（tool, args），不读外部状态：
+  - 静态工具：spec 上的 `requires_authorization` 布尔，即常量 verdict（默认 `False` = `allow`）。表达「此工具天生有副作用，默认需人确认」；
+  - `execute_command`：挂 ExecPolicy，按命令文本前缀规则动态判定（见 [CLI能力](CLI能力.md)）。
+  判定函数随工具 Binding 注入；Runtime 只消费 verdict，不理解规则含义。
 - Web 总闸 `auto_authorize`：仅 Web 有的 Session 级偏好。表达「这个 Session 我信任 agent，别再问」。没拨过就是关。
-- TUI 没有这把闸，也没有改配入口；这个入口上所有工具直接放行。
-- 需要拦 = 工具声明需要授权 **且** 当前 owner 是 Web **且** 总闸未开。
+- 入口策略：verdict=`ask` 的 Command 是否拦截由当前 owner 入口决定：
+  - owner 是 Web：看总闸，没拨过就是关，关则拦；
+  - owner 是 TUI：拦截，用 yes/no 一次性处理当前全部待授权命令；
+  - 没有 owner：不替人放行。
 - 授权是正交的派发 gate：`CommandPhase`（pending / unknown / terminal）只描述执行生命周期，是否派发由 `dispatch_eligible_by_event_id`（授权后设置）与 `authorization_rejected_by_event_id`（拒绝后设置）决定。
 
 ## 契约
 
-### 1. 写工具标 `requires_authorization=True`
+### 1. 授权判定来源
 
-- `helperme/tools/builtin/file_manage.py`：`ToolSpec(name="write_file", ...)`。
-- `helperme/tools/builtin/file_write.py`：`apply_patch`、`replace_all`。
-- 本版不拦 `execute_command`；只读工具（`read_file` / `glob` / `grep` / `get_changes`）保持 `False`。
+- 静态：`helperme/tools/builtin/file_manage.py` 的 `write_file`、`helperme/tools/builtin/file_write.py` 的 `apply_patch` / `replace_all` 标 `requires_authorization=True`；只读工具（`read_file` / `glob` / `grep` / `get_changes`）保持 `False`。
+- 动态：`execute_command` 由 ExecPolicy 按命令文本判定（默认 `allow`，内置危险前缀清单判 `ask`），不再是「不拦」。
 
 ### 2. Web 总闸 `auto_authorize`
 
@@ -27,7 +31,7 @@ Command Authorization 是 Web Channel 首版纵向切片，解决「工具副作
 - TUI 不读、不写、不暴露这把闸。Telegram / ACP 同样没有总闸入口。
 - Worker 是否自动 `grant` 看 **当前 owner**，不把文件里的布尔当全局答案：
   - owner 是 `web:…`：看总闸，没拨过则不放行；
-  - owner 是其他入口（TUI 等）：一律放行；
+  - owner 是 TUI：不放行，等待 yes/no；
   - 没有 owner：不替人放行。
 - 自动放行挂在 `SessionScheduler` 的 quiesce 钩子，也在 Host 同步放行策略时补一次。有 pending 且应当放行则 `grant_command` 并 `wake`；Web 且总闸关闭则广播 `authorization_required`。
 
@@ -72,14 +76,15 @@ Command Authorization 是 Web Channel 首版纵向切片，解决「工具副作
 ### 7. `authorization_required` 事件
 
 - SSE 事件名：`authorization_required`
-- payload：`{session_id, command_id, name, arguments}`
+- payload：`{session_id, command_id, name, arguments}`；`execute_command` 被拦时 arguments 中已含完整命令文本，用户可直接看到要确认的对象。（`matched_rule` 命中规则标识后置：等「看不清为何被拦」成为真实问题再加。）
 - 广播时机：命令进入等待授权，且当前不应自动放行时；`arguments` 取自对应 `Command.effect.argument_dict()`。
 
 ## 设计决策
 
 - 总闸是 Web Session 偏好，不是跨入口的任务事实，所以不进 Journal。
-- 创建时不把入口默认值落盘：TUI 全放行靠入口策略；Web 没拨过就是关。
-- 同一条 Session 从 Web 转到 TUI，TUI 照旧全放行；再回到 Web，仍用 Web 自己那份总闸。
+- 创建时不把入口默认值落盘：Web 没拨过就是关。
+- 同一条 Session 从 Web 转到 TUI 再转回 Web，仍用 Web 自己那份总闸。
+- TUI 从「全放行」改为「拦截 ask」：ExecPolicy 是防误操作的软边界，误操作在任何入口都是误操作；TUI 已有 yes/no 交互，机制无需新增。注意此变化使 `write_file` 等静态授权工具在 TUI 也开始拦截。
 
 ## 拒绝语义
 

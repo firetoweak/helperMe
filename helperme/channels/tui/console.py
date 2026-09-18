@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -193,6 +194,19 @@ async def read_console_input(
             )
 
 
+def _authorization_prompt(name: str, args: object) -> str:
+    command = args.get("command") if isinstance(args, Mapping) else None
+    detail = (
+        command
+        if type(command) is str
+        else json.dumps(args, ensure_ascii=False)
+    )
+    return (
+        f"命令等待授权：{name}: {detail}\n"
+        "输入 yes 授权，no 拒绝。"
+    )
+
+
 def _print_runtime_status(view: SessionView) -> None:
     if view.control_message is not None:
         print(f"控制面：\n{view.control_message}")
@@ -207,8 +221,17 @@ def _print_runtime_status(view: SessionView) -> None:
     if view.waiting_for:
         print("等待：" + ", ".join(view.waiting_for))
     if view.pending_authorization_ids:
+        print("有命令等待授权：")
+        for pending in view.pending_authorization_commands:
+            command = pending.arguments.get("command")
+            detail = (
+                command
+                if type(command) is str
+                else json.dumps(pending.arguments, ensure_ascii=False)
+            )
+            print(f"  - {pending.name}: {detail}")
         print(
-            "有命令等待授权。yes / no 写入授权事实；"
+            "yes / no 写入授权事实；"
             "其他话会写成 UserMessage，由下一步模型判断。"
         )
 
@@ -227,6 +250,11 @@ async def run_runtime_console(workspace_path: Path | None = None) -> None:
         subagent_activity_sink=context_meter.update_subagent_activity,
         conversation_status_sink=context_meter.update_conversation_status,
         preview_sink=stream_output.preview,
+        authorization_required_sink=(
+            lambda _session_id, _command_id, name, args: stream_output.note(
+                _authorization_prompt(name, args)
+            )
+        ),
         session_failed_sink=lambda _session_id, message: stream_output.note(message),
     ) as app:
         config = app.config

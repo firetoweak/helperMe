@@ -148,6 +148,7 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                         expected_tools = [
                             *assembly.surface.schemas(session_id, state),
                             *decision._skill_tools.schemas(),
+                            *decision._cli_tools.schemas(),
                             *decision._management.schemas(session_id, state),
                             *assembly.control.schemas(session_id, allowed_control),
                             *assembly.subagents.schemas(session_id),

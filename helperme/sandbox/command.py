@@ -1,8 +1,24 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+
+# 终端控制序列与有害控制字符。命令输出是 untrusted external data：
+# ANSI/OSC 可伪造界面、隐藏文本，进模型上下文前统一剥除。
+_TERMINAL_CONTROL_RE = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC：BEL 或 ST 终止
+    r"|\x1b\[[0-?]*[ -/]*[@-~]"  # CSI
+    r"|\x1b[()][0-2]"  # 字符集选择
+    r"|\x1b[@-Z\\-_]"  # 两字符转义
+    r"|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"  # C0 控制字符（保留 \t \n \r）与 DEL
+)
+
+
+def strip_terminal_control(text: str) -> str:
+    return _TERMINAL_CONTROL_RE.sub("", text)
 
 
 @dataclass(frozen=True)
@@ -46,6 +62,7 @@ class BoundedTextCapture:
         self._total_chars = 0
 
     def feed(self, text: str) -> None:
+        text = strip_terminal_control(text)
         self._total_chars += len(text)
         remaining_head = self._limit.head_chars - len(self._head)
         if remaining_head > 0:

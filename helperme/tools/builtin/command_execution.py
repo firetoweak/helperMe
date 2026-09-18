@@ -14,6 +14,7 @@ from helperme.sandbox.command import (
     ShellNotFoundError,
 )
 from helperme.sandbox.workspace import EnvironmentInputError
+from helperme.tools.builtin.exec_policy import command_requires_authorization
 from helperme.tools.spec import PydanticParameters, ToolSpec
 
 
@@ -21,6 +22,7 @@ EXECUTE_COMMAND_DESCRIPTION = """
 用途：在当前 Environment 中使用 {shell_name} 执行本机 CLI 命令。
 何时使用：用于依赖安装、构建、测试、格式化、静态检查、Git、包管理器和运行脚本；常规文件发现、搜索、读取和修改应使用专用文件工具。
 关键限制：相对 cwd 基于当前 Environment cwd，绝对 cwd 使用 Environment 原生语义；cwd 只决定启动位置，当前本地实现尚无进程级 Sandbox；command 使用 {shell_name} 语义；Shell 路径为 {shell_path}；workspace_effect 必须按预期副作用声明；仅支持有超时的前台非交互命令。
+CLI 发现：对陌生 CLI 或遇到 unknown option 时，先执行当前层级的 `<cli> --help`（如 `<cli> <子命令> --help`）逐层现查，不要继续猜 flag。
 失败/截断后：检查 exit_code、stdout、stderr、timed_out、io_errors 和各流的 truncated；io_errors 非空表示管道失败，采集结果可能不完整；超时或失败时不能假定命令成功，也不要无条件重试可能产生副作用的命令；命令产生的文件变化需通过文件工具或 Git diff 重新验证。
 """.strip()
 
@@ -166,4 +168,5 @@ def create_command_execution_spec(
         ),
         parameters=PydanticParameters(ExecuteCommandInput),
         handler=execute_command,
+        requires_authorization=command_requires_authorization,
     )

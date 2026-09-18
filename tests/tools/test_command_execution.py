@@ -93,11 +93,16 @@ class CommandEnvironmentPolicyTest(unittest.IsolatedAsyncioTestCase):
             fixed_values={"HELPER_FIXED": "fixed"},
         )
 
-        child_env = policy.build({
-            "PATH": "bin",
-            "HELPER_ALLOWED": "allowed",
-            "HELPER_SECRET": "secret",
-        })
+        # PATH 的持久化重读由 test_child_env 覆盖；这里钉住白名单转发语义。
+        with patch(
+            "helperme.sandbox.local.powershell.latest_persistent_path",
+            return_value=None,
+        ):
+            child_env = policy.build({
+                "PATH": "bin",
+                "HELPER_ALLOWED": "allowed",
+                "HELPER_SECRET": "secret",
+            })
 
         self.assertEqual(child_env["PATH"], "bin")
         self.assertEqual(child_env["HELPER_ALLOWED"], "allowed")
@@ -107,7 +112,11 @@ class CommandEnvironmentPolicyTest(unittest.IsolatedAsyncioTestCase):
     async def test_environment_name_matching_is_case_insensitive(self):
         policy = CommandEnvironmentPolicy(forward_names=("helper_allowed",))
 
-        child_env = policy.build({"HELPER_ALLOWED": "yes"})
+        with patch(
+            "helperme.sandbox.local.powershell.latest_persistent_path",
+            return_value=None,
+        ):
+            child_env = policy.build({"HELPER_ALLOWED": "yes"})
 
         self.assertEqual(child_env["HELPER_ALLOWED"], "yes")
 

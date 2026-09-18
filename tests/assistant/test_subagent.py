@@ -104,6 +104,11 @@ class _NoSkillTools:
         return []
 
 
+class _NoCliTools:
+    def schemas(self):
+        return []
+
+
 def _visible_to(events, frame: DecisionFrame):
     """一次决策实际看得见的事实，口径与 `decide()` 的 frame 边界一致。"""
 
@@ -1076,6 +1081,7 @@ class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
             "test-model",
             surface=_NoToolsets(),
             skill_tools=_NoSkillTools(),
+            cli_tools=_NoCliTools(),
             control=AssistantControlPlane(()),
             management=_NoManagement(),
             subagents=host,

@@ -10,6 +10,7 @@ ASSISTANT_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "assistant"
 LLM_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "llm"
 MCP_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "mcp"
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "skills"
+CLI_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "cli"
 TOOLS_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "tools"
 SANDBOX_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "sandbox"
 CHANNELS_ROOT = Path(__file__).resolve().parents[2] / "helperme" / "channels"
@@ -53,6 +54,26 @@ class LayerImportBoundaryTest(unittest.TestCase):
                 )
         self.assertEqual(offenders, [])
 
+    def test_cli_does_not_import_runtime_or_product_layers(self):
+        # cli 声明的对外依赖只有 sandbox（进程执行能力）与 tools（ToolSpec 契约）。
+        offenders: list[str] = []
+        forbidden = {
+            "helperme.assistant",
+            "helperme.channels",
+            "helperme.llm",
+            "helperme.mcp",
+            "helperme.runtime",
+            "helperme.skills",
+        }
+        for path in sorted(CLI_ROOT.rglob("*.py")):
+            modules = _imported_modules(path)
+            leaked = sorted(_imports_any(modules, forbidden))
+            if leaked:
+                offenders.append(
+                    f"{path.relative_to(CLI_ROOT)}: {', '.join(leaked)}"
+                )
+        self.assertEqual(offenders, [])
+
     def test_mcp_does_not_import_runtime_or_assistant(self):
         offenders: list[str] = []
         for path in sorted(MCP_ROOT.rglob("*.py")):
@@ -83,6 +104,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
                     {
                         "helperme.assistant",
                         "helperme.channels",
+                        "helperme.cli",
                         "helperme.mcp",
                         "helperme.runtime",
                         "helperme.skills",
@@ -147,12 +169,20 @@ class LayerImportBoundaryTest(unittest.TestCase):
         forbidden = {
             "helperme.llm",
             "helperme.runtime",
-            "helperme.sandbox",
             "helperme.tools",
         }
+        # sandbox 对 channels 只开放 registry：WorkspaceRecord / WorkspaceRegistry
+        # 是各层共享的工作区元数据定义，不含进程执行能力；执行面
+        # （api / command / local / workspace 及包本身）仍然禁止。
+        allowed_sandbox = {"helperme.sandbox.registry"}
         for path in sorted(CHANNELS_ROOT.rglob("*.py")):
             modules = _imported_modules(path)
             leaked = sorted(_imports_any(modules, forbidden))
+            leaked += sorted(
+                module
+                for module in _imports_any(modules, {"helperme.sandbox"})
+                if module not in allowed_sandbox
+            )
             if leaked:
                 offenders.append(
                     f"{path.relative_to(CHANNELS_ROOT)}: {', '.join(leaked)}"
@@ -166,6 +196,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
                 "helperme.tools.executor",
                 "helperme.tools.registry",
             },
+            "cli.py": {"helperme.tools.spec"},
             "skills.py": {"helperme.tools.spec"},
             "tool_results.py": {"helperme.tools.control"},
             "control.py": {
@@ -195,6 +226,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
         forbidden = {
             "helperme.assistant",
             "helperme.channels",
+            "helperme.cli",
             "helperme.llm",
             "helperme.mcp",
             "helperme.runtime",
@@ -253,6 +285,7 @@ class LayerImportBoundaryTest(unittest.TestCase):
         forbidden = {
             "helperme.assistant",
             "helperme.channels",
+            "helperme.cli",
             "helperme.llm",
             "helperme.mcp",
             "helperme.runtime",

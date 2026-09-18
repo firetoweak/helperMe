@@ -9,6 +9,7 @@ from uuid import uuid4
 from helperme.runtime.events import Event, EventDraft, StepCommitted
 from helperme.runtime.journal.api import Journal, StepLease
 from helperme.runtime.model import (
+    AuthorizationPolicy,
     Command,
     ModelDecision,
     Step,
@@ -56,7 +57,7 @@ class StepRunner:
         projector: StateProjector,
         decision_maker: DecisionMaker,
         id_factory: IdFactory = random_id,
-        requires_authorization: Mapping[str, bool] | None = None,
+        requires_authorization: Mapping[str, bool | AuthorizationPolicy] | None = None,
         decision_on_outcome: Mapping[str, bool] | None = None,
     ) -> None:
         self._journal = journal
@@ -75,7 +76,7 @@ class StepRunner:
         name: str,
         *,
         decision_on_outcome: bool,
-        requires_authorization: bool = False,
+        requires_authorization: bool | AuthorizationPolicy = False,
     ) -> None:
         self._decision_on_outcome[name] = decision_on_outcome
         self._requires_authorization[name] = requires_authorization
@@ -97,10 +98,13 @@ class StepRunner:
         commands: list[Command] = []
         for request in decision.command_requests:
             command_id = self._id_factory("command")
+            policy = self._requires_authorization[request.name]
             command = Command(
                 command_id=command_id,
                 effect=request,
-                requires_authorization=(self._requires_authorization[request.name]),
+                requires_authorization=(
+                    policy(request.argument_dict()) if callable(policy) else policy
+                ),
                 decision_on_outcome=(self._decision_on_outcome[request.name]),
             )
             commands.append(command)

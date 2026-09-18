@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -22,6 +23,15 @@ from helperme.runtime.model import CanonicalState, CommandPhase
 
 
 @dataclass(frozen=True, slots=True)
+class PendingAuthorization:
+    """待授权命令的展示信息：用户确认前需要看到自己在批准什么。"""
+
+    command_id: str
+    name: str
+    arguments: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class SessionView:
     status: str
     waiting_for: tuple[str, ...]
@@ -32,6 +42,7 @@ class SessionView:
     control_message: str | None = None
     auto_authorize: bool = False
     paused: bool = False
+    pending_authorization_commands: tuple[PendingAuthorization, ...] = ()
 
 
 def session_view(
@@ -43,10 +54,15 @@ def session_view(
     auto_authorize: bool = False,
     paused: bool = False,
 ) -> SessionView:
+    pending_ids = pending_authorization_ids(state)
+    by_id = {
+        command_state.command.command_id: command_state.command
+        for command_state in state.commands
+    }
     return SessionView(
         status=state.status.value,
         waiting_for=state.waiting_for,
-        pending_authorization_ids=pending_authorization_ids(state),
+        pending_authorization_ids=pending_ids,
         should_wake=(
             state.status is RuntimeStatus.RUNNABLE
             or any(
@@ -58,6 +74,15 @@ def session_view(
         control_message=control_message,
         auto_authorize=auto_authorize,
         paused=paused,
+        pending_authorization_commands=tuple(
+            PendingAuthorization(
+                command_id=command_id,
+                name=by_id[command_id].effect.name,
+                arguments=by_id[command_id].effect.argument_dict(),
+            )
+            for command_id in pending_ids
+            if command_id in by_id
+        ),
     )
 
 

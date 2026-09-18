@@ -10,12 +10,13 @@ from helperme.runtime import DomainFactCommitted
 CATALOG = "assistant.catalog"
 
 
-async def sync_catalog(runtime, session_id, surface, skills, management):
+async def sync_catalog(runtime, session_id, surface, skills, clis, management):
     value = {
         "toolsets": sorted(
             (asdict(item) for item in surface.descriptors()), key=lambda x: x["id"]
         ),
         "skills": skills.catalog(),
+        "clis": clis.catalog(),
         "management": management.catalog_instruction(session_id),
     }
     events = await runtime.snapshot(session_id)

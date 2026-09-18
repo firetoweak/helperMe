@@ -39,8 +39,10 @@ from helperme.runtime import (
     RecordedDecision,
     ToolBinding,
 )
+from helperme.runtime.model import AuthorizationPolicy
 from helperme.runtime.dispatcher import AttemptContext
 from helperme.runtime.state import DecisionFrame
+from helperme.assistant.cli import CliToolAdapter
 from helperme.assistant.skills import SkillToolAdapter
 from helperme.llm.api import (
     InvalidLLMResponse,
@@ -59,7 +61,7 @@ class ToolRunner(Protocol):
         arguments: Mapping[str, object],
     ) -> object: ...
 
-    def requires_authorization(self, name: str) -> bool: ...
+    def requires_authorization(self, name: str) -> bool | AuthorizationPolicy: ...
 
 
 def decision_from_llm(
@@ -172,6 +174,7 @@ class JournalBackedLlmDecisionMaker:
         *,
         surface: ToolSurface,
         skill_tools: SkillToolAdapter,
+        cli_tools: CliToolAdapter,
         control: AssistantControlPlane,
         management: ManagementSurface,
         system_prompt: str = DEFAULT_ASSISTANT_PROMPT,
@@ -189,6 +192,7 @@ class JournalBackedLlmDecisionMaker:
         self._projector = ModelContextProjector() if projector is None else projector
         self._surface = surface
         self._skill_tools = skill_tools
+        self._cli_tools = cli_tools
         self._control = control
         self._management = management
         self._context_usage_sink = context_usage_sink
@@ -208,6 +212,7 @@ class JournalBackedLlmDecisionMaker:
             state,
         )
         schemas = [*schemas, *self._skill_tools.schemas()]
+        schemas = [*schemas, *self._cli_tools.schemas()]
         schemas = [
             *schemas,
             *self._management.schemas(state.session_id, state),

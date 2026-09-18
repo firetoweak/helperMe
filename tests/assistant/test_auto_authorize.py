@@ -30,10 +30,17 @@ class AutoAuthorizeStoreTest(unittest.TestCase):
 
 
 class AutoGrantOwnersTest(unittest.TestCase):
-    def test_web_reads_preference_other_owners_always_grant(self):
+    def test_entry_policy_for_auto_grant(self):
+        # 无 owner：不替人放行。
         self.assertFalse(auto_grant_for_owners((), False))
+        # Web：看 Session 总闸偏好。
         self.assertFalse(auto_grant_for_owners(("web:c1",), False))
         self.assertTrue(auto_grant_for_owners(("web:c1",), True))
-        self.assertTrue(auto_grant_for_owners(("tui",), False))
-        self.assertTrue(auto_grant_for_owners(("tui", "web:c1"), False))
+        # TUI：不自动放行，等待 yes/no。
+        self.assertFalse(auto_grant_for_owners(("tui",), False))
+        self.assertFalse(auto_grant_for_owners(("tui",), True))
+        # Web + TUI 混合：Web 优先，看总闸。
+        self.assertFalse(auto_grant_for_owners(("tui", "web:c1"), False))
+        self.assertTrue(auto_grant_for_owners(("tui", "web:c1"), True))
+        # Telegram / ACP 等暂无授权交互入口的 Channel：保持放行。
         self.assertTrue(auto_grant_for_owners(("telegram-bot-1-chat-2",), False))

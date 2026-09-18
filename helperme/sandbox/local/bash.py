@@ -16,6 +16,7 @@ from helperme.sandbox.command import (
     CommandStartError,
     ShellNotFoundError,
 )
+from helperme.sandbox.local.child_env import CHILD_ENV_OVERLAY
 
 
 DEFAULT_ENV_NAMES = (
@@ -44,6 +45,7 @@ class BashCommandEnvironmentPolicy:
         self._fixed_values = {
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
+            **CHILD_ENV_OVERLAY,
             **dict({} if fixed_values is None else fixed_values),
         }
 

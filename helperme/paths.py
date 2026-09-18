@@ -38,6 +38,10 @@ class HelperMeHome:
         return self.root / "skills"
 
     @property
+    def clis_root(self) -> Path:
+        return self.root / "clis"
+
+    @property
     def state_root(self) -> Path:
         return self.root / "state"
 
@@ -53,6 +57,7 @@ class HelperMeHome:
         self.sessions_root.mkdir(parents=True, exist_ok=True)
         self.mcp_root.mkdir(parents=True, exist_ok=True)
         self.skills_root.mkdir(parents=True, exist_ok=True)
+        self.clis_root.mkdir(parents=True, exist_ok=True)
         self.state_root.mkdir(parents=True, exist_ok=True)
         self.cache_root.mkdir(parents=True, exist_ok=True)
 

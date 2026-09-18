@@ -13,6 +13,7 @@ from helperme.runtime.events import (
 )
 from helperme.runtime.journal.api import Journal, LeaseLostError
 from helperme.runtime.model import (
+    AuthorizationPolicy,
     Command,
     CommandOutcome,
     CommandPhase,
@@ -51,13 +52,15 @@ TaskFailed = Callable[[BaseException], None]
 class ToolBinding:
     handler: ToolHandler
     decision_on_outcome: bool = True
-    requires_authorization: bool = False
+    requires_authorization: bool | AuthorizationPolicy = False
 
     def __post_init__(self) -> None:
         if type(self.decision_on_outcome) is not bool:
             raise TypeError("decision_on_outcome must be bool")
-        if type(self.requires_authorization) is not bool:
-            raise TypeError("requires_authorization must be bool")
+        if type(self.requires_authorization) is not bool and not callable(
+            self.requires_authorization
+        ):
+            raise TypeError("requires_authorization must be bool or AuthorizationPolicy")
 
 
 async def _stop_heartbeat(task: asyncio.Task[None]) -> None:

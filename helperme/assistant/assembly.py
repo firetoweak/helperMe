@@ -39,11 +39,14 @@ from helperme.assistant.toolsets import ToolSurface, load_toolset_binding
 from helperme.runtime import AgentRuntime, ToolBinding
 from helperme.assistant.builtin_tools import build_builtin_tools
 from helperme.sandbox.registry import WorkspaceRecord
+from helperme.assistant.cli import CliToolAdapter
 from helperme.assistant.mcp import McpToolsetAdapter
 from helperme.assistant.management import ManagementDomain, ManagementSurface
 from helperme.assistant.skills import SkillToolAdapter
 from helperme.config import AssistantConfig
 from helperme.paths import HelperMeHome, runtime_data_root
+from helperme.cli.composition import CliAssembly, build_cli
+from helperme.cli.runtime import LOAD_CLI
 from helperme.mcp.composition import McpAssembly, build_mcp
 from helperme.skills.composition import SkillAssembly, build_skills
 from helperme.skills.runtime import LOAD_SKILL, READ_SKILL_RESOURCE
@@ -59,6 +62,7 @@ class AssistantAssembly:
     surface: ToolSurface
     mcp: McpAssembly
     skills: SkillAssembly
+    cli: CliAssembly
     control: AssistantControlPlane
     subagents: SubAgentHost
     compact: CompactBoundary | None = None
@@ -110,7 +114,12 @@ async def build_assistant_assembly(
             config.model_name,
         ),
     )
-    operations = (*mcp.control_operations, *skills.control_operations)
+    cli = build_cli(home)
+    operations = (
+        *mcp.control_operations,
+        *skills.control_operations,
+        *cli.control_operations,
+    )
     control = AssistantControlPlane(operations)
     management = ManagementSurface(
         (
@@ -126,11 +135,18 @@ async def build_assistant_assembly(
                 skills.management_specs,
                 skills.control_operations,
             ),
+            ManagementDomain(
+                "cli",
+                "CLI 的登记、诊断、安装、更新与修复",
+                cli.management_specs,
+                cli.control_operations,
+            ),
         ),
         gateway,
         settings,
     )
     skill_tools = SkillToolAdapter(skills, gateway, settings)
+    cli_tools = CliToolAdapter(cli, gateway, settings)
     subagents = SubAgentHost(subagent_activity_sink)
     preview = PreviewEmitter(preview_sink, thinking_sink)
     delivery_sink = subagents.routed_sink(sink)
@@ -164,6 +180,7 @@ async def build_assistant_assembly(
             DELIVER_TOOL_NAME,
             LOAD_SKILL,
             READ_SKILL_RESOURCE,
+            LOAD_CLI,
             DELEGATE,
             REPORT,
             READ,
@@ -194,6 +211,7 @@ async def build_assistant_assembly(
         **deliver_binding(delivery_sink, preview),
         **load_toolset_binding(surface),
         **skill_tools.bindings(),
+        **cli_tools.bindings(),
         **management.bindings(),
         **subagents.bindings(),
         **compact_context.bindings(),
@@ -205,6 +223,7 @@ async def build_assistant_assembly(
         config.model_name,
         surface=surface,
         skill_tools=skill_tools,
+        cli_tools=cli_tools,
         projector=projector,
         control=control,
         management=management,
@@ -255,7 +274,9 @@ async def build_assistant_assembly(
             return False
         if not compact_context.is_reader and not subagents.is_subagent(session_id):
             if not (await runtime.state(session_id)).waiting_command_ids:
-                await sync_catalog(runtime, session_id, surface, skill_tools, management)
+                await sync_catalog(
+                    runtime, session_id, surface, skill_tools, cli_tools, management
+                )
         return True if compact is None else await compact.before_advance()
 
     scheduler.before_advance = before_advance
@@ -270,6 +291,7 @@ async def build_assistant_assembly(
         surface=surface,
         mcp=mcp,
         skills=skills,
+        cli=cli,
         control=control,
         subagents=subagents,
     )

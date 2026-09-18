@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
@@ -11,6 +11,10 @@ from helperme.runtime.json_values import thaw_value
 
 
 Arguments: TypeAlias = tuple[tuple[str, object], ...]
+
+# 授权判定钩子：签发 Command 时对工具参数求值，返回 True 表示需要用户确认。
+# 必须是纯函数——只看参数，不读外部状态。静态布尔是它的常量特例。
+AuthorizationPolicy: TypeAlias = Callable[[Mapping[str, object]], bool]
 MAX_JSON_VALUE_BYTES = 128 * 1024
 MAX_JSON_VALUE_DEPTH = 32
 
@@ -132,7 +136,9 @@ class Command:
 
     `requires_authorization` and `decision_on_outcome` are assembly
     information captured at issue time. They are not an approval policy
-    and not inferred from the tool name.
+    and not inferred from the tool name. `requires_authorization` may
+    come from a static spec flag or from evaluating an AuthorizationPolicy
+    against the issued arguments; once captured it is a fixed fact.
     """
 
     command_id: str

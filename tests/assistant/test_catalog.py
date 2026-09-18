@@ -27,15 +27,16 @@ class CatalogTest(unittest.IsolatedAsyncioTestCase):
                 for r in records
             ]
         )
+        clis = SimpleNamespace(catalog=lambda: [])
         management = SimpleNamespace(catalog_instruction=lambda sid: "mcp / skill")
-        await sync_catalog(runtime, "s", surface, skills, management)
+        await sync_catalog(runtime, "s", surface, skills, clis, management)
         initial = await runtime.snapshot("s")
         descriptors.reverse()
-        await sync_catalog(runtime, "s", surface, skills, management)
+        await sync_catalog(runtime, "s", surface, skills, clis, management)
         self.assertEqual(await runtime.snapshot("s"), initial)
         records[0].description = "updated"
         records[0].revision = 2
-        await sync_catalog(runtime, "s", surface, skills, management)
+        await sync_catalog(runtime, "s", surface, skills, clis, management)
         updated = await runtime.snapshot("s")
         self.assertEqual(updated[: len(initial)], initial)
         self.assertEqual(len(updated), 2)
@@ -51,5 +52,5 @@ class CatalogTest(unittest.IsolatedAsyncioTestCase):
         after = project_chat_messages(updated, projector.project_visible("s", updated))
         self.assertEqual(after[: len(before)], before)
         self.assertIn("<capability_catalog>", after[-1]["content"])
-        await sync_catalog(runtime, "s", surface, skills, management)
+        await sync_catalog(runtime, "s", surface, skills, clis, management)
         self.assertEqual(await runtime.snapshot("s"), updated)

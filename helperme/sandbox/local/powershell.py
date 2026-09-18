@@ -15,6 +15,10 @@ from helperme.sandbox.command import (
     CommandStartError,
     ShellNotFoundError,
 )
+from helperme.sandbox.local.child_env import (
+    CHILD_ENV_OVERLAY,
+    latest_persistent_path,
+)
 from helperme.sandbox.local.windows_job import WindowsJob
 
 
@@ -55,6 +59,7 @@ class CommandEnvironmentPolicy:
         self._fixed_values = {
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
+            **CHILD_ENV_OVERLAY,
             **dict({} if fixed_values is None else fixed_values),
         }
 
@@ -65,6 +70,13 @@ class CommandEnvironmentPolicy:
             for name in self._forward_names
             if name in indexed
         }
+        # PATH 整体替换为最新持久化值：host_env 里的是 Worker 启动快照，
+        # 安装器写入注册表的新条目必须在 spawn 前重新合成。是替换不是追加，
+        # 否则 CLI 升级换安装位置后会被旧路径遮蔽。
+        fresh_path = latest_persistent_path()
+        if fresh_path is not None and "path" in self._forward_names:
+            key = indexed["path"][0] if "path" in indexed else "PATH"
+            child_env[key] = fresh_path
         child_env.update(self._fixed_values)
         return child_env
 

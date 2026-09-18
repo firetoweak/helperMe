@@ -79,6 +79,11 @@ class EmptySkillTools:
         return []
 
 
+class EmptyCliTools:
+    def schemas(self):
+        return []
+
+
 class OpenControlManagement:
     def schemas(self, _session_id, _state):
         return []
@@ -163,6 +168,7 @@ def _decision_maker(journal, llm, control, *, projector=None):
         "test-model",
         surface=ToolSurface(),
         skill_tools=EmptySkillTools(),
+        cli_tools=EmptyCliTools(),
         control=control,
         management=OpenControlManagement(),
         projector=projector,

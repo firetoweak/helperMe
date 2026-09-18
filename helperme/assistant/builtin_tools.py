@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from helperme.assistant.tool_results import runtime_tool_result
+from helperme.runtime.model import AuthorizationPolicy
 from helperme.sandbox.api import EnvironmentSelection
 from helperme.sandbox.local.provider import create_local_environment_provider
 from helperme.sandbox.registry import WorkspaceRecord, workspace_view
@@ -38,7 +39,7 @@ class BuiltinToolRunner:
             raise ValueError("builtin tool schemas 包含重复 name")
         return tuple(names)
 
-    def requires_authorization(self, name: str) -> bool:
+    def requires_authorization(self, name: str) -> bool | AuthorizationPolicy:
         spec = self._executor.registry.get(name)
         if spec is None:
             raise KeyError(name)

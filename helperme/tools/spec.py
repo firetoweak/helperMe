@@ -132,6 +132,11 @@ class JsonSchemaParameters:
         return payload
 
 
+# 授权判定钩子：签发时对工具参数求值，True = 需要用户确认（ask）。
+# 必须是纯函数，只看参数。静态布尔是它的常量特例。
+AuthorizationPolicy = Callable[[Mapping[str, object]], bool]
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     """与工具来源和模型 Provider 无关的内部工具定义。"""
@@ -145,7 +150,7 @@ class ToolSpec:
     ]
     control_boundary: bool = False
     exclusive_batch: bool = False
-    requires_authorization: bool = False
+    requires_authorization: bool | AuthorizationPolicy = False
 
     def __post_init__(self) -> None:
         if type(self.name) is not str or not self.name:
@@ -158,8 +163,10 @@ class ToolSpec:
             raise TypeError("control_boundary must be bool")
         if type(self.exclusive_batch) is not bool:
             raise TypeError("exclusive_batch must be bool")
-        if type(self.requires_authorization) is not bool:
-            raise TypeError("requires_authorization must be bool")
+        if type(self.requires_authorization) is not bool and not callable(
+            self.requires_authorization
+        ):
+            raise TypeError("requires_authorization must be bool or AuthorizationPolicy")
 
     def to_openai_tool(self) -> dict[str, Any]:
         """导出当前 OpenAI-compatible 模型接口所需的工具格式。"""
@@ -188,7 +195,7 @@ def pydantic_tool_spec(
     ],
     control_boundary: bool = False,
     exclusive_batch: bool = False,
-    requires_authorization: bool = False,
+    requires_authorization: bool | AuthorizationPolicy = False,
 ) -> ToolSpec:
     return ToolSpec(
         name=name,
