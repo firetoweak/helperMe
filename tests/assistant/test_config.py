@@ -44,7 +44,6 @@ class AppConfigTest(unittest.TestCase):
                     "num_retries": 0,
                 },
             },
-            "workspace": {"root": ".", "full_access": False},
             "runtime": {
                 "model_context_limit": 1000,
                 "input_budget_ratio": ratio,
@@ -114,7 +113,6 @@ class AppConfigTest(unittest.TestCase):
             {"kept": True},
         )
         self.assertTrue(0 < config.runtime.input_budget_ratio < 1)
-        self.assertIsInstance(config.workspace.root, Path)
         self.assertIsNone(config.channels.telegram)
 
     def test_parses_telegram_config(self):

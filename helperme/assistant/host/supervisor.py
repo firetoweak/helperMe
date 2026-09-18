@@ -17,10 +17,12 @@ from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
 from helperme.assistant.host.llm_port import complete_llm_chat
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.subagent.subagent import persist_return, report_arguments, return_data
+from helperme.assistant.workspaces import UnboundSessionError, bound_workspace_id
 from helperme.assistant.host.spawn import start_worker
 from helperme.assistant.host.worker import worker_main
 from helperme.runtime import SqliteJournal
 from helperme.sandbox.local.windows_job import WindowsJob
+from helperme.sandbox.registry import WorkspaceRegistry
 
 
 @dataclass
@@ -60,6 +62,7 @@ class HostSupervisor:
         thinking_sink=None,
         session_activity_sink=None,
         session_failed_sink=None,
+        workspaces=None,
     ):
         self.store = store
         self.config_factory = config_factory
@@ -88,6 +91,11 @@ class HostSupervisor:
         self.job = WindowsJob.create() if os.name == "nt" else None
         self._auto_authorize = AutoAuthorizeStore(store.root)
         self._pause = SessionPauseStore(store.root)
+        self.workspaces = (
+            workspaces
+            if workspaces is not None
+            else WorkspaceRegistry.load(home.workspaces_path)
+        )
 
     async def _route(self, operation, session_id, arguments):
         if operation == "llm_chat":
@@ -120,12 +128,20 @@ class HostSupervisor:
             return None
         if operation == "create_child":
             # Identity is stable; an existing child is resumed, never replaced.
+            initial_fact = dict(arguments)
+            child_workspace_id = await self.bound_workspace_id(
+                initial_fact["data"]["parent_session_id"]
+            )
             async with self.locks.setdefault(session_id, asyncio.Lock()):
                 if not self.store.path(session_id).parent.exists():
-                    await self.store.create(session_id, initial_fact=arguments)
+                    await self.store.create(
+                        session_id,
+                        workspace_id=child_workspace_id,
+                        initial_fact=initial_fact,
+                    )
             # delegate acknowledges durable creation, not successful initialization.
             activation = asyncio.create_task(
-                self.request("fact", session_id, arguments)
+                self.request("fact", session_id, initial_fact)
             )
             self._track(session_id, activation)
             return None
@@ -471,9 +487,20 @@ class HostSupervisor:
         if isawaitable(emitted):
             await emitted
 
-    async def create(self, session_id):
+    async def bound_workspace_id(self, session_id: str) -> str:
+        """会话自己的归属；派生子会话与压缩 reader 都继承它。"""
+        events = await SqliteJournal(self.store.require(session_id)).snapshot(
+            session_id
+        )
+        workspace_id = bound_workspace_id(events)
+        if workspace_id is None:
+            raise UnboundSessionError(session_id)
+        return workspace_id
+
+    async def create(self, session_id, workspace_id):
         async with self.locks.setdefault(session_id, asyncio.Lock()):
-            await self.store.create(session_id)
+            self.workspaces.get(workspace_id)
+            await self.store.create(session_id, workspace_id=workspace_id)
 
     async def fork_and_accept_input(
         self,

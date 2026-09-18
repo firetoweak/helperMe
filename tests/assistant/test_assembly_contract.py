@@ -15,6 +15,7 @@ from helperme.config import AssistantConfig
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage, ToolCall
 from helperme.paths import HelperMeHome
 from helperme.runtime import DecisionCancelled, MemoryJournal, StepCommitted
+from tests.fixtures.workspaces import workspace_record
 from tests.session_scheduler import (
     SettlingScheduler,
     build_settling_assistant,
@@ -120,8 +121,6 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                     journal = MemoryJournal()
                     config = AssistantConfig(
                         model_name="test-model",
-                        workspace_root=workspace,
-                        full_access=False,
                         model_context_limit=200_000,
                         input_budget_ratio=0.75,
                         llm=llm,
@@ -132,6 +131,7 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                         lambda _session_id, _output_id, _text: None,
                         journal,
                         session_id=session_id,
+                        workspace=workspace_record(workspace),
                     )
                     try:
                         decision = assembly.runtime.step_runner._decision_maker
@@ -236,8 +236,6 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                 assembly = await build_assistant_assembly(
                     AssistantConfig(
                         model_name="test-model",
-                        workspace_root=workspace,
-                        full_access=False,
                         model_context_limit=200_000,
                         input_budget_ratio=0.75,
                         llm=llm,
@@ -245,6 +243,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     lambda *_values: None,
                     journal,
                     session_id="session",
+                    workspace=workspace_record(workspace),
                     preview_sink=lambda *values: previews.append(values),
                     scheduler_factory=SettlingScheduler,
                 )
@@ -303,8 +302,6 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                 assembly = await build_assistant_assembly(
                     AssistantConfig(
                         model_name="test-model",
-                        workspace_root=workspace,
-                        full_access=False,
                         model_context_limit=200_000,
                         input_budget_ratio=0.75,
                         llm=StreamingLlm(),
@@ -312,6 +309,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     lambda *values: delivered.append(values),
                     MemoryJournal(),
                     session_id="session",
+                    workspace=workspace_record(workspace),
                     preview_sink=lambda *values: previews.append(values),
                     scheduler_factory=SettlingScheduler,
                 )
@@ -368,8 +366,6 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                 assembly = await build_assistant_assembly(
                     AssistantConfig(
                         model_name="test-model",
-                        workspace_root=workspace,
-                        full_access=False,
                         model_context_limit=200_000,
                         input_budget_ratio=0.75,
                         llm=CapturingLlm(),
@@ -379,6 +375,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     MemoryJournal(),
                     session_id="session",
+                    workspace=workspace_record(workspace),
                     session_failed_sink=(
                         lambda session_id, message: failed.append(
                             (session_id, message)
@@ -439,8 +436,6 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                 assembly = await build_assistant_assembly(
                     AssistantConfig(
                         model_name="test-model",
-                        workspace_root=workspace,
-                        full_access=False,
                         model_context_limit=200_000,
                         input_budget_ratio=0.75,
                         llm=CapturingLlm(),
@@ -448,6 +443,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     lambda *_values: None,
                     MemoryJournal(),
                     session_id="session",
+                    workspace=workspace_record(workspace),
                     scheduler_factory=SettlingScheduler,
                 )
                 try:

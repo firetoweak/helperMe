@@ -21,6 +21,7 @@ from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage
 from helperme.paths import HelperMeHome
 from helperme.runtime import MemoryJournal
 from helperme.tools.spec import PydanticParameters
+from tests.fixtures.workspaces import workspace_record
 
 
 TOOLS_WITH_DELIBERATE_TITLES: frozenset[str] = frozenset()
@@ -146,8 +147,6 @@ class ExposedToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 assembly = await build_assistant_assembly(
                     AssistantConfig(
                         model_name="test-model",
-                        workspace_root=workspace,
-                        full_access=False,
                         model_context_limit=200_000,
                         input_budget_ratio=0.75,
                         llm=SilentLlm(),
@@ -155,6 +154,7 @@ class ExposedToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                     lambda _session_id, _output_id, _text: None,
                     MemoryJournal(),
                     session_id=session_id,
+                    workspace=workspace_record(workspace),
                 )
                 try:
                     decision = assembly.runtime.step_runner._decision_maker

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import (
@@ -11,10 +13,12 @@ from aiogram.exceptions import (
 )
 from aiogram.types import Message, Update
 
+from helperme.assistant.conversations import SessionSummary, recent_workspace_id
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.host.ipc import WorkerFailed
 from helperme.assistant.sessions import AssistantSessions
 from helperme.config import InitialConfigCreated, load_app_config
+from helperme.sandbox.registry import WorkspaceRecord, WorkspaceRegistry
 
 
 _PREVIEW_EDIT_INTERVAL = 0.5
@@ -188,23 +192,42 @@ class TelegramChannel:
             await self.send(view.control_message)
 
 
+class TelegramWorkspaceRequired(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("Telegram 没有可回退的工作区，请加上 --workspace <path>")
+
+
+def resolve_telegram_workspace(
+    workspaces: WorkspaceRegistry,
+    summaries: tuple[SessionSummary, ...],
+    workspace_path: Path | None,
+) -> WorkspaceRecord:
+    if workspace_path is not None:
+        return workspaces.register_path(workspace_path)
+    workspace_id = recent_workspace_id(summaries)
+    if workspace_id is None:
+        raise TelegramWorkspaceRequired()
+    return workspaces.get(workspace_id)
+
+
 async def _open_chat_channel(
     sessions: AssistantSessions,
     bot: Bot,
     bot_id: int,
     chat_id: int,
+    workspace_id: str,
 ) -> TelegramChannel:
     session_id = f"telegram-bot-{bot_id}-chat-{chat_id}"
     owner = f"telegram-bot-{bot_id}-chat-{chat_id}"
     try:
         await sessions.select(owner, session_id)
     except SessionNotFoundError:
-        await sessions.create(session_id)
+        await sessions.create(session_id, workspace_id)
         await sessions.select(owner, session_id)
     return TelegramChannel(sessions, bot, chat_id, session_id, bot_id)
 
 
-async def run_telegram_assistant() -> None:
+async def run_telegram_assistant(workspace_path: Path | None = None) -> None:
     from helperme.bootstrap import bootstrap_assistant
 
     app_config = load_app_config()
@@ -252,14 +275,21 @@ async def run_telegram_assistant() -> None:
         async with bootstrap_assistant(
             send,
             app_config=app_config,
+            workspace_path=None,
             preview_sink=preview,
             session_failed_sink=session_failed,
         ) as app:
+            workspace = resolve_telegram_workspace(
+                app.workspaces,
+                await app.queries.list_sessions(),
+                workspace_path,
+            )
             channel = await _open_chat_channel(
                 app.sessions,
                 bot,
                 bot.id,
                 chat_id,
+                workspace.workspace_id,
             )
             dispatcher = Dispatcher()
 
@@ -304,10 +334,20 @@ async def run_telegram_assistant() -> None:
                 await app.sessions.release(channel.owner)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="工作区路径；缺省回退到最近一次聊天的工作区",
+    )
+    options = parser.parse_args(argv)
     try:
-        asyncio.run(run_telegram_assistant())
+        asyncio.run(run_telegram_assistant(workspace_path=options.workspace))
     except InitialConfigCreated as exc:
+        print(exc)
+    except TelegramWorkspaceRequired as exc:
         print(exc)
     except KeyboardInterrupt:
         print("\nTelegram Assistant 已退出。")

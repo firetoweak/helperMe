@@ -45,6 +45,10 @@ export function App() {
         </ActionIcon>
         <Routes>
           <Route path="/" element={<DraftRedirect />} />
+          <Route
+            path="/workspaces/:workspaceId"
+            element={<DraftRedirect />}
+          />
           <Route path="/sessions/:sessionId" element={<SessionConversation />} />
         </Routes>
       </AppShell.Main>

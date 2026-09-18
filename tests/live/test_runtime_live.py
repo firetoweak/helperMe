@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,8 @@ from helperme.runtime import MemoryJournal, RuntimeStatus
 from tests.session_scheduler import build_settling_assistant as build_live_assistant
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
+from helperme.paths import HelperMeHome
+from helperme.sandbox.registry import WorkspaceRegistry
 
 pytestmark = pytest.mark.live
 
@@ -28,10 +31,17 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
         delivered: list[str] = []
         journal = MemoryJournal()
         session_id = "live-session"
-        assembly = await build_live_assistant(config, delivered.append, journal, session_id)
+        # live 会话跑在当前目录：登记进本机 registry（幂等），
+        # supervisor 建会话时按归属校验。
+        workspace = WorkspaceRegistry.load(
+            HelperMeHome.default().workspaces_path
+        ).register_path(Path.cwd())
+        assembly = await build_live_assistant(
+            config, delivered.append, journal, session_id, workspace
+        )
         try:
             async with config.llm, assembly.mcp.client_manager:
-                await assembly.sessions.create(session_id)
+                await assembly.sessions.create(session_id, workspace.workspace_id)
                 await assembly.sessions.receive_user_message(
                     session_id,
                     "只用一句话回答：1+1 等于几。不要调用工具。",

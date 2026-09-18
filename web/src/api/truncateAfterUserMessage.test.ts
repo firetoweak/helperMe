@@ -5,6 +5,7 @@ import { truncateAfterUserMessage } from "./truncateAfterUserMessage";
 
 const conversation: ConversationView = {
   session_id: "s1",
+  workspace_id: "workspace-1",
   revision: 3,
   items: [
     {

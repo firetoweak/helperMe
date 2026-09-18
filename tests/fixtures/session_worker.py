@@ -70,8 +70,6 @@ class ProcessLlm:
 def config_for(workspace: Path):
     return AssistantConfig(
         model_name="test",
-        workspace_root=workspace,
-        full_access=False,
         model_context_limit=200000,
         input_budget_ratio=0.9,
         llm=ProcessLlm(workspace),
@@ -99,8 +97,6 @@ def cancellable_config(workspace: Path):
     config = config_for(workspace)
     return AssistantConfig(
         model_name=config.model_name,
-        workspace_root=config.workspace_root,
-        full_access=config.full_access,
         model_context_limit=config.model_context_limit,
         input_budget_ratio=config.input_budget_ratio,
         llm=CancellableProcessLlm(workspace),

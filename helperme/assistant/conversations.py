@@ -9,6 +9,7 @@ from helperme.assistant.delivery import DELIVER_TOOL_NAME
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.sessions import SessionView, session_view
 from helperme.assistant.subagent.subagent import project_parent, project_pending
+from helperme.assistant.workspaces import bound_workspace_id
 from helperme.runtime import (
     CommandPhase,
     CommandState,
@@ -37,6 +38,7 @@ UNKNOWN_TOOL_ERROR = "执行中断，结果未知"
 @dataclass(frozen=True, slots=True)
 class SessionSummary:
     session_id: str
+    workspace_id: str
     title: str
     updated_at: datetime | None
     activity: SessionActivity
@@ -77,6 +79,7 @@ ConversationItem = UserItem | StepItem
 @dataclass(frozen=True, slots=True)
 class ConversationView:
     session_id: str
+    workspace_id: str | None
     revision: int
     items: tuple[ConversationItem, ...]
     session: SessionView
@@ -101,10 +104,14 @@ class AssistantQueries:
                 isinstance(event.payload, UserMessageReceived) for event in events
             ):
                 continue
+            workspace_id = bound_workspace_id(events)
+            if workspace_id is None:
+                continue
             summaries.append(
                 project_session_summary(
                     session_id,
                     events,
+                    workspace_id=workspace_id,
                     activity=self._sessions.activity(session_id),
                 )
             )
@@ -146,10 +153,16 @@ class AssistantQueries:
         )
 
 
+def recent_workspace_id(summaries: tuple[SessionSummary, ...]) -> str | None:
+    """最近一次聊天的工作区；列表已按 updated_at 降序，取第一条即可。"""
+    return summaries[0].workspace_id if summaries else None
+
+
 def project_session_summary(
     session_id: str,
     events: tuple[Event, ...],
     *,
+    workspace_id: str,
     activity: SessionActivity,
 ) -> SessionSummary:
     title = "新会话"
@@ -159,6 +172,7 @@ def project_session_summary(
             break
     return SessionSummary(
         session_id=session_id,
+        workspace_id=workspace_id,
         title=title,
         updated_at=events[-1].occurred_at if events else None,
         activity=activity,
@@ -222,6 +236,7 @@ def project_conversation(
             )
     return ConversationView(
         session_id=session_id,
+        workspace_id=bound_workspace_id(events),
         revision=events[-1].sequence if events else 0,
         items=tuple(items),
         session=session,

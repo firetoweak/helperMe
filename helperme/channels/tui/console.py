@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 from uuid import uuid4
 
 from prompt_toolkit import PromptSession
@@ -212,7 +213,7 @@ def _print_runtime_status(view: SessionView) -> None:
         )
 
 
-async def run_runtime_console() -> None:
+async def run_runtime_console(workspace_path: Path | None = None) -> None:
     context_meter = _ContextMeter()
     stream_output = _StreamingConsoleOutput(lambda: session.app.invalidate())
     session: PromptSession[str] = _BottomAnchoredPromptSession(
@@ -221,6 +222,7 @@ async def run_runtime_console() -> None:
     )
     async with bootstrap_assistant(
         stream_output.deliver,
+        workspace_path=Path.cwd() if workspace_path is None else workspace_path,
         context_usage_sink=context_meter.update,
         subagent_activity_sink=context_meter.update_subagent_activity,
         conversation_status_sink=context_meter.update_conversation_status,
@@ -238,7 +240,9 @@ async def run_runtime_console() -> None:
         skill_console = SkillConsoleAdapter(app.skill_service)
         owner = "tui"
         session_id = f"session-{uuid4().hex}"
-        await sessions.create(session_id)
+        workspace = app.workspace
+        assert workspace is not None
+        await sessions.create(session_id, workspace.workspace_id)
         view = await sessions.select(owner, session_id)
         context_meter.select(
             sessions.conversation_status(session_id),
@@ -247,7 +251,7 @@ async def run_runtime_console() -> None:
         )
         image_paste.bind(session_id)
         input_queue: asyncio.Queue[ConsoleMessage | None] = asyncio.Queue()
-        access = "整台电脑" if config.workspace.full_access else "配置的 Workspace"
+        access = "整台电脑" if workspace.full_access else f"工作区 {workspace.name}"
         print(f"HelperMe 已启动。model={config.model.active}")
         print(f"工作区：{access}")
         print(f"当前对话：{session_id}")
@@ -292,7 +296,9 @@ async def run_runtime_console() -> None:
                     separate_turns = True
                     if user_message == "/new":
                         target_session_id = f"session-{uuid4().hex}"
-                        await sessions.create(target_session_id)
+                        await sessions.create(
+                            target_session_id, workspace.workspace_id
+                        )
                         view = await sessions.select(owner, target_session_id)
                         session_id = target_session_id
                         image_paste.bind(session_id)

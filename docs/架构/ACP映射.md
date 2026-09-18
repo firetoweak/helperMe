@@ -21,7 +21,7 @@ AssistantSessions
 | ACP | 状态 | HelperMe |
 |---|---|---|
 | `initialize` | 已映射 | 只接受 `protocolVersion: 1`。声明 `loadSession: false`；prompt 不接 image / audio / embedded context；`authMethods` 为空 |
-| `session/new` | 已映射 | `create` + `select`。`cwd` 必须是已存在的绝对目录，且是配置 workspace（`full_access` 时可为子树）。拒绝 `additionalDirectories`、`mcpServers` |
+| `session/new` | 已映射 | `create` + `select`。`cwd` 必须是已存在的绝对目录；按最深匹配复用已登记工作区，找不到则隐式登记该路径。拒绝 `additionalDirectories`、`mcpServers` |
 | `session/prompt` | 已映射 | 只收文本块 → `accept_input`。请求挂起，等 `wait_quiescent` 后回 `end_turn`；取消则回 `cancelled` |
 | `session/cancel` | 已映射 | `cancel_turn`。不映射成用户消息，不结束 Session，不杀进程 |
 

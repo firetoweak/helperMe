@@ -17,6 +17,12 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="同时启动 Vite 开发服务器",
     )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="显式登记工作区路径；缺省不从启动目录隐式创建",
+    )
     args = parser.parse_args(argv)
 
     frontend = None
@@ -29,7 +35,9 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         uvicorn.run(
-            "web_chat:app" if args.dev else app,
+            "web_chat:app" if args.dev else create_web_app(
+                workspace_path=args.workspace
+            ),
             host="127.0.0.1",
             port=8765,
             reload=args.dev,

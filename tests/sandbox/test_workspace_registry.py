@@ -9,6 +9,7 @@ from helperme.sandbox.registry import (
     WorkspacePathTaken,
     WorkspaceRecord,
     WorkspaceRegistry,
+    WorkspaceRegistryError,
     workspace_view,
 )
 from helperme.sandbox.workspace import WorkspaceScope
@@ -98,6 +99,12 @@ class WorkspaceRegistryTest(unittest.TestCase):
         self.assertEqual(first.workspace_id, again.workspace_id)
         self.assertEqual(first.name, "my-app")
         self.assertEqual(len(registry.workspaces), 1)
+
+    def test_create_rejects_a_missing_directory(self):
+        registry = WorkspaceRegistry.load(self.registry_path)
+
+        with self.assertRaises(WorkspaceRegistryError):
+            registry.create(name="gone", task_root=self.root / "missing")
 
     def test_register_path_names_new_workspace_after_directory(self):
         registry = WorkspaceRegistry.load(self.registry_path)

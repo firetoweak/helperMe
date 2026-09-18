@@ -24,6 +24,7 @@ from helperme.channels.web import app as web_app
 from helperme.channels.web.app import create_web_app
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
+from helperme.sandbox.registry import WorkspaceRegistry
 
 
 class _Sessions:
@@ -31,8 +32,8 @@ class _Sessions:
         self.queries = queries
         self.calls = []
 
-    async def create(self, session_id):
-        self.calls.append(("create", session_id))
+    async def create(self, session_id, workspace_id):
+        self.calls.append(("create", session_id, workspace_id))
 
     async def select(self, owner, session_id):
         self.calls.append(("select", owner, session_id))
@@ -96,7 +97,9 @@ class _Queries:
         self.accepted.append((session_id, content))
 
     async def list_sessions(self):
-        return (SessionSummary("session-old", "旧会话", None, "idle"),)
+        return (
+            SessionSummary("session-old", "workspace-old", "旧会话", None, "idle"),
+        )
 
     async def conversation(self, session_id, *, view=None):
         items = tuple(
@@ -111,6 +114,7 @@ class _Queries:
         )
         return ConversationView(
             session_id,
+            "workspace-old",
             len(items),
             items,
             view or SessionView("waiting", ("user_message",), (), False),
@@ -129,7 +133,12 @@ class WebFirstSliceTest(unittest.TestCase):
         )
         self.hub = WebEventHub()
         self.connection = self.channel.connect()
-        self.client = TestClient(create_web_app(self.channel, self.hub))
+        self.workspaces = WorkspaceRegistry.load(
+            Path(self._directory.name) / "workspaces.json"
+        )
+        self.client = TestClient(
+            create_web_app(self.channel, self.hub, workspaces=self.workspaces)
+        )
         self.client.__enter__()
 
     def tearDown(self):
@@ -140,14 +149,20 @@ class WebFirstSliceTest(unittest.TestCase):
         listed = self.client.get("/api/sessions")
         created = self.client.post(
             "/api/sessions",
-            json={"connection_id": self.connection.connection_id},
+            json={
+                "connection_id": self.connection.connection_id,
+                "workspace_id": "workspace-old",
+            },
         )
 
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()[0]["title"], "旧会话")
         self.assertEqual(created.status_code, 201)
         session_id = created.json()["session_id"]
-        self.assertEqual(self.sessions.calls[0], ("create", session_id))
+        self.assertEqual(
+            self.sessions.calls[0],
+            ("create", session_id, "workspace-old"),
+        )
         self.assertEqual(
             self.sessions.calls[1],
             ("select", self.connection.owner, session_id),
@@ -468,6 +483,46 @@ class WebFirstSliceTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("detail", response.json())
+
+    def test_lists_and_creates_workspaces(self):
+        listed = self.client.get("/api/workspaces")
+        created = self.client.post(
+            "/api/workspaces",
+            json={
+                "name": "demo",
+                "task_root": self._directory.name,
+                "full_access": False,
+            },
+        )
+
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json(), [])
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.json()["name"], "demo")
+        self.assertEqual(len(self.client.get("/api/workspaces").json()), 1)
+
+    def test_create_workspace_rejects_missing_directory(self):
+        response = self.client.post(
+            "/api/workspaces",
+            json={
+                "name": "missing",
+                "task_root": str(Path(self._directory.name) / "nope"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_workspace_rejects_duplicate_path(self):
+        body = {
+            "name": "demo",
+            "task_root": self._directory.name,
+            "full_access": False,
+        }
+        first = self.client.post("/api/workspaces", json=body)
+        second = self.client.post("/api/workspaces", json=body)
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 409)
 
 
 def _png_bytes():

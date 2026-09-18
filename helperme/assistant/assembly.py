@@ -38,6 +38,7 @@ from helperme.assistant.subagent.subagent import DELEGATE, REPORT, SubAgentHost
 from helperme.assistant.toolsets import ToolSurface, load_toolset_binding
 from helperme.runtime import AgentRuntime, ToolBinding
 from helperme.assistant.builtin_tools import build_builtin_tools
+from helperme.sandbox.registry import WorkspaceRecord
 from helperme.assistant.mcp import McpToolsetAdapter
 from helperme.assistant.management import ManagementDomain, ManagementSurface
 from helperme.assistant.skills import SkillToolAdapter
@@ -76,6 +77,7 @@ async def build_assistant_assembly(
     journal,
     *,
     session_id: str,
+    workspace: WorkspaceRecord,
     context_usage_sink: Callable[[str, int, int], None] | None = None,
     subagent_activity_sink: Callable[[str, bool], None] | None = None,
     tool_progress_sink=None,
@@ -87,7 +89,7 @@ async def build_assistant_assembly(
     session_transport=None,
     home: HelperMeHome | None = None,
 ) -> AssistantAssembly:
-    builtin_tools = await build_builtin_tools(config)
+    builtin_tools = await build_builtin_tools(workspace)
     settings = _model_context_settings(config)
     sessions_root = runtime_data_root() if home is None else home.runtime_sessions_root
     gateway = FileArtifactGateway(sessions_root)

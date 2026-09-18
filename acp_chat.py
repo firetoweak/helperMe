@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
+from pathlib import Path
 from uuid import uuid4
 
 from acp import run_agent
@@ -11,7 +13,15 @@ from helperme.channels.acp import HelperMeAcpAgent
 from helperme.config import InitialConfigCreated
 
 
-async def async_main() -> None:
+async def async_main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="工作区路径；缺省使用启动目录",
+    )
+    options = parser.parse_args(argv)
     agent: HelperMeAcpAgent | None = None
 
     def _push(coro) -> None:
@@ -38,12 +48,13 @@ async def async_main() -> None:
 
     async with bootstrap_assistant(
         sink,
+        workspace_path=Path.cwd() if options.workspace is None else options.workspace,
         context_usage_sink=report_usage,
         tool_progress_sink=report_tool,
         preview_sink=preview,
         session_failed_sink=session_failed,
     ) as app:
-        agent = HelperMeAcpAgent(app.sessions, app.config.workspace)
+        agent = HelperMeAcpAgent(app.sessions, app.workspaces)
         try:
             await run_agent(agent)
         finally:

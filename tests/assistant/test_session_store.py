@@ -21,7 +21,7 @@ class SessionStoreListingTest(unittest.IsolatedAsyncioTestCase):
     async def test_lists_identity_hidden_by_hashed_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
-            await store.create("session-visible")
+            await store.create("session-visible", workspace_id="workspace-1")
             (Path(directory) / "conversations.sqlite").touch()
             (Path(directory) / "_backup_session-visible").mkdir()
 
@@ -36,7 +36,7 @@ class SessionStoreListingTest(unittest.IsolatedAsyncioTestCase):
     async def test_fork_inherits_complete_prefix_and_loaded_toolsets(self):
         with tempfile.TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
-            await store.create("source")
+            await store.create("source", workspace_id="workspace-1")
             journal = SqliteJournal(store.require("source"))
             surface = ToolSurface(providers=(FakeEchoProvider(),))
             runtime = AgentRuntime(

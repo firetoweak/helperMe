@@ -26,6 +26,10 @@ class HelperMeHome:
         return self.root / "config.json"
 
     @property
+    def workspaces_path(self) -> Path:
+        return self.root / "workspaces.json"
+
+    @property
     def mcp_root(self) -> Path:
         return self.root / "mcp"
 

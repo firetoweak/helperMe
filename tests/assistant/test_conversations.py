@@ -8,6 +8,7 @@ from helperme.assistant.conversations import (
     project_conversation,
     project_session_summary,
 )
+from helperme.assistant.workspaces import workspace_binding
 from helperme.assistant.sessions import SessionView
 from helperme.runtime import (
     Command,
@@ -99,6 +100,7 @@ class ConversationProjectionTest(unittest.TestCase):
             "session-1", events, timeline(events), session=view
         )
 
+        self.assertIsNone(conversation.workspace_id)
         self.assertEqual(conversation.revision, 4)
         self.assertEqual(conversation.items[0].kind, "user")
         step = conversation.items[1]
@@ -111,6 +113,19 @@ class ConversationProjectionTest(unittest.TestCase):
         self.assertEqual(step.tools[0].name, "read_file")
         self.assertEqual(step.tools[0].status, "succeeded")
         self.assertIsNone(step.thinking)
+
+    def test_projects_the_bound_workspace(self):
+        events = (
+            event(1, "ws-1", workspace_binding("workspace-demo")),
+            event(2, "user-1", UserMessageReceived("你好")),
+        )
+        conversation = project_conversation(
+            "session-1",
+            events,
+            timeline(events),
+            session=SessionView("waiting", ("user_message",), (), False),
+        )
+        self.assertEqual(conversation.workspace_id, "workspace-demo")
 
     def test_projects_reasoning_content_as_step_thinking(self):
         events = (
@@ -225,7 +240,12 @@ class ConversationProjectionTest(unittest.TestCase):
             event(2, "user-2", UserMessageReceived("之后")),
         )
 
-        summary = project_session_summary("session-1", events, activity="running")
+        summary = project_session_summary(
+            "session-1",
+            events,
+            workspace_id="workspace-1",
+            activity="running",
+        )
 
         self.assertEqual(summary.title, "第一行")
         self.assertEqual(summary.updated_at, events[-1].occurred_at)
@@ -314,8 +334,8 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
             queries = AssistantQueries(store, Idle())
-            await store.create("empty")
-            await store.create("spoken")
+            await store.create("empty", workspace_id="workspace-1")
+            await store.create("spoken", workspace_id="workspace-1")
             await SqliteJournal(store.require("spoken")).accept_delivery(
                 EventDraft(
                     event_id="user-1",

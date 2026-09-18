@@ -5,11 +5,14 @@ Assistant 应用操作和查询，不直接读取 Journal，也不承担 Session
 
 ## 当前切片
 
-界面有 Session 侧栏、当前会话时间线和输入框。「新建会话」绑定一个未锁定草稿
-Session（`create` 后进入 `/sessions/:id`）。尚未发出用户消息时再点「新建会话」仍是
-它；发出第一条用户消息后这条 Session 锁定，下一次「新建会话」才再绑一个新草稿。
-侧栏只列出已经锁定的会话。草稿可以贴图，但不因此锁定。
-输入框底部展示当前逻辑模型与输入上下文占用。Composer 的图片入口：加号打开文件选择、
+界面有按工作区分组的 Session 侧栏、当前会话时间线和输入框。每条会话必须带
+`workspace_id`；没有归属的存量会话不出现在列表里。没有工作区时顶部「新建会话」
+不可用，界面引导先创建。顶部「新建会话」落到最近一次聊天的工作区，若还没有带
+归属的会话则落到最近创建的工作区；分组上的 `+` 只在该工作区建草稿，路由是
+`/workspaces/:workspaceId`。尚未发出用户消息时，同一工作区再点「新建会话」仍是
+那条草稿；发出第一条用户消息后这条 Session 锁定。侧栏只列出已经锁定的会话，
+分组内默认最近 5 条，其余收进 More。草稿可以贴图，但不因此锁定。
+输入框底部展示当前工作区路径、逻辑模型与输入上下文占用；路径只读，提醒人现在落在哪个沙箱里。Composer 的图片入口：加号打开文件选择、
 粘贴或拖入图片后以缩略图 tile 挂在输入框上，不把 `[Image #n]` 写进可见正文。发送时
 Channel 仍按既有附件契约写入 token 与 `artifact_refs`。时间线按用户轮次展示 Step 与其工具调用。页面级 SSE 与当前选中的
 Session 解耦：切换只改变 Host owner 的选择和中间栏，不取消仍在运行的 Session，也不
@@ -19,7 +22,7 @@ Session 解耦：切换只改变 Host owner 的选择和中间栏，不取消仍
 的工具进度仍是可丢的进程内展示，刷新后分别由 `output_final` / Journal 补齐。
 
 ```text
-点「新建会话」：若已有未锁定草稿则进入它，否则 POST /api/sessions
+点「新建会话」或分组 `+`：若该工作区已有未锁定草稿则进入它，否则 POST /api/sessions（必须带 workspace_id）
 → 空白时间线（Journal 尚无 UserMessageReceived，不出现在侧栏）
 → POST /api/sessions/{id}/attachments（若有图；不锁定）
 → POST /api/sessions/{id}/inputs  （text 含 [Image #n]，artifact_refs 为附件 id）
@@ -61,8 +64,11 @@ Journal**。缺省 false，只在人拨过时写入；创建和 Fork 不写。�
 
 ## 查询投影
 
-- `list_sessions()` 从各 Journal 投影顶层 Session 摘要，不列出 SubAgent Session，
-  也不列出尚无 `UserMessageReceived` 的空 Journal。
+- `list_sessions()` 从各 Journal 投影顶层 Session 摘要，不列出 SubAgent Session、
+  尚无 `UserMessageReceived` 的空 Journal，以及没有 `workspace_id` 的存量会话。
+  `SessionSummary` 含 `workspace_id`。
+- `GET /api/workspaces` / `POST /api/workspaces` 读写 `~/.helperme/workspaces.json`。
+  创建时路径必须是已存在目录，且不能与已有工作区完全相同。
 - `GET /api/sessions/{id}` 只从 Journal 投影时间线，不 `resume` Worker。刷新后
   的历史恢复走这条读路径；`POST .../select` 只在页面 SSE 连上后绑定 Host owner。
 - `conversation(session_id)` 投影统一时间线 `items`：`UserMessageReceived` 为
@@ -81,8 +87,9 @@ Journal**。缺省 false，只在人拨过时写入；创建和 Fork 不写。�
 映射为 Host owner；SSE 断开时释放 owner，但不取消任何 Session，也不使
 `deliver` 失败。空闲时每 15 秒发一条 SSE 注释心跳，避免长思考期间代理因
 无事件断开页面连接；注释不进前端状态。新建或选择 Session 时由 Web Channel 调用
-`select(owner, session_id)`。点「新建会话」时：当前已是未锁定草稿则保持；否则复用
-已有未锁定草稿，或 `create` 一个新的。发出第一条用户消息后草稿锁定。
+`select(owner, session_id)`。点「新建会话」时：当前已是该工作区的未锁定草稿则保持；
+否则复用该工作区已有未锁定草稿，或 `create` 一个新的。草稿按工作区各留一份，
+分组 `+` 不会掉进别的工作区的草稿。发出第一条用户消息后草稿锁定。
 
 Event Hub 向所有页面连接广播带 `session_id` 的事件，每个 Session 只保存一个
 活动 preview。Host 在 busy/idle 转换时发送 `session_activity`。前端收到

@@ -25,11 +25,24 @@ const sessionViewSchema = z
 export const sessionSummarySchema = z
   .object({
     session_id: z.string().min(1),
+    workspace_id: z.string().min(1),
     title: z.string().min(1),
     updated_at: z.string().datetime({ offset: true }).nullable(),
     activity: z.enum(["running", "idle"]),
   })
   .strict();
+
+export const workspaceSchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    name: z.string().min(1),
+    task_root: z.string().min(1),
+    full_access: z.boolean(),
+    created_at: z.string().min(1),
+  })
+  .strict();
+
+export type Workspace = z.infer<typeof workspaceSchema>;
 
 export const toolStatusSchema = z.enum([
   "running",
@@ -53,6 +66,7 @@ const toolItemSchema = z
 export const conversationViewSchema = z
   .object({
     session_id: z.string().min(1),
+    workspace_id: z.string().min(1).nullable(),
     revision: z.number().int().nonnegative(),
     items: z.array(
       z.discriminatedUnion("kind", [

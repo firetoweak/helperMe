@@ -4,17 +4,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from helperme.assistant.tool_results import runtime_tool_result
-from helperme.config import AssistantConfig
 from helperme.sandbox.api import EnvironmentSelection
-from helperme.sandbox.local.provider import (
-    create_local_environment_provider,
-    discover_host_roots,
-)
-from helperme.sandbox.workspace import (
-    RootBinding,
-    WorkspaceScope,
-    WorkspaceViewSnapshot,
-)
+from helperme.sandbox.local.provider import create_local_environment_provider
+from helperme.sandbox.registry import WorkspaceRecord, workspace_view
 from helperme.tools.executor import ToolsExecutor
 from helperme.tools.registry import BUILTIN_TOOL_REGISTRY
 from helperme.tools.builtin import create_environment_tool_specs
@@ -53,38 +45,13 @@ class BuiltinToolRunner:
         return spec.requires_authorization
 
 
-async def build_builtin_tools(config: AssistantConfig) -> BuiltinToolRunner:
-    workspace_roots = {"project": config.workspace_root}
-    effective = dict(workspace_roots)
-    if config.full_access:
-        host_roots = {
-            root.root_id: root.path for root in discover_host_roots()
-        }
-        duplicated = effective.keys() & host_roots.keys()
-        if duplicated:
-            raise ValueError(
-                "显式 workspace root 与 Host root 名称冲突: "
-                f"{sorted(duplicated)}"
-            )
-        effective.update(host_roots)
-    task_root_ids = set(workspace_roots)
-    view = WorkspaceViewSnapshot(tuple(
-        RootBinding(
-            root_id=name,
-            scope=(
-                WorkspaceScope.TASK
-                if name in task_root_ids
-                else WorkspaceScope.HOST
-            ),
-            path=root,
-        )
-        for name, root in effective.items()
-    ))
+async def build_builtin_tools(workspace: WorkspaceRecord) -> BuiltinToolRunner:
+    view = workspace_view(workspace)
     provider = create_local_environment_provider()
     binding = await provider.attach(EnvironmentSelection(
         environment_id=provider.environment_id,
         workspace_view=view,
-        cwd=str(next(iter(workspace_roots.values())).resolve()),
+        cwd=str(workspace.task_root),
     ))
     registry = BUILTIN_TOOL_REGISTRY.clone()
     for spec in create_environment_tool_specs(binding):

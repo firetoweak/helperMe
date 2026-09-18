@@ -48,10 +48,10 @@ class WebChannel:
             raise ValueError("session_id must be a non-empty str")
         return await self._queries.conversation(session_id)
 
-    async def create(self, connection_id: str):
+    async def create(self, connection_id: str, workspace_id: str):
         connection = self._require_connection(connection_id)
         session_id = f"session-{uuid4().hex}"
-        await self._sessions.create(session_id)
+        await self._sessions.create(session_id, workspace_id)
         view = await self._sessions.select(connection.owner, session_id)
         return await self._queries.conversation(session_id, view=view)
 

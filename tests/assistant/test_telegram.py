@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from helperme.assistant.conversations import SessionSummary
 from helperme.assistant.sessions import SessionView
 from helperme.assistant.runner import SessionNotFoundError
+from helperme.sandbox.registry import WorkspaceRegistry
 
 
 def _telegram():
@@ -26,7 +30,7 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         bot = AsyncMock()
 
         _TelegramChannel, _TelegramPairing, open_chat_channel = _telegram()
-        channel = await open_chat_channel(sessions, bot, 101, 7)
+        channel = await open_chat_channel(sessions, bot, 101, 7, "workspace-1")
 
         sessions.select.assert_awaited_once_with(
             "telegram-bot-101-chat-7", "telegram-bot-101-chat-7"
@@ -48,10 +52,12 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
         )
 
         _TelegramChannel, _TelegramPairing, open_chat_channel = _telegram()
-        await open_chat_channel(sessions, AsyncMock(), 202, 7)
+        await open_chat_channel(sessions, AsyncMock(), 202, 7, "workspace-1")
 
         self.assertEqual(sessions.select.await_count, 2)
-        sessions.create.assert_awaited_once_with("telegram-bot-202-chat-7")
+        sessions.create.assert_awaited_once_with(
+            "telegram-bot-202-chat-7", "workspace-1"
+        )
 
     async def test_unpaired_start_reports_chat_id_without_touching_runtime(
         self,
@@ -225,6 +231,49 @@ class TelegramChannelTest(unittest.IsolatedAsyncioTestCase):
             await channel.deliver("session-current", "output-1", "done")
 
         self.assertEqual(bot.send_message.await_count, 2)
+
+    def test_explicit_workspace_is_registered(self) -> None:
+        from helperme.channels.telegram.assistant import resolve_telegram_workspace
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "task"
+            task.mkdir()
+            workspaces = WorkspaceRegistry.load(root / "workspaces.json")
+
+            record = resolve_telegram_workspace(workspaces, (), task)
+
+            self.assertEqual(record.task_root, task.resolve())
+
+    def test_missing_workspace_falls_back_to_recent_chat(self) -> None:
+        from helperme.channels.telegram.assistant import resolve_telegram_workspace
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "task"
+            task.mkdir()
+            workspaces = WorkspaceRegistry.load(root / "workspaces.json")
+            record = workspaces.create(name="task", task_root=task)
+            summaries = (
+                SessionSummary("session-1", record.workspace_id, "最近", None, "idle"),
+            )
+
+            resolved = resolve_telegram_workspace(workspaces, summaries, None)
+
+            self.assertEqual(resolved.workspace_id, record.workspace_id)
+
+    def test_no_history_requires_explicit_workspace(self) -> None:
+        from helperme.channels.telegram.assistant import (
+            TelegramWorkspaceRequired,
+            resolve_telegram_workspace,
+        )
+
+        with TemporaryDirectory() as directory:
+            workspaces = WorkspaceRegistry.load(
+                Path(directory) / "workspaces.json"
+            )
+            with self.assertRaises(TelegramWorkspaceRequired):
+                resolve_telegram_workspace(workspaces, (), None)
 
 
 def _message(chat_id: int, text: str):

@@ -55,7 +55,7 @@ export function Conversation() {
   const routeId = routeSessionId ?? "";
   const connectionId = useAppSelector((state) => state.runtime.connectionId);
   const ownerSessionId = useAppSelector((state) => state.runtime.ownerSessionId);
-  const draftSessionId = useAppSelector((state) => state.runtime.draftSessionId);
+  const draftSessions = useAppSelector((state) => state.runtime.draftSessions);
   const superseded = useAppSelector((state) => state.runtime.supersededSessions);
   const sessionId = liveSessionId(routeId, superseded);
   const runtime = useAppSelector((state) => state.runtime.sessions[sessionId]);
@@ -98,12 +98,12 @@ export function Conversation() {
   useEffect(() => {
     if (
       conversation !== undefined &&
-      conversation.session_id === draftSessionId &&
+      Object.values(draftSessions).includes(conversation.session_id) &&
       conversation.items.some((item) => item.kind === "user")
     ) {
       dispatch(lockDraft(conversation.session_id));
     }
-  }, [conversation, dispatch, draftSessionId]);
+  }, [conversation, dispatch, draftSessions]);
   useEffect(() => {
     if (
       routeSessionId !== undefined &&
@@ -343,6 +343,7 @@ export function Conversation() {
         ) : null}
         <Composer
           sessionId={sessionId}
+          workspaceId={conversation.workspace_id}
           connectionId={connectionId}
           disabled={connectionId === null}
           sending={sending.isLoading}

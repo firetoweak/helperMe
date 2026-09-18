@@ -1,14 +1,11 @@
-import type { SessionSummary } from "../../api/contracts";
+import type { SessionSummary, Workspace } from "../../api/contracts";
 
 /**
  * 侧栏的「工作区」视图模型。
  *
- * 后端目前还没有「会话 → 工作区」的归属字段：SessionSummary 只有
- * session_id / title / updated_at / activity（见 web/src/api/contracts.ts）。
- * 因此这里先退化为「唯一默认工作区」，把所有会话放进去，只为把分组与
- * 折叠的界面骨架立起来。
- *
- * 等后端补上归属字段后，只需要改 groupSessions 的分组依据，UI 不用动。
+ * 工作区是沙箱边界，一条会话只属于一个工作区（后端 SessionSummary.workspace_id
+ * 是会话创建时定下的归属，落进去即固定）。分组完全按归属来做，不再有
+ * 「默认工作区」这种退化形态。
  */
 export type WorkspaceGroup = {
   id: string;
@@ -16,22 +13,107 @@ export type WorkspaceGroup = {
   sessions: SessionSummary[];
 };
 
-export const DEFAULT_WORKSPACE_ID = "default";
+function lastActivity(sessions: SessionSummary[]): number {
+  let latest = 0;
+  for (const session of sessions) {
+    if (session.updated_at === null) {
+      continue;
+    }
+    const timestamp = Date.parse(session.updated_at);
+    if (!Number.isNaN(timestamp) && timestamp > latest) {
+      latest = timestamp;
+    }
+  }
+  return latest;
+}
 
+/**
+ * 按归属分组。分组顺序按「最近有会话活动的在前」排，空工作区沉到后面——
+ * 这样「新建会话缺省落点 = 最近一次聊天的工作区」就是第一个非空分组。
+ */
 export function groupSessions(
   sessions: SessionSummary[],
-  defaultName = "默认工作区",
+  workspaces: Workspace[],
 ): WorkspaceGroup[] {
-  if (sessions.length === 0) {
-    return [];
+  const groups = workspaces.map((workspace) => ({
+    id: workspace.workspace_id,
+    name: workspace.name,
+    sessions: [] as SessionSummary[],
+  }));
+  const byId = new Map(groups.map((group) => [group.id, group]));
+  const orphans: WorkspaceGroup[] = [];
+  for (const session of sessions) {
+    const group = byId.get(session.workspace_id);
+    if (group !== undefined) {
+      group.sessions.push(session);
+      continue;
+    }
+    // registry 里没有这个归属（比如 registry 被手工改过）：照原样列出来，
+    // 用 id 当名字，不静默丢数据。
+    orphans.push({
+      id: session.workspace_id,
+      name: session.workspace_id,
+      sessions: [session],
+    });
   }
-  return [
-    {
-      id: DEFAULT_WORKSPACE_ID,
-      name: defaultName,
-      sessions,
-    },
-  ];
+  return [...groups, ...orphans].sort(
+    (left, right) => lastActivity(right.sessions) - lastActivity(left.sessions),
+  );
+}
+
+/**
+ * 新建会话的缺省落点：最近一次聊天的工作区；还没有任何带归属的会话时，
+ * 落最近创建的工作区；一个工作区都没有时返回 null（由界面引导创建）。
+ */
+export const WORKSPACE_SESSION_PREVIEW = 5;
+
+export function previewSessions<T>(sessions: T[], expanded: boolean): T[] {
+  if (expanded || sessions.length <= WORKSPACE_SESSION_PREVIEW) {
+    return sessions;
+  }
+  return sessions.slice(0, WORKSPACE_SESSION_PREVIEW);
+}
+
+export function draftSessionId(
+  drafts: Record<string, string>,
+  workspaceId: string | null,
+): string | undefined {
+  if (workspaceId === null) {
+    return undefined;
+  }
+  return drafts[workspaceId];
+}
+
+export function workspaceOfSession(
+  sessionId: string | undefined,
+  sessions: SessionSummary[],
+  drafts: Record<string, string>,
+): string | undefined {
+  if (sessionId === undefined) {
+    return undefined;
+  }
+  const listed = sessions.find((session) => session.session_id === sessionId);
+  if (listed !== undefined) {
+    return listed.workspace_id;
+  }
+  return Object.entries(drafts).find(([, draftId]) => draftId === sessionId)?.[0];
+}
+
+export function defaultWorkspaceId(
+  groups: WorkspaceGroup[],
+  workspaces: Workspace[],
+): string | null {
+  const withSessions = groups.find((group) => group.sessions.length > 0);
+  if (withSessions !== undefined) {
+    return withSessions.id;
+  }
+  if (workspaces.length === 0) {
+    return null;
+  }
+  const [latest] = [...workspaces].sort(
+    (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
+  );
+  return latest?.workspace_id ?? null;
 }
 
 const MINUTE = 60_000;

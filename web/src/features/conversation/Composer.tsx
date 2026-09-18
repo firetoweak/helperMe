@@ -25,6 +25,7 @@ import {
 
 import {
   useGetRuntimeQuery,
+  useGetWorkspacesQuery,
   useUploadAttachmentMutation,
 } from "../../api/helpermeApi";
 import { useAppSelector } from "../../app/hooks";
@@ -47,6 +48,7 @@ type PendingImage = {
 
 type ComposerProps = {
   sessionId: string;
+  workspaceId: string | null;
   connectionId: string | null;
   disabled: boolean;
   sending: boolean;
@@ -65,6 +67,7 @@ type ComposerProps = {
 
 export function Composer({
   sessionId,
+  workspaceId,
   connectionId,
   disabled,
   sending,
@@ -85,6 +88,10 @@ export function Composer({
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const { data: runtime } = useGetRuntimeQuery();
+  const { data: workspaces = [] } = useGetWorkspacesQuery();
+  const workspacePath = workspaces.find(
+    (workspace) => workspace.workspace_id === workspaceId,
+  )?.task_root;
   const [uploadAttachment] = useUploadAttachmentMutation();
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
@@ -354,16 +361,34 @@ export function Composer({
           size="xs"
         />
       </Group>
-      {runtime === undefined ? null : (
+      {runtime === undefined && workspacePath === undefined ? null : (
         <Group className="composer-meta" justify="space-between" wrap="nowrap">
-          <Tooltip label="请求前为估算，响应后为实际输入占用">
-            <Group gap={6} wrap="nowrap">
-              <ContextRing used={used} limit={limit} />
-              <Text c="dimmed" fz={11}>
-                {formatTokens(used)} / {formatTokens(limit)}
-              </Text>
-            </Group>
-          </Tooltip>
+          {runtime === undefined ? (
+            <span />
+          ) : (
+            <Tooltip label="请求前为估算，响应后为实际输入占用">
+              <Group gap={6} wrap="nowrap">
+                <ContextRing used={used} limit={limit} />
+                <Text c="dimmed" fz={11}>
+                  {formatTokens(used)} / {formatTokens(limit)}
+                </Text>
+              </Group>
+            </Tooltip>
+          )}
+          {workspacePath === undefined ? (
+            <span />
+          ) : (
+            <Text
+              className="composer-workspace"
+              c="dimmed"
+              ff="monospace"
+              fz={11}
+              title={workspacePath}
+              truncate
+            >
+              {workspacePath}
+            </Text>
+          )}
           <Text c="dimmed" ff="monospace" fz={11} truncate>
             {model}
           </Text>

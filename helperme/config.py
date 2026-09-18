@@ -33,10 +33,6 @@ INITIAL_CONFIG = {
             "num_retries": 0,
         },
     },
-    "workspace": {
-        "root": "D:/work/agent",
-        "full_access": True,
-    },
     "runtime": {
         "model_context_limit": 200000,
         "input_budget_ratio": 0.9,
@@ -56,12 +52,6 @@ class InitialConfigCreated(RuntimeError):
     def __init__(self, path: Path) -> None:
         self.path = path
         super().__init__(f"已创建初始配置：{path}；请填写后重新启动")
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceConfig:
-    root: Path
-    full_access: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +77,6 @@ class ChannelsConfig:
 class AppConfig:
     litellm: LiteLLMConfig
     model: ModelConfig
-    workspace: WorkspaceConfig
     runtime: RuntimeConfig
     channels: ChannelsConfig
 
@@ -95,8 +84,6 @@ class AppConfig:
 @dataclass(frozen=True, slots=True)
 class AssistantConfig:
     model_name: str
-    workspace_root: Path
-    full_access: bool
     model_context_limit: int
     input_budget_ratio: float
     llm: LLMApi
@@ -155,8 +142,8 @@ def _parse_model_config(data: dict) -> ModelConfig:
 
 def load_app_config(path: Path | None = None) -> AppConfig:
     data = _load_config_data(path)
-    if set(data) != {"litellm", "model", "workspace", "runtime", "channels"}:
-        raise ValueError("配置字段必须是 litellm/model/workspace/runtime/channels")
+    if set(data) != {"litellm", "model", "runtime", "channels"}:
+        raise ValueError("配置字段必须是 litellm/model/runtime/channels")
     litellm = data["litellm"]
     if not isinstance(litellm, dict):
         raise ValueError("配置必须包含 litellm 映射")
@@ -165,17 +152,6 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     local_model_cost_map = litellm["local_model_cost_map"]
     if type(local_model_cost_map) is not bool:
         raise ValueError("配置 litellm.local_model_cost_map 必须是布尔值")
-    workspace = data["workspace"]
-    if not isinstance(workspace, dict):
-        raise ValueError("配置必须包含 workspace 映射")
-    if set(workspace) != {"root", "full_access"}:
-        raise ValueError("workspace 配置字段必须是 root/full_access")
-    workspace_root = workspace["root"]
-    if not isinstance(workspace_root, str) or not workspace_root.strip():
-        raise ValueError("配置 workspace.root 不能为空")
-    full_access = workspace["full_access"]
-    if type(full_access) is not bool:
-        raise ValueError("配置 workspace.full_access 必须是布尔值")
 
     runtime = data["runtime"]
     if not isinstance(runtime, dict):
@@ -232,10 +208,6 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     return AppConfig(
         litellm=LiteLLMConfig(local_model_cost_map=local_model_cost_map),
         model=_parse_model_config(data),
-        workspace=WorkspaceConfig(
-            root=Path(workspace_root.strip()),
-            full_access=full_access,
-        ),
         runtime=RuntimeConfig(
             model_context_limit=model_context_limit,
             input_budget_ratio=float(input_budget_ratio),
@@ -249,8 +221,6 @@ def load_app_config(path: Path | None = None) -> AppConfig:
 def assistant_config_from_app(app: AppConfig, llm: LLMApi) -> AssistantConfig:
     return AssistantConfig(
         model_name=app.model.active,
-        workspace_root=app.workspace.root,
-        full_access=app.workspace.full_access,
         model_context_limit=app.runtime.model_context_limit,
         input_budget_ratio=app.runtime.input_budget_ratio,
         llm=llm,

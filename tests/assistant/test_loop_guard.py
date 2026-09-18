@@ -25,6 +25,7 @@ from helperme.runtime import (
 from helperme.runtime.json_values import thaw_value
 from helperme.runtime.codec import EVENT_SCHEMA_VERSION
 from helperme.runtime.model import Command, Step
+from tests.fixtures.workspaces import workspace_record
 from tests.session_scheduler import settle_session
 
 
@@ -121,8 +122,10 @@ class LoopGuardIntegrationTest(unittest.IsolatedAsyncioTestCase):
             llm = RepeatingLlm()
             journal = SqliteJournal(root / "journal.sqlite")
             assembly = await build_assistant_assembly(
-                AssistantConfig("test", root, False, 200000, 0.9, llm),
-                lambda *args: None, journal, session_id="s", home=HelperMeHome(root / "home"),
+                AssistantConfig("test", 200000, 0.9, llm),
+                lambda *args: None, journal, session_id="s",
+                workspace=workspace_record(root),
+                home=HelperMeHome(root / "home"),
             )
             try:
                 await assembly.runtime.receive_user_message("s", "read", delivery_id="u")

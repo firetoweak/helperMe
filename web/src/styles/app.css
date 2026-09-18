@@ -47,8 +47,15 @@ body {
   margin-top: 4px;
 }
 
+.workspace-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .workspace-toggle {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 6px 8px;
   border-radius: var(--mantine-radius-md);
   color: var(--mantine-color-dimmed);
@@ -56,6 +63,25 @@ body {
 
 .workspace-toggle:hover {
   background: rgba(255, 255, 255, 0.025);
+}
+
+.workspace-group.is-current .workspace-toggle {
+  color: var(--mantine-color-text);
+  background: rgba(145, 181, 106, 0.08);
+}
+
+.workspace-more {
+  padding: 4px 10px 6px;
+}
+
+.workspace-add {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.workspace-group:hover .workspace-add,
+.workspace-add:focus-visible {
+  opacity: 1;
 }
 
 .workspace-name {
@@ -371,6 +397,13 @@ body {
 .composer-meta {
   min-width: 0;
   padding: 2px 10px 6px 2px;
+}
+
+.composer-workspace {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  user-select: text;
 }
 
 .context-ring {

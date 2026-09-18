@@ -20,6 +20,8 @@ Assistant 内部相信 Runtime、Dispatcher 与 Tool Binding 的代码契约。`
 | `helperme/sandbox/api.py` | Environment 选择、绑定与 Provider 窄协议 |
 | `helperme/sandbox/command.py` | 平台无关的命令执行契约、结果与预期启动错误 |
 | `helperme/sandbox/workspace.py` | Workspace View、权限与路径解析 |
+| `helperme/sandbox/registry.py` | `workspaces.json` 清单、按路径最深匹配与隐式登记 |
+| `helperme/assistant/workspaces.py` | 会话绑定工作区的领域事实 |
 | `helperme/sandbox/local/` | 本机 Environment Provider 与 PowerShell 进程执行 |
 | `helperme/tools/spec.py` | ToolSpec、参数契约与当前 OpenAI-compatible schema 导出 |
 | `helperme/tools/registry.py` | Tool 注册、选择与内建注册表 |
@@ -59,8 +61,8 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 环境
 
-任务文件在配置的 workspace root。`full_access` 时再挂上 Host 根。命令走 `sandbox/local/powershell.py`。路径契约在 `sandbox/workspace.py`：Agent 不拥有工作目录，Environment 描述在哪里执行。Sandbox 假定当前进程已经是本机日常环境；若 Channel 客户端把环境带歪了，由 Host 在启动 Worker 时纠正或暴露，不在查找 shell 时猜。`HelperMeHome` 只表示产品自身数据目录，不能充当任务 Workspace 或 Sandbox。见[多活跃会话 · 进程身份](多活跃会话.md#进程身份)。
+任务文件在该会话绑定的工作区主根。工作区开启 `full_access` 时再挂上 Host 根。命令走 `sandbox/local/powershell.py`。路径契约在 `sandbox/workspace.py`：Agent 不拥有工作目录，Environment 描述在哪里执行。Sandbox 假定当前进程已经是本机日常环境；若 Channel 客户端把环境带歪了，由 Host 在启动 Worker 时纠正或暴露，不在查找 shell 时猜。`HelperMeHome` 只表示产品自身数据目录，不能充当任务 Workspace 或 Sandbox。工作区清单见 `helperme/sandbox/registry.py`，会话绑定见 `helperme/assistant/workspaces.py`。见[多活跃会话 · 进程身份](多活跃会话.md#进程身份)。
 
 ## 配置
 
-`~/.helperme/config.json`：模型、Workspace、Runtime 与 Channel 配置的统一用户入口。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置包含 model_context_limit、input_budget_ratio、compact_threshold_ratio 与 loop_guard_repeat_threshold。每个活跃 Session 在独立 Worker 进程中推进，见[多活跃会话](多活跃会话.md)。
+`~/.helperme/config.json`：模型、Runtime 与 Channel 配置的统一用户入口。工作区不在这份配置里，只存在 `~/.helperme/workspaces.json`。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置包含 model_context_limit、input_budget_ratio、compact_threshold_ratio 与 loop_guard_repeat_threshold。每个活跃 Session 在独立 Worker 进程中推进，见[多活跃会话](多活跃会话.md)。

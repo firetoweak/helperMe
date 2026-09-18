@@ -24,16 +24,25 @@ import {
   IconPlus,
   IconSparkles,
 } from "@tabler/icons-react";
+import { useDisclosure } from "@mantine/hooks";
 import { useState } from "react";
 import { useMatch, useNavigate } from "react-router-dom";
 
-import { useGetSessionsQuery } from "../../api/helpermeApi";
+import {
+  useGetSessionsQuery,
+  useGetWorkspacesQuery,
+} from "../../api/helpermeApi";
 import { useAppSelector } from "../../app/hooks";
 import { isForkIdentity, liveSessionId } from "../../realtime/runtimeSlice";
+import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import {
+  draftSessionId,
+  defaultWorkspaceId,
   formatRelativeTime,
   groupSessions,
+  previewSessions,
   readCollapsedWorkspaces,
+  workspaceOfSession,
   writeCollapsedWorkspaces,
 } from "./workspaces";
 
@@ -45,17 +54,35 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
   const navigate = useNavigate();
   const sessionId = useMatch("/sessions/:sessionId")?.params.sessionId;
   const connectionId = useAppSelector((state) => state.runtime.connectionId);
-  const draftSessionId = useAppSelector((state) => state.runtime.draftSessionId);
+  const draftSessions = useAppSelector((state) => state.runtime.draftSessions);
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<
+    Record<string, boolean>
+  >({});
   const runtimes = useAppSelector((state) => state.runtime.sessions);
   const superseded = useAppSelector((state) => state.runtime.supersededSessions);
   const { data: sessions = [], isLoading } = useGetSessionsQuery();
+  const { data: workspaces = [], isLoading: workspacesLoading } =
+    useGetWorkspacesQuery();
+  const [
+    createWorkspaceOpened,
+    { open: openCreateWorkspace, close: closeCreateWorkspace },
+  ] = useDisclosure(false);
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState(
     readCollapsedWorkspaces,
   );
   const visibleSessions = sessions.filter(
     (session) => !isForkIdentity(session.session_id, superseded),
   );
-  const workspaceGroups = groupSessions(visibleSessions);
+  const workspaceGroups = groupSessions(visibleSessions, workspaces);
+  const fallbackWorkspaceId = defaultWorkspaceId(workspaceGroups, workspaces);
+  const currentWorkspaceId = workspaceOfSession(
+    sessionId,
+    visibleSessions,
+    draftSessions,
+  );
+  const defaultDraftId = draftSessionId(draftSessions, fallbackWorkspaceId);
+  const canCreateSession =
+    connectionId !== null && workspaces.length > 0;
 
   function toggleWorkspace(workspaceId: string) {
     setCollapsedWorkspaces((current) => {
@@ -65,17 +92,17 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
     });
   }
 
-  function openDraft() {
-    if (sessionId !== undefined && sessionId === draftSessionId) {
+  function openDraft(workspaceId?: string) {
+    const targetId = workspaceId ?? fallbackWorkspaceId;
+    if (targetId === null) {
+      return;
+    }
+    const existing = draftSessionId(draftSessions, targetId);
+    if (sessionId !== undefined && sessionId === existing) {
       onNavigate();
       return;
     }
-    if (draftSessionId !== null) {
-      navigate(`/sessions/${encodeURIComponent(draftSessionId)}`);
-      onNavigate();
-      return;
-    }
-    navigate("/");
+    navigate(`/workspaces/${encodeURIComponent(targetId)}`);
     onNavigate();
   }
 
@@ -102,10 +129,10 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
           fullWidth
           justify="flex-start"
           leftSection={<IconPlus size={17} />}
-          disabled={connectionId === null}
-          onClick={openDraft}
+          disabled={!canCreateSession}
+          onClick={() => openDraft()}
           radius="md"
-          variant={sessionId === draftSessionId ? "filled" : "light"}
+          variant={sessionId === defaultDraftId ? "filled" : "light"}
         >
           新建会话
         </Button>
@@ -116,12 +143,13 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
           <Text c="dimmed" fw={700} fz={10} lts="0.09em" tt="uppercase">
             工作区
           </Text>
-          <Tooltip
-            label="添加工作区尚未接入后端"
-            openDelay={400}
-            position="left"
-          >
-            <ActionIcon aria-label="添加工作区" disabled size="sm" variant="subtle">
+          <Tooltip label="新建工作区" openDelay={400} position="left">
+            <ActionIcon
+              aria-label="新建工作区"
+              onClick={openCreateWorkspace}
+              size="sm"
+              variant="subtle"
+            >
               <IconFolderPlus size={15} />
             </ActionIcon>
           </Tooltip>
@@ -135,37 +163,89 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
             </Stack>
           ) : null}
           <Stack gap={4} mt="xs">
+            {!workspacesLoading && workspaces.length === 0 ? (
+              <Box px={8} py="sm">
+                <Text c="dimmed" fz={12}>
+                  还没有工作区。工作区是会话的文件系统边界，先创建一个。
+                </Text>
+                <Button
+                  fullWidth
+                  mt={8}
+                  onClick={openCreateWorkspace}
+                  size="xs"
+                  variant="light"
+                >
+                  新建工作区
+                </Button>
+              </Box>
+            ) : null}
+            <CreateWorkspaceModal
+              onClose={closeCreateWorkspace}
+              opened={createWorkspaceOpened}
+            />
             {workspaceGroups.map((workspace) => {
               const collapsed = collapsedWorkspaces[workspace.id] === true;
+              const expanded = expandedWorkspaces[workspace.id] === true;
+              const shownSessions = previewSessions(
+                workspace.sessions,
+                expanded,
+              );
+              const hiddenCount =
+                workspace.sessions.length - shownSessions.length;
               return (
-                <Box className="workspace-group" key={workspace.id}>
-                  <UnstyledButton
-                    aria-expanded={!collapsed}
-                    className="workspace-toggle"
-                    onClick={() => toggleWorkspace(workspace.id)}
-                  >
-                    <Group gap={6} justify="space-between" wrap="nowrap">
-                      <Group gap={6} wrap="nowrap">
-                        <IconFolder size={14} />
-                        <Text
-                          className="workspace-name"
-                          fw={600}
-                          fz={12}
-                          truncate
-                        >
-                          {workspace.name}
-                        </Text>
+                <Box
+                  className={
+                    workspace.id === currentWorkspaceId
+                      ? "workspace-group is-current"
+                      : "workspace-group"
+                  }
+                  key={workspace.id}
+                >
+                  <Group className="workspace-head" gap={0} wrap="nowrap">
+                    <UnstyledButton
+                      aria-expanded={!collapsed}
+                      className="workspace-toggle"
+                      onClick={() => toggleWorkspace(workspace.id)}
+                    >
+                      <Group gap={6} justify="space-between" wrap="nowrap">
+                        <Group gap={6} wrap="nowrap">
+                          <IconFolder size={14} />
+                          <Text
+                            className="workspace-name"
+                            fw={600}
+                            fz={12}
+                            truncate
+                          >
+                            {workspace.name}
+                          </Text>
+                        </Group>
+                        {collapsed ? (
+                          <IconChevronRight size={14} />
+                        ) : (
+                          <IconChevronDown size={14} />
+                        )}
                       </Group>
-                      {collapsed ? (
-                        <IconChevronRight size={14} />
-                      ) : (
-                        <IconChevronDown size={14} />
-                      )}
-                    </Group>
-                  </UnstyledButton>
+                    </UnstyledButton>
+                    <Tooltip
+                      label="在此工作区新建会话"
+                      openDelay={400}
+                      position="right"
+                    >
+                      <ActionIcon
+                        aria-label={`在 ${workspace.name} 新建会话`}
+                        className="workspace-add"
+                        disabled={connectionId === null}
+                        onClick={() => openDraft(workspace.id)}
+                        size="sm"
+                        variant="subtle"
+                      >
+                        <IconPlus size={14} />
+                      </ActionIcon>
+                    </Tooltip>
+                  </Group>
                   <Collapse expanded={!collapsed}>
                     <Stack className="workspace-sessions" gap={3}>
-                      {workspace.sessions.map((session) => {
+                      {shownSessions.map((session) => {
                         const liveId = liveSessionId(
                           session.session_id,
                           superseded,
@@ -228,6 +308,21 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
                           </Tooltip>
                         );
                       })}
+                      {hiddenCount > 0 ? (
+                        <UnstyledButton
+                          className="workspace-more"
+                          onClick={() =>
+                            setExpandedWorkspaces((current) => ({
+                              ...current,
+                              [workspace.id]: true,
+                            }))
+                          }
+                        >
+                          <Text c="dimmed" fz={12}>
+                            More · {hiddenCount}
+                          </Text>
+                        </UnstyledButton>
+                      ) : null}
                     </Stack>
                   </Collapse>
                 </Box>

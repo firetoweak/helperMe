@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from acp import PROTOCOL_VERSION, RequestError
 
 from helperme.channels.acp import HelperMeAcpAgent
-from helperme.config import WorkspaceConfig
+from helperme.sandbox.registry import WorkspaceRegistry
 
 
 class _Sessions:
@@ -18,8 +18,8 @@ class _Sessions:
         self.accepted = asyncio.Event()
         self.quiescent = asyncio.Event()
 
-    async def create(self, session_id):
-        self.calls.append(("create", session_id))
+    async def create(self, session_id, workspace_id):
+        self.calls.append(("create", session_id, workspace_id))
 
     async def select(self, owner, session_id):
         self.calls.append(("select", owner, session_id))
@@ -56,10 +56,8 @@ class AcpChannelTest(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.directory.name)
         self.sessions = _Sessions()
         self.client = _Client()
-        self.agent = HelperMeAcpAgent(
-            self.sessions,
-            WorkspaceConfig(self.root, False),
-        )
+        self.workspaces = WorkspaceRegistry.load(self.root / "workspaces.json")
+        self.agent = HelperMeAcpAgent(self.sessions, self.workspaces)
         self.agent.on_connect(self.client)
         await self.agent.initialize(PROTOCOL_VERSION)
 
@@ -168,11 +166,32 @@ class AcpChannelTest(unittest.IsolatedAsyncioTestCase):
         await self.agent.deliver(session_id, "output-1", "late output")
         self.assertEqual(self.client.updates, [])
 
-    async def test_new_session_rejects_workspace_escape(self) -> None:
-        outside = self.root.parent
+    async def test_new_session_registers_unregistered_cwd(self) -> None:
+        response = await self.agent.new_session(str(self.root), mcp_servers=[])
 
+        created = next(
+            call for call in self.sessions.calls if call[0] == "create"
+        )
+        workspace = self.workspaces.find_by_path(self.root)
+        self.assertIsNotNone(workspace)
+        self.assertEqual(created[2], workspace.workspace_id)
+        self.assertEqual(response.session_id, created[1])
+
+    async def test_new_session_reuses_the_deepest_workspace(self) -> None:
+        nested = self.root / "nested"
+        nested.mkdir()
+        inner = self.workspaces.create(name="nested", task_root=nested)
+
+        await self.agent.new_session(str(nested), mcp_servers=[])
+
+        created = next(
+            call for call in self.sessions.calls if call[0] == "create"
+        )
+        self.assertEqual(created[2], inner.workspace_id)
+
+    async def test_new_session_rejects_invalid_cwd(self) -> None:
         with self.assertRaises(RequestError) as raised:
-            await self.agent.new_session(str(outside), mcp_servers=[])
+            await self.agent.new_session("relative", mcp_servers=[])
 
         self.assertEqual(raised.exception.code, -32602)
         self.assertEqual(self.sessions.calls, [])

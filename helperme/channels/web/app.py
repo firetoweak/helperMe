@@ -25,6 +25,11 @@ from helperme.assistant.runner import SessionNotFoundError
 from helperme.bootstrap import bootstrap_assistant
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
+from helperme.sandbox.registry import (
+    WorkspaceNotFound,
+    WorkspacePathTaken,
+    WorkspaceRegistryError,
+)
 
 SSE_KEEPALIVE_SECONDS = 15
 
@@ -44,6 +49,10 @@ class ConnectionRequest(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     connection_id: str
+
+
+class CreateSessionRequest(ConnectionRequest):
+    workspace_id: str
 
 
 class InputRequest(BaseModel):
@@ -88,9 +97,19 @@ class PauseRequest(BaseModel):
     paused: bool
 
 
+class WorkspaceCreateRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    name: str
+    task_root: str
+    full_access: bool = False
+
+
 def create_web_app(
     channel: WebChannel | None = None,
     hub: WebEventHub | None = None,
+    workspace_path: Path | None = None,
+    workspaces=None,
 ) -> FastAPI:
     events = hub if hub is not None else WebEventHub()
 
@@ -100,10 +119,12 @@ def create_web_app(
         if channel is not None:
             app.state.channel = channel
             app.state.runtime = {"model": "test", "context_limit": 200000}
+            app.state.workspaces = workspaces
             yield
             return
         async with bootstrap_assistant(
             events.output_final,
+            workspace_path=workspace_path,
             preview_sink=events.preview,
             thinking_sink=events.thinking,
             session_activity_sink=events.session_activity,
@@ -121,6 +142,7 @@ def create_web_app(
                 "model": assistant.config.model.active,
                 "context_limit": assistant.config.runtime.model_context_limit,
             }
+            app.state.workspaces = assistant.workspaces
             failures = asyncio.create_task(
                 report_worker_failures(assistant.sessions, events),
                 name="web-assistant-failure",
@@ -151,6 +173,20 @@ def create_web_app(
 
     @app.exception_handler(AttachmentRejected)
     async def attachment_rejected(_request: Request, error: AttachmentRejected):
+        return JSONResponse(status_code=400, content={"detail": str(error)})
+
+    @app.exception_handler(WorkspaceNotFound)
+    async def workspace_not_found(_request: Request, error: WorkspaceNotFound):
+        return JSONResponse(status_code=404, content={"detail": str(error)})
+
+    @app.exception_handler(WorkspacePathTaken)
+    async def workspace_path_taken(_request: Request, error: WorkspacePathTaken):
+        return JSONResponse(status_code=409, content={"detail": str(error)})
+
+    @app.exception_handler(WorkspaceRegistryError)
+    async def workspace_registry_error(
+        _request: Request, error: WorkspaceRegistryError
+    ):
         return JSONResponse(status_code=400, content={"detail": str(error)})
 
     @app.get("/api/events", response_class=EventSourceResponse)
@@ -190,8 +226,22 @@ def create_web_app(
         return await _channel(request).conversation(session_id)
 
     @app.post("/api/sessions", status_code=201)
-    async def create_session(body: ConnectionRequest, request: Request):
-        return await _channel(request).create(body.connection_id)
+    async def create_session(body: CreateSessionRequest, request: Request):
+        return await _channel(request).create(body.connection_id, body.workspace_id)
+
+    @app.get("/api/workspaces")
+    async def list_workspaces(request: Request):
+        registry = request.app.state.workspaces
+        return [record.to_dict() for record in registry.workspaces]
+
+    @app.post("/api/workspaces", status_code=201)
+    async def create_workspace(body: WorkspaceCreateRequest, request: Request):
+        registry = request.app.state.workspaces
+        return registry.create(
+            name=body.name,
+            task_root=Path(body.task_root),
+            full_access=body.full_access,
+        ).to_dict()
 
     @app.post("/api/sessions/{session_id}/select")
     async def select_session(

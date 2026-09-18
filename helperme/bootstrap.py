@@ -15,6 +15,7 @@ from helperme.config import AppConfig, assistant_config_from_app, load_app_confi
 from helperme.llm.adapter import LiteLLMAdapter
 from helperme.paths import HelperMeHome
 from helperme.mcp.composition import build_mcp
+from helperme.sandbox.registry import WorkspaceRecord, WorkspaceRegistry
 from helperme.skills.composition import build_skills
 from helperme.skills.summarizer import LlmSkillDiffSummarizer
 
@@ -25,6 +26,7 @@ class UnboundHostLlm:
 
 
 def worker_config(app_config: AppConfig):
+    """Worker 只拿配置；它这条会话的工作区由会话自己的日志决定。"""
     return assistant_config_from_app(app_config, UnboundHostLlm())
 
 
@@ -36,6 +38,8 @@ class BootstrappedAssistant:
     mcp_service: object
     skill_service: object
     queries: AssistantQueries
+    workspaces: WorkspaceRegistry
+    workspace: WorkspaceRecord | None
 
 
 @asynccontextmanager
@@ -43,6 +47,7 @@ async def bootstrap_assistant(
     sink: DeliverySink,
     *,
     app_config: AppConfig | None = None,
+    workspace_path: Path | None = None,
     context_usage_sink=None,
     subagent_activity_sink=None,
     conversation_status_sink=None,
@@ -59,11 +64,18 @@ async def bootstrap_assistant(
     home.initialize()
     store = SessionStore(home.runtime_sessions_root)
     llm = LiteLLMAdapter(config.model, config.litellm)
+    workspaces = WorkspaceRegistry.load(home.workspaces_path)
+    # 只有调用方明确给出路径才登记。TUI / ACP 传入启动目录或 --workspace；
+    # Web / Telegram 缺省不从进程 cwd 偷建工作区。
+    workspace = (
+        None if workspace_path is None else workspaces.register_path(workspace_path)
+    )
     host = HostSupervisor(
         store,
         partial(worker_config, config),
         home,
         sink,
+        workspaces=workspaces,
         llm=llm,
         context_usage_sink=context_usage_sink,
         subagent_activity_sink=subagent_activity_sink,
@@ -88,6 +100,8 @@ async def bootstrap_assistant(
                 mcp.service,
                 skills.service,
                 AssistantQueries(store, host),
+                workspaces,
+                workspace,
             )
         finally:
             await host.close()

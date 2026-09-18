@@ -167,23 +167,33 @@ describe("runtimeSlice", () => {
     expect(state.sessions.s2.contextUsage).toBeNull();
   });
 
-  it("keeps a single unlocked draft until the first user message locks it", () => {
-    let state = reducer(undefined, setDraftSession("draft-1"));
-    expect(state.draftSessionId).toBe("draft-1");
+  it("keeps an unlocked draft per workspace until the first user message locks it", () => {
+    let state = reducer(
+      undefined,
+      setDraftSession({ workspaceId: "w1", sessionId: "draft-1" }),
+    );
+    state = reducer(
+      state,
+      setDraftSession({ workspaceId: "w2", sessionId: "draft-2" }),
+    );
+    expect(state.draftSessions).toEqual({ w1: "draft-1", w2: "draft-2" });
     state = reducer(state, lockDraft("other"));
-    expect(state.draftSessionId).toBe("draft-1");
+    expect(state.draftSessions).toEqual({ w1: "draft-1", w2: "draft-2" });
     state = reducer(state, lockDraft("draft-1"));
-    expect(state.draftSessionId).toBeNull();
+    expect(state.draftSessions).toEqual({ w2: "draft-2" });
   });
 
-  it("clears the host owner on disconnect without dropping the unlocked draft", () => {
+  it("clears the host owner on disconnect without dropping unlocked drafts", () => {
     let state = reducer(undefined, connected("conn-1"));
-    state = reducer(state, setDraftSession("draft-1"));
+    state = reducer(
+      state,
+      setDraftSession({ workspaceId: "w1", sessionId: "draft-1" }),
+    );
     state = reducer(state, bindOwner("draft-1"));
     state = reducer(state, disconnected());
     expect(state.connectionId).toBeNull();
     expect(state.ownerSessionId).toBeNull();
-    expect(state.draftSessionId).toBe("draft-1");
+    expect(state.draftSessions).toEqual({ w1: "draft-1" });
   });
 
   it("follows a fork chain to the live session and marks fork identities", () => {

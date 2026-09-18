@@ -42,7 +42,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
         buffer = BytesIO()
         Image.new("RGB", (16, 16), "red").save(buffer, format="PNG")
-        await self.host.create("image-session")
+        await self.host.create("image-session", self.workspace.workspace_id)
         ref = AttachmentGateway(self.home.runtime_sessions_root).for_session(
             "image-session"
         ).save_image(buffer.getvalue(), "image/png")
@@ -68,7 +68,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
             DeliveryIdentity,
         )
 
-        await self.store.create("child")
+        await self.store.create("child", workspace_id=self.workspace.workspace_id)
         journal = SqliteJournal(self.store.require("child"))
         await journal.accept_delivery(
             EventDraft(
@@ -103,7 +103,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
     async def test_failed_reader_still_reports_and_exits(self):
         from helperme.assistant.host.ipc import WorkerFailed
 
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.persist_child()
         self.host.config_factory = partial(failing_request_config, self.root)
         with self.assertRaises(WorkerFailed):
@@ -113,7 +113,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await self.assert_failure_report("application request failed")
 
     async def test_new_child_has_parent_identity_before_initialization(self):
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         self.host.config_factory = partial(failing_startup_config, self.root, "config")
         await asyncio.wait_for(
             self.host._route(
@@ -135,7 +135,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         from tests.fixtures.session_worker import delegate_startup_failure_config
 
         self.host.config_factory = partial(delegate_startup_failure_config, self.root)
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "parent", "DELEGATE_CHILDREN", delivery_id="input"
         )
@@ -153,7 +153,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
     async def assert_startup_failure(self, stage):
         from helperme.assistant.host.ipc import WorkerFailed
 
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.persist_child()
         self.host.config_factory = partial(failing_startup_config, self.root, stage)
         with self.assertRaises(WorkerFailed):
@@ -170,10 +170,15 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await self.assert_startup_failure("client")
 
     async def asyncSetUp(self):
+        from helperme.sandbox.registry import WorkspaceRegistry
+
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.home = HelperMeHome(self.root / "home")
         self.store = SessionStore(self.home.runtime_sessions_root)
+        self.workspace = WorkspaceRegistry.load(
+            self.home.workspaces_path
+        ).register_path(self.root)
         self.output = []
         self.output_ids = []
         self.previews = []
@@ -209,7 +214,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.directory.cleanup()
 
     async def test_idle_exit_delivery_and_explicit_restart(self):
-        await self.host.create("one")
+        await self.host.create("one", self.workspace.workspace_id)
         await until(lambda: not self.host.workers and not self.host.watchers)
         await self.host.receive_user_message("one", "hello", delivery_id="input")
         await until(lambda: self.output)
@@ -225,7 +230,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.output, [("one", "done")])
 
     async def test_preview_and_final_cross_worker_boundary_in_order(self):
-        await self.host.create("one")
+        await self.host.create("one", self.workspace.workspace_id)
         await self.host.receive_user_message("one", "hello", delivery_id="input")
         await until(lambda: self.output == [("one", "done")])
 
@@ -238,7 +243,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delta[3], final[2])
 
     async def test_selected_idle_worker_stays_until_owner_releases_it(self):
-        await self.host.create("one")
+        await self.host.create("one", self.workspace.workspace_id)
         view = await self.host.select("cli", "one")
         self.assertEqual(view.status, "waiting")
         await until(
@@ -264,7 +269,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
         self.host.config_factory = partial(cancellable_config, self.root)
         self.host.llm = CancellableProcessLlm(self.root)
-        await self.host.create("one")
+        await self.host.create("one", self.workspace.workspace_id)
         await self.host.select("acp", "one")
         await self.host.accept_input(
             "one",
@@ -282,7 +287,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(events[-1].payload, DecisionCancelled)
 
     async def test_unselected_busy_worker_stops_only_after_work_finishes(self):
-        await self.host.create("one")
+        await self.host.create("one", self.workspace.workspace_id)
         await self.host.select("cli", "one")
         await self.host.receive_user_message(
             "one", "BLOCK_PROCESS", delivery_id="input"
@@ -299,9 +304,9 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
     async def test_failed_selection_keeps_previous_owner_mapping(self):
         from helperme.assistant.host.ipc import WorkerFailed
 
-        await self.host.create("old")
+        await self.host.create("old", self.workspace.workspace_id)
         await self.host.select("cli", "old")
-        await self.host.create("broken")
+        await self.host.create("broken", self.workspace.workspace_id)
         self.host.config_factory = partial(
             failing_startup_config, self.root, "config"
         )
@@ -313,18 +318,18 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old", self.host.workers)
 
     async def test_blocking_worker_and_crash_do_not_stop_another(self):
-        await self.host.create("blocked")
+        await self.host.create("blocked", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "blocked", "BLOCK_PROCESS", delivery_id="a"
         )
         await until(lambda: list(self.root.glob("blocked-*")))
         blocked_at = time.monotonic()
-        await self.host.create("crash")
+        await self.host.create("crash", self.workspace.workspace_id)
         await self.host.receive_user_message("crash", "CRASH_PROCESS", delivery_id="b")
         failure = await asyncio.wait_for(self.host.wait_failure(), 30)
         self.assertEqual(failure.failure.exception_type, "builtins.RuntimeError")
         self.assertIn("intentional worker crash", failure.failure.traceback)
-        await self.host.create("healthy")
+        await self.host.create("healthy", self.workspace.workspace_id)
         await self.host.receive_user_message("healthy", "hello", delivery_id="c")
         await until(lambda: ("healthy", "done") in self.output)
         self.assertIn("blocked", self.host.workers)
@@ -333,7 +338,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await until(lambda: ("blocked", "done") in self.output)
 
     async def test_two_children_return_after_parent_worker_exits(self):
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "parent", "DELEGATE_CHILDREN", delivery_id="input"
         )
@@ -349,8 +354,8 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(sid == "parent" for sid, _ in self.output))
 
     async def test_resume_selected_parent_recovers_its_children_only(self):
-        await self.host.create("unrelated")
-        await self.host.create("parent")
+        await self.host.create("unrelated", self.workspace.workspace_id)
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "parent", "DELEGATE_CHILDREN", delivery_id="input"
         )
@@ -380,7 +385,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
         self.host._route = interrupted_route
         (self.root / "release").touch()
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "parent", "DELEGATE_CHILDREN", delivery_id="input"
         )
@@ -395,7 +400,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.host.failures.empty())
 
     async def test_deliveries_during_idle_transition_are_all_durable(self):
-        await self.host.create("one")
+        await self.host.create("one", self.workspace.workspace_id)
         await asyncio.gather(
             *(
                 self.host.receive_user_message(
@@ -419,7 +424,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
         self.host.config_factory = partial(interrupted_read_config, self.root)
         (self.root / "release").touch()
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.host._route(
             "create_child",
             "child",
@@ -475,7 +480,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         from helperme.runtime import DomainFactCommitted
         from helperme.assistant.subagent.subagent import REPORT_FACT, TASK_FACT
 
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.host._route(
             "create_child",
             "child",
@@ -506,7 +511,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         from helperme.runtime import DomainFactCommitted
         from helperme.assistant.subagent.subagent import REPORT_FACT, RETURN_FACT, TASK_FACT
 
-        await self.host.create("parent")
+        await self.host.create("parent", self.workspace.workspace_id)
         await self.host._route(
             "create_child",
             "child",

@@ -8,9 +8,11 @@ import {
   conversationViewSchema,
   runtimeStatusSchema,
   sessionSummarySchema,
+  workspaceSchema,
   type ConversationView,
   type RuntimeStatus,
   type SessionSummary,
+  type Workspace,
 } from "./contracts";
 
 type SelectSession = {
@@ -78,7 +80,7 @@ function putConversation(
 export const helpermeApi = createApi({
   reducerPath: "helpermeApi",
   baseQuery: fetchBaseQuery({ baseUrl: "/api" }),
-  tagTypes: ["Sessions", "Conversation"],
+  tagTypes: ["Sessions", "Workspaces", "Conversation"],
   endpoints: (build) => ({
     getRuntime: build.query<RuntimeStatus, void>({
       query: () => "/runtime",
@@ -90,6 +92,24 @@ export const helpermeApi = createApi({
         sessionSummarySchema.array().parse(value),
       providesTags: ["Sessions"],
     }),
+    getWorkspaces: build.query<Workspace[], void>({
+      query: () => "/workspaces",
+      transformResponse: (value: unknown) =>
+        workspaceSchema.array().parse(value),
+      providesTags: ["Workspaces"],
+    }),
+    createWorkspace: build.mutation<
+      Workspace,
+      { name: string; taskRoot: string; fullAccess: boolean }
+    >({
+      query: ({ name, taskRoot, fullAccess }) => ({
+        url: "/workspaces",
+        method: "POST",
+        body: { name, task_root: taskRoot, full_access: fullAccess },
+      }),
+      transformResponse: (value: unknown) => workspaceSchema.parse(value),
+      invalidatesTags: ["Workspaces"],
+    }),
     getConversation: build.query<ConversationView, string>({
       query: (sessionId) => `/sessions/${encodeURIComponent(sessionId)}`,
       transformResponse: (value: unknown) => conversationViewSchema.parse(value),
@@ -97,14 +117,17 @@ export const helpermeApi = createApi({
         { type: "Conversation", id: sessionId },
       ],
     }),
-    createSession: build.mutation<ConversationView, string>({
-      query: (connectionId) => ({
+    createSession: build.mutation<
+      ConversationView,
+      { connectionId: string; workspaceId: string }
+    >({
+      query: ({ connectionId, workspaceId }) => ({
         url: "/sessions",
         method: "POST",
-        body: { connection_id: connectionId },
+        body: { connection_id: connectionId, workspace_id: workspaceId },
       }),
       transformResponse: (value: unknown) => conversationViewSchema.parse(value),
-      async onQueryStarted(_connectionId, { dispatch, getState, queryFulfilled }) {
+      async onQueryStarted(_arg, { dispatch, getState, queryFulfilled }) {
         const { data } = await queryFulfilled;
         dispatch(bindOwner(data.session_id));
         putConversation(dispatch, getState, data.session_id, data);
@@ -261,7 +284,9 @@ export const helpermeApi = createApi({
 export const {
   useCreateSessionMutation,
   useGetRuntimeQuery,
+  useCreateWorkspaceMutation,
   useGetSessionsQuery,
+  useGetWorkspacesQuery,
   useGetConversationQuery,
   useSelectSessionMutation,
   useSendInputMutation,

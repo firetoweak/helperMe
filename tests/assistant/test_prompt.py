@@ -25,6 +25,7 @@ from helperme.paths import HelperMeHome
 from helperme.runtime import MemoryJournal
 from helperme.skills.runtime import LOAD_SKILL, READ_SKILL_RESOURCE
 from helperme.tools.executor import RESERVED_KEYS
+from tests.fixtures.workspaces import workspace_record
 
 
 class DefaultAssistantPromptTests(unittest.TestCase):
@@ -150,8 +151,6 @@ class PromptVocabularyTests(unittest.IsolatedAsyncioTestCase):
             self._assembly = await build_assistant_assembly(
                 AssistantConfig(
                     model_name="test-model",
-                    workspace_root=workspace,
-                    full_access=False,
                     model_context_limit=200_000,
                     input_budget_ratio=0.75,
                     llm=SilentLlm(),
@@ -159,6 +158,7 @@ class PromptVocabularyTests(unittest.IsolatedAsyncioTestCase):
                 lambda _session_id, _output_id, _text: None,
                 MemoryJournal(),
                 session_id="parent/sub-vocabulary",
+                workspace=workspace_record(workspace),
             )
 
     async def asyncTearDown(self) -> None:

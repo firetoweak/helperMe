@@ -96,8 +96,6 @@ class CompactLlm:
 def config_for(workspace: Path):
     return AssistantConfig(
         model_name="compact-test",
-        workspace_root=workspace,
-        full_access=False,
         model_context_limit=60000,
         input_budget_ratio=0.9,
         llm=CompactLlm(workspace),

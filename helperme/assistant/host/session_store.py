@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from helperme.assistant.runner import SessionNotFoundError
+from helperme.assistant.workspaces import workspace_binding
 from helperme.runtime import RuntimeStatus, SqliteJournal, replay
 from helperme.runtime.events import (
     DeliveryIdentity,
@@ -71,7 +72,11 @@ class SessionStore:
         return tuple(sorted(paths))
 
     async def create(
-        self, session_id: str, *, initial_fact: dict | None = None
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+        initial_fact: dict | None = None,
     ) -> None:
         path = self.path(session_id)
         if path.parent.exists():
@@ -80,6 +85,15 @@ class SessionStore:
         staging.mkdir()
         journal = SqliteJournal(staging / "journal.sqlite")
         await journal.create_session(session_id)
+        await journal.accept_delivery(
+            EventDraft(
+                event_id=f"event_{uuid4().hex}",
+                session_id=session_id,
+                payload=workspace_binding(workspace_id),
+                occurred_at=datetime.now(timezone.utc),
+                delivery=DeliveryIdentity("workspace", uuid4().hex),
+            )
+        )
         if initial_fact is not None:
             await journal.accept_delivery(
                 EventDraft(

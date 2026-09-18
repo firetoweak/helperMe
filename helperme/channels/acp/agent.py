@@ -23,7 +23,6 @@ from helperme.channels.acp.project import (
     tool_start,
     usage_update,
 )
-from helperme.config import WorkspaceConfig
 
 
 @dataclass(slots=True)
@@ -37,9 +36,9 @@ class _ActivePrompt:
 class HelperMeAcpAgent:
     """ACP v1 stdio boundary over HelperMe's Session application service."""
 
-    def __init__(self, sessions, workspace: WorkspaceConfig) -> None:
+    def __init__(self, sessions, workspaces) -> None:
         self._sessions = sessions
-        self._workspace = workspace
+        self._workspaces = workspaces
         self._client = None
         self._connection_id = uuid4().hex
         self._owners: dict[str, str] = {}
@@ -86,7 +85,7 @@ class HelperMeAcpAgent:
         mcp_servers=None,
         **_kwargs,
     ) -> NewSessionResponse:
-        self._validate_workspace(cwd)
+        workspace = self._workspace_for(cwd)
         if additional_directories:
             raise RequestError.invalid_params(
                 {"additionalDirectories": "not supported"}
@@ -95,7 +94,7 @@ class HelperMeAcpAgent:
             raise RequestError.invalid_params({"mcpServers": "not supported"})
         session_id = f"session-{uuid4().hex}"
         owner = f"acp-{self._connection_id}-session-{session_id}"
-        await self._sessions.create(session_id)
+        await self._sessions.create(session_id, workspace.workspace_id)
         await self._sessions.select(owner, session_id)
         self._owners[session_id] = owner
         return NewSessionResponse(session_id=session_id)
@@ -276,16 +275,10 @@ class HelperMeAcpAgent:
         self._previews.clear()
         self._delivered.clear()
 
-    def _validate_workspace(self, cwd: str) -> Path:
+    def _workspace_for(self, cwd: str):
         requested = Path(cwd)
         if not requested.is_absolute() or not requested.is_dir():
             raise RequestError.invalid_params(
                 {"cwd": "must be an existing absolute directory"}
             )
-        resolved = requested.resolve()
-        root = self._workspace.root.resolve()
-        if not self._workspace.full_access and resolved != root and root not in resolved.parents:
-            raise RequestError.invalid_params(
-                {"cwd": "outside the configured workspace"}
-            )
-        return resolved
+        return self._workspaces.register_path(requested)

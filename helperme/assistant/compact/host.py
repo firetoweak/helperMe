@@ -72,7 +72,11 @@ class CompactHost:
         )
         fact = seed_fact(TASK, data, continuing=True)
         if not self.host.store.path(reader).parent.exists():
-            await self.host.store.create(reader, initial_fact=fact)
+            await self.host.store.create(
+                reader,
+                workspace_id=await self.host.bound_workspace_id(job["source"]),
+                initial_fact=fact,
+            )
         else:
             events = await SqliteJournal(self.host.store.require(reader)).snapshot(
                 reader

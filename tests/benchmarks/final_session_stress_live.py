@@ -8,6 +8,8 @@ from pathlib import Path
 from tests.session_scheduler import build_settling_assistant as build_stress_assistant
 from helperme.config import assistant_config_from_app, load_app_config
 from helperme.llm.adapter import LiteLLMAdapter
+from helperme.paths import HelperMeHome
+from helperme.sandbox.registry import WorkspaceRegistry
 from helperme.runtime import (
     CommandOutcomeReceived,
     InvokeTool,
@@ -44,12 +46,16 @@ output/phase1.md、output/final_report.md，并使用 grep 或 glob 做一次交
 
 async def main() -> None:
     app_config = load_app_config()
-    workspace = app_config.workspace.root.resolve()
-    expected_workspace = (
+    workspace_root = (
         Path(__file__).resolve().parents[1] / ".live_workspace"
     ).resolve()
-    if workspace != expected_workspace:
-        raise AssertionError(f"config workspace mismatch: {workspace}")
+    if not workspace_root.is_dir():
+        raise AssertionError(f"missing live workspace: {workspace_root}")
+    # 压测会话跑在 .live_workspace：登记进本机 registry（幂等），
+    # supervisor 建会话时按归属校验。
+    workspace = WorkspaceRegistry.load(
+        HelperMeHome.default().workspaces_path
+    ).register_path(workspace_root)
 
     config = assistant_config_from_app(
         app_config,
@@ -57,16 +63,20 @@ async def main() -> None:
     )
     delivered: list[str] = []
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    journal_path = workspace / ".runtime" / f"stress-{run_id}.sqlite"
+    journal_path = workspace_root / ".runtime" / f"stress-{run_id}.sqlite"
     journal_path.parent.mkdir(parents=True, exist_ok=True)
     journal = SqliteJournal(journal_path)
     session_id = f"final-stress-{run_id}"
-    assembly = await build_stress_assistant(config, delivered.append, journal, session_id)
+    assembly = await build_stress_assistant(
+        config, delivered.append, journal, session_id, workspace
+    )
     runtime = assembly.runtime
 
     try:
         async with config.llm, assembly.mcp.client_manager:
-            created = await assembly.sessions.create(session_id)
+            created = await assembly.sessions.create(
+                session_id, workspace.workspace_id
+            )
             if not created:
                 raise AssertionError("stress session was not created")
             for index, task in enumerate(TASKS, start=1):

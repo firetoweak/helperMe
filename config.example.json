@@ -18,10 +18,6 @@
       "num_retries": 0
     }
   },
-  "workspace": {
-    "root": "D:/work/agent",
-    "full_access": true
-  },
   "runtime": {
     "model_context_limit": 200000,
     "input_budget_ratio": 0.9,

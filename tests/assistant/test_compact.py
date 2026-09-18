@@ -19,6 +19,7 @@ from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.assistant.artifacts import FileArtifactGateway
 from helperme.paths import HelperMeHome
+from helperme.sandbox.registry import WorkspaceRegistry
 from helperme.runtime import SqliteJournal, StepCommitted, DomainFactCommitted
 from tests.fixtures.compact_worker import CompactLlm, config_for, HANDOFF
 
@@ -37,6 +38,9 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.home = HelperMeHome(self.root / "home")
         self.store = SessionStore(self.home.runtime_sessions_root)
+        self.workspace = WorkspaceRegistry.load(
+            self.home.workspaces_path
+        ).register_path(self.root)
         self.outputs = []
         self.host = self.new_host()
 
@@ -54,7 +58,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def start(self):
-        await self.host.create("chat")
+        await self.host.create("chat", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "chat", " history" * 31000, delivery_id="first"
         )
@@ -118,7 +122,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_failure_keeps_old_window_and_does_not_restart(self):
         (self.root / "fail_compact").touch()
-        await self.host.create("chat")
+        await self.host.create("chat", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "chat", " history" * 31000, delivery_id="first"
         )
@@ -146,7 +150,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
     async def test_multiturn_reading_finishes_without_changing_tools(self):
         (self.root / "read_compact").touch()
         (self.root / "release_compact").touch()
-        await self.host.create("chat")
+        await self.host.create("chat", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "chat", " history" * 31000, delivery_id="first"
         )
@@ -162,7 +166,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_reads_are_reminded_and_can_complete(self):
         (self.root / "repeat_reads").touch()
         (self.root / "release_compact").touch()
-        await self.host.create("chat")
+        await self.host.create("chat", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "chat", " history" * 31000, delivery_id="first"
         )
@@ -178,7 +182,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.host.failures.empty())
 
     async def test_handoff_reads_frozen_prefix_attachments_from_source(self):
-        await self.host.create("chat")
+        await self.host.create("chat", self.workspace.workspace_id)
         buffer = BytesIO()
         Image.new("RGB", (8, 8), "red").save(buffer, format="PNG")
         ref = (
@@ -199,7 +203,7 @@ class CompactTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_visible_write_schema_does_not_authorize_handoff_execution(self):
         (self.root / "write_compact").touch()
-        await self.host.create("chat")
+        await self.host.create("chat", self.workspace.workspace_id)
         await self.host.receive_user_message(
             "chat", " history" * 31000, delivery_id="first"
         )

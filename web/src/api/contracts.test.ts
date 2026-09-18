@@ -25,6 +25,7 @@ describe("conversationViewSchema", () => {
   it("keeps step identity, output identity and nested command identity separate", () => {
     const parsed = conversationViewSchema.parse({
       session_id: "session-1",
+      workspace_id: "workspace-1",
       revision: 3,
       items: [
         {
@@ -73,6 +74,7 @@ describe("conversationViewSchema", () => {
     expect(() =>
       conversationViewSchema.parse({
         session_id: "session-1",
+        workspace_id: "workspace-1",
         revision: 1,
         items: [
           {
@@ -93,6 +95,7 @@ describe("conversationViewSchema", () => {
     const attachmentId = `sha256:${"a".repeat(64)}`;
     const parsed = conversationViewSchema.parse({
       session_id: "session-1",
+      workspace_id: "workspace-1",
       revision: 1,
       items: [
         {
@@ -116,6 +119,7 @@ describe("conversation thinking field", () => {
   it("accepts reasoning text on a step without treating it as reply text", () => {
     const parsed = conversationViewSchema.parse({
       session_id: "session-1",
+      workspace_id: "workspace-1",
       revision: 1,
       items: [
         {
@@ -162,6 +166,7 @@ describe("toolProgressEventSchema", () => {
   it("accepts unknown as a journal tool status", () => {
     const parsed = conversationViewSchema.parse({
       session_id: "session-1",
+      workspace_id: "workspace-1",
       revision: 1,
       items: [
         {

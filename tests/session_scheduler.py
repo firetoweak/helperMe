@@ -54,7 +54,7 @@ class SettledSession:
     control_message: str | None = None
 
 
-async def build_settling_assistant(config, sink, journal, session_id):
+async def build_settling_assistant(config, sink, journal, session_id, workspace):
     from helperme.assistant.assembly import build_assistant_assembly
 
     return await build_assistant_assembly(
@@ -62,6 +62,7 @@ async def build_settling_assistant(config, sink, journal, session_id):
         sink,
         journal,
         session_id=session_id,
+        workspace=workspace,
         scheduler_factory=SettlingScheduler,
     )
 

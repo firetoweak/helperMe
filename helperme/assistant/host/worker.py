@@ -13,8 +13,10 @@ from helperme.assistant.host.llm_port import WorkerLlmPort
 from helperme.assistant.subagent.subagent import (
     project_parent, record_interrupted_return, record_unexpected_return,
 )
+from helperme.assistant.workspaces import bound_workspace
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal
+from helperme.sandbox.registry import WorkspaceRegistry
 
 
 async def run_worker(connection, session_id, path, config_factory, home_root):
@@ -42,6 +44,11 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
     await record_interrupted_return(journal, session_id)
     config = config_factory()
     events = await journal.snapshot(session_id)
+    workspace = bound_workspace(
+        session_id,
+        events,
+        WorkspaceRegistry.load(home.workspaces_path),
+    )
     stop = asyncio.Event()
     active_requests = 0
     ready = asyncio.Event()
@@ -134,6 +141,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
         sink,
         journal,
         session_id=session_id,
+        workspace=workspace,
         context_usage_sink=lambda *values: notify("usage", *values),
         subagent_activity_sink=lambda *values: notify("activity", *values),
         tool_progress_sink=lambda *values: notify("tool", *values),

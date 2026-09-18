@@ -189,6 +189,8 @@ class WorkspaceRegistry:
         full_access: bool = False,
     ) -> WorkspaceRecord:
         resolved = task_root.resolve()
+        if not resolved.is_dir():
+            raise WorkspaceRegistryError(f"工作区路径不是已存在的目录: {resolved}")
         if any(record.task_root == resolved for record in self._workspaces):
             raise WorkspacePathTaken(resolved)
         record = WorkspaceRecord(

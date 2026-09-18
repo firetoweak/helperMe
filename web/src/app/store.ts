@@ -2,12 +2,31 @@ import { configureStore } from "@reduxjs/toolkit";
 
 import { helpermeApi } from "../api/helpermeApi";
 import runtimeReducer, {
+  hydrateDrafts,
   hydrateSuperseded,
-  setDraftSession,
 } from "../realtime/runtimeSlice";
 
-const DRAFT_KEY = "helperme.draftSessionId";
+const DRAFT_KEY = "helperme.draftSessions";
 const SUPERSEDED_KEY = "helperme.supersededSessions";
+
+function readDrafts(): Record<string, string> {
+  const raw = sessionStorage.getItem(DRAFT_KEY);
+  if (raw === null || raw === "") {
+    return {};
+  }
+  const parsed: unknown = JSON.parse(raw);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("draftSessions must be an object");
+  }
+  const values: Record<string, string> = {};
+  for (const [workspaceId, sessionId] of Object.entries(parsed)) {
+    if (typeof sessionId !== "string" || sessionId === "") {
+      throw new Error("draftSessions values must be session ids");
+    }
+    values[workspaceId] = sessionId;
+  }
+  return values;
+}
 
 function readSuperseded(): Record<string, string> {
   const raw = localStorage.getItem(SUPERSEDED_KEY);
@@ -37,9 +56,9 @@ export const store = configureStore({
     getDefaultMiddleware().concat(helpermeApi.middleware),
 });
 
-const savedDraft = sessionStorage.getItem(DRAFT_KEY);
-if (savedDraft !== null && savedDraft !== "") {
-  store.dispatch(setDraftSession(savedDraft));
+const savedDrafts = sessionStorage.getItem(DRAFT_KEY);
+if (savedDrafts !== null && savedDrafts !== "") {
+  store.dispatch(hydrateDrafts(readDrafts()));
 }
 
 const savedSuperseded = localStorage.getItem(SUPERSEDED_KEY);
@@ -49,10 +68,10 @@ if (savedSuperseded !== null && savedSuperseded !== "") {
 
 store.subscribe(() => {
   const runtime = store.getState().runtime;
-  if (runtime.draftSessionId === null) {
+  if (Object.keys(runtime.draftSessions).length === 0) {
     sessionStorage.removeItem(DRAFT_KEY);
   } else {
-    sessionStorage.setItem(DRAFT_KEY, runtime.draftSessionId);
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(runtime.draftSessions));
   }
   localStorage.setItem(
     SUPERSEDED_KEY,
