@@ -299,6 +299,18 @@ def create_web_app(
             tuple(body.artifact_refs),
         )
 
+    @app.post("/api/sessions/{session_id}/control")
+    async def resolve_control(
+        session_id: str,
+        body: AuthorizationRequest,
+        request: Request,
+    ):
+        return await _channel(request).resolve_control(
+            body.connection_id,
+            session_id,
+            body.approved,
+        )
+
     @app.post("/api/sessions/{session_id}/forks", status_code=201)
     async def edit_and_fork(
         session_id: str,

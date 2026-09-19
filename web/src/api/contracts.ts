@@ -8,11 +8,22 @@ const controlApprovalSchema = z
   })
   .strict();
 
+const pendingAuthorizationSchema = z
+  .object({
+    command_id: z.string().min(1),
+    name: z.string().min(1),
+    arguments: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+export type PendingAuthorization = z.infer<typeof pendingAuthorizationSchema>;
+
 const sessionViewSchema = z
   .object({
     status: z.string().min(1),
     waiting_for: z.array(z.string().min(1)),
     pending_authorization_ids: z.array(z.string().min(1)),
+    pending_authorization_commands: z.array(pendingAuthorizationSchema),
     should_wake: z.boolean(),
     has_active_subagents: z.boolean(),
     control_approval: controlApprovalSchema.nullable(),

@@ -1,6 +1,6 @@
 import { Button, Center, Loader, Stack, Text } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -27,8 +27,11 @@ export function DraftRedirect() {
     routeWorkspaceId ??
     defaultWorkspaceId(groupSessions(sessions, workspaces), workspaces);
   const existingDraft = draftSessionId(draftSessions, targetWorkspaceId);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    setOpenError(null);
     if (connectionId === null) {
       return;
     }
@@ -47,15 +50,22 @@ export function DraftRedirect() {
       targetWorkspaceId,
       createSession,
       dispatch,
-    ).then((id) => {
-      if (!cancelled) {
-        navigate(`/sessions/${encodeURIComponent(id)}`, { replace: true });
-      }
-    });
+    )
+      .then((id) => {
+        if (!cancelled) {
+          navigate(`/sessions/${encodeURIComponent(id)}`, { replace: true });
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setOpenError(cause instanceof Error ? cause.message : String(cause));
+        }
+      });
     return () => {
       cancelled = true;
     };
   }, [
+    attempt,
     connectionId,
     createSession,
     dispatch,
@@ -71,6 +81,30 @@ export function DraftRedirect() {
     workspaces.length === 0
   ) {
     return <NoWorkspaceYet />;
+  }
+
+  if (openError !== null) {
+    return (
+      <Center h="100%">
+        <Stack align="center" gap="sm">
+          <Text c="red" fw={600} size="sm">
+            无法打开 Session
+          </Text>
+          <Text c="dimmed" maw={420} size="sm" ta="center">
+            {openError}
+          </Text>
+          <Button
+            onClick={() => {
+              setOpenError(null);
+              setAttempt((value) => value + 1);
+            }}
+            variant="light"
+          >
+            重试
+          </Button>
+        </Stack>
+      </Center>
+    );
   }
 
   return (

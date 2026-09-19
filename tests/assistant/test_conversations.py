@@ -331,6 +331,16 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
             def is_paused(self, session_id):
                 return session_id == "spoken"
 
+            async def view(self, session_id):
+                return SessionView(
+                    "waiting",
+                    ("user_message",),
+                    (),
+                    False,
+                    auto_authorize=self.web_auto_authorize(session_id),
+                    paused=self.is_paused(session_id),
+                )
+
         with TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
             queries = AssistantQueries(store, Idle())

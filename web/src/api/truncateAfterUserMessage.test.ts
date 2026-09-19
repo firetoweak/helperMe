@@ -45,6 +45,7 @@ const conversation: ConversationView = {
     status: "waiting",
     waiting_for: ["user_message"],
     pending_authorization_ids: [],
+    pending_authorization_commands: [],
     should_wake: false,
     has_active_subagents: false,
     control_approval: null,

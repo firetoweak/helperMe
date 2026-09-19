@@ -171,7 +171,10 @@ class AssistantSessions:
         *,
         approved: bool,
     ) -> str:
-        return await self._control.resolve(session_id, approved=approved)
+        message = await self._control.resolve(session_id, approved=approved)
+        # 与命令授权一致：审批结果必须唤醒本轮，否则 agent 不会继续。
+        await self._scheduler.wake(session_id)
+        return message
 
     async def receive_user_message(
         self,

@@ -188,5 +188,5 @@ class AssistantControlPlane:
         return (
             f"{request.summary}\n"
             f"风险：{request.risk}\n"
-            "输入 yes 确认，no 取消。"
+            "输入 yes 确认，no 取消；Web 端可直接点击「确认 / 取消」按钮。"
         )

@@ -27,6 +27,7 @@ import {
   useAuthorizeCommandMutation,
   useEditAndForkMutation,
   useGetConversationQuery,
+  useResolveControlMutation,
   useSelectSessionMutation,
   useSendInputMutation,
   useSetAutoAuthorizeMutation,
@@ -74,6 +75,7 @@ export function Conversation() {
   const [sendInput, sending] = useSendInputMutation();
   const [editAndFork, editing] = useEditAndForkMutation();
   const [authorizeCommand, authorizing] = useAuthorizeCommandMutation();
+  const [resolveControl, resolvingControl] = useResolveControlMutation();
   const [setAutoAuthorize, autoAuthorizing] = useSetAutoAuthorizeMutation();
   const [setPaused, pausing] = useSetPausedMutation();
   const [retryTurn, retrying] = useRetryTurnMutation();
@@ -197,6 +199,13 @@ export function Conversation() {
     } finally {
       dispatch(authorizationResolved({ sessionId, commandId }));
     }
+  }
+
+  async function decideControl(approved: boolean) {
+    if (connectionId === null) {
+      return;
+    }
+    await resolveControl({ connectionId, sessionId, approved }).unwrap();
   }
 
   async function toggleAutoAuthorize(enabled: boolean) {
@@ -388,6 +397,45 @@ export function Conversation() {
           }}
         />
       </Box>
+      <Modal
+        centered
+        closeOnClickOutside={false}
+        closeOnEscape={false}
+        onClose={() => {}}
+        opened={conversation.session.control_approval !== null}
+        title="等待确认"
+        withCloseButton={false}
+      >
+        {conversation.session.control_approval === null ? null : (
+          <Stack gap="md">
+            <Text className="pre-wrap" fz={13}>
+              {conversation.session.control_approval?.summary}
+            </Text>
+            <Text c="dimmed" className="pre-wrap" fz={12}>
+              风险：{conversation.session.control_approval?.risk}
+            </Text>
+            <Group justify="flex-end" gap="xs">
+              <Button
+                color="gray"
+                disabled={resolvingControl.isLoading}
+                leftSection={<IconX size={14} />}
+                onClick={() => void decideControl(false)}
+              >
+                取消
+              </Button>
+              <Button
+                color="sage"
+                disabled={resolvingControl.isLoading}
+                leftSection={<IconCheck size={14} />}
+                loading={resolvingControl.isLoading}
+                onClick={() => void decideControl(true)}
+              >
+                确认
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
       <Modal
         centered
         closeOnClickOutside={false}

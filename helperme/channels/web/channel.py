@@ -176,6 +176,19 @@ class WebChannel:
         view = await self._sessions.view(session_id)
         return await self._queries.conversation(session_id, view=view)
 
+    async def resolve_control(
+        self,
+        connection_id: str,
+        session_id: str,
+        approved: bool,
+    ):
+        self._require_connection(connection_id)
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        await self._sessions.resolve_control(session_id, approved=approved)
+        view = await self._sessions.view(session_id)
+        return await self._queries.conversation(session_id, view=view)
+
     async def set_auto_authorize(
         self,
         connection_id: str,

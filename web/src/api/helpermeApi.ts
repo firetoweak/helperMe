@@ -41,6 +41,10 @@ type AuthorizeCommand = SelectSession & {
   approved: boolean;
 };
 
+type ResolveControl = SelectSession & {
+  approved: boolean;
+};
+
 type SetAutoAuthorize = SelectSession & {
   enabled: boolean;
 };
@@ -242,6 +246,18 @@ export const helpermeApi = createApi({
         putConversation(dispatch, getState, arg.sessionId, data);
       },
     }),
+    resolveControl: build.mutation<ConversationView, ResolveControl>({
+      query: ({ connectionId, sessionId, approved }) => ({
+        url: `/sessions/${encodeURIComponent(sessionId)}/control`,
+        method: "POST",
+        body: { connection_id: connectionId, approved },
+      }),
+      transformResponse: (value: unknown) => conversationViewSchema.parse(value),
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        putConversation(dispatch, getState, arg.sessionId, data);
+      },
+    }),
     setAutoAuthorize: build.mutation<ConversationView, SetAutoAuthorize>({
       query: ({ connectionId, sessionId, enabled }) => ({
         url: `/sessions/${encodeURIComponent(sessionId)}/auto-authorize`,
@@ -294,6 +310,7 @@ export const {
   useUploadAttachmentMutation,
   useCancelTurnMutation,
   useAuthorizeCommandMutation,
+  useResolveControlMutation,
   useSetAutoAuthorizeMutation,
   useSetPausedMutation,
   useRetryTurnMutation,
