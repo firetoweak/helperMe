@@ -53,6 +53,7 @@ class HelperMeHome:
 
     @property
     def cache_root(self) -> Path:
+        # 目前仅用于 tiktoken 编码缓存，唯一消费者是 helperme/llm/adapter.py。
         return self.root / "cache"
 
     @property
