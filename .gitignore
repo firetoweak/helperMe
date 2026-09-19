@@ -9,7 +9,7 @@ docs/.obsidian/
 .codex-remote-attachments/
 
 # 本机专用的实例启动脚本（含绝对路径），不提交
-start-dev.ps1
+start-*.ps1
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
