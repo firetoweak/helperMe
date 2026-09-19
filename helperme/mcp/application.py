@@ -233,7 +233,9 @@ class McpApplicationService:
         record = await self.registry.get(server_id)
         if record is None:
             raise McpServerNotFoundError(f"MCP Server 不存在: {server_id}")
-        return await self._test_record(record)
+        runtime = await self._test_record(record)
+        await self._persist_test_result(server_id, runtime)
+        return runtime
 
     async def test_and_enable(
         self,
@@ -258,11 +260,23 @@ class McpApplicationService:
                     f"current revision {record.revision}"
                 )
             runtime = await self._test_record(record)
+            tested_record = await self._persist_test_result(server_id, runtime)
             if runtime.status is not RuntimeAvailability.AVAILABLE:
-                return ServerActivationResult(record, runtime)
+                return ServerActivationResult(tested_record, runtime)
             enabled = await self.registry.set_enabled(server_id, True)
             await self.client_manager.invalidate(server_id)
             return ServerActivationResult(enabled, runtime)
+
+    async def _persist_test_result(
+        self,
+        server_id: str,
+        runtime: McpServerRuntimeState,
+    ) -> McpServerRecord:
+        return await self.registry.mark_tested(
+            server_id,
+            runtime.status,
+            error_summary=runtime.last_error_summary or "",
+        )
 
     async def _test_record(
         self,

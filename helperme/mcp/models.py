@@ -117,6 +117,9 @@ class McpServerRecord:
     revision: int = 1
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    last_status: RuntimeAvailability = RuntimeAvailability.UNKNOWN
+    last_checked_at: datetime | None = None
+    last_error_summary: str = ""
 
     def __post_init__(self) -> None:
         validate_server_id(self.id)
@@ -147,6 +150,15 @@ class McpServerRecord:
                 raise ValueError("streamable_http transport_config 类型不匹配")
         else:
             raise ValueError(f"不支持的 transport: {self.transport}")
+        if not isinstance(self.last_status, RuntimeAvailability):
+            raise TypeError("last_status 必须是 RuntimeAvailability")
+        if self.last_checked_at is not None and (
+            type(self.last_checked_at) is not datetime
+            or self.last_checked_at.tzinfo is None
+        ):
+            raise TypeError("last_checked_at 必须是带时区的 datetime|null")
+        if type(self.last_error_summary) is not str:
+            raise TypeError("last_error_summary 必须是 string")
 
     @property
     def toolset_id(self) -> str:
@@ -185,10 +197,21 @@ class McpServerRecord:
             "revision": self.revision,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "last_status": self.last_status.value,
+            "last_checked_at": (
+                self.last_checked_at.isoformat()
+                if self.last_checked_at is not None
+                else None
+            ),
+            "last_error_summary": self.last_error_summary,
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "McpServerRecord":
+        payload = dict(payload)
+        payload.setdefault("last_status", "unknown")
+        payload.setdefault("last_checked_at", None)
+        payload.setdefault("last_error_summary", "")
         _require_exact_keys(
             payload,
             {
@@ -201,6 +224,9 @@ class McpServerRecord:
                 "revision",
                 "created_at",
                 "updated_at",
+                "last_status",
+                "last_checked_at",
+                "last_error_summary",
             },
             "MCP server record",
         )
@@ -259,6 +285,16 @@ class McpServerRecord:
             revision=revision,
             created_at=_parse_datetime(payload["created_at"]),
             updated_at=_parse_datetime(payload["updated_at"]),
+            last_status=RuntimeAvailability(payload["last_status"]),
+            last_checked_at=(
+                _parse_datetime(payload["last_checked_at"])
+                if payload["last_checked_at"] is not None
+                else None
+            ),
+            last_error_summary=_require_str(
+                payload["last_error_summary"],
+                "last_error_summary",
+            ),
         )
 
 

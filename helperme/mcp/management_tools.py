@@ -17,11 +17,10 @@ def create_mcp_management_specs(
     service: McpApplicationService,
 ) -> tuple[ToolSpec, ...]:
     async def list_servers(_input: EmptyInput) -> dict:
-        items = await service.list_servers(include_runtime=True)
+        items = await service.list_servers(include_runtime=False)
         servers = []
         for item in items:
             record = item.record
-            runtime = item.runtime
             servers.append({
                 "id": record.id,
                 "display_name": record.display_name,
@@ -29,7 +28,13 @@ def create_mcp_management_specs(
                 "transport": record.transport.value,
                 "enabled": record.enabled,
                 "revision": record.revision,
-                "runtime": runtime.to_dict() if runtime is not None else None,
+                "last_status": record.last_status.value,
+                "last_checked_at": (
+                    record.last_checked_at.isoformat()
+                    if record.last_checked_at is not None
+                    else None
+                ),
+                "last_error_summary": record.last_error_summary or None,
             })
         return {
             "ok": True,
@@ -73,7 +78,8 @@ def create_mcp_management_specs(
         ToolSpec(
             name="list_mcp_servers",
             description=(
-                "列出所有已注册 MCP Server，包括 disabled 项及最近运行状态。"
+                "列出所有已注册 MCP Server，包括 disabled 项及最近测试状态。"
+                "last_status 是上次真实测试结果（unknown 表示从未测试）。"
                 "用户询问某个 MCP 是否安装、可用或可恢复时，应先调用本工具；"
                 "Toolset 目录只包含 enabled 项，不能代替管理状态。"
             ),

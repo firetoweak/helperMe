@@ -443,6 +443,10 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(activation.succeeded)
             self.assertTrue(activation.record.enabled)
             self.assertEqual(activation.record.revision, 2)
+            self.assertEqual(
+                activation.record.last_status,
+                RuntimeAvailability.AVAILABLE,
+            )
 
     async def test_test_and_enable_preserves_disabled_on_failure(self):
         with TemporaryDirectory() as directory:
@@ -474,6 +478,98 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(activation.succeeded)
             self.assertFalse(activation.record.enabled)
             self.assertEqual(activation.record.revision, 1)
+            self.assertEqual(
+                activation.record.last_status,
+                RuntimeAvailability.UNAVAILABLE,
+            )
+
+    async def test_test_server_persists_last_status(self):
+        with TemporaryDirectory() as directory:
+            workspace = HelperMeHome(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_home(workspace)
+            secrets = McpSecretStore.from_home(workspace)
+            manager = McpClientManager(
+                secrets,
+                runtime_root=_runtime_root(workspace),
+            )
+            service = McpApplicationService(registry, secrets, manager)
+            record = await service.upsert_server(
+                server_id="demo",
+                display_name="Demo",
+                transport="stdio",
+                transport_config={"command": "python", "args": []},
+                enabled=False,
+            )
+            self.assertEqual(record.last_status, RuntimeAvailability.UNKNOWN)
+
+            runtime = manager.runtime_state("demo")
+            runtime.mark_available(
+                negotiated_version="2026-07-28",
+                capabilities={"tools": {}},
+            )
+            service._test_record = AsyncMock(return_value=runtime)
+
+            await service.test_server("demo")
+
+            stored = await registry.get("demo")
+            self.assertIsNotNone(stored)
+            self.assertEqual(
+                stored.last_status,
+                RuntimeAvailability.AVAILABLE,
+            )
+            self.assertEqual(stored.revision, 1)
+
+    async def test_mark_tested_persists_and_survives_reload(self):
+        with TemporaryDirectory() as directory:
+            workspace = HelperMeHome(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_home(workspace)
+            secrets = McpSecretStore.from_home(workspace)
+            service = McpApplicationService(
+                registry,
+                secrets,
+                McpClientManager(
+                    secrets,
+                    runtime_root=_runtime_root(workspace),
+                ),
+            )
+            await service.upsert_server(
+                server_id="demo",
+                display_name="Demo",
+                transport="stdio",
+                transport_config={"command": "python", "args": []},
+                enabled=False,
+            )
+
+            await registry.mark_tested(
+                "demo",
+                RuntimeAvailability.UNAVAILABLE,
+                error_summary="connection failed",
+            )
+
+            reloaded_registry = McpRegistry.from_home(workspace)
+            reloaded = await reloaded_registry.get("demo")
+            self.assertIsNotNone(reloaded)
+            self.assertEqual(
+                reloaded.last_status,
+                RuntimeAvailability.UNAVAILABLE,
+            )
+            self.assertEqual(reloaded.last_error_summary, "connection failed")
+            self.assertIsNotNone(reloaded.last_checked_at)
+            self.assertEqual(reloaded.revision, 1)
+
+    async def test_from_dict_compat_without_last_status_fields(self):
+        data = _stdio_record("demo").to_dict()
+        del data["last_status"]
+        del data["last_checked_at"]
+        del data["last_error_summary"]
+
+        restored = McpServerRecord.from_dict(data)
+
+        self.assertEqual(restored.last_status, RuntimeAvailability.UNKNOWN)
+        self.assertIsNone(restored.last_checked_at)
+        self.assertEqual(restored.last_error_summary, "")
 
     async def test_assembly_exposes_agent_management_and_recovery_specs(self):
         with TemporaryDirectory() as directory:

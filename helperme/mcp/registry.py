@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Mapping
 
 from helperme.paths import HelperMeHome
-from helperme.mcp.models import McpServerRecord, utc_now
+from helperme.mcp.models import (
+    McpServerRecord,
+    RuntimeAvailability,
+    utc_now,
+)
 
 
 class McpRegistry:
@@ -99,6 +103,42 @@ class McpRegistry:
                 revision=existing.revision + 1,
                 created_at=existing.created_at,
                 updated_at=utc_now(),
+                last_status=existing.last_status,
+                last_checked_at=existing.last_checked_at,
+                last_error_summary=existing.last_error_summary,
+            )
+            index[server_id] = updated
+            self._write_unlocked(
+                tuple(sorted(index.values(), key=lambda item: item.id))
+            )
+            return updated
+
+    async def mark_tested(
+        self,
+        server_id: str,
+        status: RuntimeAvailability,
+        *,
+        error_summary: str = "",
+    ) -> McpServerRecord:
+        """持久化最近一次测试结果，不改变配置 revision。"""
+        async with self._lock:
+            index = self._index_unlocked()
+            existing = index.get(server_id)
+            if existing is None:
+                raise KeyError(server_id)
+            updated = McpServerRecord(
+                id=existing.id,
+                display_name=existing.display_name,
+                description=existing.description,
+                transport=existing.transport,
+                transport_config=existing.transport_config,
+                enabled=existing.enabled,
+                revision=existing.revision,
+                created_at=existing.created_at,
+                updated_at=utc_now(),
+                last_status=status,
+                last_checked_at=utc_now(),
+                last_error_summary=error_summary,
             )
             index[server_id] = updated
             self._write_unlocked(
