@@ -1,6 +1,6 @@
 # Channel 协议改造
 
-> 状态：架构方向已确认。本轮只确定入口关系和职责边界，不展开详细设计或实施。当前接入行为见 [Channel 接入契约](Channel接入契约.md)，ACP 已接线能力见 [ACP 映射](ACP映射.md)。
+> 状态：架构方向已确认。本文修正四个 Channel 的架构关系与职责边界；Web 已落地，见 [Web](Web.md)。当前接入行为见 [Channel 接入契约](Channel接入契约.md)，ACP 已接线能力见 [ACP 映射](ACP映射.md)。
 
 ## 目标
 
@@ -9,7 +9,7 @@ TUI、Web、ACP、Satori 四个 Channel 平级并存，共享 Assistant 应用�
 | Channel | 职责 | 当前安排 |
 |---|---|---|
 | TUI | 自有终端交互，原生使用 Assistant 应用能力 | 保留独立入口，不迁入 ACP |
-| Web | 自有网页交互，原生使用 Assistant 应用能力 | 确定架构位置，传输与交互细节待设计 |
+| Web | 自有网页交互，原生使用 Assistant 应用能力 | 已落地，见 [Web](Web.md) |
 | ACP | 适配 Obsidian 等外部编辑器与 ACP Client | 保留已有实现与边界约定 |
 | Satori | 适配 IM 平台 | 保留架构方向，当前暂缓 |
 
@@ -20,7 +20,7 @@ ACP ─────┼── Assistant 应用操作 / 查询 ── Host / Worke
 Satori ──┘   （Satori 暂缓）
 ```
 
-平级不要求功能完全一致。TUI 与 Web 可以按产品需要呈现事件级历史、消息分叉等原生能力；ACP 的协议表达范围不构成其他入口的能力上限。这些能力在本文中只是架构动机，不代表已经实现，也不在本轮展开事件切点、分叉语义或接口设计。
+平级不要求功能完全一致。TUI 与 Web 可以按产品需要呈现事件级历史、消息分叉等原生能力；ACP 的协议表达范围不构成其他入口的能力上限。消息分叉（编辑消息分支）已在 Web 落地，见 [Web](Web.md)；本文不再展开 ACP 的事件切点、分叉语义或接口设计。
 
 ## 职责边界
 
@@ -28,7 +28,7 @@ Satori ──┘   （Satori 暂缓）
 
 现有 `AssistantSessions` 是协议无关的应用端口。共享能力沿这条边界按实际需求扩展；Channel 不直接操作 Journal、实现 Runtime 推进循环或维护第二份会话事实。展示从 Journal / Assistant 事实投影，各入口自行适配。
 
-不为四个入口增加宽泛的 Channel 基类、统一消息模型或能力协商框架。入口之间不互相转译，不要求连接生命周期与配置 Schema 相同。Web 的传输方式留待具体设计，不在此指定。
+不为四个入口增加宽泛的 Channel 基类、统一消息模型或能力协商框架。入口之间不互相转译，不要求连接生命周期与配置 Schema 相同。Web 的传输方式（HTTP / SSE）已落地，见 [Web](Web.md)。
 
 TUI 原生接入是正式路径，与 ACP 平级并存不属于兼容双轨。Satori 暂缓期间不启动 Telegram 替换，也不因目标架构尚未实施而删除当前 Telegram 入口。
 
@@ -108,6 +108,6 @@ Journal Event / Assistant lifecycle
 
 ## 当前范围与后续专题
 
-当前仅修正四个 Channel 的架构关系及职责，不安排 TUI / Web 迁入 ACP，不推进 Satori 开发或 Telegram 替换，也不以完成 ACP 闭环作为其他入口的前置条件。
+本文修正四个 Channel 的架构关系及职责，不安排 TUI / Web 迁入 ACP，不推进 Satori 开发或 Telegram 替换，也不以完成 ACP 闭环作为其他入口的前置条件。
 
-事件级历史回看、从历史继续运行与消息分叉留待独立专题讨论；本轮不确定其应用接口、持久结构或执行规则。Satori 的协议字段、identity 映射与平台迁移方案在恢复该专题时再设计。
+消息分叉（编辑消息分支）已在 Web 落地，见 [Web](Web.md)；事件级历史回看与从历史继续运行留待独立专题，本文不确定其应用接口、持久结构或执行规则。Satori 的协议字段、identity 映射与平台迁移方案在恢复该专题时再设计。

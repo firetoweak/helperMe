@@ -2,7 +2,7 @@
 
 > 第四个能力端口：把外部命令行工具（如 `rg`、`gh`）作为"执行空间"接入。
 > 与 MCP / Skill 平级，不并入二者，也不做统一 Plugin 框架。
-> 状态：设计稿，未实现。
+> 状态：已落地。
 
 ## 定位与语义
 
@@ -87,11 +87,11 @@ child_env =
 | profile | 超时 | 参数处理 | 用途 |
 |---|---|---|---|
 | normal | 普通（≤300s） | 非交互 | agent 日常命令 |
-| install | 长超时 | 显式非交互参数（winget `--accept-source-agreements` / `--accept-package-agreements` / `--scope user`） | 包管理器安装 |
+| install | 长超时 | 显式非交互参数（`--accept-source-agreements` / `--accept-package-agreements` / `--scope user`；winget 源后置） | 包管理器安装 |
 
 - install profile 的 ProcessRunner 是**进程级单例**，`build_cli(home, ...)` 时注入 CLI Application，不经过 per-Session 的 EnvironmentBinding——包管理器安装与 workspace 无关。
 - 依赖方向：`helperme/cli → helperme/sandbox`。
-- 第一版只支持 user-scope 安装。需要管理员提权的包明确失败并提示手动安装：UAC 弹窗会使子进程进入另一安全上下文，输出采集断裂，不做。
+- manifest 源只登记本机已安装 CLI，无安装 scope；winget 源（后置）第一版只支持 user-scope 安装。需要管理员提权的包明确失败并提示手动安装：UAC 弹窗会使子进程进入另一安全上下文，输出采集断裂，不做。
 
 ## 体检
 
@@ -140,7 +140,7 @@ helperme/cli/
   models.py            CliRecord / CliSourceRef / CliHealth
   registry.py          CliRegistry（registry.json 原子读写）
   application.py       CliApplicationService（install/uninstall/update/repair/list/inspect/test）
-  installer.py         安装来源执行（manifest / winget；pip / npm / url 后置）
+  installer.py         安装来源执行（manifest；winget / pip / npm / url 后置）
   health.py            体检（--help / --version / 非 TTY / --json）
   management_tools.py  list_installed_clis / inspect_cli / test_cli 的 ToolSpec
   approval.py          propose_cli_* 的 ControlApprovalHandler
@@ -159,7 +159,7 @@ Assistant 边界翻译在 `helperme/assistant/cli.py` 的 `CliToolAdapter`，只
 ```text
 CliRecord
   name            CLI id（^[a-z0-9][a-z0-9-]{0,63}$），如 rg / gh
-  description     单行，≤1000 字符；manifest 源登记时提供，winget 源取自包元数据并压成单行
+  description     单行，≤1000 字符；manifest 源登记时提供（winget 源后置，届时取自包元数据并压成单行）
   source          CliSourceRef{ kind, locator, requested_version }
   version         安装源元数据或 --version 解析出的版本串（失败为空）
   resolved_path   解析出的绝对路径（where.exe / 安装源元数据 / 登记时显式给出；无法解析为 None）
@@ -191,16 +191,16 @@ Registry 信封与 Skill 同构：`{ "version": 1, "clis": [...] }`，原子写�
 package_id / version / architecture / scope
 ```
 
-用户批准的是这个确定候选；执行时按 `--id --exact --version --source` 固定安装。版本被源撤下则执行失败——失败即漂移检测，提示候选已失效、重新 propose。winget manifest 内置 installer hash 校验，HelperMe 不重复做 hash 层。
+用户批准的是这个确定候选；执行时按 `--id --exact --version --source` 固定安装。版本被源撤下则执行失败——失败即漂移检测，提示候选已失效、重新 propose。winget 源（后置）届时用 manifest 内置 installer hash 校验，HelperMe 不重复做 hash 层。
 
 ### repair 语义
 
-- winget 域：按登记的 `version` 固定重装（与 update 的"移动"区分）；`version` 为空则拒绝 repair，提示走 uninstall + install。
 - manifest 域：重新解析 `resolved_path` 并重跑体检。
+- winget 域（后置）：按登记的 `version` 固定重装（与 update 的"移动"区分）；`version` 为空则拒绝 repair，提示走 uninstall + install。
 
 ### 安装源
 
-`kind: manifest | winget`（`pip` / `npm` / `url` 后置）。
+`kind: manifest`（`winget` / `pip` / `npm` / `url` 后置）。
 
 - **manifest**（第一版）：本地声明文件，登记已装/手工安装的 CLI。注册 = 纯登记；update 简化为 refresh（用户自行升级，HelperMe 重跑体检更新 `version`）；PATH 由用户的手工安装保证。
 - **winget**（第二切片）：带着 install profile 与候选冻结一起来。
