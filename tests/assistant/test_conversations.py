@@ -331,15 +331,11 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
             def is_paused(self, session_id):
                 return session_id == "spoken"
 
+            def control_approval(self, session_id):
+                return None
+
             async def view(self, session_id):
-                return SessionView(
-                    "waiting",
-                    ("user_message",),
-                    (),
-                    False,
-                    auto_authorize=self.web_auto_authorize(session_id),
-                    paused=self.is_paused(session_id),
-                )
+                raise AssertionError("读会话不得唤醒 Worker")
 
         with TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
@@ -362,3 +358,46 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed[0].title, "你好")
         self.assertTrue(spoken.session.auto_authorize)
         self.assertTrue(spoken.session.paused)
+
+    async def test_conversation_takes_control_approval_from_host_mirror(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from helperme.assistant.control import ControlApprovalView
+        from helperme.assistant.conversations import AssistantQueries
+        from helperme.assistant.host.session_store import SessionStore
+        from helperme.runtime import SqliteJournal
+        from helperme.runtime.events import DeliveryIdentity, EventDraft
+
+        class Mirror:
+            def activity(self, session_id):
+                return "idle"
+
+            def web_auto_authorize(self, session_id):
+                return None
+
+            def is_paused(self, session_id):
+                return None
+
+            def control_approval(self, session_id):
+                return ControlApprovalView("req-1", "删除工作区", "high")
+
+            async def view(self, session_id):
+                raise AssertionError("读会话不得唤醒 Worker")
+
+        with TemporaryDirectory() as directory:
+            store = SessionStore(Path(directory))
+            queries = AssistantQueries(store, Mirror())
+            await store.create("spoken", workspace_id="workspace-1")
+            await SqliteJournal(store.require("spoken")).accept_delivery(
+                EventDraft(
+                    event_id="user-1",
+                    session_id="spoken",
+                    payload=UserMessageReceived("删掉它"),
+                    occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+                    delivery=DeliveryIdentity("web", "d1"),
+                )
+            )
+            conversation = await queries.conversation("spoken")
+
+        self.assertEqual(conversation.session.control_approval.request_id, "req-1")

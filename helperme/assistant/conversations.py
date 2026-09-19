@@ -7,8 +7,8 @@ from typing import Literal
 
 from helperme.assistant.delivery import DELIVER_TOOL_NAME
 from helperme.assistant.host.session_store import SessionStore
-from helperme.assistant.sessions import SessionView
-from helperme.assistant.subagent.subagent import project_parent
+from helperme.assistant.sessions import SessionView, session_view
+from helperme.assistant.subagent.subagent import project_parent, project_pending
 from helperme.assistant.workspaces import bound_workspace_id
 from helperme.runtime import (
     CommandPhase,
@@ -138,9 +138,15 @@ class AssistantQueries:
         ).snapshot(session_id)
         state = replay(session_id, events).state
         if view is None:
-            # 控制面待审批只存在于 Session 进程内，必须经 Host 请求取回，
-            # 否则这里拼出的视图永远看不到 control_approval。
-            view = await self._sessions.view(session_id)
+            # 只读投影：control_approval 取 Host 持有的 Worker 镜像，
+            # 不能改成 Host 请求，那会唤醒 Worker 并把读当成运行广播出去。
+            view = session_view(
+                state,
+                has_active_subagents=bool(project_pending(events)),
+                control_approval=self._sessions.control_approval(session_id),
+                auto_authorize=self._sessions.web_auto_authorize(session_id),
+                paused=self._sessions.is_paused(session_id),
+            )
         return project_conversation(
             session_id,
             events,

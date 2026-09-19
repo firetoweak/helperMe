@@ -91,6 +91,8 @@ class HostSupervisor:
         self.job = WindowsJob.create() if os.name == "nt" else None
         self._auto_authorize = AutoAuthorizeStore(store.root)
         self._pause = SessionPauseStore(store.root)
+        # Worker 内存态的镜像：读会话不必为了它唤醒 Worker。
+        self._control_approvals: dict[str, object] = {}
         self.workspaces = (
             workspaces
             if workspaces is not None
@@ -207,6 +209,8 @@ class HostSupervisor:
                         await emitted
             elif kind == "session_failed":
                 await self._emit_session_failed(*values)
+            elif kind == "control_approval":
+                self._control_approvals[session_id] = values[0]
             elif kind == "idle":
                 worker.idle_revision = values[0]
                 worker.idle_has_active_subagents = values[1]
@@ -317,6 +321,7 @@ class HostSupervisor:
             worker.peer.connection.close()
             worker.process.close()
             self.workers.pop(session_id)
+            self._control_approvals.pop(session_id, None)
             worker.exited.set()
             worker.transition.set()
             worker.changed.set()
@@ -427,6 +432,9 @@ class HostSupervisor:
 
     def is_paused(self, session_id):
         return self._pause.get(session_id)
+
+    def control_approval(self, session_id):
+        return self._control_approvals.get(session_id)
 
     def _owners_of(self, session_id):
         return tuple(

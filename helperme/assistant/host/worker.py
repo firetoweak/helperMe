@@ -54,6 +54,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
     ready = asyncio.Event()
     revision = 0
     advertised = -1
+    advertised_approval = None
 
     async def handle(operation, target, arguments):
         nonlocal revision, active_requests
@@ -188,7 +189,12 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                     and advertised != revision
                 ):
                     view = await assembly.sessions.view(session_id)
-                    # Control proposals currently live in this Worker until resolved.
+                    # Control proposals live in this Worker until resolved. The Host
+                    # mirrors them so that reading a conversation never has to wake
+                    # this process.
+                    if view.control_approval != advertised_approval:
+                        advertised_approval = view.control_approval
+                        await peer.send(("control_approval", view.control_approval))
                     if view.control_approval is None:
                         advertised = revision
                         await peer.send(
