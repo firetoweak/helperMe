@@ -124,7 +124,110 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolArgumentsError):
             spec.parameters.validate(base)
 
-    async def test_rejects_secret_fields(self):
+    async def test_accepts_http_headers_and_bearer(self):
+        spec = self._spec()
+        input_data = spec.parameters.validate({
+            "server_id": "remote",
+            "display_name": "Remote",
+            "transport": "streamable_http",
+            "url": "https://example.com/mcp",
+            "source": "user_input",
+            "headers": {"X-API-Key": "secret-value"},
+            "bearer": "token-value",
+        })
+
+        result = await spec.handler(input_data)
+
+        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertEqual(
+            result.payload["transport_config"]["headers"],
+            {"X-API-Key": "secret-value"},
+        )
+        self.assertEqual(
+            result.payload["transport_config"]["bearer"],
+            "token-value",
+        )
+        self.assertNotIn("secret-value", result.summary)
+        self.assertNotIn("token-value", result.summary)
+        self.assertIn('"X-API-Key": "***"', result.summary)
+
+    async def test_accepts_stdio_env(self):
+        spec = self._spec()
+        input_data = spec.parameters.validate({
+            "server_id": "tavily",
+            "display_name": "Tavily",
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "tavily-mcp"],
+            "env": {"TAVILY_API_KEY": "secret-value"},
+            "source": "user_input",
+        })
+
+        result = await spec.handler(input_data)
+
+        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertEqual(
+            result.payload["transport_config"]["env"],
+            {"TAVILY_API_KEY": "secret-value"},
+        )
+        self.assertNotIn("secret-value", result.summary)
+        self.assertIn('"TAVILY_API_KEY": "***"', result.summary)
+
+    async def test_keeps_http_url_query_for_normalization(self):
+        spec = self._spec()
+        input_data = spec.parameters.validate({
+            "server_id": "tavily",
+            "display_name": "Tavily",
+            "transport": "streamable_http",
+            "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=secret-value",
+            "source": "user_input",
+        })
+
+        result = await spec.handler(input_data)
+
+        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertEqual(
+            result.payload["transport_config"]["url"],
+            "https://mcp.tavily.com/mcp/?tavilyApiKey=secret-value",
+        )
+        self.assertNotIn("secret-value", result.summary)
+        self.assertIn("?<redacted>", result.summary)
+
+    async def test_rejects_http_url_userinfo(self):
+        spec = self._spec()
+        with self.assertRaises(ToolArgumentsError):
+            spec.parameters.validate({
+                "server_id": "remote",
+                "display_name": "Remote",
+                "transport": "streamable_http",
+                "url": "https://user:pass@example.com/mcp",
+                "source": "user_input",
+            })
+
+    async def test_rejects_stdio_with_headers_or_bearer(self):
+        spec = self._spec()
+        with self.assertRaises(ToolArgumentsError):
+            spec.parameters.validate({
+                "server_id": "remote",
+                "display_name": "Remote",
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["server"],
+                "source": "user_input",
+                "headers": {"Authorization": "secret"},
+            })
+        with self.assertRaises(ToolArgumentsError):
+            spec.parameters.validate({
+                "server_id": "remote",
+                "display_name": "Remote",
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["server"],
+                "source": "user_input",
+                "bearer": "secret",
+            })
+
+    async def test_rejects_http_with_env(self):
         spec = self._spec()
         with self.assertRaises(ToolArgumentsError):
             spec.parameters.validate({
@@ -133,7 +236,7 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
                 "transport": "streamable_http",
                 "url": "https://example.com/mcp",
                 "source": "user_input",
-                "headers": {"Authorization": "secret"},
+                "env": {"KEY": "secret"},
             })
 
     async def test_existing_id_is_not_silently_overwritten(self):

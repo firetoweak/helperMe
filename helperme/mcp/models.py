@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 
 _SERVER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
+# Streamable HTTP 把「URL query 整段」当作单个 Secret 抽取时的逻辑名。
+QUERY_SECRET_KEY = "__url_query__"
+
 
 def validate_server_id(server_id: str) -> str:
     if type(server_id) is not str or not _SERVER_ID_PATTERN.fullmatch(server_id):
@@ -65,6 +68,7 @@ class StdioTransportConfig:
 class StreamableHttpTransportConfig:
     url: str
     header_refs: Mapping[str, str] = field(default_factory=dict)
+    query_refs: Mapping[str, str] = field(default_factory=dict)
     timeout_seconds: float = 30.0
 
     def __post_init__(self) -> None:
@@ -90,7 +94,13 @@ class StreamableHttpTransportConfig:
             for key, value in self.header_refs.items()
         ):
             raise TypeError("header_refs 必须是 string mapping")
+        if not isinstance(self.query_refs, Mapping) or any(
+            type(key) is not str or type(value) is not str
+            for key, value in self.query_refs.items()
+        ):
+            raise TypeError("query_refs 必须是 string mapping")
         object.__setattr__(self, "header_refs", dict(self.header_refs))
+        object.__setattr__(self, "query_refs", dict(self.query_refs))
 
 
 TransportConfig = StdioTransportConfig | StreamableHttpTransportConfig
@@ -147,7 +157,7 @@ class McpServerRecord:
         config = self.transport_config
         if isinstance(config, StdioTransportConfig):
             return dict(config.env_refs)
-        return dict(config.header_refs)
+        return {**dict(config.header_refs), **dict(config.query_refs)}
 
     def to_dict(self) -> dict[str, Any]:
         config = self.transport_config
@@ -162,6 +172,7 @@ class McpServerRecord:
             transport_config = {
                 "url": config.url,
                 "header_refs": dict(config.header_refs),
+                "query_refs": dict(config.query_refs),
                 "timeout_seconds": config.timeout_seconds,
             }
         return {
@@ -210,9 +221,11 @@ class McpServerRecord:
                 env_refs=_require_string_map(raw_config["env_refs"], "env_refs"),
             )
         else:
+            raw_config = dict(raw_config)
+            raw_config.setdefault("query_refs", {})
             _require_exact_keys(
                 raw_config,
-                {"url", "header_refs", "timeout_seconds"},
+                {"url", "header_refs", "query_refs", "timeout_seconds"},
                 "streamable_http transport_config",
             )
             timeout = raw_config["timeout_seconds"]
@@ -223,6 +236,10 @@ class McpServerRecord:
                 header_refs=_require_string_map(
                     raw_config["header_refs"],
                     "header_refs",
+                ),
+                query_refs=_require_string_map(
+                    raw_config["query_refs"],
+                    "query_refs",
                 ),
                 timeout_seconds=float(timeout),
             )

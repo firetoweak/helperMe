@@ -25,6 +25,7 @@ from mcp.types import (
 )
 
 from helperme.mcp.models import (
+    QUERY_SECRET_KEY,
     McpServerRecord,
     McpServerRuntimeState,
     StdioTransportConfig,
@@ -484,15 +485,18 @@ class _SdkConnectionOwner:
                 self._record.transport_config,
             )
             read_timeout = config.timeout_seconds
+            secrets = dict(self._secrets)
+            query = secrets.pop(QUERY_SECRET_KEY, None)
+            url = config.url + (f"?{query}" if query else "")
             http_client = await stack.enter_async_context(
                 httpx2.AsyncClient(
-                    headers=dict(self._secrets),
+                    headers=secrets,
                     timeout=read_timeout,
                     follow_redirects=False,
                 )
             )
             transport = streamable_http_client(
-                config.url,
+                url,
                 http_client=http_client,
             )
         client = await stack.enter_async_context(

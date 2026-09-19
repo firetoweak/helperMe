@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import PurePath
 from typing import Any, Literal, Mapping
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -42,7 +43,10 @@ class McpInstallProposalInput(BaseModel):
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     cwd: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    bearer: str | None = None
     timeout_seconds: float = 30.0
     source: Literal["user_input", "official_documentation", "registry"]
 
@@ -53,6 +57,10 @@ class McpInstallProposalInput(BaseModel):
                 raise ValueError("stdio proposal 必须提供 command")
             if self.url is not None:
                 raise ValueError("stdio proposal 不能提供 url")
+            if self.headers or self.bearer is not None:
+                raise ValueError(
+                    "stdio 的密钥请填 env，不要填 headers/bearer"
+                )
             executable = PurePath(self.command).name.lower()
             if executable in _SHELL_EXECUTABLES:
                 raise ValueError("MCP stdio 不接受 Shell 解释器作为 command")
@@ -67,19 +75,36 @@ class McpInstallProposalInput(BaseModel):
                 raise ValueError(
                     "streamable_http proposal 不能提供 command/args/cwd"
                 )
+            if self.env:
+                raise ValueError(
+                    "streamable_http 的鉴权请填 headers 或 bearer，不要填 env"
+                )
+            parsed = urlsplit(self.url)
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError(
+                    "streamable_http URL 不能包含 userinfo 凭据"
+                )
         return self
 
     def transport_config(self) -> dict[str, Any]:
         if self.transport == "stdio":
-            return {
+            config = {
                 "command": self.command,
                 "args": list(self.args),
                 "cwd": self.cwd,
             }
-        return {
+            if self.env:
+                config["env"] = self.env
+            return config
+        config = {
             "url": self.url,
             "timeout_seconds": self.timeout_seconds,
         }
+        if self.headers:
+            config["headers"] = self.headers
+        if self.bearer is not None:
+            config["bearer"] = self.bearer
+        return config
 
     def frozen_payload(self) -> dict[str, Any]:
         return {
@@ -103,12 +128,32 @@ class McpInstallProposalInput(BaseModel):
                 "Arguments：" + json.dumps(self.args, ensure_ascii=False),
                 f"Working directory：{self.cwd or '(Server 私有 runtime 目录)'}",
             ])
+            if self.env:
+                lines.append(
+                    "Env：" + json.dumps(
+                        {key: "***" for key in self.env},
+                        ensure_ascii=False,
+                    )
+                )
         else:
-            lines.extend([
-                f"URL：{self.url}",
-                f"Timeout：{self.timeout_seconds}s",
-            ])
+            lines.append(f"URL：{self._display_url()}")
+            if self.headers:
+                lines.append(
+                    "Headers：" + json.dumps(
+                        {key: "***" for key in self.headers},
+                        ensure_ascii=False,
+                    )
+                )
+            if self.bearer is not None:
+                lines.append("Bearer：***")
+            lines.append(f"Timeout：{self.timeout_seconds}s")
         return "\n".join(lines)
+
+    def _display_url(self) -> str:
+        parsed = urlsplit(self.url or "")
+        if not parsed.query:
+            return self.url or ""
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}?<redacted>"
 
 
 def create_mcp_install_proposal_spec(
@@ -146,7 +191,10 @@ def create_mcp_install_proposal_spec(
         description=(
             "在用户要求安装 MCP Server 时，整理完整配置并提交待确认方案。"
             "信息不足时先在普通对话中询问；不得猜测路径、URL、Secret 或未经验证的包名。"
-            "只接受单进程 stdio 启动配置或无 Secret 的 HTTP URL。"
+            "stdio：填 command/args/cwd，密钥填 env；"
+            "streamable_http：填 url，鉴权信息填 headers 或 bearer，"
+            "也可把密钥直接写在 url 的 query 里。"
+            "禁止用 user:pass@host 的形式在 url 里带凭据。"
             "本工具必须单独调用。"
         ),
         parameters=PydanticParameters(McpInstallProposalInput),

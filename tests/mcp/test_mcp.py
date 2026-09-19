@@ -46,6 +46,7 @@ from helperme.mcp.client_manager import (
 )
 from helperme.mcp.composition import build_mcp
 from helperme.mcp.models import (
+    QUERY_SECRET_KEY,
     McpServerRecord,
     RuntimeAvailability,
     StdioTransportConfig,
@@ -284,6 +285,86 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(
                 (workspace.mcp_root / "secrets" / "demo.json").exists()
             )
+
+    async def test_streamable_http_url_query_is_extracted_as_secret(self):
+        with TemporaryDirectory() as directory:
+            workspace = HelperMeHome(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_home(workspace)
+            secrets = McpSecretStore.from_home(workspace)
+            service = McpApplicationService(
+                registry,
+                secrets,
+                McpClientManager(
+                    secrets,
+                    runtime_root=_runtime_root(workspace),
+                ),
+            )
+            record = await service.upsert_server(
+                server_id="tavily",
+                display_name="Tavily",
+                transport="streamable_http",
+                transport_config={
+                    "url": (
+                        "https://mcp.tavily.com/mcp/"
+                        "?tavilyApiKey=secret-value"
+                    ),
+                },
+                enabled=False,
+            )
+
+            config = record.transport_config
+            self.assertIsInstance(config, StreamableHttpTransportConfig)
+            self.assertEqual(config.url, "https://mcp.tavily.com/mcp/")
+            self.assertIn(QUERY_SECRET_KEY, config.query_refs)
+            self.assertNotIn(
+                "secret-value",
+                registry.path.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                secrets.snapshot_namespace("tavily"),
+                {QUERY_SECRET_KEY: "tavilyApiKey=secret-value"},
+            )
+            self.assertEqual(
+                record.credential_refs[QUERY_SECRET_KEY],
+                secrets.ref_for("tavily", QUERY_SECRET_KEY),
+            )
+
+    async def test_streamable_http_query_refs_roundtrip(self):
+        with TemporaryDirectory() as directory:
+            workspace = HelperMeHome(Path(directory) / ".helperme")
+            workspace.initialize()
+            registry = McpRegistry.from_home(workspace)
+            secrets = McpSecretStore.from_home(workspace)
+            service = McpApplicationService(
+                registry,
+                secrets,
+                McpClientManager(
+                    secrets,
+                    runtime_root=_runtime_root(workspace),
+                ),
+            )
+            record = await service.upsert_server(
+                server_id="tavily",
+                display_name="Tavily",
+                transport="streamable_http",
+                transport_config={
+                    "url": "https://mcp.tavily.com/mcp/?a=1&b=2",
+                },
+                enabled=False,
+            )
+
+            restored = McpServerRecord.from_dict(record.to_dict())
+
+            self.assertEqual(
+                restored.transport_config.url,
+                record.transport_config.url,
+            )
+            self.assertEqual(
+                restored.transport_config.query_refs,
+                record.transport_config.query_refs,
+            )
+            self.assertEqual(restored.credential_refs, record.credential_refs)
 
     async def test_agent_management_tools_find_and_test_disabled_server(self):
         with TemporaryDirectory() as directory:

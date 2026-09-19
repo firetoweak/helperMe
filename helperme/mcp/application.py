@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from helperme.mcp.client_manager import McpClientError, McpClientManager
 from helperme.mcp.content import McpContentService
@@ -12,6 +13,7 @@ from helperme.mcp.errors import (
     McpServerNotFoundError,
 )
 from helperme.mcp.models import (
+    QUERY_SECRET_KEY,
     McpServerRecord,
     McpServerRuntimeState,
     RuntimeAvailability,
@@ -381,23 +383,49 @@ class McpApplicationService:
                 if not bearer:
                     raise ValueError("HTTP bearer 不能为空")
                 prepared_secrets["Authorization"] = f"Bearer {bearer}"
+            parsed_url = urlsplit(url)
+            if parsed_url.query:
+                prepared_secrets[QUERY_SECRET_KEY] = parsed_url.query
+                url = urlunsplit(
+                    (
+                        parsed_url.scheme,
+                        parsed_url.netloc,
+                        parsed_url.path,
+                        "",
+                        "",
+                    )
+                )
+            existing_header_refs = (
+                dict(existing.transport_config.header_refs)
+                if existing is not None
+                and isinstance(
+                    existing.transport_config,
+                    StreamableHttpTransportConfig,
+                )
+                else {}
+            )
+            existing_query_refs = (
+                dict(existing.transport_config.query_refs)
+                if existing is not None
+                and isinstance(
+                    existing.transport_config,
+                    StreamableHttpTransportConfig,
+                )
+                else {}
+            )
             refs = self._resolve_refs(
                 server_id=server_id,
                 existing=existing,
                 prepared_secrets=prepared_secrets,
-                existing_refs=(
-                    dict(existing.transport_config.header_refs)
-                    if existing is not None
-                    and isinstance(
-                        existing.transport_config,
-                        StreamableHttpTransportConfig,
-                    )
-                    else {}
-                ),
+                existing_refs={**existing_header_refs, **existing_query_refs},
             )
+            query_refs: dict[str, str] = {}
+            if QUERY_SECRET_KEY in refs:
+                query_refs = {QUERY_SECRET_KEY: refs.pop(QUERY_SECRET_KEY)}
             config = StreamableHttpTransportConfig(
                 url=url,
                 header_refs=refs,
+                query_refs=query_refs,
                 timeout_seconds=float(timeout),
             )
         return kind, prepared_secrets, config
