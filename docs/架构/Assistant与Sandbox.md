@@ -65,4 +65,4 @@ Sandbox 不 import Assistant、Runtime 或 Tools；Runtime 也不 import Sandbox
 
 ## 配置
 
-`~/.helperme/config.json`：模型、Runtime 与 Channel 配置的统一用户入口。工作区不在这份配置里，只存在 `~/.helperme/workspaces.json`。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置包含 model_context_limit、input_budget_ratio、compact_threshold_ratio 与 loop_guard_repeat_threshold。每个活跃 Session 在独立 Worker 进程中推进，见[多活跃会话](多活跃会话.md)。
+`~/.helperme/config.json`：模型、Runtime 与 Channel 配置的统一用户入口。`~/.helperme` 是 `HelperMeHome` 的默认位置，设置 `HELPERME_HOME` 会整体改写数据根，config 与全部产品数据一起搬走；`HELPERME_CONFIG` 只单独改写配置文件路径。同一台机器上并行运行多个实例必须分开数据根，见[自举开发](../自举开发.md)。工作区不在这份配置里，只存在 `~/.helperme/workspaces.json`。首次启动缺少默认配置时，Host 创建带占位值的初始 JSON，提示用户编辑后结束本次启动。配置只在启动边界严格解析为各领域的内部类型，消费者不直接读取 JSON。Runtime 配置包含 model_context_limit、input_budget_ratio、compact_threshold_ratio 与 loop_guard_repeat_threshold。每个活跃 Session 在独立 Worker 进程中推进，见[多活跃会话](多活跃会话.md)。

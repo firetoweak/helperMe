@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,12 @@ class HelperMeHomeTest(unittest.TestCase):
             home = HelperMeHome.default()
 
         self.assertEqual(home.root, Path("C:/Users/test/.helperme").resolve())
+
+    def test_environment_overrides_default_root(self):
+        with patch.dict(os.environ, {"HELPERME_HOME": "C:/instances/agent"}):
+            home = HelperMeHome.default()
+
+        self.assertEqual(home.root, Path("C:/instances/agent").resolve())
 
     def test_layout_contains_product_data_roots(self):
         with tempfile.TemporaryDirectory() as directory:

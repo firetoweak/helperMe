@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+
+HOME_PATH_ENV = "HELPERME_HOME"
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +19,8 @@ class HelperMeHome:
 
     @classmethod
     def default(cls) -> "HelperMeHome":
+        if HOME_PATH_ENV in os.environ:
+            return cls(Path(os.environ[HOME_PATH_ENV]))
         return cls(Path.home() / ".helperme")
 
     @property

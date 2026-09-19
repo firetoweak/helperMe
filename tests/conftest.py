@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 
 collect_ignore = []
 if os.environ.get("HELPERME_RUN_LIVE_TESTS") != "1":
@@ -27,6 +29,12 @@ def pytest_collection_modifyitems(config, items):
         return
     config.hook.pytest_deselected(items=process_items)
     items[:] = [item for item in items if item.get_closest_marker("process") is None]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_helperme_home(monkeypatch):
+    """测试进程可能由一个设了 HELPERME_HOME 的 HelperMe 实例派生。"""
+    monkeypatch.delenv("HELPERME_HOME", raising=False)
 
 
 def pytest_report_header(config):

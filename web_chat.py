@@ -18,6 +18,12 @@ def main(argv: list[str] | None = None) -> None:
         help="同时启动 Vite 开发服务器",
     )
     parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Web 服务端口",
+    )
+    parser.add_argument(
         "--workspace",
         type=Path,
         default=None,
@@ -39,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
                 workspace_path=args.workspace
             ),
             host="127.0.0.1",
-            port=8765,
+            port=args.port,
             reload=args.dev,
             reload_dirs=[str(Path(__file__).parent)] if args.dev else None,
             timeout_graceful_shutdown=1,

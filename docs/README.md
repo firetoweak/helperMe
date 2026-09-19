@@ -17,6 +17,7 @@
 | 文档 | 用途 |
 |---|---|
 | [模型配置](模型配置.md) | DeepSeek、OpenAI、Claude、Gemini、Azure、OpenRouter、vLLM、Ollama 可复制配置 |
+| [自举开发](自举开发.md) | 用 HelperMe 开发 HelperMe：双 worktree、数据根与端口隔离 |
 
 ## 架构
 
