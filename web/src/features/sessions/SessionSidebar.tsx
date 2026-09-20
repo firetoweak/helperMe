@@ -16,8 +16,6 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import {
-  IconChevronDown,
-  IconChevronRight,
   IconFolder,
   IconFolderPlus,
   IconMessageCircle,
@@ -154,7 +152,7 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
             </ActionIcon>
           </Tooltip>
         </Group>
-        <ScrollArea className="session-scroll" offsetScrollbars type="hover">
+        <ScrollArea className="session-scroll" type="hover">
           {isLoading ? (
             <Stack gap={8} mt="xs" px={6}>
               <Skeleton h={38} radius="md" />
@@ -207,23 +205,16 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
                       className="workspace-toggle"
                       onClick={() => toggleWorkspace(workspace.id)}
                     >
-                      <Group gap={6} justify="space-between" wrap="nowrap">
-                        <Group gap={6} wrap="nowrap">
-                          <IconFolder size={14} />
-                          <Text
-                            className="workspace-name"
-                            fw={600}
-                            fz={12}
-                            truncate
-                          >
-                            {workspace.name}
-                          </Text>
-                        </Group>
-                        {collapsed ? (
-                          <IconChevronRight size={14} />
-                        ) : (
-                          <IconChevronDown size={14} />
-                        )}
+                      <Group gap={6} wrap="nowrap">
+                        <IconFolder size={14} />
+                        <Text
+                          className="workspace-name"
+                          fw={600}
+                          fz={12}
+                          truncate
+                        >
+                          {workspace.name}
+                        </Text>
                       </Group>
                     </UnstyledButton>
                     <Tooltip
