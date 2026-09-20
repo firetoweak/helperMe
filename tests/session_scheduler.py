@@ -73,19 +73,14 @@ async def settle_session(
     *,
     control: AssistantControlPlane | None = None,
 ) -> SettledSession:
-    messages: list[str] = []
     scheduler = SettlingScheduler(
         runtime,
         session_id,
         control=control,
-        notify=lambda _session_id, message: messages.append(message),
     )
     try:
         await scheduler.wake(session_id)
         await scheduler.join()
-        return SettledSession(
-            await runtime.state(session_id),
-            messages[-1] if messages else None,
-        )
+        return SettledSession(await runtime.state(session_id))
     finally:
         await scheduler.close()

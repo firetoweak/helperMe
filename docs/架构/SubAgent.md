@@ -100,7 +100,7 @@ Scheduler 报告两种终局：静止（`on_quiesced`）与已识别的失败（
 
 ## 对外不可见
 
-子 Session 的 `deliver` 经 `routed_sink` 变成空操作，正文留在子自己的 Journal 里。失败提示同样不外露：`notify` 与 deliver 走同一条路由。用户该看到的是父转述后的判断，而不是一条不知来处的裸错误。父自己失败仍照常送达——拦的是子，不是所有失败。
+子 Session 的 `deliver` 经 `routed_sink` 变成空操作，正文留在子自己的 Journal 里。失败提示同样不外露：`session_failed` 在子 Session 上被吞掉。用户该看到的是父转述后的判断，而不是一条不知来处的裸错误。父自己失败仍照常送达——拦的是子，不是所有失败。
 
 唯一外露的是一个活动指示：`SubAgentHost` 接受可选的 `activity_sink`，TUI 状态行据此显示「子 Agent 工作中」。它读的是进程内缓存 `_visible_pending` 而不是 Journal 投影，且经 `call_soon` 异步发出——**这条线只管显示，不进入委派与回收的执行闭环**。执行判断始终从 Journal 投影。两者不混用：显示可以丢、可以过期，执行判断不行。
 

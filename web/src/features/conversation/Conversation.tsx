@@ -160,6 +160,7 @@ export function Conversation() {
     runtime?.tools ?? {},
     runtime?.committedThinking ?? {},
     runtime?.activeThinking ?? null,
+    runtime?.activity ?? null,
   );
   const turns = timelineTurns(items);
   const running = runtime?.activity === "running";

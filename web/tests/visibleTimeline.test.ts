@@ -83,13 +83,40 @@ describe("visibleTimeline", () => {
       pending: true,
     });
     expect(
-      visibleTimeline(empty, { "user-1": "最终" }, null, {})[1],
+      visibleTimeline(
+        empty,
+        { "user-1": "最终" },
+        null,
+        {},
+        {},
+        null,
+        "running",
+      )[1],
     ).toMatchObject({
       key: "output:user-1",
       kind: "step",
       text: "最终",
       pending: true,
     });
+  });
+
+  it("drops orphan committed output after the session is idle", () => {
+    const empty: ConversationView = {
+      ...conversation,
+      revision: 1,
+      items: [conversation.items[0]],
+    };
+    const visible = visibleTimeline(
+      empty,
+      { "notification-1": '{"code":"SKILL_SOURCE_ERROR"}' },
+      null,
+      {},
+      {},
+      null,
+      "idle",
+    );
+    expect(visible).toHaveLength(1);
+    expect(visible[0]).toMatchObject({ kind: "user" });
   });
 
   it("mounts an empty pending step as soon as preview starts", () => {

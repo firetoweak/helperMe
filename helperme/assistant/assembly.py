@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from uuid import uuid4
 
 from helperme.assistant.artifacts import (
     READ_ARTIFACT_SCHEMA,
@@ -21,7 +20,6 @@ from helperme.assistant.delivery import (
     DELIVER_TOOL_NAME,
     PreviewEmitter,
     deliver_binding,
-    emit_delivery,
 )
 from helperme.assistant.context.projection import (
     ModelContextProjector,
@@ -151,14 +149,6 @@ async def build_assistant_assembly(
     preview = PreviewEmitter(preview_sink, thinking_sink)
     delivery_sink = subagents.routed_sink(sink)
 
-    async def notify(session_id: str, text: str) -> None:
-        await emit_delivery(
-            delivery_sink,
-            session_id,
-            f"notification-{uuid4().hex}",
-            text,
-        )
-
     async def report_session_failed(session_id: str, text: str) -> None:
         if subagents.is_subagent(session_id) or session_failed_sink is None:
             return
@@ -240,9 +230,7 @@ async def build_assistant_assembly(
         runtime,
         session_id,
         control=control,
-        # 失败与控制面提示同样是子 Session 的对外输出，一样不外露：
-        # 用户该看到的是父转述后的判断，不是一条不知来处的裸错误。
-        notify=notify,
+        # 子 Session 失败提示不外露：用户该看到的是父转述后的判断。
         on_quiesced=subagents.on_quiesced,
         on_failed=subagents.on_failed,
         session_failed=report_session_failed,

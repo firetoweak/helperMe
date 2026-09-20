@@ -343,7 +343,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     await assembly.scheduler.close()
 
     async def test_session_endings_are_wired_to_the_subagent_host(self):
-        """静止、失败、对外输出三条线都要落到 SubAgentHost。
+        """静止与失败两条线都要落到 SubAgentHost。
 
         漏接 on_failed，子 Session 撞上模型失败就既不静止也不回收，父会拿着
         一个永远清不空的待回收集合一直等下去。
@@ -403,8 +403,6 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     )
 
                     assembly.subagents._parents["parent/sub-1"] = "parent"
-                    await scheduler._emit("parent/sub-1", "运行失败：上游 500")
-                    await scheduler._emit("parent", "父转述后的判断")
                     await scheduler._emit_session_failed(
                         "parent/sub-1", "运行失败：上游 500"
                     )
@@ -416,7 +414,7 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     assembly.subagents._publish_activity("parent")
                     await asyncio.sleep(0)
 
-                    self.assertEqual(delivered, [("parent", "父转述后的判断")])
+                    self.assertEqual(delivered, [])
                     self.assertEqual(failed, [("parent", "运行失败：父自己的错误")])
                     self.assertEqual(activity, [("parent", True)])
                 finally:

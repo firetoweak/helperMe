@@ -11,9 +11,11 @@ from helperme.mcp.secrets import McpSecretStore
 from helperme.mcp.approval import (
     McpInstallApprovalHandler,
     McpRecoveryApprovalHandler,
+    McpRemoveApprovalHandler,
     McpUpdateApprovalHandler,
     create_mcp_install_proposal_spec,
     create_mcp_recovery_proposal_spec,
+    create_mcp_remove_proposal_spec,
     create_mcp_update_proposal_spec,
 )
 from helperme.mcp.management_tools import create_mcp_management_specs
@@ -70,6 +72,11 @@ def build_mcp(
             "mcp",
             create_mcp_update_proposal_spec(service),
             McpUpdateApprovalHandler(service),
+        ),
+        ControlOperation(
+            "mcp",
+            create_mcp_remove_proposal_spec(service),
+            McpRemoveApprovalHandler(service),
         ),
     )
     return McpAssembly(

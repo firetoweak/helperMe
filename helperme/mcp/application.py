@@ -218,11 +218,30 @@ class McpApplicationService:
             await self.client_manager.invalidate(server_id)
             return record
 
-    async def remove_server(self, server_id: str) -> McpServerRecord:
+    async def remove_server(
+        self,
+        server_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> McpServerRecord:
         async with self._management_lock:
-            if await self.registry.get(server_id) is None:
-                raise McpServerNotFoundError(
+            current = await self.registry.get(server_id)
+            if current is None:
+                if expected_revision is None:
+                    raise McpServerNotFoundError(
+                        f"MCP Server 不存在: {server_id}"
+                    )
+                raise McpRecoveryPreconditionError(
                     f"MCP Server 不存在: {server_id}"
+                )
+            if (
+                expected_revision is not None
+                and current.revision != expected_revision
+            ):
+                raise McpRecoveryPreconditionError(
+                    f"MCP Server `{server_id}` 配置已变化："
+                    f"expected revision {expected_revision}, "
+                    f"current revision {current.revision}"
                 )
             record = await self.registry.remove(server_id)
             self.secret_store.delete_namespace(server_id)

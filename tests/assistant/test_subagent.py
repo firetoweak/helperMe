@@ -270,7 +270,6 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
 
         scheduler = LocalSessionRouter(
             runtime,
-            notify=_surface,
             session_failed=_surface,
             on_quiesced=host.on_quiesced,
             on_failed=host.on_failed,

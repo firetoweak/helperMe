@@ -182,6 +182,7 @@ async def emit_delivery(
     output_id: str,
     text: str,
 ) -> None:
+    """把助手正文交给 Channel。`output_id` 必须是该 Step 的 trigger event id。"""
     emitted = sink(session_id, output_id, text)
     if isawaitable(emitted):
         await emitted

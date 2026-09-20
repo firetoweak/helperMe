@@ -1,5 +1,9 @@
 import type { ConversationView, ToolStatus } from "../../api/contracts";
-import type { ActivePreview, LiveTool } from "../../realtime/runtimeSlice";
+import type {
+  ActivePreview,
+  LiveTool,
+  SessionActivity,
+} from "../../realtime/runtimeSlice";
 
 export type VisibleUser = {
   key: string;
@@ -36,6 +40,7 @@ export function visibleTimeline(
   tools: Record<string, LiveTool>,
   committedThinking: Record<string, string> = {},
   liveThinking: ActivePreview | null = null,
+  activity: SessionActivity | null = null,
 ): VisibleItem[] {
   const journalOutputIds = new Set(
     conversation.items
@@ -74,6 +79,9 @@ export function visibleTimeline(
   });
   for (const [outputId, text] of Object.entries(committed)) {
     if (journalOutputIds.has(outputId)) {
+      continue;
+    }
+    if (activity !== "running") {
       continue;
     }
     items.push({

@@ -592,3 +592,32 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             outcome.data["result"], {"ok": False, "code": "ALREADY_REGISTERED"}
         )
+
+    async def test_proposal_conclusion_is_not_delivered(self):
+        async def propose(_input: ProposalInput):
+            return {"ok": False, "code": "ALREADY_REGISTERED"}
+
+        journal = MemoryJournal()
+        control = AssistantControlPlane((_operation(propose),))
+        delivered: list[str] = []
+        runtime = AgentRuntime(
+            journal,
+            _decision_maker(journal, ControlLlm(), control),
+            deliver_binding(
+                lambda _session_id, _output_id, text: delivered.append(text)
+            ),
+        )
+        await runtime.receive_user_message(
+            SESSION_ID, "安装它", delivery_id="user-1"
+        )
+        await settle_session(runtime, SESSION_ID, control=control)
+
+        facts = [
+            event.payload
+            for event in await journal.snapshot(SESSION_ID)
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == CONTROL_CONCLUDED
+        ]
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0].data["result"]["code"], "ALREADY_REGISTERED")
+        self.assertNotIn("ALREADY_REGISTERED", "".join(delivered))

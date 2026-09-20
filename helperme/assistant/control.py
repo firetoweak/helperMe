@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import json
 import traceback
 from dataclasses import dataclass
 from typing import Mapping, Sequence
@@ -51,13 +50,12 @@ class NoPendingControlApproval(LookupError):
 
 @dataclass(frozen=True, slots=True)
 class ControlOutcome:
-    """一次控制提案的结局：先成为事实，再决定要不要提示人。"""
+    """一次控制提案的结局：只成为事实，再决定要不要继续决策。"""
 
     fact_type: str
     data: Mapping[str, object]
     delivery_id: str
     requests_decision: bool
-    notice: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,7 +237,6 @@ class AssistantControlPlane:
                 },
                 _step_delivery_id(step, "failed"),
                 True,
-                None,
             )
         finally:
             self._active_sessions.remove(session_id)
@@ -260,7 +257,6 @@ class AssistantControlPlane:
                 },
                 f"{result.id}:proposed",
                 False,
-                None,
             )
         if type(result) is not dict:
             raise TypeError("控制工具返回值不符合契约")
@@ -273,7 +269,6 @@ class AssistantControlPlane:
             },
             _step_delivery_id(step, "concluded"),
             True,
-            json.dumps(result, ensure_ascii=False, sort_keys=True),
         )
 
     async def resolve(

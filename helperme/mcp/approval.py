@@ -17,9 +17,11 @@ from helperme.mcp.errors import McpInputError, McpRecoveryPreconditionError
 MCP_INSTALL_ACTION = "mcp.install"
 MCP_RECOVER_ACTION = "mcp.recover"
 MCP_UPDATE_ACTION = "mcp.update"
+MCP_REMOVE_ACTION = "mcp.remove"
 PROPOSE_MCP_INSTALL = "propose_mcp_install"
 PROPOSE_MCP_RECOVERY = "propose_mcp_recovery"
 PROPOSE_MCP_UPDATE = "propose_mcp_update"
+PROPOSE_MCP_REMOVE = "propose_mcp_remove"
 
 _SHELL_EXECUTABLES = {
     "bash",
@@ -478,6 +480,102 @@ class McpRecoveryApprovalHandler:
                 "enabled": True,
                 "revision": activation.record.revision,
                 "runtime": runtime.to_dict(),
+            },
+        )
+
+
+class McpRemoveProposalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    server_id: str
+
+
+def create_mcp_remove_proposal_spec(
+    service: McpApplicationService,
+) -> ToolSpec:
+    async def propose(
+        input_data: McpRemoveProposalInput,
+    ) -> ControlApprovalRequest | dict[str, Any]:
+        record = await service.registry.get(input_data.server_id)
+        if record is None:
+            return {
+                "ok": False,
+                "code": "MCP_SERVER_NOT_FOUND",
+                "data": {"server_id": input_data.server_id},
+                "error": f"未注册 MCP Server `{input_data.server_id}`",
+                "hint": "先调用 list_mcp_servers 核对精确 ID。",
+            }
+        return ControlApprovalRequest(
+            id=f"approval-{uuid4().hex}",
+            action=MCP_REMOVE_ACTION,
+            payload={
+                "server_id": record.id,
+                "expected_revision": record.revision,
+            },
+            summary=(
+                f"准备删除 MCP Server `{record.id}`（{record.display_name}）\n"
+                f"登记状态：{'enabled' if record.enabled else 'disabled'}\n"
+                f"Revision：{record.revision}"
+            ),
+            risk=(
+                "批准后将移除该 MCP Server 的登记与本地 Secret；"
+                "该 Server 对所有 Session 不再可见。"
+            ),
+        )
+
+    return ToolSpec(
+        name=PROPOSE_MCP_REMOVE,
+        description=(
+            "移除一个已登记 MCP Server 的登记与本地 Secret。"
+            "应先用 list_mcp_servers 核对精确 ID。"
+            "本工具必须单独调用。"
+        ),
+        parameters=PydanticParameters(McpRemoveProposalInput),
+        handler=propose,
+        control_boundary=True,
+        exclusive_batch=True,
+    )
+
+
+class McpRemoveApprovalHandler:
+    action = MCP_REMOVE_ACTION
+
+    def __init__(self, service: McpApplicationService) -> None:
+        self._service = service
+
+    async def execute(
+        self,
+        payload: Mapping[str, Any],
+    ) -> ControlApprovalExecution:
+        data = _approval_payload(
+            payload,
+            {"server_id", "expected_revision"},
+        )
+        server_id = data["server_id"]
+        expected_revision = data["expected_revision"]
+        if type(server_id) is not str or type(expected_revision) is not int:
+            raise McpInputError("MCP remove approval payload 类型无效")
+        try:
+            record = await self._service.remove_server(
+                server_id,
+                expected_revision=expected_revision,
+            )
+        except McpRecoveryPreconditionError as exc:
+            return ControlApprovalExecution(
+                succeeded=False,
+                message=f"MCP Server `{server_id}` 删除条件已变化，未执行：{exc}",
+                data={"server_id": server_id},
+            )
+        return ControlApprovalExecution(
+            succeeded=True,
+            message=(
+                f"MCP Server `{record.id}` 已删除。"
+                "登记与本地 Secret 已清除，能力目录已更新，"
+                "load_toolset 之后工具从下一个 Step 不再可见。"
+            ),
+            data={
+                "server_id": record.id,
+                "revision": record.revision,
             },
         )
 

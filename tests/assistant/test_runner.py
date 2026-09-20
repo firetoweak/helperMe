@@ -118,12 +118,10 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
 
         model = ScriptedDecisionMaker((fail, lambda _frame: ModelDecision(content="ok")))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        notified = []
         failed = []
         scheduler = SettlingScheduler(
             runtime,
             "session",
-            notify=lambda session_id, message: notified.append((session_id, message)),
             session_failed=lambda session_id, message: failed.append(
                 (session_id, message)
             ),
@@ -133,7 +131,6 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         try:
             await scheduler.wake("session")
             await scheduler.join()
-            self.assertEqual(notified, [])
             self.assertEqual(len(failed), 1)
             self.assertEqual(failed[0][0], "session")
             self.assertIn("provider rejected request", failed[0][1])
@@ -157,12 +154,10 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
 
         model = ScriptedDecisionMaker((fail, lambda _frame: ModelDecision(content="ok")))
         runtime = AgentRuntime(MemoryJournal(), model, {}, SequentialIds())
-        notified = []
         failed = []
         scheduler = SettlingScheduler(
             runtime,
             "session",
-            notify=lambda session_id, message: notified.append((session_id, message)),
             session_failed=lambda session_id, message: failed.append(
                 (session_id, message)
             ),
@@ -172,7 +167,6 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         try:
             await scheduler.wake("session")
             await scheduler.join()
-            self.assertEqual(notified, [])
             self.assertEqual(len(failed), 1)
             self.assertIn("没有给出可用回复或工具调用", failed[0][1])
             self.assertTrue(failed[0][1].startswith("运行失败："))

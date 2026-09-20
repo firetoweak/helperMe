@@ -38,6 +38,7 @@ from helperme.mcp.adapter import (
     encode_tool_name,
 )
 from helperme.mcp.application import McpApplicationService
+from helperme.mcp.errors import McpRecoveryPreconditionError
 from helperme.mcp.client_manager import (
     ManagedMcpConnection,
     McpClientManager,
@@ -285,6 +286,42 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(
                 (workspace.mcp_root / "secrets" / "demo.json").exists()
             )
+
+    async def test_remove_server_rejects_stale_revision(self):
+        with TemporaryDirectory() as directory:
+            workspace = HelperMeHome(Path(directory) / ".helperme")
+            workspace.initialize()
+            service = McpApplicationService(
+                McpRegistry.from_home(workspace),
+                McpSecretStore.from_home(workspace),
+                McpClientManager(
+                    McpSecretStore.from_home(workspace),
+                    runtime_root=_runtime_root(workspace),
+                ),
+            )
+            record = await service.upsert_server(
+                server_id="demo",
+                display_name="Demo",
+                transport="stdio",
+                transport_config={
+                    "command": "python",
+                    "args": ["server.py"],
+                },
+            )
+
+            with self.assertRaises(McpRecoveryPreconditionError):
+                await service.remove_server(
+                    "demo",
+                    expected_revision=record.revision + 1,
+                )
+            self.assertIsNotNone(await service.registry.get("demo"))
+
+            removed = await service.remove_server(
+                "demo",
+                expected_revision=record.revision,
+            )
+            self.assertEqual(removed.id, "demo")
+            self.assertIsNone(await service.registry.get("demo"))
 
     async def test_streamable_http_url_query_is_extracted_as_secret(self):
         with TemporaryDirectory() as directory:
@@ -588,6 +625,7 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
                     "propose_mcp_install",
                     "propose_mcp_recovery",
                     "propose_mcp_update",
+                    "propose_mcp_remove",
                 },
             )
 

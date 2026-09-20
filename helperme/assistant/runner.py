@@ -41,7 +41,6 @@ class SessionScheduler:
         session_id: str,
         *,
         control: AssistantControlPlane,
-        notify: Callable[[str, str], Awaitable[None] | None] | None = None,
         on_quiesced: (
             Callable[[str, CanonicalState], Awaitable[None] | None] | None
         ) = None,
@@ -52,7 +51,6 @@ class SessionScheduler:
         self._runtime = runtime
         self._session_id = session_id
         self._control = control
-        self._notify = notify
         self._on_quiesced = on_quiesced
         self._on_failed = on_failed
         self._session_failed = session_failed
@@ -132,20 +130,11 @@ class SessionScheduler:
                     source=CONTROL_SOURCE,
                     requests_decision=outcome.requests_decision,
                 )
-                if outcome.notice is not None:
-                    await self._emit(session_id, outcome.notice)
                 # 待裁决的提案要停下等人；另外两种结局是模型必须看到的新事实。
                 runnable = runnable or outcome.requests_decision
         if not runnable:
             await self._quiesced(session_id)
         return runnable
-
-    async def _emit(self, session_id: str, message: str) -> None:
-        if self._notify is None:
-            return
-        notified = self._notify(session_id, message)
-        if isinstance(notified, Awaitable):
-            await notified
 
     async def _emit_session_failed(self, session_id: str, message: str) -> None:
         if self._session_failed is None:

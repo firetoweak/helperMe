@@ -146,7 +146,8 @@ Step 提交后，无工具则原地成为最终
 （`control_approval`），Web 用不能关闭的确认框出示 `summary` / `risk`，提案正文
 不进时间线。用户确认后，安装/测试的执行说明走 `control_message`，画在当前轮次
 末尾；同一份结果写入 `assistant.control.resolved`，供模型在下一拍看见。preview、
-committed cache 和 Journal Step 使用同一 `output_id` 作为显示身份，阶段切换不重复
+committed cache 和 Journal Step 使用同一 `output_id` 作为显示身份，这个 id 就是
+Step 的 trigger event id；没有 Journal 身份的文字不得走 `deliver`，阶段切换不重复
 挂载普通最终回复。助手正文由 `@ai-markdown/react-mantine` 渲染；preview 增量按动画帧
 合并后再进 Redux，流式期间不做代码高亮，结束后再高亮。Remend 只修尚未闭合的
 流式 Markdown 尾部。思考块只展示纯文本，流式时展开、结束后自动折上。

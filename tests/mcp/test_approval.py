@@ -14,11 +14,15 @@ from helperme.tools.spec import ToolArgumentsError
 from helperme.mcp.approval import (
     MCP_INSTALL_ACTION,
     MCP_RECOVER_ACTION,
+    MCP_REMOVE_ACTION,
     McpInstallApprovalHandler,
     McpRecoveryProposalInput,
     McpRecoveryApprovalHandler,
+    McpRemoveApprovalHandler,
+    McpRemoveProposalInput,
     create_mcp_install_proposal_spec,
     create_mcp_recovery_proposal_spec,
+    create_mcp_remove_proposal_spec,
     create_mcp_update_proposal_spec,
 )
 from helperme.mcp.errors import McpRecoveryPreconditionError
@@ -505,3 +509,90 @@ class McpRecoveryConsoleTest(unittest.IsolatedAsyncioTestCase):
         service.test_and_enable.assert_awaited_once_with("demo")
         self.assertIn("测试并启用成功", reply)
         self.assertIn("能力目录", reply)
+
+
+class McpRemoveApprovalTest(unittest.IsolatedAsyncioTestCase):
+    async def test_proposal_freezes_registered_revision(self):
+        record = SimpleNamespace(
+            id="demo",
+            display_name="Demo",
+            enabled=True,
+            revision=3,
+        )
+        service = SimpleNamespace(
+            registry=SimpleNamespace(get=AsyncMock(return_value=record)),
+        )
+        spec = create_mcp_remove_proposal_spec(service)
+        input_data = spec.parameters.validate({"server_id": "demo"})
+
+        result = await spec.handler(input_data)
+
+        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertEqual(result.action, MCP_REMOVE_ACTION)
+        self.assertEqual(
+            result.payload,
+            {"server_id": "demo", "expected_revision": 3},
+        )
+        self.assertIn("所有 Session", result.risk)
+        self.assertTrue(spec.control_boundary)
+
+    async def test_missing_server_does_not_create_approval(self):
+        service = SimpleNamespace(
+            registry=SimpleNamespace(get=AsyncMock(return_value=None)),
+        )
+        spec = create_mcp_remove_proposal_spec(service)
+        result = await spec.handler(McpRemoveProposalInput(server_id="missing"))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "MCP_SERVER_NOT_FOUND")
+
+    async def test_handler_removes_expected_revision(self):
+        service = SimpleNamespace(
+            remove_server=AsyncMock(
+                return_value=SimpleNamespace(id="demo", revision=3)
+            ),
+        )
+        handler = McpRemoveApprovalHandler(service)
+
+        result = await handler.execute({
+            "server_id": "demo",
+            "expected_revision": 3,
+        })
+
+        self.assertTrue(result.succeeded)
+        service.remove_server.assert_awaited_once_with(
+            "demo",
+            expected_revision=3,
+        )
+        self.assertEqual(result.data["server_id"], "demo")
+        self.assertIn("已删除", result.message)
+
+    async def test_handler_only_converts_declared_precondition(self):
+        service = SimpleNamespace(
+            remove_server=AsyncMock(
+                side_effect=McpRecoveryPreconditionError("revision changed")
+            ),
+        )
+        handler = McpRemoveApprovalHandler(service)
+
+        result = await handler.execute({
+            "server_id": "demo",
+            "expected_revision": 3,
+        })
+
+        self.assertFalse(result.succeeded)
+        self.assertIn("revision changed", result.message)
+
+    async def test_handler_exposes_unexpected_service_value_error(self):
+        service = SimpleNamespace(
+            remove_server=AsyncMock(
+                side_effect=ValueError("internal service bug")
+            ),
+        )
+        handler = McpRemoveApprovalHandler(service)
+
+        with self.assertRaisesRegex(ValueError, "internal service bug"):
+            await handler.execute({
+                "server_id": "demo",
+                "expected_revision": 3,
+            })
