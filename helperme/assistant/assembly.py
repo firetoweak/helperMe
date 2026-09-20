@@ -266,11 +266,12 @@ async def build_assistant_assembly(
         control=control,
         management=management,
         subagents=subagents,
-        meta_root=sessions_root,
     )
 
     async def before_advance():
-        if sessions.is_paused(session_id):
+        if session_transport is not None and await session_transport(
+            "is_paused", session_id, {}
+        ):
             return False
         if not compact_context.is_reader and not subagents.is_subagent(session_id):
             if not (await runtime.state(session_id)).waiting_command_ids:

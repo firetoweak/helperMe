@@ -39,6 +39,8 @@ async def report_worker_failures(host: HostSupervisor, events: WebEventHub) -> N
 
     while True:
         failure = await host.wait_failure()
+        if host.compact.store.reader_job(failure.session_id) is not None:
+            continue
         await events.session_failed(
             failure.session_id,
             f"Session 进程失败：{failure.failure.render()}",
@@ -132,6 +134,7 @@ def create_web_app(
             tool_progress_sink=events.tool_progress,
             authorization_required_sink=events.authorization_required,
             context_usage_sink=events.context_usage,
+            conversation_status_sink=events.conversation_status,
         ) as assistant:
             app.state.channel = WebChannel(
                 assistant.sessions,

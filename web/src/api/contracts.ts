@@ -104,6 +104,8 @@ export const conversationViewSchema = z
       ]),
     ),
     session: sessionViewSchema,
+    compact_count: z.number().int().nonnegative(),
+    compact_phase: z.enum(["running", "ready", "failed"]).nullable(),
   })
   .strict();
 
@@ -189,6 +191,14 @@ export const contextUsageEventSchema = z
     session_id: z.string().min(1),
     used: z.number().int().nonnegative(),
     limit: z.number().int().positive(),
+  })
+  .strict();
+
+export const conversationStatusEventSchema = z
+  .object({
+    session_id: z.string().min(1),
+    compact_count: z.number().int().nonnegative(),
+    compact_phase: z.enum(["running", "ready", "failed"]).nullable(),
   })
   .strict();
 

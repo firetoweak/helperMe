@@ -4,11 +4,14 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from helperme.assistant.auto_authorize import (
     AutoAuthorizeStore,
     auto_grant_for_owners,
 )
+from helperme.assistant.host.supervisor import HostSupervisor
 
 
 class AutoAuthorizeStoreTest(unittest.TestCase):
@@ -44,3 +47,25 @@ class AutoGrantOwnersTest(unittest.TestCase):
         self.assertTrue(auto_grant_for_owners(("tui", "web:c1"), True))
         # Telegram / ACP 等暂无授权交互入口的 Channel：保持放行。
         self.assertTrue(auto_grant_for_owners(("telegram-bot-1-chat-2",), False))
+
+
+class HostAutoAuthorizeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_set_auto_authorize_writes_host_store_and_pushes_policy(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            host = object.__new__(HostSupervisor)
+            host._auto_authorize = AutoAuthorizeStore(root)
+            host._push_authorization_policy = AsyncMock(
+                return_value=SimpleNamespace(auto_authorize=False)
+            )
+            host._with_preference = lambda observed, session_id: observed
+
+            view = await host.set_auto_authorize("session-1", True)
+
+            self.assertTrue(host.web_auto_authorize("session-1"))
+            self.assertEqual(
+                json.loads((root / "auto_authorize.json").read_text(encoding="utf-8")),
+                {"session-1": True},
+            )
+            host._push_authorization_policy.assert_awaited_once_with("session-1")
+            self.assertIs(view, host._push_authorization_policy.return_value)

@@ -34,6 +34,10 @@ export type SessionRuntime = {
   authorizations: Record<string, PendingAuthorization>;
   contextUsage: { used: number; limit: number } | null;
   controlNotice: string | null;
+  conversationStatus: {
+    compactCount: number;
+    compactPhase: "running" | "ready" | "failed" | null;
+  } | null;
 };
 
 type RuntimeState = {
@@ -71,6 +75,7 @@ function runtimeOf(state: RuntimeState, sessionId: string): SessionRuntime {
     authorizations: {},
     contextUsage: null,
     controlNotice: null,
+    conversationStatus: null,
   };
   state.sessions[sessionId] = created;
   return created;
@@ -155,6 +160,7 @@ const runtimeSlice = createSlice({
       session.authorizations = {};
       session.contextUsage = null;
       session.controlNotice = null;
+      session.conversationStatus = null;
     },
     controlNotice(
       state,
@@ -307,6 +313,19 @@ const runtimeSlice = createSlice({
         limit: action.payload.limit,
       };
     },
+    conversationStatus(
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        compactCount: number;
+        compactPhase: "running" | "ready" | "failed" | null;
+      }>,
+    ) {
+      runtimeOf(state, action.payload.sessionId).conversationStatus = {
+        compactCount: action.payload.compactCount,
+        compactPhase: action.payload.compactPhase,
+      };
+    },
   },
 });
 
@@ -335,5 +354,6 @@ export const {
   authorizationRequired,
   authorizationResolved,
   contextUsage,
+  conversationStatus,
 } = runtimeSlice.actions;
 export default runtimeSlice.reducer;

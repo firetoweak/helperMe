@@ -25,7 +25,7 @@ Command Authorization 是 Web Channel 首版纵向切片，解决「工具副作
 ### 2. Web 总闸 `auto_authorize`
 
 - `SessionView.auto_authorize` 只表示 **Web 总闸偏好**，不是当前入口是否正在放行。
-- 存储：assistant 层会话元数据（`sessions_root/auto_authorize.json`），**不进 Journal**。模型无需知道。只在人拨过总闸时写入；创建 Session 不写 Channel 默认值。Fork 出的新 Session 未写入。
+- 存储：Host 的 `sessions_root/auto_authorize.json`，**不进 Journal**。模型无需知道。只在人拨过总闸时由 Host 写入；Worker 不读不写该文件，只收 Host 推来的 preference/grant。创建 Session 不写 Channel 默认值。Fork 出的新 Session 未写入。
 - `GET /api/sessions/{id}` 不 resume Worker。Host 直接读这份元数据补 `SessionView.auto_authorize`，缺省 `false`。刷新不丢。
 - 端点：`POST /api/sessions/{session_id}/auto-authorize`，body `{connection_id, enabled}`（`strict=True, extra="forbid"`），返回更新后的对话投影（内含 `SessionView`）。打开总闸时，当前待授权命令一并 `grant_command`。
 - TUI 不读、不写、不暴露这把闸。Telegram / ACP 同样没有总闸入口。

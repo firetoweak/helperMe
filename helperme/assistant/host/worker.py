@@ -55,6 +55,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
     revision = 0
     advertised = -1
     advertised_approval = None
+    advertised_busy = False
 
     async def handle(operation, target, arguments):
         nonlocal revision, active_requests
@@ -183,9 +184,14 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                 if assembly.scheduler._failure is not None:
                     raise assembly.scheduler._failure
                 assembly.scheduler.changed.clear()
+                if not assembly.scheduler.idle:
+                    if not advertised_busy:
+                        advertised_busy = True
+                        advertised = -1
+                        await peer.send(("busy",))
+                    continue
                 if (
-                    assembly.scheduler.idle
-                    and active_requests == 0
+                    active_requests == 0
                     and advertised != revision
                 ):
                     view = await assembly.sessions.view(session_id)
@@ -197,6 +203,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                         await peer.send(("control_approval", view.control_approval))
                     if view.control_approval is None:
                         advertised = revision
+                        advertised_busy = False
                         await peer.send(
                             (
                                 "idle",

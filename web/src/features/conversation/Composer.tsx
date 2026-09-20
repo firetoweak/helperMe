@@ -64,6 +64,8 @@ type ComposerProps = {
   onSend: (text: string, artifactRefs: string[]) => Promise<void>;
   onSetPaused: (paused: boolean) => void;
   onRetry: () => void;
+  compactCount: number;
+  compactPhase: "running" | "ready" | "failed" | null;
 };
 
 export function Composer({
@@ -83,6 +85,8 @@ export function Composer({
   onSend,
   onSetPaused,
   onRetry,
+  compactCount,
+  compactPhase,
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [pending, setPending] = useState<ComposerImage[]>([]);
@@ -482,14 +486,26 @@ export function Composer({
           {runtime === undefined ? (
             <span />
           ) : (
-            <Tooltip label="请求前为估算，响应后为实际输入占用">
-              <Group gap={6} wrap="nowrap">
-                <ContextRing used={used} limit={limit} />
-                <Text c="dimmed" fz={11}>
-                  {formatTokens(used)} / {formatTokens(limit)}
-                </Text>
-              </Group>
-            </Tooltip>
+            <Group gap={10} wrap="nowrap">
+              <Tooltip label="请求前为估算，响应后为实际输入占用">
+                <Group gap={6} wrap="nowrap">
+                  <ContextRing used={used} limit={limit} />
+                  <Text c="dimmed" fz={11}>
+                    {formatTokens(used)} / {formatTokens(limit)}
+                  </Text>
+                </Group>
+              </Tooltip>
+              <Text c="dimmed" fz={11}>
+                {`compact ${compactCount} 次`}
+                {compactPhase == null
+                  ? ""
+                  : `  ·  compact ${
+                      { running: "整理中", ready: "等待切换", failed: "失败" }[
+                        compactPhase
+                      ]
+                    }`}
+              </Text>
+            </Group>
           )}
           {workspacePath === undefined ? (
             <span />

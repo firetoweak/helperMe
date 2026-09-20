@@ -5,6 +5,7 @@ import reducer, {
   connected,
   contextUsage,
   controlNotice,
+  conversationStatus,
   disconnected,
   lockDraft,
   outputFinal,
@@ -166,6 +167,21 @@ describe("runtimeSlice", () => {
     );
     expect(state.sessions.s1.contextUsage).toEqual({ used: 1200, limit: 200000 });
     expect(state.sessions.s2.contextUsage).toBeNull();
+  });
+
+  it("stores compact status on the owning session", () => {
+    let state = reducer(
+      undefined,
+      conversationStatus({
+        sessionId: "s1",
+        compactCount: 1,
+        compactPhase: "failed",
+      }),
+    );
+    expect(state.sessions.s1.conversationStatus).toEqual({
+      compactCount: 1,
+      compactPhase: "failed",
+    });
   });
 
   it("keeps an unlocked draft per workspace until the first user message locks it", () => {

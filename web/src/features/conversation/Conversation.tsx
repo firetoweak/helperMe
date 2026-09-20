@@ -163,6 +163,10 @@ export function Conversation() {
   );
   const turns = timelineTurns(items);
   const running = runtime?.activity === "running";
+  const compactCount =
+    runtime?.conversationStatus?.compactCount ?? conversation.compact_count;
+  const compactPhase =
+    runtime?.conversationStatus?.compactPhase ?? conversation.compact_phase;
   const lastTurnKey = turns.at(-1)?.key;
   const awaitingControl = conversation.session.control_approval !== null;
   const notice =
@@ -343,6 +347,18 @@ export function Conversation() {
             跳到最新
           </Button>
         )}
+        {compactPhase !== "failed" ? null : (
+          <Alert
+            className="composer-error"
+            color="red"
+            icon={<IconAlertCircle size={16} />}
+            py="xs"
+          >
+            <Text className="pre-wrap" ff="monospace" fz={11}>
+              上下文整理失败。窗口仍超预算时会话无法继续推进。
+            </Text>
+          </Alert>
+        )}
         {runtime?.lastError == null ? null : (
           <Alert
             className="composer-error"
@@ -403,6 +419,8 @@ export function Conversation() {
           retryBusy={retrying.isLoading}
           autoAuthorize={conversation.session.auto_authorize}
           autoAuthorizeBusy={autoAuthorizing.isLoading}
+          compactCount={compactCount}
+          compactPhase={compactPhase}
           onToggleAutoAuthorize={toggleAutoAuthorize}
           onSend={send}
           onRetry={() => {

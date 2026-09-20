@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from helperme.assistant.compact.store import ConversationStatus
 from helperme.channels.web.hub import WebEventHub
 
 
@@ -119,6 +120,25 @@ class WebEventHubTest(unittest.IsolatedAsyncioTestCase):
                 "preview.delta",
                 "thinking.finished",
             ],
+        )
+        self.hub.unsubscribe(queue)
+
+    async def test_conversation_status_is_session_scoped(self):
+        queue = self.hub.subscribe()
+
+        await self.hub.conversation_status(
+            ConversationStatus("session-a", "session-a", 1, "running")
+        )
+        event = await queue.get()
+
+        self.assertEqual(event.name, "conversation_status")
+        self.assertEqual(
+            event.data,
+            {
+                "session_id": "session-a",
+                "compact_count": 1,
+                "compact_phase": "running",
+            },
         )
         self.hub.unsubscribe(queue)
 

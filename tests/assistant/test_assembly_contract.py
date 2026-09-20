@@ -424,6 +424,15 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
             root = Path(directory)
             workspace = root / "workspace"
             workspace.mkdir()
+            paused = False
+
+            async def transport(operation, session_id, arguments):
+                if operation == "is_paused":
+                    return paused
+                if operation == "compact_boundary":
+                    return "continue"
+                raise AssertionError(operation)
+
             with (
                 patch(
                     "helperme.assistant.assembly.HelperMeHome.default",
@@ -446,15 +455,17 @@ class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
                     session_id="session",
                     workspace=workspace_record(workspace),
                     scheduler_factory=SettlingScheduler,
+                    session_transport=transport,
                 )
                 try:
+                    await assembly.runtime.create_session("session")
                     await assembly.runtime.receive_user_message(
                         "session",
                         "hello",
                         delivery_id="user-1",
                     )
                     self.assertTrue(await assembly.scheduler.before_advance())
-                    await assembly.sessions.set_paused("session", paused=True)
+                    paused = True
                     self.assertFalse(await assembly.scheduler.before_advance())
                 finally:
                     await assembly.scheduler.close()

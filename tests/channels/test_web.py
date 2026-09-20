@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from helperme.assistant.attachments import AttachmentGateway
+from helperme.assistant.host.ipc import ProcessFailure, WorkerFailed
 from helperme.assistant.conversations import (
     ConversationView,
     SessionSummary,
@@ -21,7 +23,7 @@ from helperme.assistant.conversations import (
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import SessionView
 from helperme.channels.web import app as web_app
-from helperme.channels.web.app import create_web_app
+from helperme.channels.web.app import create_web_app, report_worker_failures
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
 from helperme.sandbox.registry import WorkspaceRegistry
@@ -279,6 +281,8 @@ class WebFirstSliceTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["session_id"], "session-old")
         self.assertEqual(response.json()["items"], [])
+        self.assertEqual(response.json()["compact_count"], 0)
+        self.assertIsNone(response.json()["compact_phase"])
         self.assertEqual(self.sessions.calls, [])
 
     def test_runtime_exposes_active_model_and_context_limit(self):
@@ -549,6 +553,41 @@ class WebFirstSliceTest(unittest.TestCase):
 
         self.assertEqual(first.status_code, 201)
         self.assertEqual(second.status_code, 409)
+
+
+class ReportWorkerFailuresTest(unittest.IsolatedAsyncioTestCase):
+    async def test_compact_reader_failure_is_not_session_failed(self):
+        host = SimpleNamespace(
+            compact=SimpleNamespace(
+                store=SimpleNamespace(
+                    reader_job=lambda session_id: (
+                        {"source": "chat"} if session_id == "compact-1" else None
+                    )
+                )
+            )
+        )
+        pending = [
+            WorkerFailed("compact-1", ProcessFailure("Boom", "reader died", "")),
+            WorkerFailed("session-1", ProcessFailure("Dead", "worker died", "")),
+        ]
+
+        async def wait_failure():
+            if pending:
+                return pending.pop(0)
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        host.wait_failure = wait_failure
+        events = WebEventHub()
+        queue = events.subscribe()
+        task = asyncio.create_task(report_worker_failures(host, events))
+        event = await asyncio.wait_for(queue.get(), timeout=1)
+        self.assertEqual(event.name, "session_failed")
+        self.assertEqual(event.data["session_id"], "session-1")
+        self.assertTrue(queue.empty())
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        events.unsubscribe(queue)
 
 
 def _png_bytes():

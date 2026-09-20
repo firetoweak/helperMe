@@ -35,7 +35,7 @@ Prompt 要求仅补关键缺口，不扩展调查；不再包含预算收尾指�
 
 输入预算沿用 `model_context_limit` / `input_budget_ratio`，留出输出空间；每次模型调用（含新提醒）和窗口发布前检查。
 
-`compact_threshold_ratio` 默认 0.8，相对于输入预算触发后台准备。失败保留原始诊断，不自动重试或发布半成品；B 容量足够时继续，容量不足时暂停模型调用但继续接收输入。
+`compact_threshold_ratio` 默认 0.8，相对于输入预算触发后台准备。失败保留原始诊断，不自动重试或发布半成品；B 容量足够时继续，容量不足时暂停模型调用但继续接收输入。Host 把 `ConversationStatus` 推给 Channel：TUI 写在上下文栏；Web 走 `GET /api/sessions/{id}` 的 `compact_count` / `compact_phase` 和 SSE `conversation_status`，输入框底部写次数与相位，`failed` 另出横幅，不写成用户会话的 `session_failed`。
 
 Host 的 `conversations.sqlite` 仅保存后台任务、结果和发布准备，不再保存业务会话路由。开发阶段只维护当前表结构，不读写或检查数据库版本号；首次启动自动建库。旧结构的开发数据库需在停止相关任务后一次性备份重建，不提供自动迁移或兼容路径。
 

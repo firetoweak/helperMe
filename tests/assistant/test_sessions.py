@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -253,83 +252,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
-    async def test_resume_does_not_wake_when_paused(self):
-        runtime = AgentRuntime(
-            MemoryJournal(),
-            ScriptedDecisionMaker((lambda _frame: ModelDecision(content="ok"),)),
-            {},
-            SequentialIds(),
-        )
-        await runtime.create_session(self.SESSION_ID)
-        await runtime.receive_user_message(
-            self.SESSION_ID,
-            "hello",
-            delivery_id="user-1",
-        )
-        scheduler = RecordingScheduler(runtime, self.SESSION_ID)
-        sessions, _surface = self._sessions(runtime, scheduler)
-        try:
-            held = await sessions.set_paused(self.SESSION_ID, paused=True)
-            self.assertTrue(held.paused)
-            self.assertTrue(held.should_wake)
-            self.assertEqual(scheduler.woken, [])
-            view = await sessions.resume(self.SESSION_ID)
-            self.assertTrue(view.paused)
-            self.assertTrue(view.should_wake)
-            self.assertEqual(scheduler.woken, [])
-            resumed = await sessions.set_paused(self.SESSION_ID, paused=False)
-            self.assertFalse(resumed.paused)
-            self.assertEqual(scheduler.woken, [self.SESSION_ID])
-        finally:
-            await scheduler.close()
-
-    async def test_user_message_clears_pause_without_writing_default(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            runtime = AgentRuntime(
-                MemoryJournal(),
-                ScriptedDecisionMaker((lambda _frame: ModelDecision(content="ok"),)),
-                {},
-                SequentialIds(),
-            )
-            await runtime.create_session(self.SESSION_ID)
-            scheduler = RecordingScheduler(runtime, self.SESSION_ID)
-            sessions = AssistantSessions(
-                runtime,
-                ToolSurface(),
-                scheduler,
-                control=scheduler._control,
-                management=ManagementSurface(
-                    (),
-                    MemoryArtifactGateway(),
-                    ModelContextSettings(),
-                ),
-                meta_root=root,
-            )
-            try:
-                await sessions.receive_user_message(
-                    self.SESSION_ID,
-                    "hello",
-                    delivery_id="user-1",
-                )
-                self.assertFalse(sessions.is_paused(self.SESSION_ID))
-                self.assertFalse((root / "paused.json").is_file())
-                await sessions.set_paused(self.SESSION_ID, paused=True)
-                self.assertTrue(sessions.is_paused(self.SESSION_ID))
-                await sessions.receive_user_message(
-                    self.SESSION_ID,
-                    "go on",
-                    delivery_id="user-2",
-                )
-                self.assertFalse(sessions.is_paused(self.SESSION_ID))
-                self.assertEqual(
-                    json.loads((root / "paused.json").read_text(encoding="utf-8")),
-                    {self.SESSION_ID: False},
-                )
-            finally:
-                await scheduler.close()
-
-    async def test_create_does_not_persist_web_preference(self):
+    async def test_create_and_policy_do_not_write_host_preference_files(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = AgentRuntime(MemoryJournal(), ScriptedDecisionMaker(()), {})
@@ -344,26 +267,19 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
                     MemoryArtifactGateway(),
                     ModelContextSettings(),
                 ),
-                meta_root=root,
             )
             try:
                 view = await sessions.create(self.SESSION_ID)
                 self.assertFalse(view.auto_authorize)
                 self.assertFalse(view.paused)
+                updated = await sessions.apply_authorization_policy(
+                    self.SESSION_ID,
+                    preference=True,
+                    grant=True,
+                )
+                self.assertTrue(updated.auto_authorize)
                 self.assertFalse((root / "auto_authorize.json").is_file())
                 self.assertFalse((root / "paused.json").is_file())
-                updated = await sessions.set_auto_authorize(self.SESSION_ID, True)
-                self.assertTrue(updated.auto_authorize)
-                self.assertEqual(
-                    json.loads((root / "auto_authorize.json").read_text(encoding="utf-8")),
-                    {self.SESSION_ID: True},
-                )
-                paused = await sessions.set_paused(self.SESSION_ID, paused=True)
-                self.assertTrue(paused.paused)
-                self.assertEqual(
-                    json.loads((root / "paused.json").read_text(encoding="utf-8")),
-                    {self.SESSION_ID: True},
-                )
             finally:
                 await scheduler.close()
 

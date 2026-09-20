@@ -6,6 +6,7 @@ from helperme.runtime.json_values import thaw_value
 import asyncio
 import json
 from dataclasses import asdict
+from inspect import isawaitable
 from helperme.assistant.artifacts import FileArtifactGateway
 from helperme.assistant.compact.core import (
     TASK,
@@ -40,8 +41,11 @@ class CompactHost:
         self.activating = set()
 
     def notify_status(self, session):
-        if self.host.conversation_status_sink is not None:
-            self.host.conversation_status_sink(self.store.status(session))
+        if self.host.conversation_status_sink is None:
+            return
+        emitted = self.host.conversation_status_sink(self.store.status(session))
+        if isawaitable(emitted):
+            self.host._track(session, asyncio.ensure_future(emitted))
 
     def lock(self, session):
         return self.locks.setdefault(session, asyncio.Lock())
@@ -220,7 +224,7 @@ class CompactHost:
             self.host.store.require(session)
             await self.recover_prepared(session)
             result = await self.host.request(operation, session, arguments)
-            if operation == "resume":
+            if operation in {"resume", "view"}:
                 job = self.store.job(session)
                 if (
                     job is not None

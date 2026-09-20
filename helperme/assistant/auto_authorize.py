@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 class AutoAuthorizeStore:
-    """Web Session 总闸。只在人拨过时写入，缺省 false。不进 Journal。"""
+    """Host-only Web 总闸。只在人拨过时写入，缺省 false。不进 Journal。"""
 
     def __init__(self, root: Path | None) -> None:
         self._root = root

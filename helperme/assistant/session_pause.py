@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 class SessionPauseStore:
-    """Session hold. Only written when a person toggles it. Not in the Journal."""
+    """Host-only session hold. Only written when a person toggles it. Not in the Journal."""
 
     def __init__(self, root: Path | None) -> None:
         self._root = root
