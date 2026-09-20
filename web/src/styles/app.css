@@ -51,6 +51,12 @@ body {
   display: flex;
   align-items: center;
   gap: 2px;
+  padding-right: 2px;
+  border-radius: var(--mantine-radius-md);
+}
+
+.workspace-head:hover {
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .workspace-toggle {
@@ -61,11 +67,7 @@ body {
   color: var(--mantine-color-dimmed);
 }
 
-.workspace-toggle:hover {
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.workspace-group.is-current .workspace-toggle {
+.workspace-group.is-current .workspace-head {
   color: var(--mantine-color-text);
   background: rgba(145, 181, 106, 0.08);
 }
