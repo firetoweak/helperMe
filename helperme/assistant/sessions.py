@@ -7,6 +7,7 @@ from pathlib import Path
 from helperme.assistant.auto_authorize import AutoAuthorizeStore
 from helperme.assistant.session_pause import SessionPauseStore
 from helperme.assistant.control import (
+    CONTROL_FACT,
     AssistantControlPlane,
     ControlApprovalView,
 )
@@ -171,10 +172,23 @@ class AssistantSessions:
         *,
         approved: bool,
     ) -> str:
-        message = await self._control.resolve(session_id, approved=approved)
-        # 与命令授权一致：审批结果必须唤醒本轮，否则 agent 不会继续。
+        resolution = await self._control.resolve(session_id, approved=approved)
+        await self._runtime.receive_domain_fact(
+            session_id,
+            CONTROL_FACT,
+            {
+                "approved": resolution.approved,
+                "action": resolution.action,
+                "succeeded": resolution.succeeded,
+                "message": resolution.message,
+                "data": dict(resolution.data),
+            },
+            delivery_id=resolution.request_id,
+            source=CONTROL_FACT,
+            requests_decision=True,
+        )
         await self._scheduler.wake(session_id)
-        return message
+        return resolution.message
 
     async def receive_user_message(
         self,

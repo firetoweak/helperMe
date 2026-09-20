@@ -33,6 +33,7 @@ export type SessionRuntime = {
   tools: Record<string, LiveTool>;
   authorizations: Record<string, PendingAuthorization>;
   contextUsage: { used: number; limit: number } | null;
+  controlNotice: string | null;
 };
 
 type RuntimeState = {
@@ -69,6 +70,7 @@ function runtimeOf(state: RuntimeState, sessionId: string): SessionRuntime {
     tools: {},
     authorizations: {},
     contextUsage: null,
+    controlNotice: null,
   };
   state.sessions[sessionId] = created;
   return created;
@@ -152,6 +154,14 @@ const runtimeSlice = createSlice({
       session.tools = {};
       session.authorizations = {};
       session.contextUsage = null;
+      session.controlNotice = null;
+    },
+    controlNotice(
+      state,
+      action: PayloadAction<{ sessionId: string; message: string | null }>,
+    ) {
+      runtimeOf(state, action.payload.sessionId).controlNotice =
+        action.payload.message;
     },
     sessionActivity(
       state,
@@ -311,6 +321,7 @@ export const {
   hydrateSuperseded,
   supersedeSession,
   clearLiveOutput,
+  controlNotice,
   sessionActivity,
   sessionFailed,
   previewStarted,

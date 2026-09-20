@@ -4,6 +4,7 @@ import reducer, {
   bindOwner,
   connected,
   contextUsage,
+  controlNotice,
   disconnected,
   lockDraft,
   outputFinal,
@@ -206,6 +207,23 @@ describe("runtimeSlice", () => {
     expect(isForkIdentity("parent", state.supersededSessions)).toBe(false);
     expect(isForkIdentity("child", state.supersededSessions)).toBe(true);
     expect(isForkIdentity("grandchild", state.supersededSessions)).toBe(true);
+  });
+
+  it("keeps a control notice after idle so install results survive refetch", () => {
+    let state = reducer(
+      undefined,
+      controlNotice({
+        sessionId: "s1",
+        message: "MCP Server `demo` 安装、测试并启用成功。",
+      }),
+    );
+    state = reducer(state, sessionActivity({ sessionId: "s1", activity: "idle" }));
+    expect(state.sessions.s1.controlNotice).toBe(
+      "MCP Server `demo` 安装、测试并启用成功。",
+    );
+
+    state = reducer(state, clearLiveOutput("s1"));
+    expect(state.sessions.s1.controlNotice).toBeNull();
   });
 
   it("clears live output so a truncated edit does not keep later previews", () => {

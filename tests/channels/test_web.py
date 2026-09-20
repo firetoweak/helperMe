@@ -80,6 +80,10 @@ class _Sessions:
     async def resolve_authorization(self, session_id, command_id, *, approved):
         self.calls.append(("resolve_authorization", session_id, command_id, approved))
 
+    async def resolve_control(self, session_id, *, approved):
+        self.calls.append(("resolve_control", session_id, approved))
+        return "MCP Server `demo` 安装、测试并启用成功；请新建 Session 使用该能力。"
+
     async def set_auto_authorize(self, session_id, enabled):
         self.calls.append(("set_auto_authorize", session_id, enabled))
         return SessionView("waiting", ("user_message",), (), False, auto_authorize=enabled)
@@ -422,6 +426,28 @@ class WebFirstSliceTest(unittest.TestCase):
                     "artifact_refs": (attachment_id,),
                 },
             ),
+        )
+
+    def test_resolve_control_returns_execution_message(self):
+        response = self.client.post(
+            "/api/sessions/session-old/control",
+            json={
+                "connection_id": self.connection.connection_id,
+                "approved": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["session"]["control_message"],
+            "MCP Server `demo` 安装、测试并启用成功；请新建 Session 使用该能力。",
+        )
+        self.assertEqual(
+            self.sessions.calls,
+            [
+                ("resolve_control", "session-old", True),
+                ("view", "session-old"),
+            ],
         )
 
     def test_authorize_command_is_per_command(self):

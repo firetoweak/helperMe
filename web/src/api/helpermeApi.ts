@@ -2,7 +2,12 @@ import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 import { z } from "zod";
 
-import { bindOwner, clearLiveOutput, supersedeSession } from "../realtime/runtimeSlice";
+import {
+  bindOwner,
+  clearLiveOutput,
+  controlNotice,
+  supersedeSession,
+} from "../realtime/runtimeSlice";
 import { truncateAfterUserMessage } from "./truncateAfterUserMessage";
 import {
   conversationViewSchema,
@@ -256,6 +261,12 @@ export const helpermeApi = createApi({
       async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
         const { data } = await queryFulfilled;
         putConversation(dispatch, getState, arg.sessionId, data);
+        dispatch(
+          controlNotice({
+            sessionId: arg.sessionId,
+            message: data.session.control_message,
+          }),
+        );
       },
     }),
     setAutoAuthorize: build.mutation<ConversationView, SetAutoAuthorize>({

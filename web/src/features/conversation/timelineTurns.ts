@@ -43,6 +43,63 @@ function isFinal(step: VisibleStep): boolean {
   return !step.pending && step.text !== null && step.tools.length === 0;
 }
 
+function stepHasLiveWork(step: VisibleStep): boolean {
+  return (
+    step.pending ||
+    step.tools.some(
+      (tool) =>
+        tool.status === "running" || tool.status === "awaiting_authorization",
+    )
+  );
+}
+
+function processHasLiveWork(turn: TimelineTurn): boolean {
+  return turn.process.some(stepHasLiveWork);
+}
+
+export function turnIsSettled(
+  turn: TimelineTurn,
+  options: {
+    latest: boolean;
+    running: boolean;
+    awaitingControl: boolean;
+  },
+): boolean {
+  if (processHasLiveWork(turn)) {
+    return false;
+  }
+  if (!options.latest) {
+    return true;
+  }
+  return !options.running && !options.awaitingControl;
+}
+
+export function turnReply(
+  turn: TimelineTurn,
+  settled: boolean,
+): { key: string; text: string; streaming: boolean } | null {
+  const step = turn.final ?? turn.active;
+  if (step === null) {
+    return null;
+  }
+  const text = (step.text ?? "").trim();
+  if (text === "") {
+    return null;
+  }
+  return {
+    key: step.key,
+    text: step.text ?? "",
+    streaming: !settled && turn.active !== null,
+  };
+}
+
+export function turnNeedsSilentEnd(
+  turn: TimelineTurn,
+  settled: boolean,
+): boolean {
+  return settled && turn.process.length > 0 && turnReply(turn, settled) === null;
+}
+
 function turnHasThinking(turn: TimelineTurn): boolean {
   return [turn.active, turn.final, ...turn.process].some(
     (step) => step !== null && (step.thinking ?? "").trim() !== "",
@@ -51,8 +108,11 @@ function turnHasThinking(turn: TimelineTurn): boolean {
 
 export function turnNeedsThinkingHint(
   turn: TimelineTurn,
-  options: { running: boolean; latest: boolean },
+  options: { running: boolean; latest: boolean; settled?: boolean },
 ): boolean {
+  if (options.settled === true) {
+    return false;
+  }
   if (turnHasThinking(turn)) {
     return false;
   }

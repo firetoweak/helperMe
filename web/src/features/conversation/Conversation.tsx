@@ -37,6 +37,7 @@ import {
 import { useAppDispatch, useAppSelector } from "../../app/hooks";
 import {
   authorizationResolved,
+  controlNotice,
   liveSessionId,
   lockDraft,
   viewing,
@@ -47,7 +48,14 @@ import { ExecutionProcess } from "./ExecutionProcess";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { turnNeedsSubagentHint } from "./subagent";
-import { timelineTurns, turnNeedsThinkingHint, type TimelineTurn } from "./timelineTurns";
+import {
+  timelineTurns,
+  turnIsSettled,
+  turnNeedsSilentEnd,
+  turnNeedsThinkingHint,
+  turnReply,
+  type TimelineTurn,
+} from "./timelineTurns";
 import { useFollowOutput } from "./useFollowOutput";
 import { visibleTimeline } from "./visibleTimeline";
 
@@ -156,6 +164,9 @@ export function Conversation() {
   const turns = timelineTurns(items);
   const running = runtime?.activity === "running";
   const lastTurnKey = turns.at(-1)?.key;
+  const awaitingControl = conversation.session.control_approval !== null;
+  const notice =
+    runtime?.controlNotice ?? conversation.session.control_message;
   const subagentsActive = conversation.session.has_active_subagents;
 
   async function send(text: string, artifactRefs: string[]) {
@@ -169,6 +180,7 @@ export function Conversation() {
       text,
       artifactRefs,
     }).unwrap();
+    dispatch(controlNotice({ sessionId, message: null }));
     dispatch(lockDraft(sessionId));
   }
 
@@ -244,6 +256,13 @@ export function Conversation() {
           <Stack className="timeline" gap="lg" ref={followOutput.contentRef}>
             {turns.map((turn) => {
               const thinking = replyThinking(turn);
+              const latest = turn.key === lastTurnKey;
+              const settled = turnIsSettled(turn, {
+                latest,
+                running,
+                awaitingControl,
+              });
+              const reply = turnReply(turn, settled);
               return (
               <Stack gap="lg" key={turn.key}>
                 {turn.user === null ? null : (
@@ -260,38 +279,45 @@ export function Conversation() {
                 )}
                 {turn.process.length === 0 ? null : (
                   <ExecutionProcess
-                    complete={turn.final !== null}
+                    complete={settled}
                     onAuthorize={authorize}
                     steps={turn.process}
                   />
                 )}
                 {thinking === null ? null : (
                   <ThinkingBlock
-                    streaming={thinking.thinkingPending}
+                    streaming={thinking.thinkingPending && !settled}
                     text={thinking.thinking}
                   />
                 )}
                 {turnNeedsThinkingHint(turn, {
-                  latest: turn.key === lastTurnKey,
+                  latest,
                   running,
+                  settled,
                 }) ? (
                   <RunningHint label="思考中" />
-                ) : showReply(turn) ? (
+                ) : reply !== null ? (
                   <Box
                     component="article"
                     className="message message-assistant"
-                    key={(turn.active ?? turn.final)!.key}
+                    key={reply.key}
                   >
                     <Group align="flex-start" gap="sm" wrap="nowrap">
                       <ThemeIcon radius="xl" size={28} variant="subtle">
                         <IconSparkles size={15} />
                       </ThemeIcon>
                       <MarkdownMessage
-                        content={(turn.active ?? turn.final)!.text ?? ""}
-                        streaming={turn.active !== null}
+                        content={reply.text}
+                        streaming={reply.streaming}
                       />
                     </Group>
                   </Box>
+                ) : turnNeedsSilentEnd(turn, settled) &&
+                  !(latest && notice !== null) ? (
+                  <SilentEndHint />
+                ) : null}
+                {latest && notice !== null ? (
+                  <ControlNotice message={notice} />
                 ) : null}
                 {turnNeedsSubagentHint(
                   turn.key === lastTurnKey,
@@ -504,17 +530,43 @@ function RunningHint({ label }: { label: string }) {
   );
 }
 
+function SilentEndHint() {
+  return (
+    <Box component="article" className="message message-assistant">
+      <Group align="center" gap="sm" wrap="nowrap">
+        <ThemeIcon radius="xl" size={28} variant="subtle">
+          <IconSparkles size={15} />
+        </ThemeIcon>
+        <Text c="dimmed" size="sm">
+          这一轮没有文字回复
+        </Text>
+      </Group>
+    </Box>
+  );
+}
+
+function ControlNotice({ message }: { message: string }) {
+  return (
+    <Alert
+      className="control-notice"
+      color="sage"
+      icon={<IconCheck size={16} />}
+      title="操作结果"
+      variant="light"
+    >
+      <Text className="pre-wrap" size="sm">
+        {message}
+      </Text>
+    </Alert>
+  );
+}
+
 function replyThinking(turn: TimelineTurn) {
   const step = turn.active ?? turn.final;
   if (step === null || step.thinking === null) {
     return null;
   }
   return { thinking: step.thinking, thinkingPending: step.thinkingPending };
-}
-
-function showReply(turn: TimelineTurn) {
-  const step = turn.active ?? turn.final;
-  return step !== null && (step.text ?? "").trim() !== "";
 }
 
 function shortId(id: string) {

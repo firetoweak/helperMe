@@ -8,18 +8,21 @@ from pydantic import BaseModel, ConfigDict
 
 from helperme.assistant.artifacts import MemoryArtifactStore
 from helperme.assistant.context.projection import ModelContextProjector
-from helperme.assistant.control import AssistantControlPlane
+from helperme.assistant.control import CONTROL_FACT, AssistantControlPlane
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
+from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.delivery import deliver_binding
 from helperme.assistant.toolsets import ToolSurface
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage, ToolCall
 from helperme.runtime import (
     AgentRuntime,
+    DomainFactCommitted,
     LeaseLostError,
     MemoryJournal,
     RuntimeStatus,
     StepCommitted,
 )
+from helperme.runtime.json_values import thaw_value
 from helperme.tools.control import (
     ControlApprovalExecution,
     ControlApprovalRequest,
@@ -266,9 +269,114 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual([c.effect.name for c in steps[0].commands], ["deliver"])
 
-        self.assertEqual(await control.resolve(SESSION_ID, approved=True), "安装完成")
+        resolved = await control.resolve(SESSION_ID, approved=True)
+        self.assertEqual(resolved.message, "安装完成")
+        self.assertEqual(resolved.action, "test.install")
+        self.assertTrue(resolved.approved)
+        self.assertTrue(resolved.succeeded)
         self.assertEqual(dict(handler.payloads[0]), {"value": "frozen"})
         self.assertIsNone(control.pending_view(SESSION_ID))
+
+    async def test_approval_writes_control_fact_and_requests_decision(self):
+        async def propose(input_data: ProposalInput):
+            return ControlApprovalRequest(
+                "approval-1",
+                "test.install",
+                {"value": input_data.value},
+                "安装 frozen",
+                "测试风险",
+            )
+
+        handler = ApprovalHandler()
+        control = AssistantControlPlane((_operation(propose, handler),))
+        journal = MemoryJournal()
+        runtime = AgentRuntime(
+            journal,
+            _decision_maker(journal, ControlLlm(), control),
+            deliver_binding(lambda _session_id, _output_id, _text: None),
+        )
+        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
+        await settle_session(runtime, SESSION_ID, control=control)
+
+        woken: list[str] = []
+
+        async def wake(session_id: str) -> None:
+            woken.append(session_id)
+
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            SimpleNamespace(wake=wake),
+            control=control,
+            management=SimpleNamespace(),
+        )
+        message = await sessions.resolve_control(SESSION_ID, approved=True)
+
+        self.assertEqual(message, "安装完成")
+        self.assertEqual(woken, [SESSION_ID])
+        facts = [
+            event.payload
+            for event in await journal.snapshot(SESSION_ID)
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == CONTROL_FACT
+        ]
+        self.assertEqual(len(facts), 1)
+        self.assertTrue(facts[0].requests_decision)
+        self.assertEqual(
+            thaw_value(facts[0].data),
+            {
+                "approved": True,
+                "action": "test.install",
+                "succeeded": True,
+                "message": "安装完成",
+                "data": {},
+            },
+        )
+        self.assertIs(
+            (await runtime.state(SESSION_ID)).status,
+            RuntimeStatus.RUNNABLE,
+        )
+
+    async def test_cancellation_writes_control_fact(self):
+        async def propose(input_data: ProposalInput):
+            return ControlApprovalRequest(
+                "approval-1",
+                "test.install",
+                {"value": input_data.value},
+                "安装 frozen",
+                "测试风险",
+            )
+
+        control = AssistantControlPlane((_operation(propose),))
+        journal = MemoryJournal()
+        runtime = AgentRuntime(
+            journal,
+            _decision_maker(journal, ControlLlm(), control),
+            deliver_binding(lambda _session_id, _output_id, _text: None),
+        )
+        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
+        await settle_session(runtime, SESSION_ID, control=control)
+
+        async def wake(_session_id: str) -> None:
+            return None
+
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            SimpleNamespace(wake=wake),
+            control=control,
+            management=SimpleNamespace(),
+        )
+        message = await sessions.resolve_control(SESSION_ID, approved=False)
+        self.assertEqual(message, "已取消控制操作：test.install")
+        facts = [
+            event.payload
+            for event in await journal.snapshot(SESSION_ID)
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == CONTROL_FACT
+        ]
+        self.assertEqual(thaw_value(facts[0].data)["approved"], False)
+        self.assertTrue(facts[0].requests_decision)
 
     async def test_approval_failure_does_not_restore_consumed_request(self):
         async def propose(input_data: ProposalInput):

@@ -33,6 +33,19 @@ class ControlNotice:
     message: str
 
 
+CONTROL_FACT = "assistant.control"
+
+
+@dataclass(frozen=True, slots=True)
+class ControlResolution:
+    request_id: str
+    action: str
+    approved: bool
+    succeeded: bool
+    message: str
+    data: Mapping[str, object]
+
+
 @dataclass(frozen=True, slots=True)
 class _DecisionKey:
     session_id: str
@@ -170,18 +183,32 @@ class AssistantControlPlane:
             request.risk,
         )
 
-    async def resolve(self, session_id: str, *, approved: bool) -> str:
+    async def resolve(self, session_id: str, *, approved: bool) -> ControlResolution:
         request = self._pending.get(session_id)
         if request is None:
             raise ValueError("当前 Session 没有待确认的控制操作")
         del self._pending[session_id]
         if not approved:
-            return f"已取消控制操作：{request.action}"
+            return ControlResolution(
+                request.id,
+                request.action,
+                False,
+                False,
+                f"已取消控制操作：{request.action}",
+                {},
+            )
         operation = self._approval_operations[request.action]
         execution = await operation.approval_handler.execute(
             request.payload,
         )
-        return execution.message
+        return ControlResolution(
+            request.id,
+            request.action,
+            True,
+            execution.succeeded,
+            execution.message,
+            dict(execution.data),
+        )
 
     @staticmethod
     def _approval_message(request: ControlApprovalRequest) -> str:

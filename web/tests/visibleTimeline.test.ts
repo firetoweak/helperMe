@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { ConversationView } from "../src/api/contracts";
 import {
   timelineTurns,
+  turnIsSettled,
+  turnNeedsSilentEnd,
   turnNeedsThinkingHint,
+  turnReply,
+  type TimelineTurn,
 } from "../src/features/conversation/timelineTurns";
 import { visibleTimeline } from "../src/features/conversation/visibleTimeline";
 
@@ -381,4 +385,191 @@ describe("turnNeedsThinkingHint", () => {
       ),
     ).toBe(false);
   });
+
+  it("hides thinking once the turn has settled", () => {
+    expect(
+      turnNeedsThinkingHint(
+        {
+          key: "user-1",
+          user,
+          process: [toolOnlyStep("succeeded")],
+          active: null,
+          final: null,
+        },
+        { running: false, latest: true, settled: true },
+      ),
+    ).toBe(false);
+  });
 });
+
+describe("turnIsSettled", () => {
+  const user = {
+    key: "user-1",
+    kind: "user" as const,
+    text: "安装这个 MCP",
+    images: [],
+  };
+
+  it("closes an idle tool-only turn after install or test", () => {
+    const turn = toolOnlyTurn(user);
+    expect(
+      turnIsSettled(turn, {
+        latest: true,
+        running: false,
+        awaitingControl: false,
+      }),
+    ).toBe(true);
+    expect(turnNeedsSilentEnd(turn, true)).toBe(true);
+    expect(turnReply(turn, true)).toBeNull();
+  });
+
+  it("stays open while the session is still running", () => {
+    expect(
+      turnIsSettled(toolOnlyTurn(user), {
+        latest: true,
+        running: true,
+        awaitingControl: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays open while control approval is pending", () => {
+    expect(
+      turnIsSettled(toolOnlyTurn(user), {
+        latest: true,
+        running: false,
+        awaitingControl: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays open while a tool is still running or awaiting authorization", () => {
+    expect(
+      turnIsSettled(
+        {
+          key: "user-1",
+          user,
+          process: [toolOnlyStep("running")],
+          active: null,
+          final: null,
+        },
+        { latest: true, running: false, awaitingControl: false },
+      ),
+    ).toBe(false);
+    expect(
+      turnIsSettled(
+        {
+          key: "user-1",
+          user,
+          process: [toolOnlyStep("awaiting_authorization")],
+          active: null,
+          final: null,
+        },
+        { latest: true, running: false, awaitingControl: false },
+      ),
+    ).toBe(false);
+  });
+
+  it("closes earlier turns even if the current session is running", () => {
+    expect(
+      turnIsSettled(toolOnlyTurn(user), {
+        latest: false,
+        running: true,
+        awaitingControl: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not invent a silent end when a final reply exists", () => {
+    const turn: TimelineTurn = {
+      key: "user-1",
+      user,
+      process: [toolOnlyStep("succeeded")],
+      active: null,
+      final: {
+        key: "output:out-1",
+        kind: "step",
+        outputId: "out-1",
+        text: "已经装好并测过了",
+        thinking: null,
+        thinkingPending: false,
+        pending: false,
+        tools: [],
+      },
+    };
+    expect(turnIsSettled(turn, {
+      latest: true,
+      running: false,
+      awaitingControl: false,
+    })).toBe(true);
+    expect(turnNeedsSilentEnd(turn, true)).toBe(false);
+    expect(turnReply(turn, true)).toMatchObject({
+      text: "已经装好并测过了",
+      streaming: false,
+    });
+  });
+
+  it("keeps leftover preview text after idle, without streaming", () => {
+    const turn: TimelineTurn = {
+      key: "user-1",
+      user,
+      process: [toolOnlyStep("succeeded")],
+      active: {
+        key: "output:user-1",
+        kind: "step",
+        outputId: "user-1",
+        text: "先测一下",
+        thinking: null,
+        thinkingPending: false,
+        pending: true,
+        tools: [],
+      },
+      final: null,
+    };
+    expect(
+      turnIsSettled(turn, {
+        latest: true,
+        running: false,
+        awaitingControl: false,
+      }),
+    ).toBe(true);
+    expect(turnReply(turn, true)).toMatchObject({
+      text: "先测一下",
+      streaming: false,
+    });
+    expect(turnNeedsSilentEnd(turn, true)).toBe(false);
+  });
+});
+
+function toolOnlyTurn(user: TimelineTurn["user"]): TimelineTurn {
+  return {
+    key: "user-1",
+    user,
+    process: [toolOnlyStep("succeeded")],
+    active: null,
+    final: null,
+  };
+}
+
+function toolOnlyStep(
+  status: "succeeded" | "running" | "awaiting_authorization",
+): TimelineTurn["process"][number] {
+  return {
+    key: "output:user-1",
+    kind: "step",
+    outputId: "user-1",
+    text: null,
+    thinking: null,
+    thinkingPending: false,
+    pending: false,
+    tools: [
+      {
+        commandId: "cmd-1",
+        name: "test_mcp_server",
+        status,
+        error: null,
+        arguments: { server_id: "demo" },
+      },
+    ],
+  };
+}

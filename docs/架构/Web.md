@@ -125,7 +125,13 @@ Journal 仍为运行中或中断时采用更新的实时状态。切换 Session 
 与 preview / `deliver` 正文分开。思考块只展示纯文本，流式时展开、结束后自动折上。刷新后可从 Step 的
 `decision_metadata.message_extensions.reasoning_content` 恢复已提交的思考。
 Step 提交后，无工具则原地成为最终
-回复，有工具才移入执行过程。最终回复出现后，整个执行过程自动折叠。preview、
+回复，有工具才移入执行过程。一轮是否收口看机械事实：Session `idle`、没有进行中或待授权
+工具、没有未决 control approval；不要求必须出现最终气泡。`turn.final` 只表示有一句给用户看
+的话。收口后执行过程自动折叠；有工具却没有正文时，Channel 画「这一轮没有文字回复」，
+不写 Journal，也不假装成 `deliver`。用户确认控制提案后，安装/测试的执行说明走
+`control_message`：TUI / Telegram / ACP 当场出示，Web 也画在当前轮次末尾。这条说明
+是 Channel 即时投影；同一份结果同时写入 Journal 的 `assistant.control` 事实，供模型
+在下一拍决策中看见。preview、
 committed cache 和 Journal Step 使用同一 `output_id` 作为显示身份，阶段切换不重复
 挂载普通最终回复。助手正文由 `@ai-markdown/react-mantine` 渲染；preview 增量按动画帧
 合并后再进 Redux，流式期间不做代码高亮，结束后再高亮。Remend 只修尚未闭合的
