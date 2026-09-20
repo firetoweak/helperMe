@@ -47,6 +47,7 @@ DEFAULT_SIZE_EXTERNALIZE_CHARS = 16_000
 DEFAULT_PREVIEW_CHARS = 1_200
 DEFAULT_IMAGE_BUDGET_TOKENS = 8_000
 _IMAGE_EVICTED_HINT = "\n图片已移出上下文；需要重新查看时用上面的 id 调用 read_image。"
+_USER_ATTACHMENT_HINT = "\n（本消息附图 id：{ids}；需要重看时用 read_image 回读）"
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,12 +216,25 @@ def _user_content(
     text: str,
     attachments: AttachmentStore | None,
 ) -> object:
+    """用户消息带附件时，图片块之外同时把 id 留在正文里。
+
+    图片块是给支持视觉的模型看的；一旦下游（provider、宿主或任何中间层）没有把它
+    真正交到模型手上，正文里的 id 就是模型唯一的可寻址线索。缺了它，模型只剩
+    `[Image #1]` 这样的 token，既不知道 id 也无法用 read_image 回读——失败的形态
+    从「看不到图」退化成「不知道有图」。工具回图的 id 本来就在结果 JSON 里，这里
+    只是把用户附件补齐到同等程度。
+    """
+
     if not event.artifact_refs:
         return text
     if attachments is None:
         raise ValueError("user message has attachment refs but no store")
     images = [attachments.inspect(ref).to_block() for ref in event.artifact_refs]
-    return [{"type": "text", "text": text}, *images]
+    identifiers = "、".join(image["id"] for image in images)
+    return [
+        {"type": "text", "text": f"{text}{_USER_ATTACHMENT_HINT.format(ids=identifiers)}"},
+        *images,
+    ]
 
 
 def _translate_visible_events(

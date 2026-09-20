@@ -55,7 +55,7 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
                 for message in messages
                 if message["role"] == "user"
             )
-            self.assertEqual(user["content"][0]["text"], "[Image #1] look")
+            self.assertTrue(user["content"][0]["text"].startswith("[Image #1] look"))
             self.assertEqual(user["content"][1]["id"], ref.attachment_id)
             self.assertEqual(user["content"][1]["type"], "image")
 

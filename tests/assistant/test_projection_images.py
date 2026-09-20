@@ -193,7 +193,8 @@ class ToolImageProjectionTest(unittest.IsolatedAsyncioTestCase):
                 for message in messages
                 if message["role"] == "user" and type(message["content"]) is list
             )
-            self.assertEqual(user["content"][0]["text"], "[Image #1] look")
+            self.assertTrue(user["content"][0]["text"].startswith("[Image #1] look"))
+            self.assertIn(ref.attachment_id, user["content"][0]["text"])
             self.assertEqual(user["content"][1]["id"], ref.attachment_id)
             self.assertEqual(user["content"][1]["mime"], "image/png")
             journaled = next(
