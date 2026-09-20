@@ -114,6 +114,8 @@ class HostSupervisor:
             return await complete_llm_chat(
                 self.llm, arguments, on_delta, on_reasoning_delta
             )
+        if operation == "is_paused":
+            return self.is_paused(session_id)
         if operation == "compact_boundary":
             return await self.compact.boundary(session_id, arguments)
         if operation == "compact_complete":
@@ -544,7 +546,7 @@ class HostSupervisor:
             self.selections[owner] = session_id
             try:
                 await self._push_authorization_policy(session_id)
-                view = await self.compact.application("resume", session_id, {})
+                view = await self.resume(session_id)
             except BaseException:
                 if previous is None:
                     self.selections.pop(owner, None)
@@ -561,7 +563,7 @@ class HostSupervisor:
                 if worker is not None:
                     await self._push_authorization_policy(previous)
                     await self._stop_idle(previous, worker)
-            return self._with_preference(view, session_id)
+            return view
 
     async def release(self, owner):
         async with self.selection_locks.setdefault(owner, asyncio.Lock()):
@@ -574,8 +576,9 @@ class HostSupervisor:
                 await self._stop_idle(session_id, worker)
 
     async def resume(self, session_id):
+        operation = "view" if self.is_paused(session_id) else "resume"
         return self._with_preference(
-            await self.compact.application("resume", session_id, {}),
+            await self.compact.application(operation, session_id, {}),
             session_id,
         )
 
@@ -598,10 +601,11 @@ class HostSupervisor:
         )
 
     async def accept_input(self, session_id, content, **kwargs):
+        if self._pause.get(session_id):
+            self._pause.set(session_id, False)
         view = await self.compact.application(
             "accept_input", session_id, dict(content=content, **kwargs)
         )
-        self._pause.remember(session_id, view.paused)
         return self._with_preference(view, session_id)
 
     async def resolve_authorization(self, session_id, command_id, *, approved):
@@ -623,12 +627,12 @@ class HostSupervisor:
 
     async def set_paused(self, session_id, paused):
         self._pause.set(session_id, bool(paused))
-        return self._with_preference(
-            await self.compact.application(
-                "set_paused", session_id, {"paused": bool(paused)}
-            ),
-            session_id,
-        )
+        if paused:
+            return self._with_preference(
+                await self.compact.application("view", session_id, {}),
+                session_id,
+            )
+        return await self.resume(session_id)
 
     async def resolve_control(self, session_id, *, approved):
         return await self.compact.application(

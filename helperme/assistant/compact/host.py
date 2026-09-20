@@ -220,7 +220,7 @@ class CompactHost:
             self.host.store.require(session)
             await self.recover_prepared(session)
             result = await self.host.request(operation, session, arguments)
-            if operation == "resume":
+            if operation in {"resume", "view"}:
                 job = self.store.job(session)
                 if (
                     job is not None

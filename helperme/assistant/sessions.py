@@ -5,7 +5,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from helperme.assistant.auto_authorize import AutoAuthorizeStore
-from helperme.assistant.session_pause import SessionPauseStore
 from helperme.assistant.control import (
     AssistantControlPlane,
     ControlApprovalView,
@@ -107,7 +106,6 @@ class AssistantSessions:
         self._management = management
         self._subagents = subagents
         self._auto_authorize = AutoAuthorizeStore(meta_root)
-        self._pause = SessionPauseStore(meta_root)
         self._auto_grant: dict[str, bool] = {}
 
     def _view(
@@ -123,7 +121,6 @@ class AssistantSessions:
             control_message=control_message,
             has_active_subagents=has_active_subagents,
             auto_authorize=self._auto_authorize.get(state.session_id),
-            paused=self._pause.get(state.session_id),
         )
 
     async def create(self, session_id: str) -> SessionView:
@@ -144,7 +141,7 @@ class AssistantSessions:
             pending_subagents = await self._subagents.rehydrate(session_id)
         if self._subagents is not None and self._subagents.has_returned(session_id):
             return self._view(state)
-        if self._view(state).should_wake and not self._pause.get(session_id):
+        if self._view(state).should_wake:
             await self._scheduler.wake(session_id)
         elif self._subagents is not None:
             await self._subagents.on_quiesced(session_id, state)
@@ -185,8 +182,6 @@ class AssistantSessions:
         source: str = "user",
         artifact_refs: tuple[str, ...] = (),
     ) -> None:
-        if self._pause.get(session_id):
-            self._pause.set(session_id, False)
         await self._runtime.receive_user_message(
             session_id,
             content,
@@ -294,17 +289,6 @@ class AssistantSessions:
         for command_id in pending:
             await self._runtime.grant_command(session_id, command_id)
         await self._scheduler.wake(session_id)
-
-    def is_paused(self, session_id: str) -> bool:
-        return self._pause.get(session_id)
-
-    async def set_paused(self, session_id: str, *, paused: bool) -> SessionView:
-        self._pause.set(session_id, paused)
-        if not paused:
-            state = await self._runtime.state(session_id)
-            if self._view(state).should_wake:
-                await self._scheduler.wake(session_id)
-        return await self.view(session_id)
 
     async def cancel_turn(self, session_id: str) -> SessionView:
         await self._scheduler.cancel_turn(session_id)

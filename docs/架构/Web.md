@@ -57,10 +57,12 @@ Session 运行或存在活动 preview 时，时间线跟随内容尺寸变化固
 `resume` / wake），不写用户消息。Agent 自然停在等用户输入时
 `should_wake` 为 false，两按钮都不出现。这不是 `cancel_turn`。
 有 `lastError` 时横幅「再试」取代「继续」，仍走同一条 retry。
-`SessionView.paused` 与自动授权同级，存在 `sessions_root/paused.json`，**不进
-Journal**。缺省 false，只在人拨过时写入；创建和 Fork 不写。刷新走 GET 投影，Host
-直接补字段，不 resume Worker。新用户消息会清掉暂停。端点
-`POST /api/sessions/{id}/paused`，body `{connection_id, paused}`。
+`SessionView.paused` 只活在 Host 的 `sessions_root/paused.json`，**不进 Journal**，
+Worker 不读不写该文件。缺省 false，只在人拨过时由 Host 写入；创建和 Fork 不写。
+Worker 每次推进前向 Host 询问 `is_paused`；`resume` / `select` 在暂停时只
+`view`，不 wake。刷新走 GET 投影，Host 直接补字段，不 resume Worker。新用户
+消息由 Host 清掉暂停。端点 `POST /api/sessions/{id}/paused`，body
+`{connection_id, paused}`。
 
 运行中第一次发送不立刻入账：正文和图片停在输入框上方。当前轮回到 idle 后按顺序发出；点「立即发送」马上走现有后到消息；点垃圾桶把停放内容退回编辑栏，不是丢掉。这不是 `cancel_turn`，也不另建后端队列。刷新或切换会话丢弃停放。
 
