@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from helperme.assistant.control import AssistantControlPlane
+from helperme.assistant.control import CONTROL_SOURCE, AssistantControlPlane
 from helperme.assistant.delivery import PreviewEmitter
 from helperme.assistant.failures import assistant_failure_message
 from helperme.assistant.management import ManagementSurface
@@ -117,16 +117,28 @@ class SessionScheduler:
         if advance.step is None and advance.status is not RuntimeStatus.RUNNABLE:
             await self._preview.abort(session_id)
             await self._preview.abort_thinking(session_id)
+        runnable = advance.status is RuntimeStatus.RUNNABLE
         if advance.step is not None:
-            result = await self._control.after_committed_step(
+            outcome = await self._control.after_committed_step(
                 session_id,
                 advance.step,
             )
-            if result is not None:
-                await self._emit(session_id, result.message)
-        if advance.status is not RuntimeStatus.RUNNABLE:
+            if outcome is not None:
+                await self._runtime.receive_domain_fact(
+                    session_id,
+                    outcome.fact_type,
+                    dict(outcome.data),
+                    delivery_id=outcome.delivery_id,
+                    source=CONTROL_SOURCE,
+                    requests_decision=outcome.requests_decision,
+                )
+                if outcome.notice is not None:
+                    await self._emit(session_id, outcome.notice)
+                # 待裁决的提案要停下等人；另外两种结局是模型必须看到的新事实。
+                runnable = runnable or outcome.requests_decision
+        if not runnable:
             await self._quiesced(session_id)
-        return advance.status is RuntimeStatus.RUNNABLE
+        return runnable
 
     async def _emit(self, session_id: str, message: str) -> None:
         if self._notify is None:

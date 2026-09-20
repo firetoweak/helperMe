@@ -201,10 +201,9 @@ class JournalBackedLlmDecisionMaker:
         self._loop_guard = LoopGuard() if loop_guard is None else loop_guard
         self._preview = PreviewEmitter() if preview is None else preview
 
-    def _schemas(self, frame: DecisionFrame):
-        return self.schemas_for(frame.state)
-
-    def schemas_for(self, state) -> tuple[list[dict[str, object]], frozenset[str]]:
+    def schemas_for(
+        self, state, events
+    ) -> tuple[list[dict[str, object]], frozenset[str]]:
         if self._compact is not None and self._compact.is_reader:
             return deepcopy(self._compact.schemas()), frozenset()
         schemas = self._surface.schemas(
@@ -223,6 +222,7 @@ class JournalBackedLlmDecisionMaker:
         )
         control_schemas = self._control.schemas(
             state.session_id,
+            events,
             allowed_control_names,
         )
         offered_control_names = _tool_names(control_schemas)
@@ -305,18 +305,19 @@ class JournalBackedLlmDecisionMaker:
         )
 
     async def decide(self, frame: DecisionFrame) -> RecordedDecision:
-        # Host-owned context is captured before the first await. Journal facts
-        # are bounded by the frame position, freezing this Step's visible world.
+        # Journal facts are bounded by the frame position, freezing this Step's
+        # visible world. Schemas read the same bounded events: a control proposal
+        # still awaiting the user must not offer another control tool.
         self._control.begin_decision(frame.state.session_id)
-        prompt = self._prompt_for(frame)
-        schemas, control_names = self._schemas(frame)
-        allowed_tool_names = _tool_names(schemas)
         journal_tail = await self._journal.snapshot(frame.state.session_id)
         events = tuple(
             event
             for event in journal_tail
             if event.sequence <= frame.observed_journal_position
         )
+        prompt = self._prompt_for(frame)
+        schemas, control_names = self.schemas_for(frame.state, events)
+        allowed_tool_names = _tool_names(schemas)
         visible = frame.state
         if self._compact is not None and self._compact.is_reader:
             prepared = await self._compact.prepare_reader(events, visible)

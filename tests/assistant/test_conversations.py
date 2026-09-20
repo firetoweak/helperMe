@@ -331,9 +331,6 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
             def is_paused(self, session_id):
                 return session_id == "spoken"
 
-            def control_approval(self, session_id):
-                return None
-
             def conversation_status(self, session_id):
                 from helperme.assistant.compact.store import ConversationStatus
 
@@ -364,17 +361,17 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(spoken.session.auto_authorize)
         self.assertTrue(spoken.session.paused)
 
-    async def test_conversation_takes_control_approval_from_host_mirror(self):
+    async def test_conversation_projects_control_approval_from_journal(self):
         from pathlib import Path
         from tempfile import TemporaryDirectory
 
-        from helperme.assistant.control import ControlApprovalView
+        from helperme.assistant.control import CONTROL_PROPOSED, CONTROL_SOURCE
         from helperme.assistant.conversations import AssistantQueries
         from helperme.assistant.host.session_store import SessionStore
-        from helperme.runtime import SqliteJournal
+        from helperme.runtime import DomainFactCommitted, SqliteJournal
         from helperme.runtime.events import DeliveryIdentity, EventDraft
 
-        class Mirror:
+        class Host:
             def activity(self, session_id):
                 return "idle"
 
@@ -383,9 +380,6 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
 
             def is_paused(self, session_id):
                 return None
-
-            def control_approval(self, session_id):
-                return ControlApprovalView("req-1", "删除工作区", "high")
 
             def conversation_status(self, session_id):
                 from helperme.assistant.compact.store import ConversationStatus
@@ -397,9 +391,10 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
 
         with TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
-            queries = AssistantQueries(store, Mirror())
+            queries = AssistantQueries(store, Host())
             await store.create("spoken", workspace_id="workspace-1")
-            await SqliteJournal(store.require("spoken")).accept_delivery(
+            journal = SqliteJournal(store.require("spoken"))
+            await journal.accept_delivery(
                 EventDraft(
                     event_id="user-1",
                     session_id="spoken",
@@ -408,8 +403,27 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
                     delivery=DeliveryIdentity("web", "d1"),
                 )
             )
+            await journal.accept_delivery(
+                EventDraft(
+                    event_id="proposed-1",
+                    session_id="spoken",
+                    payload=DomainFactCommitted(
+                        CONTROL_PROPOSED,
+                        {
+                            "request_id": "req-1",
+                            "action": "workspace.remove",
+                            "payload": {"workspace_id": "workspace-1"},
+                            "summary": "删除工作区",
+                            "risk": "high",
+                        },
+                    ),
+                    occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+                    delivery=DeliveryIdentity(CONTROL_SOURCE, "req-1:proposed"),
+                )
+            )
             conversation = await queries.conversation("spoken")
 
         self.assertEqual(conversation.session.control_approval.request_id, "req-1")
+        self.assertEqual(conversation.session.control_approval.risk, "high")
         self.assertEqual(conversation.compact_count, 2)
         self.assertEqual(conversation.compact_phase, "failed")

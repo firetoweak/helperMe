@@ -174,6 +174,7 @@ class PromptVocabularyTests(unittest.IsolatedAsyncioTestCase):
             *decision._management.schemas(session_id),
             *assembly.control.schemas(
                 session_id,
+                (),
                 decision._management.control_names(session_id),
             ),
             *assembly.subagents.schemas(session_id),

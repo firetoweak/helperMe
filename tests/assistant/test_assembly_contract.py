@@ -141,6 +141,7 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                             delivery_id="user-1",
                         )
                         state = await assembly.runtime.state(session_id)
+                        events = await assembly.runtime.snapshot(session_id)
                         allowed_control = decision._management.control_names(
                             session_id,
                             state,
@@ -150,7 +151,9 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                             *decision._skill_tools.schemas(),
                             *decision._cli_tools.schemas(),
                             *decision._management.schemas(session_id, state),
-                            *assembly.control.schemas(session_id, allowed_control),
+                            *assembly.control.schemas(
+                                session_id, events, allowed_control
+                            ),
                             *assembly.subagents.schemas(session_id),
                             *decision._compact.schemas(),
                         ]

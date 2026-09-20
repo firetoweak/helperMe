@@ -54,7 +54,6 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
     ready = asyncio.Event()
     revision = 0
     advertised = -1
-    advertised_approval = None
     advertised_busy = False
 
     async def handle(operation, target, arguments):
@@ -195,22 +194,15 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                     and advertised != revision
                 ):
                     view = await assembly.sessions.view(session_id)
-                    # Control proposals live in this Worker until resolved. The Host
-                    # mirrors them so that reading a conversation never has to wake
-                    # this process.
-                    if view.control_approval != advertised_approval:
-                        advertised_approval = view.control_approval
-                        await peer.send(("control_approval", view.control_approval))
-                    if view.control_approval is None:
-                        advertised = revision
-                        advertised_busy = False
-                        await peer.send(
-                            (
-                                "idle",
-                                revision,
-                                view.has_active_subagents,
-                            )
+                    advertised = revision
+                    advertised_busy = False
+                    await peer.send(
+                        (
+                            "idle",
+                            revision,
+                            view.has_active_subagents,
                         )
+                    )
             await peer.send(("stopping",))
         finally:
             await peer.close(RuntimeError("Worker closed"))

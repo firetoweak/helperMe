@@ -10,6 +10,7 @@ from helperme.assistant.auto_authorize import (
     AutoAuthorizeStore,
     auto_grant_for_owners,
 )
+from helperme.assistant.control import pending_approval_view
 from helperme.assistant.session_pause import SessionPauseStore
 from helperme.assistant.compact.host import CompactHost
 from helperme.assistant.delivery import emit_delivery
@@ -98,8 +99,6 @@ class HostSupervisor:
         self.job = WindowsJob.create() if os.name == "nt" else None
         self._auto_authorize = AutoAuthorizeStore(store.root)
         self._pause = SessionPauseStore(store.root)
-        # Worker 内存态的镜像：读会话不必为了它唤醒 Worker。
-        self._control_approvals: dict[str, object] = {}
         self.workspaces = (
             workspaces
             if workspaces is not None
@@ -218,8 +217,6 @@ class HostSupervisor:
                         await emitted
             elif kind == "session_failed":
                 await self._emit_session_failed(*values)
-            elif kind == "control_approval":
-                self._control_approvals[session_id] = values[0]
             elif kind == "idle":
                 was_running = worker.running
                 worker.idle_revision = values[0]
@@ -334,7 +331,6 @@ class HostSupervisor:
             worker.peer.connection.close()
             worker.process.close()
             self.workers.pop(session_id)
-            self._control_approvals.pop(session_id, None)
             worker.exited.set()
             worker.transition.set()
             worker.changed.set()
@@ -439,9 +435,6 @@ class HostSupervisor:
 
     def is_paused(self, session_id):
         return self._pause.get(session_id)
-
-    def control_approval(self, session_id):
-        return self._control_approvals.get(session_id)
 
     def _owners_of(self, session_id):
         return tuple(
@@ -580,7 +573,7 @@ class HostSupervisor:
         return self._with_preference(
             session_view(
                 state,
-                control_approval=self.control_approval(session_id),
+                control_approval=pending_approval_view(events),
                 has_active_subagents=bool(project_pending(events)),
             ),
             session_id,

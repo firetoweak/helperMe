@@ -35,7 +35,7 @@ Channel 不区分 running/idle 输入，不创建 Interrupt 类型，不抢占�
 
 明确的授权 `yes/no` 由 Assistant 应用边界映射为 `CommandAuthorized` / `CommandRejected`。其他文本一律保留为用户消息，Runtime 不猜语义。
 
-control confirmation 优先于 Command authorization。当前两类确认沿用既有进程内接纳语义，尚不承诺跨 Worker 重启的 delivery 幂等；普通 `UserMessageReceived` 的 Journal 幂等契约不变。control approval 的持久闭环是独立专题。
+control confirmation 优先于 Command authorization。待裁决的控制提案从 Journal 投影，Worker 重启后仍在；用户的 yes/no 由 Assistant 应用边界写成 `assistant.control.resolved`。普通 `UserMessageReceived` 的 Journal 幂等契约不变。过期确认的跨进程错误回传还没做。
 
 ## 输出
 
@@ -45,7 +45,7 @@ control confirmation 优先于 Command authorization。当前两类确认沿用�
 
 Step 原子提交后，Assistant 正文仍通过产品拥有的 `deliver(output_id, text)` Command 到达 Channel sink。Channel 用同一 `output_id` 将最终正文与 preview 对齐，不重复显示；最终正文与 preview 不一致属于内部契约违规。投递失败不回滚 Step，也不重新调用模型或业务工具；重试和外部平台能够提供的幂等程度由 Channel 承担。Telegram 对明确的临时网络、服务端与限流错误重试，TUI 的本地写出同步完成；ACP stdio 连接断开后没有可重连的 reply route。
 
-控制面审批提示由 Scheduler 在 Step 提交后的 Assistant 边界发送，不伪装成 Runtime Event；它没有模型 preview，使用独立的 `output_id`。
+控制提案本身不走 `deliver`，不进对话时间线。Channel 从会话视图的 `control_approval` 出示确认；用户确认后的执行说明走 `control_message`，并与 Journal 里的 `assistant.control.resolved` 同一份内容。见[入口与授权 · 控制提案](入口与授权.md#控制提案)。
 
 ## Session 操作
 

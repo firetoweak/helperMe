@@ -129,7 +129,17 @@ class HelperMeAcpAgent:
                 delivery_id=f"acp-prompt-{uuid4().hex}",
             )
             turn.accepted.set()
-            if view.control_message is not None:
+            if view.control_approval is not None:
+                await self.deliver(
+                    session_id,
+                    f"control-{uuid4().hex}",
+                    (
+                        f"{view.control_approval.summary}\n"
+                        f"风险：{view.control_approval.risk}\n"
+                        "输入 yes 确认，no 取消。"
+                    ),
+                )
+            elif view.control_message is not None:
                 await self.deliver(
                     session_id,
                     f"control-{uuid4().hex}",

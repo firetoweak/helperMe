@@ -4,9 +4,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from helperme.assistant.control import (
-    CONTROL_FACT,
+    CONTROL_RESOLVED,
+    CONTROL_SOURCE,
     AssistantControlPlane,
     ControlApprovalView,
+    ControlResolution,
+    NoPendingControlApproval,
+    pending_approval_view,
+    project_pending_approval,
 )
 from helperme.assistant.runner import (
     SessionScheduler,
@@ -109,13 +114,14 @@ class AssistantSessions:
     def _view(
         self,
         state: CanonicalState,
+        events,
         *,
         control_message: str | None = None,
         has_active_subagents: bool = False,
     ) -> SessionView:
         return session_view(
             state,
-            control_approval=self._control.pending_view(state.session_id),
+            control_approval=pending_approval_view(events),
             control_message=control_message,
             has_active_subagents=has_active_subagents,
             auto_authorize=self._preference.get(state.session_id, False),
@@ -137,26 +143,28 @@ class AssistantSessions:
         pending_subagents: tuple[str, ...] = ()
         if self._subagents is not None:
             pending_subagents = await self._subagents.rehydrate(session_id)
+        events = await self._runtime.snapshot(session_id)
         if self._subagents is not None and self._subagents.has_returned(session_id):
-            return self._view(state)
-        if self._view(state).should_wake:
+            return self._view(state, events)
+        if self._view(state, events).should_wake:
             await self._scheduler.wake(session_id)
         elif self._subagents is not None:
             await self._subagents.on_quiesced(session_id, state)
         return self._view(
             state,
+            events,
             has_active_subagents=bool(pending_subagents),
         )
 
     async def view(self, session_id: str) -> SessionView:
+        events = await self._runtime.snapshot(session_id)
         state = await self._runtime.state(session_id)
         has_active_subagents = False
         if self._subagents is not None:
-            has_active_subagents = bool(
-                project_pending(await self._runtime.snapshot(session_id))
-            )
+            has_active_subagents = bool(project_pending(events))
         return self._view(
             state,
+            events,
             has_active_subagents=has_active_subagents,
         )
 
@@ -166,23 +174,51 @@ class AssistantSessions:
         *,
         approved: bool,
     ) -> str:
-        resolution = await self._control.resolve(session_id, approved=approved)
+        request = project_pending_approval(
+            await self._runtime.snapshot(session_id)
+        )
+        if request is None:
+            raise NoPendingControlApproval(session_id)
+        try:
+            resolution = await self._control.resolve(request, approved=approved)
+        except Exception as error:
+            # 执行可能已经改了世界的一半。裁决先落成事实，重试不会再执行一次。
+            await self._commit_resolution(
+                session_id,
+                ControlResolution(
+                    request.id,
+                    request.action,
+                    True,
+                    False,
+                    f"控制操作执行失败：{error}",
+                    {},
+                ),
+            )
+            raise
+        await self._commit_resolution(session_id, resolution)
+        await self._scheduler.wake(session_id)
+        return resolution.message
+
+    async def _commit_resolution(
+        self,
+        session_id: str,
+        resolution: ControlResolution,
+    ) -> None:
         await self._runtime.receive_domain_fact(
             session_id,
-            CONTROL_FACT,
+            CONTROL_RESOLVED,
             {
+                "request_id": resolution.request_id,
                 "approved": resolution.approved,
                 "action": resolution.action,
                 "succeeded": resolution.succeeded,
                 "message": resolution.message,
                 "data": dict(resolution.data),
             },
-            delivery_id=resolution.request_id,
-            source=CONTROL_FACT,
+            delivery_id=f"{resolution.request_id}:resolved",
+            source=CONTROL_SOURCE,
             requests_decision=True,
         )
-        await self._scheduler.wake(session_id)
-        return resolution.message
 
     async def receive_user_message(
         self,

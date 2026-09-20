@@ -28,7 +28,7 @@ class _Sessions:
     async def accept_input(self, session_id, content, **kwargs):
         self.calls.append(("accept_input", session_id, content, kwargs))
         self.accepted.set()
-        return SimpleNamespace(control_message=None)
+        return SimpleNamespace(control_approval=None, control_message=None)
 
     async def wait_quiescent(self, session_id):
         await self.quiescent.wait()

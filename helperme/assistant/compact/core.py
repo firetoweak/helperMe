@@ -18,6 +18,7 @@ from helperme.assistant.context.projection import (
     _translate_visible_events,
     PreparedModelContext,
 )
+from helperme.assistant.control import project_pending_approval
 from helperme.assistant.subagent.subagent import project_parent
 from helperme.llm.api import InvalidLLMResponse
 from helperme.runtime import DomainFactCommitted, ToolBinding
@@ -385,13 +386,16 @@ class CompactBoundary:
         sid = self.context.session_id
         events = await self.runtime.snapshot(sid)
         state = self.runtime.projector.project(sid, events).state
-        if state.waiting_command_ids or self.control.pending_view(sid) is not None:
+        if (
+            state.waiting_command_ids
+            or project_pending_approval(events) is not None
+        ):
             return {"safe": False}
         visible = self.context.visible(
             events, StateProjector().project_visible(sid, events)
         )
         prompt = self.decision.prompt_for(state)
-        tools = self.decision.schemas_for(state)[0]
+        tools = self.decision.schemas_for(state, events)[0]
         prepared = self.context.projector.prepare(
             events,
             visible,

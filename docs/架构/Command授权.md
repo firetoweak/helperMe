@@ -1,6 +1,6 @@
 # Command 授权
 
-Command Authorization 是 Web Channel 首版纵向切片，解决「工具副作用需要用户确认」的交互。与 Control Approval（批准安装、更新等管理提案）分离，两者变化原因不同，不抽象成通用「审批框架」。
+Command Authorization 是 Web Channel 首版纵向切片，解决「工具副作用需要用户确认」的交互。与 Control Approval（批准安装、更新等管理提案）分离，两者变化原因不同，不抽象成通用「审批框架」。控制提案见[入口与授权 · 控制提案](入口与授权.md#控制提案)。
 
 ## 语义
 

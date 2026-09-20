@@ -181,7 +181,7 @@ Registry 信封与 Skill 同构：`{ "version": 1, "clis": [...] }`，原子写�
 - 控制提案（`ControlOperation`，声明 `control_boundary` + `exclusive_batch`）：
   - `propose_cli_install` / `propose_cli_update` / `propose_cli_repair` / `propose_cli_uninstall`
 
-安装/卸载/更新/修复都是外部副作用，走 Control Approval：提案不签发 Runtime Command，用户确认后由 CLI Application 执行。与 Skill 的差异：CLI **安装即注册，无 enabled 开关**，因此没有 `propose_cli_enable`，改为 `propose_cli_uninstall` 移除登记。安装提案的 risk 文案必须写明：安装后该 CLI 对所有 Session 可见可用，且其本地凭据域（如 `gh` 的 GitHub 凭据）对 agent 开放。
+安装/卸载/更新/修复都是外部副作用，走 Control Approval：提案不签发 Runtime Command，用户确认后由 CLI Application 执行。待裁决项与裁决结果的事实形状见[入口与授权 · 控制提案](入口与授权.md#控制提案)。与 Skill 的差异：CLI **安装即注册，无 enabled 开关**，因此没有 `propose_cli_enable`，改为 `propose_cli_uninstall` 移除登记。安装提案的 risk 文案必须写明：安装后该 CLI 对所有 Session 可见可用，且其本地凭据域（如 `gh` 的 GitHub 凭据）对 agent 开放。
 
 ### 候选冻结
 

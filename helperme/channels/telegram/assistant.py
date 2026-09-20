@@ -188,7 +188,13 @@ class TelegramChannel:
             delivery_id=f"{self._delivery_prefix}{update_id}",
             source="telegram",
         )
-        if view.control_message is not None:
+        if view.control_approval is not None:
+            await self.send(
+                f"{view.control_approval.summary}\n"
+                f"风险：{view.control_approval.risk}\n"
+                "输入 yes 确认，no 取消。"
+            )
+        elif view.control_message is not None:
             await self.send(view.control_message)
 
 

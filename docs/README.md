@@ -52,7 +52,7 @@
 | 文档 | 角色 |
 |---|---|
 | [Channel 接入契约](架构/Channel接入契约.md) | 准绳：identity、投递幂等、Event wake、输出路由 |
-| [入口与授权](架构/入口与授权.md) | 当前 TUI / Telegram 行为 |
+| [入口与授权](架构/入口与授权.md) | 当前 TUI / Telegram 行为；控制提案的 Journal 事实 |
 | [ACP 映射](架构/ACP映射.md) | 当前 ACP v1 已接线 / 未接线清单 |
 | [Channel 协议改造](架构/Channel协议改造.md) | 架构方向：TUI / Web / ACP / Satori 平级，Satori 暂缓 |
 | [Web](架构/Web.md) | Web Channel、前端状态边界与已接切片 |
