@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from pathlib import Path
 
-from helperme.assistant.auto_authorize import AutoAuthorizeStore
 from helperme.assistant.control import (
     AssistantControlPlane,
     ControlApprovalView,
@@ -97,7 +95,6 @@ class AssistantSessions:
         control: AssistantControlPlane,
         management: ManagementSurface,
         subagents: SubAgentHost | None = None,
-        meta_root: Path | None = None,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
@@ -105,7 +102,7 @@ class AssistantSessions:
         self._control = control
         self._management = management
         self._subagents = subagents
-        self._auto_authorize = AutoAuthorizeStore(meta_root)
+        self._preference: dict[str, bool] = {}
         self._auto_grant: dict[str, bool] = {}
 
     def _view(
@@ -120,7 +117,7 @@ class AssistantSessions:
             control_approval=self._control.pending_view(state.session_id),
             control_message=control_message,
             has_active_subagents=has_active_subagents,
-            auto_authorize=self._auto_authorize.get(state.session_id),
+            auto_authorize=self._preference.get(state.session_id, False),
         )
 
     async def create(self, session_id: str) -> SessionView:
@@ -251,22 +248,10 @@ class AssistantSessions:
         await self._scheduler.wake(session_id)
 
     def web_auto_authorize(self, session_id: str) -> bool:
-        return self._auto_authorize.get(session_id)
+        return self._preference.get(session_id, False)
 
     def is_auto_authorized(self, session_id: str) -> bool:
         return self._auto_grant.get(session_id, False)
-
-    async def set_auto_authorize(
-        self,
-        session_id: str,
-        enabled: bool,
-    ) -> SessionView:
-        self._auto_authorize.set(session_id, enabled)
-        return await self.apply_authorization_policy(
-            session_id,
-            preference=bool(enabled),
-            grant=bool(enabled),
-        )
 
     async def apply_authorization_policy(
         self,
@@ -275,7 +260,7 @@ class AssistantSessions:
         preference: bool,
         grant: bool,
     ) -> SessionView:
-        self._auto_authorize.remember(session_id, preference)
+        self._preference[session_id] = bool(preference)
         self._auto_grant[session_id] = bool(grant)
         if grant:
             await self._grant_pending(session_id)

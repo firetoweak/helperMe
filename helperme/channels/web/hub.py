@@ -147,6 +147,29 @@ class WebEventHub:
             {"session_id": session_id, "message": message},
         )
 
+    async def conversation_status(self, status) -> None:
+        session_id = status.session_id
+        compact_count = status.compact_count
+        compact_phase = status.compact_phase
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty str")
+        if type(compact_count) is not int or compact_count < 0:
+            raise ValueError("compact_count must be a nonnegative int")
+        if compact_phase is not None and compact_phase not in {
+            "running",
+            "ready",
+            "failed",
+        }:
+            raise ValueError("compact_phase must be running, ready, failed, or None")
+        await self._broadcast(
+            "conversation_status",
+            {
+                "session_id": session_id,
+                "compact_count": compact_count,
+                "compact_phase": compact_phase,
+            },
+        )
+
     async def context_usage(self, session_id: str, used: int, limit: int) -> None:
         if type(session_id) is not str or not session_id:
             raise ValueError("session_id must be a non-empty str")

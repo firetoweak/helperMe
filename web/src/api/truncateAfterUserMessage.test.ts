@@ -53,6 +53,8 @@ const conversation: ConversationView = {
     auto_authorize: false,
     paused: false,
   },
+  compact_count: 0,
+  compact_phase: null,
 };
 
 describe("truncateAfterUserMessage", () => {

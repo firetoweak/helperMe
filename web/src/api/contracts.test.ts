@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   contextUsageEventSchema,
+  conversationStatusEventSchema,
   conversationViewSchema,
   outputFinalEventSchema,
   runtimeStatusSchema,
@@ -55,6 +56,8 @@ describe("conversationViewSchema", () => {
         },
       ],
       session,
+      compact_count: 0,
+      compact_phase: null,
     });
 
     expect(parsed.items[1]).toMatchObject({
@@ -108,6 +111,8 @@ describe("conversationViewSchema", () => {
         },
       ],
       session,
+      compact_count: 0,
+      compact_phase: null,
     });
     expect(parsed.items[0]).toMatchObject({
       kind: "user",
@@ -134,6 +139,8 @@ describe("conversation thinking field", () => {
         },
       ],
       session,
+      compact_count: 0,
+      compact_phase: null,
     });
     expect(parsed.items[0]).toMatchObject({
       text: "world",
@@ -189,6 +196,8 @@ describe("toolProgressEventSchema", () => {
         },
       ],
       session,
+      compact_count: 0,
+      compact_phase: null,
     });
     expect(parsed.items[0]).toMatchObject({
       tools: [{ command_id: "cmd-1", status: "unknown" }],
@@ -217,6 +226,22 @@ describe("sessionFailedEventSchema", () => {
     ).toEqual({
       session_id: "session-1",
       message: "运行失败：模型服务暂时不可用",
+    });
+  });
+});
+
+describe("conversationStatusEventSchema", () => {
+  it("identifies compact status by session", () => {
+    expect(
+      conversationStatusEventSchema.parse({
+        session_id: "session-1",
+        compact_count: 1,
+        compact_phase: "running",
+      }),
+    ).toEqual({
+      session_id: "session-1",
+      compact_count: 1,
+      compact_phase: "running",
     });
   });
 });

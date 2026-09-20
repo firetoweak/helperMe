@@ -2,6 +2,7 @@ import {
   authorizationRequiredEventSchema,
   connectedEventSchema,
   contextUsageEventSchema,
+  conversationStatusEventSchema,
   outputFinalEventSchema,
   previewAbortedEventSchema,
   previewDeltaEventSchema,
@@ -19,6 +20,7 @@ import {
   authorizationRequired,
   connected,
   contextUsage,
+  conversationStatus,
   disconnected,
   outputFinal,
   previewAborted,
@@ -77,6 +79,16 @@ export function openEventBridge(dispatch: AppDispatch): () => void {
         sessionId: payload.session_id,
         used: payload.used,
         limit: payload.limit,
+      }),
+    );
+  });
+  source.addEventListener("conversation_status", (event) => {
+    const payload = conversationStatusEventSchema.parse(JSON.parse(event.data));
+    dispatch(
+      conversationStatus({
+        sessionId: payload.session_id,
+        compactCount: payload.compact_count,
+        compactPhase: payload.compact_phase,
       }),
     );
   });

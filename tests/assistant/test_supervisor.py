@@ -246,15 +246,15 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await self.host.create("one", self.workspace.workspace_id)
         view = await self.host.select("cli", "one")
         self.assertEqual(view.status, "waiting")
+        self.assertNotIn("one", self.host.workers)
+
+        await self.host.receive_user_message("one", "hello", delivery_id="input")
+        await until(lambda: self.output == [("one", "done")])
         await until(
             lambda: "one" in self.host.workers
             and self.host.workers["one"].idle_revision is not None
         )
         process_id = self.host.workers["one"].process.pid
-
-        await self.host.receive_user_message("one", "hello", delivery_id="input")
-        await until(lambda: self.output == [("one", "done")])
-        await until(lambda: self.host.workers["one"].idle_revision is not None)
         self.assertIn("one", self.host.workers)
         self.assertEqual(self.host.workers["one"].process.pid, process_id)
 
@@ -315,7 +315,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
             await self.host.select("cli", "broken")
 
         self.assertEqual(self.host.selections["cli"], "old")
-        self.assertIn("old", self.host.workers)
+        self.assertNotIn("broken", self.host.workers)
 
     async def test_blocking_worker_and_crash_do_not_stop_another(self):
         await self.host.create("blocked", self.workspace.workspace_id)

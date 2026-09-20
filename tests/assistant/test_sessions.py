@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -253,7 +252,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await scheduler.close()
 
-    async def test_create_does_not_persist_web_preference(self):
+    async def test_create_and_policy_do_not_write_host_preference_files(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = AgentRuntime(MemoryJournal(), ScriptedDecisionMaker(()), {})
@@ -268,20 +267,18 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
                     MemoryArtifactGateway(),
                     ModelContextSettings(),
                 ),
-                meta_root=root,
             )
             try:
                 view = await sessions.create(self.SESSION_ID)
                 self.assertFalse(view.auto_authorize)
                 self.assertFalse(view.paused)
-                self.assertFalse((root / "auto_authorize.json").is_file())
-                self.assertFalse((root / "paused.json").is_file())
-                updated = await sessions.set_auto_authorize(self.SESSION_ID, True)
-                self.assertTrue(updated.auto_authorize)
-                self.assertEqual(
-                    json.loads((root / "auto_authorize.json").read_text(encoding="utf-8")),
-                    {self.SESSION_ID: True},
+                updated = await sessions.apply_authorization_policy(
+                    self.SESSION_ID,
+                    preference=True,
+                    grant=True,
                 )
+                self.assertTrue(updated.auto_authorize)
+                self.assertFalse((root / "auto_authorize.json").is_file())
                 self.assertFalse((root / "paused.json").is_file())
             finally:
                 await scheduler.close()

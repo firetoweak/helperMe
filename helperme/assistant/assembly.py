@@ -266,7 +266,6 @@ async def build_assistant_assembly(
         control=control,
         management=management,
         subagents=subagents,
-        meta_root=sessions_root,
     )
 
     async def before_advance():

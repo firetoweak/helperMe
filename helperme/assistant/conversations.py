@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
 
@@ -83,6 +83,8 @@ class ConversationView:
     revision: int
     items: tuple[ConversationItem, ...]
     session: SessionView
+    compact_count: int = 0
+    compact_phase: str | None = None
 
 
 class AssistantQueries:
@@ -147,12 +149,17 @@ class AssistantQueries:
                 auto_authorize=self._sessions.web_auto_authorize(session_id),
                 paused=self._sessions.is_paused(session_id),
             )
-        return project_conversation(
-            session_id,
-            events,
-            state.steps,
-            session=view,
-            activity=self._sessions.activity(session_id),
+        status = self._sessions.conversation_status(session_id)
+        return replace(
+            project_conversation(
+                session_id,
+                events,
+                state.steps,
+                session=view,
+                activity=self._sessions.activity(session_id),
+            ),
+            compact_count=status.compact_count,
+            compact_phase=status.compact_phase,
         )
 
 

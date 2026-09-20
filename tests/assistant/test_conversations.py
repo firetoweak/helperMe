@@ -334,6 +334,11 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
             def control_approval(self, session_id):
                 return None
 
+            def conversation_status(self, session_id):
+                from helperme.assistant.compact.store import ConversationStatus
+
+                return ConversationStatus(session_id, session_id, 0, None)
+
             async def view(self, session_id):
                 raise AssertionError("读会话不得唤醒 Worker")
 
@@ -382,6 +387,11 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
             def control_approval(self, session_id):
                 return ControlApprovalView("req-1", "删除工作区", "high")
 
+            def conversation_status(self, session_id):
+                from helperme.assistant.compact.store import ConversationStatus
+
+                return ConversationStatus(session_id, session_id, 2, "failed")
+
             async def view(self, session_id):
                 raise AssertionError("读会话不得唤醒 Worker")
 
@@ -401,3 +411,5 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
             conversation = await queries.conversation("spoken")
 
         self.assertEqual(conversation.session.control_approval.request_id, "req-1")
+        self.assertEqual(conversation.compact_count, 2)
+        self.assertEqual(conversation.compact_phase, "failed")

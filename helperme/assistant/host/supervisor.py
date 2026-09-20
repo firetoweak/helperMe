@@ -16,11 +16,17 @@ from helperme.assistant.delivery import emit_delivery
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
 from helperme.assistant.host.llm_port import complete_llm_chat
 from helperme.assistant.host.session_store import SessionStore
-from helperme.assistant.subagent.subagent import persist_return, report_arguments, return_data
+from helperme.assistant.sessions import session_view
+from helperme.assistant.subagent.subagent import (
+    persist_return,
+    project_pending,
+    report_arguments,
+    return_data,
+)
 from helperme.assistant.workspaces import UnboundSessionError, bound_workspace_id
 from helperme.assistant.host.spawn import start_worker
 from helperme.assistant.host.worker import worker_main
-from helperme.runtime import SqliteJournal
+from helperme.runtime import SqliteJournal, replay
 from helperme.sandbox.local.windows_job import WindowsJob
 from helperme.sandbox.registry import WorkspaceRegistry
 
@@ -38,6 +44,7 @@ class Worker:
     transition: asyncio.Event = field(default_factory=asyncio.Event)
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     idle_has_active_subagents: bool = False
+    running: bool = False
     returned: tuple[str, dict] | None = None
     reclaimed: bool = False
 
@@ -214,14 +221,18 @@ class HostSupervisor:
             elif kind == "control_approval":
                 self._control_approvals[session_id] = values[0]
             elif kind == "idle":
+                was_running = worker.running
                 worker.idle_revision = values[0]
                 worker.idle_has_active_subagents = values[1]
+                worker.running = False
                 worker.changed.set()
                 await self._stop_idle(session_id, worker)
-                await self._emit_session_activity(session_id, "idle")
+                if was_running:
+                    await self._emit_session_activity(session_id, "idle")
             elif kind == "busy":
                 worker.idle_revision = None
                 worker.idle_has_active_subagents = False
+                worker.running = True
                 worker.stopping = False
                 worker.transition.set()
                 worker.changed.set()
@@ -394,7 +405,6 @@ class HostSupervisor:
         assert not self.closed
         lock = self.locks.setdefault(session_id, asyncio.Lock())
         just_started = False
-        became_running = False
         while True:
             async with lock:
                 if self.closed:
@@ -404,16 +414,11 @@ class HostSupervisor:
                     worker = await self._start(session_id)
                     just_started = True
                 if not worker.stopping:
-                    became_running = (
-                        just_started or worker.idle_revision is not None
-                    )
                     worker.requests += 1
                     worker.idle_revision = None
                     break
             await worker.transition.wait()
         try:
-            if became_running:
-                await self._emit_session_activity(session_id, "running")
             if just_started and operation != "apply_authorization_policy":
                 await worker.peer.request(
                     "apply_authorization_policy",
@@ -473,7 +478,7 @@ class HostSupervisor:
 
     def activity(self, session_id):
         worker = self.workers.get(session_id)
-        if worker is not None and worker.idle_revision is None:
+        if worker is not None and worker.running:
             return "running"
         return "idle"
 
@@ -545,8 +550,7 @@ class HostSupervisor:
             self.selecting[owner] = session_id
             self.selections[owner] = session_id
             try:
-                await self._push_authorization_policy(session_id)
-                view = await self.resume(session_id)
+                view = await self._select_view(session_id)
             except BaseException:
                 if previous is None:
                     self.selections.pop(owner, None)
@@ -564,6 +568,38 @@ class HostSupervisor:
                     await self._push_authorization_policy(previous)
                     await self._stop_idle(previous, worker)
             return view
+
+    async def _journal_state(self, session_id):
+        events = await SqliteJournal(self.store.require(session_id)).snapshot(
+            session_id
+        )
+        return events, replay(session_id, events).state
+
+    async def _project_view(self, session_id):
+        events, state = await self._journal_state(session_id)
+        return self._with_preference(
+            session_view(
+                state,
+                control_approval=self.control_approval(session_id),
+                has_active_subagents=bool(project_pending(events)),
+            ),
+            session_id,
+        )
+
+    async def _should_wake(self, session_id):
+        if self.is_paused(session_id):
+            return False
+        _events, state = await self._journal_state(session_id)
+        return session_view(state).should_wake
+
+    async def _select_view(self, session_id):
+        if await self._should_wake(session_id):
+            if session_id in self.workers:
+                await self._push_authorization_policy(session_id)
+            return await self.resume(session_id)
+        if session_id in self.workers:
+            await self._push_authorization_policy(session_id)
+        return await self._project_view(session_id)
 
     async def release(self, owner):
         async with self.selection_locks.setdefault(owner, asyncio.Lock()):

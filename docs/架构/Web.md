@@ -12,7 +12,7 @@ Assistant 应用操作和查询，不直接读取 Journal，也不承担 Session
 `/workspaces/:workspaceId`。尚未发出用户消息时，同一工作区再点「新建会话」仍是
 那条草稿；发出第一条用户消息后这条 Session 锁定。侧栏只列出已经锁定的会话，
 分组内默认最近 5 条，其余收进 More。草稿可以贴图，但不因此锁定。
-输入框底部展示当前工作区路径、逻辑模型与输入上下文占用；路径只读，提醒人现在落在哪个沙箱里。Composer 的图片入口：加号打开文件选择、
+输入框底部展示当前工作区路径、逻辑模型、输入上下文占用，以及 compact 次数与相位；路径只读，提醒人现在落在哪个沙箱里。Composer 的图片入口：加号打开文件选择、
 粘贴或拖入图片后以缩略图 tile 挂在输入框上，不把 `[Image #n]` 写进可见正文。发送时
 Channel 仍按既有附件契约写入 token 与 `artifact_refs`。时间线按用户轮次展示 Step 与其工具调用。页面级 SSE 与当前选中的
 Session 解耦：切换只改变 Host owner 的选择和中间栏，不取消仍在运行的 Session，也不
@@ -57,12 +57,16 @@ Session 运行或存在活动 preview 时，时间线跟随内容尺寸变化固
 `resume` / wake），不写用户消息。Agent 自然停在等用户输入时
 `should_wake` 为 false，两按钮都不出现。这不是 `cancel_turn`。
 有 `lastError` 时横幅「再试」取代「继续」，仍走同一条 retry。
+`SessionView.auto_authorize` 只活在 Host 的 `sessions_root/auto_authorize.json`，
+**不进 Journal**，Worker 不读不写该文件。缺省 false，只在人拨过时由 Host 写入；
+创建和 Fork 不写。Worker 只收 Host 推来的 preference/grant。
 `SessionView.paused` 只活在 Host 的 `sessions_root/paused.json`，**不进 Journal**，
 Worker 不读不写该文件。缺省 false，只在人拨过时由 Host 写入；创建和 Fork 不写。
-Worker 每次推进前向 Host 询问 `is_paused`；`resume` / `select` 在暂停时只
-`view`，不 wake。刷新走 GET 投影，Host 直接补字段，不 resume Worker。新用户
-消息由 Host 清掉暂停。端点 `POST /api/sessions/{id}/paused`，body
-`{connection_id, paused}`。
+Worker 每次推进前向 Host 询问 `is_paused`；`resume` 在暂停时只 `view`，不 wake。
+`select` 绑定 owner；仅当 Journal 仍 `should_wake` 且未暂停时才启动 Worker 并
+wake。空闲 WAITING 不拉起进程，也不把应用请求报成运行中。刷新走 GET 投影，Host
+直接补字段，不 resume Worker。新用户消息由 Host 清掉暂停。端点
+`POST /api/sessions/{id}/paused`，body `{connection_id, paused}`。
 
 运行中第一次发送不立刻入账：正文和图片停在输入框上方。当前轮回到 idle 后按顺序发出；点「立即发送」马上走现有后到消息；点垃圾桶把停放内容退回编辑栏，不是丢掉。这不是 `cancel_turn`，也不另建后端队列。刷新或切换会话丢弃停放。
 
@@ -78,6 +82,7 @@ Worker 每次推进前向 Host 询问 `is_paused`；`resume` / `select` 在暂�
 - `conversation(session_id)` 投影统一时间线 `items`：`UserMessageReceived` 为
   用户消息；每个 `StepCommitted` 投影为一个 Step，其中嵌套正文和该步的非
   `deliver` Command。未传入 Worker `SessionView` 时，从同一份 Journal 重放得到只读视图。
+  Host 另补 `compact_count` / `compact_phase`，不 resume Worker。
 - Step 使用 `step_id` 作为身份，并沿用 `step.trigger_event_id` 作为独立
   `output_id`；preview 不进入历史投影。
 - Step 内工具使用 `command_id` 作为身份。终态来自 `CommandOutcomeReceived`：成功或
@@ -96,7 +101,8 @@ Worker 每次推进前向 Host 询问 `is_paused`；`resume` / `select` 在暂�
 分组 `+` 不会掉进别的工作区的草稿。发出第一条用户消息后草稿锁定。
 
 Event Hub 向所有页面连接广播带 `session_id` 的事件，每个 Session 只保存一个
-活动 preview。Host 在 busy/idle 转换时发送 `session_activity`。前端收到
+活动 preview。Host 在 Scheduler 真正开始/结束推进时发送 `session_activity`，
+不因 `select`、授权策略或 `view` 这类应用请求报 `running`。前端收到
 `session_activity` 后重拉该 Session 投影，让 `should_wake` 与工具终态跟上
 Journal。已识别的模型失败
 走 `session_failed`，记在 Session 的瞬时 `lastError` 上，用输入框上方提示展示，
@@ -108,6 +114,12 @@ Journal。已识别的模型失败
 当前逻辑模型名，以及该 Session 的输入上下文占用：请求前为估算值，响应后为
 LLM 返回的实际 input tokens，分母为配置的 `model_context_limit`。占用随
 `context_usage` 实时更新，刷新后回到 0，直到下一次决策。
+Compact 状态来自 Host `ConversationStatus`：`GET /api/sessions/{id}` 带
+`compact_count` / `compact_phase`，变化走 SSE `conversation_status`。
+`running` / `ready` / `failed` 对应整理中、等待切换、失败。输入框底部写次数和相位；
+`failed` 时在输入框上方单独横幅说明窗口仍超预算则无法继续推进，不进
+`lastError`，也不用「再试」。压缩 reader 进程失败不写成用户会话的
+`session_failed`，只把源会话标成 compact 失败。
 
 `tool_progress` 只携带 `command_id`、工具名和状态，不广播工具参数或返回值。
 前端用 `command_id` 合并实时事件与 Journal 卡片：Journal 成功/失败终态优先；
@@ -163,23 +175,7 @@ Command 授权已按 [Command 授权](Command授权.md) 落地。
 
 ## 下一片
 
-> Command Authorization 契约见 [Command 授权](Command授权.md)。以下为原始约束，保留备查。
+Command Authorization 已落地，契约见 [Command 授权](Command授权.md)。
 
-应做 **授权交互**。当前工具卡把“等待授权”误显示成“运行中”，这是现有闭环里最明显的语义缺口。
-
-建议只完成这一条纵向链路：
-
-- 工具卡增加 `awaiting_authorization`、`rejected` 状态。
-- 卡片展示工具名和调用参数，提供“允许 / 拒绝”按钮。
-- 按 `command_id` 单独决策，不再一次处理全部待授权命令。
-- Web 增加明确的授权接口，不把按钮转换成聊天消息里的 `yes/no`。
-- 授权后原卡片直接转为运行中，切换 Session 仍不影响执行。
-- 刷新后从 Journal 恢复等待、拒绝和最终状态。
-- 增加实时的“需要授权”通知，否则无正文输出的工具调用可能不会触发页面刷新。
-
-同时要保持两种审批分离：
-
-- **Command Authorization**：允许某次工具产生副作用。
-- **Control Approval**：批准安装、更新等管理提案，展示 `summary` 和 `risk`。
-
-本切片先做 Command Authorization；Control Approval 下一片再接。不要抽象成通用“审批框架”，两者变化原因不同。
+还没接的是 **Control Approval**：批准安装、更新等管理提案，展示 `summary` 和 `risk`。
+不要和 Command Authorization 抽象成通用审批框架，两者变化原因不同。
