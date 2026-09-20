@@ -65,6 +65,18 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(document, INITIAL_CONFIG)
         self.assertIsNotNone(config.channels.telegram)
 
+    def test_router_retry_defaults_are_injected_by_code(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            data = self._data()
+            data["model"]["router"].pop("num_retries")
+            self._write_config(path, data)
+
+            config = load_app_config(path)
+
+        self.assertEqual(config.model.router["num_retries"], 3)
+        self.assertEqual(config.model.router["timeout"], 60)
+
     def test_loop_guard_threshold_is_validated_at_config_boundary(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"

@@ -30,7 +30,6 @@ INITIAL_CONFIG = {
                     },
                 }
             ],
-            "num_retries": 0,
         },
     },
     "runtime": {
@@ -45,6 +44,14 @@ INITIAL_CONFIG = {
             "allowed_chat_id": None,
         }
     },
+}
+
+
+# 重试与超时的代码默认值：不写入用户配置，避免用户漏配或写错。
+# num_retries 是"首次调用之外"的重试次数；timeout 是单次尝试的超时秒数（流式下即多久没有数据算超时）。
+DEFAULT_ROUTER_SETTINGS = {
+    "num_retries": 3,
+    "timeout": 60,
 }
 
 
@@ -137,6 +144,8 @@ def _parse_model_config(data: dict) -> ModelConfig:
     router = model["router"]
     if type(router) is not dict or not router:
         raise ValueError("模型配置 model.router 必须是非空映射")
+    for key, value in DEFAULT_ROUTER_SETTINGS.items():
+        router.setdefault(key, value)
     return ModelConfig(active=active.strip(), router=router)
 
 

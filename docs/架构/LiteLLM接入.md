@@ -30,8 +30,7 @@ HelperMe 只校验模型配置的外层形状：当前逻辑模型名与 Router 
              "reasoning_effort": "high"
           }
         }
-      ],
-      "num_retries": 0
+      ]
     }
   }
 }
@@ -39,7 +38,7 @@ HelperMe 只校验模型配置的外层形状：当前逻辑模型名与 Router 
 
 这是传给 Python SDK `Router` 的数据形状，不复用 LiteLLM Proxy 的配置加载器，也不承诺 Proxy 专属的 `include`、密钥引用或热更新语义。
 
-`runtime.model_context_limit`、输入预算和 Compact 阈值仍由 HelperMe 配置。第一阶段一个逻辑模型只对应一个部署，关闭重试，不配置 fallback、缓存或跨模型负载均衡。
+`runtime.model_context_limit`、输入预算和 Compact 阈值仍由 HelperMe 配置。第一阶段一个逻辑模型只对应一个部署，不配置 fallback、缓存或跨模型负载均衡。重试次数与单次尝试超时不写进用户配置，由代码默认注入 Router（`DEFAULT_ROUTER_SETTINGS`：重试 3 次、单次超时 60 秒）。
 
 ## LLMApi 契约
 
