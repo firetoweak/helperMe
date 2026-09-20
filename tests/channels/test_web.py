@@ -84,7 +84,7 @@ class _Sessions:
 
     async def resolve_control(self, session_id, *, approved):
         self.calls.append(("resolve_control", session_id, approved))
-        return "MCP Server `demo` 安装、测试并启用成功；请新建 Session 使用该能力。"
+        return "MCP Server `demo` 安装、测试并启用成功。能力目录已更新，load_toolset 之后工具从下一个 Step 可见。"
 
     async def set_auto_authorize(self, session_id, enabled):
         self.calls.append(("set_auto_authorize", session_id, enabled))
@@ -444,7 +444,7 @@ class WebFirstSliceTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json()["session"]["control_message"],
-            "MCP Server `demo` 安装、测试并启用成功；请新建 Session 使用该能力。",
+            "MCP Server `demo` 安装、测试并启用成功。能力目录已更新，load_toolset 之后工具从下一个 Step 可见。",
         )
         self.assertEqual(
             self.sessions.calls,

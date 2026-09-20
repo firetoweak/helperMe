@@ -231,7 +231,7 @@ class McpConsoleAdapter:
 
     @staticmethod
     def _with_reload_notice(message: str) -> str:
-        return f"{message}\n执行 /mcp reload 后在新 Session 生效。"
+        return f"{message}\n下一轮决策会更新能力目录。"
 
     @staticmethod
     def _server_and_cursor(rest: str) -> tuple[str, str | None]:

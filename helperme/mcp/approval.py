@@ -181,8 +181,7 @@ def create_mcp_install_proposal_spec(
             payload=input_data.frozen_payload(),
             summary=input_data.approval_summary(),
             risk=(
-                "批准后 Application 将持久保存并启动该外部 MCP Server；"
-                "新能力仅在新 Session 生效。"
+                "批准后 Application 将持久保存并启动该外部 MCP Server。"
             ),
         )
 
@@ -195,6 +194,7 @@ def create_mcp_install_proposal_spec(
             "streamable_http：填 url，鉴权信息填 headers 或 bearer，"
             "也可把密钥直接写在 url 的 query 里。"
             "禁止用 user:pass@host 的形式在 url 里带凭据。"
+            "启用成功后能力目录更新，load_toolset 之后工具从下一个 Step 可见。"
             "本工具必须单独调用。"
         ),
         parameters=PydanticParameters(McpInstallProposalInput),
@@ -256,8 +256,8 @@ class McpInstallApprovalHandler:
         return ControlApprovalExecution(
             succeeded=True,
             message=(
-                f"MCP Server `{enabled.id}` 安装、测试并启用成功；"
-                "请新建 Session 使用该能力。"
+                f"MCP Server `{enabled.id}` 安装、测试并启用成功。"
+                "能力目录已更新，load_toolset 之后工具从下一个 Step 可见。"
             ),
             data={
                 "server_id": enabled.id,
@@ -403,7 +403,7 @@ def create_mcp_recovery_proposal_spec(
             ),
             risk=(
                 "批准后 Application 将启动已登记的外部 MCP Server 进行测试；"
-                "测试成功后持久启用，新能力仅在新 Session 生效。"
+                "测试成功后持久启用。"
             ),
         )
 
@@ -470,8 +470,8 @@ class McpRecoveryApprovalHandler:
         return ControlApprovalExecution(
             succeeded=True,
             message=(
-                f"MCP Server `{server_id}` 测试并启用成功；"
-                "请新建 Session 使用该能力。"
+                f"MCP Server `{server_id}` 测试并启用成功。"
+                "能力目录已更新，load_toolset 之后工具从下一个 Step 可见。"
             ),
             data={
                 "server_id": server_id,
