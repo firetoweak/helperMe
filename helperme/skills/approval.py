@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal, Mapping, cast
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from helperme.tools.control import (
     ControlApprovalExecution,
@@ -13,23 +14,55 @@ from helperme.tools.spec import PydanticParameters, ToolSpec
 from helperme.skills.application import SkillApplicationService
 from helperme.skills.models import SkillSourceRef
 from helperme.skills.sources import SkillSourceError
-from helperme.skills.errors import SkillAlreadyInstalledError, SkillInputError
+from helperme.skills.errors import (
+    SkillAlreadyInstalledError,
+    SkillInputError,
+    SkillNotFoundError,
+)
 
 
 SKILL_INSTALL_ACTION = "skill.install"
-SKILL_ENABLE_ACTION = "skill.enable"
+SKILL_SET_ENABLED_ACTION = "skill.set_enabled"
+SKILL_UNINSTALL_ACTION = "skill.uninstall"
 SKILL_UPDATE_ACTION = "skill.update"
-SKILL_REPAIR_ACTION = "skill.repair"
 PROPOSE_SKILL_INSTALL = "propose_skill_install"
-PROPOSE_SKILL_ENABLE = "propose_skill_enable"
+PROPOSE_SKILL_SET_ENABLED = "propose_skill_set_enabled"
+PROPOSE_SKILL_UNINSTALL = "propose_skill_uninstall"
 PROPOSE_SKILL_UPDATE = "propose_skill_update"
-PROPOSE_SKILL_REPAIR = "propose_skill_repair"
+
+
+SOURCE_KIND_HELP = "local=Host 本机目录；github=GitHub 仓库或子目录；url=HTTPS raw SKILL.md 或 ZIP。"
+LOCATOR_HELP = (
+    "local 必须是 Host 本机包含 SKILL.md 的绝对目录，不是文件或 Workspace 相对路径；"
+    "github 使用 owner/repo 或 https://github.com/owner/repo/tree/<ref>/<subpath>；"
+    "url 使用 HTTPS raw Markdown 或 ZIP 地址，不接受普通 HTML 网页。"
+    "仓库或 ZIP 未指定子目录时必须仅有一个 SKILL.md。工具自行下载，无需预先下载。"
+)
+REF_HELP = "仅 github 可用：分支、tag 或 commit；省略使用 HEAD。tree URL 已包含 ref 时不得再传。"
+
+
+def _validate_source(source: SkillSourceRef) -> None:
+    if source.kind == "local" and not Path(source.locator).is_absolute():
+        raise ValueError("local locator 必须是 Host 本机绝对目录")
+    if source.kind != "github" and source.requested_ref is not None:
+        raise ValueError("requested_ref 仅适用于 github 来源")
 
 
 class SkillInstallProposalInput(BaseModel):
-    source_kind: Literal["local", "github", "url"]
-    locator: str
-    requested_ref: str | None = None
+    source_kind: Literal["local", "github", "url"] = Field(description=SOURCE_KIND_HELP)
+    locator: str = Field(
+        min_length=1,
+        description=LOCATOR_HELP,
+        examples=["https://github.com/typesafe-ai/skills/tree/main/skills/typesafe-ai"],
+    )
+    requested_ref: str | None = Field(default=None, description=REF_HELP)
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "SkillInstallProposalInput":
+        _validate_source(SkillSourceRef(
+            self.source_kind, self.locator, self.requested_ref,
+        ))
+        return self
 
 
 def create_skill_install_proposal_spec(
@@ -64,8 +97,10 @@ def create_skill_install_proposal_spec(
                     "locator": input_data.locator,
                 },
                 "error": str(exc),
-                "hint": "检查网络、来源地址或本地路径后重试。",
+                "hint": "按来源格式和具体错误修正输入；不确定用法可查询 skill_help。",
             })
+        except SkillInputError as exc:
+            return _preparation_failure(exc)
         return ControlApprovalProposal(
             action=SKILL_INSTALL_ACTION,
             payload={
@@ -80,7 +115,7 @@ def create_skill_install_proposal_spec(
                 f"来源：{candidate.source.kind} {candidate.source.locator}\n"
                 f"解析引用：{candidate.resolved_ref}\n"
                 f"Content hash：{candidate.content_hash}\n"
-                "安装后保持 disabled，不会立即进入模型能力目录。"
+                "批准后完整安装到 Agent HOME 并启用；下一 Step 进入能力目录。"
             ),
             risk=(
                 "Skill 包可包含外部指令和脚本；"
@@ -92,9 +127,9 @@ def create_skill_install_proposal_spec(
     return ToolSpec(
         name=PROPOSE_SKILL_INSTALL,
         description=(
-            "当用户要求从 local/GitHub/URL 安装 Skill 时，"
-            "获取并冻结确定候选，然后提交用户审批。"
-            "信息不足时先询问；本工具必须单独调用。"
+            "从指定 local/GitHub/URL 来源安装 Skill。"
+            "工具自行获取、校验、冻结，批准后完整安装到 Agent HOME 并启用，无需先调用 test_installed_skill。"
+            "只接受未安装的技能；已有技能用 propose_skill_update。本工具必须单独调用。"
         ),
         parameters=PydanticParameters(SkillInstallProposalInput),
         handler=propose,
@@ -143,8 +178,8 @@ class SkillInstallApprovalHandler:
         return ControlApprovalExecution(
             succeeded=True,
             message=(
-                f"Skill `{record.name}` 已安装为 disabled。"
-                "请 inspect/test 后显式 enable。"
+                f"Skill `{record.name}` 已安装并启用，包完整性校验通过。"
+                "下一 Step 进入能力目录；正文尚未加载，相关任务时按需 load_skill。"
             ),
             data={
                 "skill_id": record.name,
@@ -155,84 +190,98 @@ class SkillInstallApprovalHandler:
         )
 
 
-class SkillEnableProposalInput(BaseModel):
-    skill_id: str
+class SkillSetEnabledProposalInput(BaseModel):
+    skill_id: str = Field(description="已安装技能的名称，可用 list_installed_skills 查询。")
+    enabled: bool = Field(description="true 启用，false 停用；不删除 HOME 中的包。")
 
 
-def create_skill_enable_proposal_spec(
-    service: SkillApplicationService,
-) -> ToolSpec:
-    async def propose(input_data: SkillEnableProposalInput) -> ControlApprovalProposal:
-        inspection = await service.test_skill(input_data.skill_id)
-        record = inspection.record
-        if record.enabled:
-            raise ValueError(f"Skill 已启用: {record.name}")
+def create_skill_set_enabled_proposal_spec(service: SkillApplicationService) -> ToolSpec:
+    async def propose(input_data: SkillSetEnabledProposalInput):
+        record = await service.registry.get(input_data.skill_id)
+        if record is None:
+            return _preparation_failure(SkillNotFoundError(
+                f"Skill 未安装: {input_data.skill_id}"
+            ))
+        if record.enabled == input_data.enabled:
+            return {
+                "ok": True,
+                "code": "SKILL_STATE_UNCHANGED",
+                "data": record.to_dict(),
+            }
+        if input_data.enabled:
+            try:
+                await service.test_skill(record.name)
+            except SkillInputError as exc:
+                return _preparation_failure(exc)
+        state = "启用" if input_data.enabled else "停用"
         return ControlApprovalProposal(
-            action=SKILL_ENABLE_ACTION,
+            action=SKILL_SET_ENABLED_ACTION,
             payload={
                 "skill_id": record.name,
                 "expected_revision": record.revision,
                 "expected_hash": record.content_hash,
+                "enabled": input_data.enabled,
             },
-            summary=(
-                f"准备启用 Skill `{record.name}`\n"
-                f"Revision：{record.revision}\n"
-                f"Content hash：{record.content_hash}\n"
-                f"主指令长度：{inspection.main_instruction_chars} chars"
-            ),
-            risk=(
-                "启用后，该 Skill 的外部指令会从下一个 Step 进入目录；"
-                "其脚本仍只在 Agent 显式调用命令时执行。"
-            ),
+            summary=f"准备{state} Skill `{record.name}`，revision={record.revision}。",
+            risk="批准后改变目录可用状态，下一 Step 生效；不执行技能正文或脚本。",
         )
 
     return ToolSpec(
-        name=PROPOSE_SKILL_ENABLE,
-        description=(
-            "对已 inspect/test 且 disabled 的 Skill 提交启用审批。"
-            "本工具必须单独调用。"
-        ),
-        parameters=PydanticParameters(SkillEnableProposalInput),
-        handler=propose,
+        PROPOSE_SKILL_SET_ENABLED,
+        "启用或停用已安装 Skill，提交审批；状态相同时直接返回。无需先调用 test_installed_skill。"
+        "启用允许后续按需加载，停用保留完整包。本工具必须单独调用。",
+        PydanticParameters(SkillSetEnabledProposalInput),
+        propose,
         control_boundary=True,
         exclusive_batch=True,
     )
 
 
-class SkillEnableApprovalHandler:
-    action = SKILL_ENABLE_ACTION
+def _frozen_identity(payload: Mapping[str, object]) -> tuple[str, int, str]:
+    skill_id = payload["skill_id"]
+    revision = payload["expected_revision"]
+    content_hash = payload["expected_hash"]
+    if (
+        type(skill_id) is not str
+        or type(revision) is not int
+        or type(content_hash) is not str
+    ):
+        raise SkillInputError("Skill approval identity 类型无效")
+    return skill_id, revision, content_hash
+
+
+def _preparation_failure(exc: SkillInputError) -> ControlPreparationFailure:
+    return ControlPreparationFailure({
+        "ok": False,
+        "code": "SKILL_PRECONDITION_FAILED",
+        "data": {},
+        "error": str(exc),
+    })
+
+
+class SkillSetEnabledApprovalHandler:
+    action = SKILL_SET_ENABLED_ACTION
 
     def __init__(self, service: SkillApplicationService) -> None:
         self.service = service
 
     async def execute(self, payload: Mapping[str, object]) -> ControlApprovalExecution:
-        if set(payload) != {
-            "skill_id",
-            "expected_revision",
-            "expected_hash",
-        }:
-            raise SkillInputError("Skill enable approval payload 字段不匹配")
-        skill_id = payload["skill_id"]
-        expected_revision = payload["expected_revision"]
-        expected_hash = payload["expected_hash"]
-        if (
-            type(skill_id) is not str
-            or type(expected_revision) is not int
-            or type(expected_hash) is not str
-        ):
-            raise SkillInputError("Skill enable approval payload 类型无效")
-        record = await self.service.enable_frozen(
-            skill_id,
-            expected_revision,
-            expected_hash,
-        )
+        if set(payload) != {"skill_id", "expected_revision", "expected_hash", "enabled"}:
+            raise SkillInputError("Skill set_enabled approval payload 字段不匹配")
+        skill_id, revision, content_hash = _frozen_identity(payload)
+        enabled = payload["enabled"]
+        if type(enabled) is not bool:
+            raise SkillInputError("Skill enabled 必须是 bool")
+        try:
+            record = await self.service.set_enabled_frozen(
+                skill_id, revision, content_hash, enabled,
+            )
+        except SkillInputError as exc:
+            return ControlApprovalExecution(False, str(exc))
+        state = "启用" if record.enabled else "停用"
         return ControlApprovalExecution(
-            succeeded=True,
-            message=(
-                f"Skill `{record.name}` 已启用。"
-                "最新目录将从下一个 Step 生效。"
-            ),
-            data={
+            True, f"Skill `{record.name}` 已{state}，目录变化从下一 Step 生效。",
+            {
                 "skill_id": record.name,
                 "revision": record.revision,
                 "enabled": record.enabled,
@@ -240,11 +289,68 @@ class SkillEnableApprovalHandler:
         )
 
 
+class SkillUninstallProposalInput(BaseModel):
+    skill_id: str = Field(description="要移除的已安装技能名称；删除 HOME 中的包及登记，不删除来源。")
+
+
+def create_skill_uninstall_proposal_spec(service: SkillApplicationService) -> ToolSpec:
+    async def propose(input_data: SkillUninstallProposalInput):
+        record = await service.registry.get(input_data.skill_id)
+        if record is None:
+            return _preparation_failure(SkillNotFoundError(
+                f"Skill 未安装: {input_data.skill_id}"
+            ))
+        return ControlApprovalProposal(
+            action=SKILL_UNINSTALL_ACTION,
+            payload={
+                "skill_id": record.name,
+                "expected_revision": record.revision,
+                "expected_hash": record.content_hash,
+            },
+            summary=f"准备卸载 Skill `{record.name}`，revision={record.revision}。",
+            risk="批准后删除 HOME 中的安装包与登记；来源不变，下一 Step 从目录移除。",
+        )
+
+    return ToolSpec(
+        PROPOSE_SKILL_UNINSTALL,
+        "卸载指定 Skill 的完整安装包与登记，提交审批；不删除原始来源。"
+        "包损坏或丢失时仍可卸载登记。本工具必须单独调用。",
+        PydanticParameters(SkillUninstallProposalInput),
+        propose,
+        control_boundary=True,
+        exclusive_batch=True,
+    )
+
+
+class SkillUninstallApprovalHandler:
+    action = SKILL_UNINSTALL_ACTION
+
+    def __init__(self, service: SkillApplicationService) -> None:
+        self.service = service
+
+    async def execute(self, payload: Mapping[str, object]) -> ControlApprovalExecution:
+        if set(payload) != {"skill_id", "expected_revision", "expected_hash"}:
+            raise SkillInputError("Skill uninstall approval payload 字段不匹配")
+        skill_id, revision, content_hash = _frozen_identity(payload)
+        try:
+            record = await self.service.remove(
+                skill_id, expected_revision=revision, expected_hash=content_hash,
+            )
+        except SkillInputError as exc:
+            return ControlApprovalExecution(False, str(exc))
+        return ControlApprovalExecution(
+            True, f"Skill `{record.name}` 已卸载，下一 Step 从能力目录移除。",
+            {"skill_id": record.name},
+        )
+
+
 class SkillUpdateProposalInput(BaseModel):
-    skill_id: str
-    source_kind: Literal["local", "github", "url"] | None = None
-    locator: str | None = None
-    requested_ref: str | None = None
+    skill_id: str = Field(description="要更新的已安装技能名称。")
+    source_kind: Literal["local", "github", "url"] | None = Field(
+        default=None, description=SOURCE_KIND_HELP + " 省略沿用登记来源。",
+    )
+    locator: str | None = Field(default=None, description=LOCATOR_HELP)
+    requested_ref: str | None = Field(default=None, description=REF_HELP)
 
     @model_validator(mode="after")
     def validate_replacement(self) -> "SkillUpdateProposalInput":
@@ -252,6 +358,10 @@ class SkillUpdateProposalInput(BaseModel):
             raise ValueError("replacement source_kind/locator 必须同时提供")
         if self.source_kind is None and self.requested_ref is not None:
             raise ValueError("requested_ref 需要 replacement source")
+        if self.source_kind is not None:
+            _validate_source(SkillSourceRef(
+                self.source_kind, cast(str, self.locator), self.requested_ref,
+            ))
         return self
 
     def replacement(self) -> SkillSourceRef | None:
@@ -314,7 +424,7 @@ def create_skill_update_proposal_spec(
         name=PROPOSE_SKILL_UPDATE,
         description=(
             "为健康的已安装 Skill 检查来源更新并冻结候选，提交更新审批。"
-            "诊断显示安装包损坏时不要调用，应改用 propose_skill_repair。"
+            "省略来源时使用登记来源；保持启用状态。包损坏时不能更新，可卸载后重新安装。"
             "本工具必须单独调用。"
         ),
         parameters=PydanticParameters(SkillUpdateProposalInput),
@@ -347,115 +457,5 @@ class SkillUpdateApprovalHandler:
         return ControlApprovalExecution(
             True,
             f"Skill `{record.name}` 已更新 (revision={record.revision})。",
-            {"skill_id": record.name, "revision": record.revision},
-        )
-
-
-class SkillRepairProposalInput(BaseModel):
-    skill_id: str
-
-
-def create_skill_repair_proposal_spec(
-    service: SkillApplicationService,
-) -> ToolSpec:
-    async def propose(
-        input_data: SkillRepairProposalInput,
-    ) -> ControlApprovalProposal | ControlPreparationFailure | dict:
-        try:
-            record, candidate = await service.prepare_repair(
-                input_data.skill_id,
-            )
-        except (SkillInputError, SkillSourceError) as exc:
-            return ControlPreparationFailure({
-                "ok": False,
-                "code": "SKILL_REPAIR_PREPARE_FAILED",
-                "data": {"skill_id": input_data.skill_id},
-                "error": str(exc),
-                "hint": None,
-            })
-        return ControlApprovalProposal(
-            action=SKILL_REPAIR_ACTION,
-            payload={
-                "skill_id": record.name,
-                "candidate_hash": candidate.content_hash,
-                "source": candidate.source.to_dict(),
-                "resolved_ref": candidate.resolved_ref,
-                "expected_revision": record.revision,
-                "expected_content_hash": record.content_hash,
-            },
-            summary=(
-                f"准备修复 Skill `{record.name}`\n"
-                f"Revision：{record.revision}\n"
-                f"登记 hash：{record.content_hash}\n"
-                f"冻结来源：{candidate.source.kind} {candidate.source.locator}"
-            ),
-            risk=(
-                "批准后只恢复与 Registry 登记 hash 完全相同的冻结内容；"
-                "来源内容变化时拒绝修复，不会把修复暗中变成更新。"
-            ),
-        )
-
-    return ToolSpec(
-        name=PROPOSE_SKILL_REPAIR,
-        description=(
-            "在 inspect/test 已证明已安装 Skill 包损坏或丢失后，"
-            "从登记来源冻结同 hash 内容并提交修复审批。"
-            "本工具必须单独调用。"
-        ),
-        parameters=PydanticParameters(SkillRepairProposalInput),
-        handler=propose,
-        control_boundary=True,
-        exclusive_batch=True,
-    )
-
-
-class SkillRepairApprovalHandler:
-    action = SKILL_REPAIR_ACTION
-
-    def __init__(self, service: SkillApplicationService) -> None:
-        self.service = service
-
-    async def execute(self, payload: Mapping[str, object]) -> ControlApprovalExecution:
-        expected = {
-            "skill_id",
-            "candidate_hash",
-            "source",
-            "resolved_ref",
-            "expected_revision",
-            "expected_content_hash",
-        }
-        if set(payload) != expected:
-            raise SkillInputError("Skill repair approval payload 字段不匹配")
-        source = payload["source"]
-        if not isinstance(source, Mapping):
-            raise SkillInputError("Skill repair source 必须是 object")
-        if (
-            type(payload["skill_id"]) is not str
-            or type(payload["candidate_hash"]) is not str
-            or type(payload["resolved_ref"]) is not str
-            or type(payload["expected_revision"]) is not int
-            or type(payload["expected_content_hash"]) is not str
-        ):
-            raise SkillInputError("Skill repair approval payload 类型无效")
-        try:
-            record = await self.service.repair_frozen(
-                cast(str, payload["skill_id"]),
-                cast(str, payload["candidate_hash"]),
-                SkillSourceRef.from_dict(dict(source)),
-                cast(str, payload["resolved_ref"]),
-                expected_revision=cast(int, payload["expected_revision"]),
-                expected_content_hash=cast(
-                    str,
-                    payload["expected_content_hash"],
-                ),
-            )
-        except SkillInputError as exc:
-            return ControlApprovalExecution(
-                False,
-                f"Skill repair 未执行：{exc}",
-            )
-        return ControlApprovalExecution(
-            True,
-            f"Skill `{record.name}` 已修复 (revision={record.revision})。",
             {"skill_id": record.name, "revision": record.revision},
         )

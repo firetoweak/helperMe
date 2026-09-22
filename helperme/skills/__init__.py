@@ -8,7 +8,7 @@ from helperme.skills.models import (
     SkillSourceRef,
 )
 from helperme.skills.installer import LocalSkillInstaller
-from helperme.skills.application import SkillApplicationService, SkillInspection
+from helperme.skills.application import SkillApplicationService, SkillTestResult
 from helperme.skills.console import SkillCommandError, SkillConsoleAdapter
 from helperme.skills.package import LocalSkillPackageReader, SkillPackageError
 from helperme.skills.registry import SkillRegistry
@@ -21,16 +21,16 @@ from helperme.skills.runtime import (
 from helperme.skills.sources import SkillSourceError, SkillSourceRouter
 from helperme.skills.summarizer import LlmSkillDiffSummarizer, SkillDiffSummarizer
 from helperme.skills.approval import (
-    PROPOSE_SKILL_ENABLE,
+    PROPOSE_SKILL_SET_ENABLED,
     PROPOSE_SKILL_INSTALL,
-    PROPOSE_SKILL_REPAIR,
+    PROPOSE_SKILL_UNINSTALL,
     PROPOSE_SKILL_UPDATE,
-    SkillEnableApprovalHandler,
+    SkillSetEnabledApprovalHandler,
     SkillInstallApprovalHandler,
-    SkillRepairApprovalHandler,
+    SkillUninstallApprovalHandler,
     SkillUpdateApprovalHandler,
     create_skill_install_proposal_spec,
-    create_skill_repair_proposal_spec,
+    create_skill_uninstall_proposal_spec,
     create_skill_update_proposal_spec,
 )
 
@@ -44,7 +44,7 @@ __all__ = [
     "SkillApplicationService",
     "SkillBundle",
     "SkillFile",
-    "SkillInspection",
+    "SkillTestResult",
     "SkillCommandError",
     "SkillConsoleAdapter",
     "SkillPackageError",
@@ -57,14 +57,14 @@ __all__ = [
     "SkillDiffSummarizer",
     "LlmSkillDiffSummarizer",
     "PROPOSE_SKILL_INSTALL",
-    "PROPOSE_SKILL_ENABLE",
+    "PROPOSE_SKILL_SET_ENABLED",
     "PROPOSE_SKILL_UPDATE",
-    "PROPOSE_SKILL_REPAIR",
-    "SkillEnableApprovalHandler",
+    "PROPOSE_SKILL_UNINSTALL",
+    "SkillSetEnabledApprovalHandler",
     "SkillInstallApprovalHandler",
     "SkillUpdateApprovalHandler",
-    "SkillRepairApprovalHandler",
+    "SkillUninstallApprovalHandler",
     "create_skill_install_proposal_spec",
     "create_skill_update_proposal_spec",
-    "create_skill_repair_proposal_spec",
+    "create_skill_uninstall_proposal_spec",
 ]

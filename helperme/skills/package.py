@@ -96,6 +96,7 @@ def parse_skill_markdown(content: bytes) -> tuple[str, str, str]:
         raise SkillPackageError(
             "SKILL.md Frontmatter description 必须是非空 string"
         )
+    description = description.strip()
     try:
         validate_skill_id(name)
         validate_skill_description(description)

@@ -75,7 +75,7 @@ class LocalSkillInstaller:
                     source=bundle.source,
                     resolved_ref=bundle.resolved_ref,
                     content_hash=bundle.content_hash,
-                    enabled=False,
+                    enabled=True,
                 )
                 try:
                     return await self.registry.add(record)

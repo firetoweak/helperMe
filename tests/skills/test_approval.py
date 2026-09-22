@@ -7,17 +7,17 @@ from helperme.tools.control import ControlApprovalProposal
 from helperme.paths import HelperMeHome
 from helperme.skills.application import SkillApplicationService
 from helperme.skills.approval import (
-    SkillEnableApprovalHandler,
-    SkillEnableProposalInput,
+    SkillSetEnabledApprovalHandler,
+    SkillSetEnabledProposalInput,
     SkillInstallApprovalHandler,
     SkillInstallProposalInput,
-    SkillRepairApprovalHandler,
-    SkillRepairProposalInput,
+    SkillUninstallApprovalHandler,
+    SkillUninstallProposalInput,
+    create_skill_uninstall_proposal_spec,
     SkillUpdateApprovalHandler,
     SkillUpdateProposalInput,
-    create_skill_enable_proposal_spec,
+    create_skill_set_enabled_proposal_spec,
     create_skill_install_proposal_spec,
-    create_skill_repair_proposal_spec,
     create_skill_update_proposal_spec,
 )
 from tests.skills.test_package import write_skill
@@ -45,28 +45,6 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(execution.succeeded)
             installed = workspace.skills_root / "packages" / "demo" / "SKILL.md"
             self.assertIn("v2", installed.read_text(encoding="utf-8"))
-
-    async def test_repair_proposal_restores_corrupted_registered_content(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            workspace = HelperMeHome(root / ".helperme")
-            workspace.initialize()
-            source = root / "source"
-            write_skill(source, name="demo", body="original\n")
-            service = SkillApplicationService(workspace)
-            await service.install_local(source)
-            installed = workspace.skills_root / "packages" / "demo" / "SKILL.md"
-            installed.write_text("broken", encoding="utf-8")
-
-            request = await create_skill_repair_proposal_spec(service).handler(
-                SkillRepairProposalInput(skill_id="demo")
-            )
-            execution = await SkillRepairApprovalHandler(service).execute(
-                request.payload
-            )
-
-            self.assertTrue(execution.succeeded)
-            self.assertIn("original", installed.read_text(encoding="utf-8"))
 
     async def test_already_installed_is_a_deterministic_proposal_result(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -160,10 +138,17 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             installed = service.skills_root / "packages" / "demo" / "SKILL.md"
             text = installed.read_text(encoding="utf-8")
             self.assertTrue(execution.succeeded)
-            self.assertFalse(record.enabled)
+            self.assertTrue(record.enabled)
+            self.assertEqual(record.revision, 1)
             self.assertEqual(record.content_hash, frozen_hash)
             self.assertIn("Frozen v1", text)
             self.assertNotIn("Drifted v2", text)
+            shutil.rmtree(source)
+            from helperme.skills.runtime import LoadSkillInput
+            load = next(item for item in service.tool_catalog.tool_specs() if item.name == "load_skill")
+            loaded = await load.handler(LoadSkillInput(skill_id="demo"))
+            self.assertTrue(loaded["ok"])
+            self.assertIn("frozen body", loaded["data"]["content"])
 
     async def test_missing_frozen_install_candidate_is_known_execution_failure(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -204,7 +189,7 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(spec.control_boundary)
             self.assertTrue(spec.exclusive_batch)
 
-    async def test_enable_proposal_freezes_revision_and_rejects_drift(self):
+    async def test_set_enabled_proposal_freezes_revision_and_rejects_drift(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = HelperMeHome(root / ".helperme")
@@ -213,14 +198,83 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             write_skill(source, name="demo")
             service = SkillApplicationService(workspace)
             await service.install_local(source)
-            spec = create_skill_enable_proposal_spec(service)
-            request = await spec.handler(SkillEnableProposalInput(skill_id="demo"))
+            spec = create_skill_set_enabled_proposal_spec(service)
+            request = await spec.handler(SkillSetEnabledProposalInput(skill_id="demo", enabled=False))
 
             await service.set_enabled("demo", True)
             await service.set_enabled("demo", False)
 
-            with self.assertRaisesRegex(ValueError, "过期"):
-                await SkillEnableApprovalHandler(service).execute(request.payload)
+            result = await SkillSetEnabledApprovalHandler(service).execute(request.payload)
+            self.assertFalse(result.succeeded)
+            self.assertIn("过期", result.message)
 
             self.assertTrue(spec.control_boundary)
             self.assertTrue(spec.exclusive_batch)
+
+    async def test_uninstall_rejects_changed_revision_then_removes_current_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            write_skill(source, name="demo")
+            service = SkillApplicationService(HelperMeHome(root / "home"))
+            await service.install_local(source)
+            spec = create_skill_uninstall_proposal_spec(service)
+            request = await spec.handler(SkillUninstallProposalInput(skill_id="demo"))
+            await service.set_enabled("demo", False)
+            handler = SkillUninstallApprovalHandler(service)
+            stale = await handler.execute(request.payload)
+            self.assertFalse(stale.succeeded)
+            self.assertTrue((service.skills_root / "packages/demo").is_dir())
+            current = await spec.handler(SkillUninstallProposalInput(skill_id="demo"))
+            removed = await handler.execute(current.payload)
+            self.assertTrue(removed.succeeded)
+            self.assertIsNone(await service.registry.get("demo"))
+            self.assertFalse((service.skills_root / "packages/demo").exists())
+            self.assertTrue(source.is_dir())
+
+    async def test_set_enabled_can_disable_without_reading_a_damaged_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            write_skill(source, name="demo")
+            service = SkillApplicationService(HelperMeHome(root / "home"))
+            await service.install_local(source)
+            (service.skills_root / "packages/demo/SKILL.md").write_text("damaged", encoding="utf-8")
+            request = await create_skill_set_enabled_proposal_spec(service).handler(
+                SkillSetEnabledProposalInput(skill_id="demo", enabled=False)
+            )
+            result = await SkillSetEnabledApprovalHandler(service).execute(request.payload)
+            self.assertTrue(result.succeeded)
+            self.assertFalse((await service.registry.get("demo")).enabled)
+
+    async def test_install_rechecks_catalog_budget_before_any_install_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            write_skill(source, name="demo", description="Demo")
+            home = HelperMeHome(root / "home")
+            service = SkillApplicationService(home)
+            request = await create_skill_install_proposal_spec(service).handler(
+                SkillInstallProposalInput(source_kind="local", locator=str(source))
+            )
+            constrained = SkillApplicationService(home, max_catalog_chars=1)
+            result = await SkillInstallApprovalHandler(constrained).execute(request.payload)
+            self.assertFalse(result.succeeded)
+            self.assertIn("SKILL_CATALOG_LIMIT", result.message)
+            self.assertEqual(await constrained.list_skills(), ())
+            self.assertFalse((home.skills_root / "packages/demo").exists())
+
+    async def test_uninstall_can_remove_registration_when_package_is_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            write_skill(source, name="demo")
+            service = SkillApplicationService(HelperMeHome(root / "home"))
+            await service.install_local(source)
+            shutil.rmtree(service.skills_root / "packages/demo")
+            request = await create_skill_uninstall_proposal_spec(service).handler(
+                SkillUninstallProposalInput(skill_id="demo")
+            )
+            result = await SkillUninstallApprovalHandler(service).execute(request.payload)
+            self.assertTrue(result.succeeded)
+            self.assertIsNone(await service.registry.get("demo"))

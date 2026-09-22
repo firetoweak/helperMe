@@ -33,22 +33,29 @@ from helperme.assistant.decision import (
 from helperme.assistant.runner import SessionScheduler
 from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.subagent.subagent import DELEGATE, REPORT, SubAgentHost
-from helperme.assistant.toolsets import ToolSurface, load_toolset_binding
+from helperme.assistant.toolsets import (
+    LOAD_TOOLSET,
+    LOAD_TOOLSET_DESCRIPTION,
+    ToolSurface,
+    load_toolset_binding,
+)
 from helperme.runtime import AgentRuntime, ToolBinding
 from helperme.assistant.builtin_tools import build_builtin_tools
 from helperme.sandbox.registry import WorkspaceRecord
 from helperme.assistant.cli import CliToolAdapter
 from helperme.assistant.mcp import McpToolsetAdapter
-from helperme.assistant.management import ManagementDomain, ManagementSurface
+from helperme.assistant.management import (
+    ManagementDomain,
+    ManagementSurface,
+    ResidentTool,
+)
 from helperme.assistant.skills import SkillToolAdapter
 from helperme.assistant.catalog import CapabilityCatalog
 from helperme.config import AssistantConfig
 from helperme.paths import HelperMeHome, runtime_data_root
 from helperme.cli.composition import CliAssembly, build_cli
-from helperme.cli.runtime import LOAD_CLI
 from helperme.mcp.composition import McpAssembly, build_mcp
 from helperme.skills.composition import SkillAssembly, build_skills
-from helperme.skills.runtime import LOAD_SKILL, READ_SKILL_RESOURCE
 from helperme.skills.summarizer import LlmSkillDiffSummarizer
 
 
@@ -128,18 +135,27 @@ async def build_assistant_assembly(
                 "MCP Server 的发现、诊断、安装、更新与修复",
                 mcp.management_specs,
                 mcp.control_operations,
+                (ResidentTool(LOAD_TOOLSET, LOAD_TOOLSET_DESCRIPTION),),
             ),
             ManagementDomain(
                 "skill",
-                "Skill 的发现、检查、安装、启用、更新与修复",
+                "Skill 的帮助、查询、检查、安装、更新、启停与卸载",
                 skills.management_specs,
                 skills.control_operations,
+                tuple(
+                    ResidentTool(spec.name, spec.description)
+                    for spec in skills.tool_catalog.tool_specs()
+                ),
             ),
             ManagementDomain(
                 "cli",
                 "CLI 的登记、诊断、安装、更新与修复",
                 cli.management_specs,
                 cli.control_operations,
+                tuple(
+                    ResidentTool(spec.name, spec.description)
+                    for spec in cli.tool_catalog.tool_specs()
+                ),
             ),
         ),
         gateway,
@@ -170,14 +186,12 @@ async def build_assistant_assembly(
             "read_artifact",
             "read_image",
             DELIVER_TOOL_NAME,
-            LOAD_SKILL,
-            READ_SKILL_RESOURCE,
-            LOAD_CLI,
             DELEGATE,
             REPORT,
             READ,
             SUBMIT,
             *management.names(),
+            *management.resident_names(),
             *(operation.name for operation in operations),
         ),
         gateway=gateway,

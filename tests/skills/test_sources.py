@@ -14,6 +14,7 @@ from helperme.skills.approval import (
     create_skill_install_proposal_spec,
 )
 from helperme.skills.sources import SkillSourceError, SkillSourceRouter
+from helperme.skills.package import SkillPackageError
 from helperme.tools.control import ControlPreparationFailure
 from tests.skills.test_package import write_skill
 
@@ -36,6 +37,45 @@ def skill_zip(
 
 
 class SkillSourceRouterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_package_errors_preserve_reason_for_every_source(self):
+        markdown = b"---\nname: demo\ndescription: ''\n---\nbody\n"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("repo-commit/SKILL.md", markdown)
+
+        async def handler(request):
+            if request.url.host == "api.github.com":
+                return httpx.Response(200, json={"sha": "abc123"})
+            if request.url.host == "codeload.github.com":
+                return httpx.Response(200, content=buffer.getvalue())
+            return httpx.Response(200, content=markdown)
+
+        router = SkillSourceRouter(transport=httpx.MockTransport(handler))
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "SKILL.md").write_bytes(markdown)
+            for source in (
+                SkillSourceRef("local", directory),
+                SkillSourceRef("url", "https://example.test/SKILL.md"),
+                SkillSourceRef("github", "owner/repository"),
+            ):
+                with self.subTest(kind=source.kind):
+                    with self.assertRaisesRegex(
+                        SkillSourceError, "package 格式无效: Skill description 不能为空"
+                    ) as captured:
+                        await router.fetch(source)
+                    self.assertIsInstance(captured.exception.__cause__, SkillPackageError)
+
+    async def test_local_read_error_is_distinct_from_package_error(self):
+        reader = Mock()
+        reader.read.side_effect = PermissionError("access denied")
+
+        with self.assertRaisesRegex(
+            SkillSourceError, "无法读取本地 Skill source: .*access denied"
+        ) as captured:
+            await SkillSourceRouter(reader).fetch(SkillSourceRef("local", "skill"))
+
+        self.assertIsInstance(captured.exception.__cause__, PermissionError)
+
     async def test_connect_error_becomes_external_skill_source_error(self):
         async def handler(request):
             raise httpx.ConnectError("offline", request=request)

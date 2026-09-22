@@ -61,9 +61,13 @@ class SkillSourceRouter:
                     self.package_reader.read,
                     Path(source.locator),
                 )
-            except (OSError, SkillPackageError) as exc:
+            except SkillPackageError as exc:
                 raise SkillSourceError(
-                    f"无法读取本地 Skill source: {source.locator}"
+                    f"本地 Skill package 格式无效: {exc}"
+                ) from exc
+            except OSError as exc:
+                raise SkillSourceError(
+                    f"无法读取本地 Skill source: {source.locator}: {exc}"
                 ) from exc
             return replace(bundle, source=source)
         if source.kind == "url":
@@ -84,7 +88,7 @@ class SkillSourceRouter:
                     (root / "SKILL.md").write_bytes(content)
                     bundle = self.package_reader.read(root)
         except SkillPackageError as exc:
-            raise SkillSourceError("远程 Skill package 格式无效") from exc
+            raise SkillSourceError(f"远程 Skill package 格式无效: {exc}") from exc
         return replace(
             bundle,
             source=source,
@@ -123,7 +127,7 @@ class SkillSourceRouter:
         try:
             bundle = self._read_zip(archive, package_subpath=subpath)
         except SkillPackageError as exc:
-            raise SkillSourceError("GitHub Skill package 格式无效") from exc
+            raise SkillSourceError(f"GitHub Skill package 格式无效: {exc}") from exc
         return replace(
             bundle,
             source=source,

@@ -91,7 +91,7 @@ class LocalSkillInstallerTest(unittest.IsolatedAsyncioTestCase):
 
             target = skills_root / "packages" / "python-testing"
             self.assertEqual(record.name, "python-testing")
-            self.assertFalse(record.enabled)
+            self.assertTrue(record.enabled)
             self.assertTrue((target / "SKILL.md").is_file())
             self.assertTrue((target / "scripts" / "run.py").is_file())
             self.assertEqual((await registry.get(record.name)), record)

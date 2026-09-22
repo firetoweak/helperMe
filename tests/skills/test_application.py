@@ -6,10 +6,6 @@ from helperme.paths import HelperMeHome
 from helperme.llm.api import LLMTransientError
 from helperme.skills.application import SkillApplicationService
 from helperme.skills.console import SkillConsoleAdapter
-from helperme.skills.errors import (
-    SkillInstalledPackageError,
-    SkillPreconditionError,
-)
 from helperme.skills.models import SkillSourceRef
 from tests.skills.test_package import write_skill
 
@@ -51,8 +47,8 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.skills_root.parent, self.workspace.root)
         self.assertNotEqual(self.service.skills_root, self.workspace.mcp_root)
 
-    async def test_inspect_test_enable_disable_and_remove(self):
-        inspection = await self.service.inspect("demo")
+    async def test_test_enable_disable_and_remove(self):
+        inspection = await self.service.test_skill("demo")
         self.assertEqual(inspection.record.name, "demo")
         self.assertEqual(
             [item[0] for item in inspection.files],
@@ -62,10 +58,10 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
 
         enabled = await self.service.set_enabled("demo", True)
         self.assertTrue(enabled.enabled)
-        self.assertEqual(enabled.revision, 2)
+        self.assertEqual(enabled.revision, 1)
         disabled = await self.service.set_enabled("demo", False)
         self.assertFalse(disabled.enabled)
-        self.assertEqual(disabled.revision, 3)
+        self.assertEqual(disabled.revision, 2)
 
         removed = await self.service.remove("demo")
         self.assertEqual(removed.name, "demo")
@@ -75,6 +71,7 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_enable_rejects_modified_installed_package(self):
+        await self.service.set_enabled("demo", False)
         installed = self.service.skills_root / "packages" / "demo" / "SKILL.md"
         installed.write_text(
             "---\nname: demo\ndescription: Demo skill\n---\ntampered\n",
@@ -86,42 +83,8 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse((await self.service.registry.get("demo")).enabled)
 
-    async def test_repair_restores_registered_hash_and_preserves_enabled(self):
-        enabled = await self.service.set_enabled("demo", True)
-        installed = self.service.skills_root / "packages" / "demo" / "SKILL.md"
-        installed.write_text("broken", encoding="utf-8")
-        with self.assertRaises(SkillInstalledPackageError):
-            await self.service.test_skill("demo")
-
-        record, candidate = await self.service.prepare_repair("demo")
-        repaired = await self.service.repair_frozen(
-            "demo",
-            candidate.content_hash,
-            candidate.source,
-            candidate.resolved_ref,
-            expected_revision=record.revision,
-            expected_content_hash=record.content_hash,
-        )
-
-        self.assertTrue(repaired.enabled)
-        self.assertEqual(repaired.revision, enabled.revision + 1)
-        self.assertEqual(repaired.content_hash, enabled.content_hash)
-        self.assertEqual((await self.service.test_skill("demo")).record, repaired)
-
-    async def test_repair_refuses_source_drift_as_implicit_update(self):
-        installed = self.service.skills_root / "packages" / "demo" / "SKILL.md"
-        installed.write_text("broken", encoding="utf-8")
-        write_skill(
-            self.source,
-            name="demo",
-            description="Changed source",
-            body="new version\n",
-        )
-
-        with self.assertRaisesRegex(SkillPreconditionError, "内容已变化"):
-            await self.service.prepare_repair("demo")
-
     async def test_enable_rejects_catalog_over_budget_without_state_change(self):
+        await self.service.set_enabled("demo", False)
         constrained = SkillApplicationService(
             self.workspace,
             registry=self.service.registry,
@@ -182,7 +145,7 @@ class SkillApplicationServiceTest(unittest.IsolatedAsyncioTestCase):
             body="candidate\n",
         )
         candidate = (await self.service.check_update("demo")).candidate
-        await self.service.set_enabled("demo", True)
+        await self.service.set_enabled("demo", False)
 
         with self.assertRaisesRegex(ValueError, "候选过期"):
             await self.service.update("demo", candidate.candidate_hash)
@@ -269,9 +232,9 @@ class SkillConsoleAdapterTest(unittest.IsolatedAsyncioTestCase):
             )
             listing = await adapter.execute_if_handled("/skill list")
             test = await adapter.execute_if_handled("/skill test demo")
-            enable = await adapter.execute_if_handled("/skill enable demo")
+            enable = await adapter.execute_if_handled("/skill set_enabled demo true")
 
-            self.assertIn("disabled", install)
-            self.assertIn("demo [disabled]", listing)
+            self.assertIn("已安装并启用", install)
+            self.assertIn("demo [enabled]", listing)
             self.assertIn("校验通过", test)
             self.assertIn("下一个 Step", enable)

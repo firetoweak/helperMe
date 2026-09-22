@@ -12,6 +12,7 @@ from helperme.assistant.management import (
     LOAD_MANAGEMENT_TOOLS,
     ManagementDomain,
     ManagementSurface,
+    ResidentTool,
 )
 from helperme.assistant.context.projection import ModelContextSettings
 from tests.session_scheduler import settle_session
@@ -105,12 +106,14 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                     "mcp management",
                     (_spec("diagnose_mcp"),),
                     (_operation("mcp", "propose_mcp_repair"),),
+                    (ResidentTool("load_toolset", "load a toolset"),),
                 ),
                 ManagementDomain(
                     "skill",
                     "skill management",
                     (_spec("diagnose_skill"),),
-                    (_operation("skill", "propose_skill_repair"),),
+                    (_operation("skill", "propose_skill_install"),),
+                    (ResidentTool("load_skill", "load a skill"),),
                 ),
             )
             management = ManagementSurface(
@@ -169,6 +172,40 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 frozenset({"propose_mcp_repair"}),
             )
 
+    async def test_loaded_skill_map_describes_every_registered_operation(self):
+        from helperme.paths import HelperMeHome
+        from helperme.skills.composition import build_skills
+
+        with TemporaryDirectory() as directory:
+            assembly = build_skills(HelperMeHome(Path(directory) / "home"))
+            resident = tuple(
+                ResidentTool(spec.name, spec.description)
+                for spec in assembly.tool_catalog.tool_specs()
+            )
+            domain = ManagementDomain(
+                "skill", "Skill 管理", assembly.management_specs, assembly.control_operations, resident,
+            )
+            surface = ManagementSurface(
+                (domain,), FileArtifactGateway(Path(directory) / "artifacts"), ModelContextSettings(),
+            )
+            self.assertEqual(_names(surface.schemas("session")), {LOAD_MANAGEMENT_TOOLS})
+            loaded = await surface.load("session", "skill", activation_command_id="load-1")
+            specs = {item.name: item for item in assembly.management_specs}
+            specs.update({item.name: item.proposal_spec for item in assembly.control_operations})
+            expected = {
+                name: ("control" if spec.control_boundary else "diagnostic", spec.description)
+                for name, spec in specs.items()
+            }
+            expected.update({item.name: ("resident", item.description) for item in resident})
+            entries = loaded["data"]["tools"]
+            self.assertEqual({item["name"] for item in entries}, set(expected))
+            for entry in entries:
+                self.assertEqual((entry["kind"], entry["description"]), expected[entry["name"]])
+            # 声明归属不改变呈现：常驻工具不因为加载管理域而变成管理域 schema。
+            self.assertTrue(
+                set(domain.resident_names).isdisjoint(_names(surface.schemas("session")))
+            )
+
     async def test_failed_load_outcome_does_not_create_activation(self):
         with TemporaryDirectory() as directory:
             gateway = FileArtifactGateway(Path(directory))
@@ -178,6 +215,7 @@ class ManagementProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                     "mcp management",
                     (_spec("diagnose_mcp"),),
                     (_operation("mcp", "propose_mcp_repair"),),
+                    (),
                 ),
             )
             management = ManagementSurface(

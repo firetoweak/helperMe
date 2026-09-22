@@ -27,14 +27,16 @@ from helperme.runtime.model import DecisionState
 
 LOAD_TOOLSET = "load_toolset"
 
+LOAD_TOOLSET_DESCRIPTION = (
+    "为当前 Session 加载一个 Toolset，并返回本次发现的工具名称与描述。"
+    "其中的工具从下一个 Step 开始可用。未加载前不能调用其中的工具。"
+)
+
 LOAD_TOOLSET_SCHEMA: dict[str, object] = {
     "type": "function",
     "function": {
         "name": LOAD_TOOLSET,
-        "description": (
-            "为当前 Session 加载一个 Toolset，并返回本次发现的工具名称与描述。"
-            "其中的工具从下一个 Step 开始可用。未加载前不能调用其中的工具。"
-        ),
+        "description": LOAD_TOOLSET_DESCRIPTION,
         "parameters": {
             "type": "object",
             "properties": {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from helperme.skills.application import SkillApplicationService
@@ -25,27 +24,26 @@ class SkillConsoleAdapter:
         action = parts[1]
         rest = parts[2] if len(parts) > 2 else ""
         if action == "list":
-            return await self._list()
+            return await self._list(rest)
         if action == "install":
             return await self._install(rest)
-        if action == "inspect":
-            return await self._inspect(rest)
         if action == "test":
             return await self._test(rest)
-        if action == "enable":
-            return self._with_next_step(await self._set_enabled(rest, True))
-        if action == "disable":
-            return self._with_next_step(await self._set_enabled(rest, False))
-        if action == "remove":
+        if action == "set_enabled":
+            args = rest.split()
+            if len(args) != 2 or args[1] not in {"true", "false"}:
+                raise SkillCommandError("/skill set_enabled <id> <true|false>")
+            return self._with_next_step(await self._set_enabled(args[0], args[1] == "true"))
+        if action == "uninstall":
             return self._with_next_step(await self._remove(rest))
-        if action == "check-update":
-            return await self._check_update(rest)
         if action == "update":
             return self._with_next_step(await self._update(rest))
         raise SkillCommandError(f"未知 /skill 子命令: {action}")
 
-    async def _list(self) -> str:
+    async def _list(self, rest: str) -> str:
         records = await self._service.list_skills()
+        if rest.strip():
+            records = tuple(item for item in records if item.name == rest.strip())
         if not records:
             return "尚未安装任何 Skill。"
         return "\n".join(
@@ -77,21 +75,9 @@ class SkillConsoleAdapter:
         except SkillSourceError as exc:
             raise SkillCommandError(str(exc)) from exc
         return (
-            f"已安装 Skill `{record.name}` 为 disabled。"
-            "\n检查后执行 /skill enable，从下一个 Step 发布给模型。"
+            f"已安装并启用 Skill `{record.name}`，包完整性校验通过。"
+            "\n下一个 Step 进入能力目录，正文按需加载。"
         )
-
-    async def _inspect(self, rest: str) -> str:
-        skill_id = self._required_id(rest, "inspect")
-        inspection = await self._service.inspect(skill_id)
-        return json.dumps({
-            "record": inspection.record.to_dict(),
-            "main_instruction_chars": inspection.main_instruction_chars,
-            "files": [
-                {"path": path, "bytes": size}
-                for path, size in inspection.files
-            ],
-        }, ensure_ascii=False, indent=2)
 
     async def _test(self, rest: str) -> str:
         skill_id = self._required_id(rest, "test")
@@ -103,43 +89,39 @@ class SkillConsoleAdapter:
         )
 
     async def _set_enabled(self, rest: str, enabled: bool) -> str:
-        action = "enable" if enabled else "disable"
+        action = "set_enabled"
         skill_id = self._required_id(rest, action)
         record = await self._service.set_enabled(skill_id, enabled)
         state = "启用" if enabled else "停用"
         return f"已{state} Skill `{record.name}` (revision={record.revision})"
 
     async def _remove(self, rest: str) -> str:
-        skill_id = self._required_id(rest, "remove")
+        skill_id = self._required_id(rest, "uninstall")
         record = await self._service.remove(skill_id)
         return f"已卸载 Skill `{record.name}`"
 
-    async def _check_update(self, rest: str) -> str:
+    async def _update(self, rest: str) -> str:
         parts = rest.split(maxsplit=3)
         if not parts:
             raise SkillCommandError(
-                "/skill check-update <id> [[local|url|github] <locator> [ref]]"
+                "/skill update <id> [[local|url|github] <locator> [ref]]"
             )
         skill_id = parts[0]
         replacement = None
         if len(parts) > 1:
             if len(parts) < 3 or parts[1] not in {"local", "url", "github"}:
                 raise SkillCommandError(
-                    "/skill check-update <id> [[local|url|github] <locator> [ref]]"
+                    "/skill update <id> [[local|url|github] <locator> [ref]]"
                 )
             replacement = SkillSourceRef(
                 parts[1],
                 parts[2],
                 parts[3] if len(parts) == 4 else None,
             )
-        candidate = await self._service.check_update(skill_id, replacement)
-        return json.dumps(candidate.to_dict(), ensure_ascii=False, indent=2)
-
-    async def _update(self, rest: str) -> str:
-        parts = rest.split()
-        if len(parts) != 2:
-            raise SkillCommandError("/skill update <id> <candidate_hash>")
-        record = await self._service.update(parts[0], parts[1])
+        report = await self._service.check_update(skill_id, replacement)
+        if not report.candidate.diff.changed:
+            return f"Skill `{skill_id}` 内容没有变化。"
+        record = await self._service.update(skill_id, report.candidate.candidate_hash)
         return f"已更新 Skill `{record.name}` (revision={record.revision})"
 
     @staticmethod
@@ -156,14 +138,11 @@ class SkillConsoleAdapter:
     @staticmethod
     def _help() -> str:
         return (
-            "Skill 命令：\n"
-            "  /skill list\n"
+            "Skill 包完整安装到 Agent HOME，安装默认启用；正文按需加载。\n"
+            "  /skill list [id]\n"
             "  /skill install [local|url|github] <locator> [ref]\n"
-            "  /skill inspect <id>\n"
             "  /skill test <id>\n"
-            "  /skill enable <id>\n"
-            "  /skill disable <id>\n"
-            "  /skill remove <id>"
-            "\n  /skill check-update <id> [[local|url|github] <locator> [ref]]"
-            "\n  /skill update <id> <candidate_hash>"
+            "  /skill set_enabled <id> <true|false>\n"
+            "  /skill uninstall <id>\n"
+            "  /skill update <id> [[local|url|github] <locator> [ref]]"
         )

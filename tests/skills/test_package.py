@@ -55,6 +55,26 @@ class LocalSkillPackageReaderTest(unittest.TestCase):
             changed = LocalSkillPackageReader().read(root)
             self.assertNotEqual(first.content_hash, changed.content_hash)
 
+    def test_normalizes_description_without_changing_package_bytes_or_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundles = []
+            for description in (">\n  Folded\n  description", "'  Folded description  '"):
+                with self.subTest(description=description):
+                    content = (
+                        f"---\nname: demo\ndescription: {description}\n---\nbody\n"
+                    ).encode("utf-8")
+                    (root / "SKILL.md").write_bytes(content)
+
+                    bundle = LocalSkillPackageReader().read(root)
+
+                    self.assertEqual(bundle.description, "Folded description")
+                    self.assertEqual(bundle.files[0].content, content)
+                    self.assertEqual((root / "SKILL.md").read_bytes(), content)
+                    bundles.append(bundle)
+
+            self.assertNotEqual(bundles[0].content_hash, bundles[1].content_hash)
+
     def test_rejects_missing_invalid_and_duplicate_frontmatter(self):
         cases = {
             "missing": "# no frontmatter\n",
@@ -68,6 +88,9 @@ class LocalSkillPackageReaderTest(unittest.TestCase):
             ),
             "empty_description": (
                 "---\nname: demo\ndescription: ''\n---\nbody\n"
+            ),
+            "whitespace_description": (
+                "---\nname: demo\ndescription: '   '\n---\nbody\n"
             ),
             "multiline_description": (
                 "---\nname: demo\ndescription: |\n  line one\n  line two\n"

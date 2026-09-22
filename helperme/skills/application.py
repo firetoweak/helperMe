@@ -14,7 +14,7 @@ from helperme.skills.package import write_skill_bundle
 from helperme.skills.registry import SkillRegistry
 from helperme.skills.runtime import SkillToolCatalog
 from helperme.skills.updates import SkillCandidateStore
-from helperme.skills.models import SkillUpdateCandidate, SkillUpdateReport
+from helperme.skills.models import SkillUpdateReport
 from helperme.skills.models import SkillSourceRef
 from helperme.skills.sources import SkillSourceRouter
 from helperme.skills.summarizer import SkillDiffSummarizer
@@ -38,7 +38,7 @@ from helperme.skills.package import SkillPackageError
 
 
 @dataclass(frozen=True)
-class SkillInspection:
+class SkillTestResult:
     record: SkillRecord
     files: tuple[tuple[str, int], ...]
     main_instruction_chars: int
@@ -110,7 +110,22 @@ class SkillApplicationService:
     async def install_source(self, source: SkillSourceRef) -> SkillRecord:
         bundle = await self.source_router.fetch(source)
         async with self._management_lock:
-            return await self.installer.install_bundle(bundle)
+            return await self._install_bundle(bundle)
+
+    async def _check_catalog_budget(self, name: str, description: str) -> None:
+        records = await self.registry.list_skills()
+        entries = [
+            (item.name, item.description) for item in records
+            if item.enabled and item.name != name
+        ]
+        entries.append((name, description))
+        catalog = "\n".join(f"- {key}: {value}" for key, value in entries)
+        if len(catalog) > self.max_catalog_chars:
+            raise SkillPreconditionError("SKILL_CATALOG_LIMIT: 启用后完整 Skill 目录超出预算")
+
+    async def _install_bundle(self, bundle: SkillBundle) -> SkillRecord:
+        await self._check_catalog_budget(bundle.name, bundle.description)
+        return await self.installer.install_bundle(bundle)
 
     async def prepare_install(
         self,
@@ -122,6 +137,7 @@ class SkillApplicationService:
                 raise SkillAlreadyInstalledError(
                     f"Skill 已安装: {bundle.name}"
                 )
+            await self._check_catalog_budget(bundle.name, bundle.description)
             return self.install_candidates.freeze(bundle)
 
     async def install_frozen(
@@ -136,80 +152,19 @@ class SkillApplicationService:
             content_hash,
         )
         async with self._management_lock:
-            return await self.installer.install_bundle(replace(
+            return await self._install_bundle(replace(
                 bundle,
                 source=source,
                 resolved_ref=resolved_ref,
             ))
 
-    async def prepare_repair(
-        self,
-        skill_id: str,
-    ) -> tuple[SkillRecord, SkillInstallCandidate]:
-        try:
-            validate_skill_id(skill_id)
-        except ValueError as exc:
-            raise SkillInputError(str(exc)) from exc
-        async with self._management_lock:
-            record = await self.registry.get(skill_id)
-            if record is None:
-                raise SkillNotFoundError(f"Skill 未安装: {skill_id}")
-            bundle = await self.source_router.fetch(record.source)
-            if bundle.name != record.name:
-                raise SkillPreconditionError(
-                    f"Skill repair source 身份已变化: "
-                    f"{record.name} -> {bundle.name}"
-                )
-            if bundle.content_hash != record.content_hash:
-                raise SkillPreconditionError(
-                    "Skill repair source 内容已变化；应由模型判断是否走更新"
-                )
-            return record, self.install_candidates.freeze(bundle)
-
-    async def repair_frozen(
-        self,
-        skill_id: str,
-        candidate_hash: str,
-        source: SkillSourceRef,
-        resolved_ref: str,
-        *,
-        expected_revision: int,
-        expected_content_hash: str,
-    ) -> SkillRecord:
-        bundle = replace(
-            self.install_candidates.load_bundle(skill_id, candidate_hash),
-            source=source,
-            resolved_ref=resolved_ref,
-        )
-        async with self._management_lock:
-            current = await self.registry.get(skill_id)
-            if current is None:
-                raise SkillPreconditionError(f"Skill 未安装: {skill_id}")
-            if (
-                current.revision != expected_revision
-                or current.content_hash != expected_content_hash
-            ):
-                raise SkillPreconditionError(
-                    "Skill 已在 repair 提案后变化，候选过期"
-                )
-            if bundle.content_hash != current.content_hash:
-                raise SkillPreconditionError(
-                    "Skill repair 候选不是当前登记内容"
-                )
-            return await self._repair_with_candidate(current, bundle)
-
-    async def inspect(self, skill_id: str) -> SkillInspection:
+    async def test_skill(self, skill_id: str) -> SkillTestResult:
         record, bundle = await self._validated_bundle(skill_id)
-        return SkillInspection(
+        return SkillTestResult(
             record=record,
-            files=tuple(
-                (item.relative_path, item.size) for item in bundle.files
-            ),
+            files=tuple((item.relative_path, item.size) for item in bundle.files),
             main_instruction_chars=len(bundle.main_instructions),
         )
-
-    async def test_skill(self, skill_id: str) -> SkillInspection:
-        return await self.inspect(skill_id)
 
     async def set_enabled(
         self,
@@ -219,11 +174,12 @@ class SkillApplicationService:
         async with self._management_lock:
             return await self._set_enabled_locked(skill_id, enabled)
 
-    async def enable_frozen(
+    async def set_enabled_frozen(
         self,
         skill_id: str,
         expected_revision: int,
         expected_hash: str,
+        enabled: bool,
     ) -> SkillRecord:
         async with self._management_lock:
             record = await self.registry.get(skill_id)
@@ -236,7 +192,7 @@ class SkillApplicationService:
                 raise SkillPreconditionError(
                     f"Skill `{skill_id}` 已在审批前变化，冻结方案过期"
                 )
-            return await self._set_enabled_locked(skill_id, True)
+            return await self._set_enabled_locked(skill_id, enabled)
 
     async def _set_enabled_locked(
         self,
@@ -246,18 +202,8 @@ class SkillApplicationService:
         if await self.registry.get(skill_id) is None:
             raise SkillNotFoundError(f"Skill 未安装: {skill_id}")
         if enabled:
-            await self._validated_bundle(skill_id)
-            records = await self.registry.list_skills()
-            enabled_records = tuple(
-                item
-                for item in records
-                if item.enabled or item.name == skill_id
-            )
-            catalog = self._catalog_text(enabled_records)
-            if len(catalog) > self.max_catalog_chars:
-                raise SkillPreconditionError(
-                    "SKILL_CATALOG_LIMIT: 启用后完整 Skill 目录超出预算"
-                )
+            record, _ = await self._validated_bundle(skill_id)
+            await self._check_catalog_budget(record.name, record.description)
         return await self.registry.set_enabled(skill_id, enabled)
 
     async def check_update(
@@ -324,6 +270,8 @@ class SkillApplicationService:
                 )
             if not candidate.diff.changed:
                 raise SkillPreconditionError("Skill 候选与当前安装内容相同")
+            if current.enabled:
+                await self._check_catalog_budget(bundle.name, bundle.description)
             return await self._replace_with_candidate(current, bundle)
 
     async def _replace_with_candidate(
@@ -374,61 +322,13 @@ class SkillApplicationService:
             if cleanup_temporary and temporary.exists():
                 shutil.rmtree(temporary)
 
-    async def _repair_with_candidate(
+    async def remove(
         self,
-        current: SkillRecord,
-        bundle: SkillBundle,
+        skill_id: str,
+        *,
+        expected_revision: int | None = None,
+        expected_hash: str | None = None,
     ) -> SkillRecord:
-        target = self._package_directory(current.name)
-        self.installer.staging_root.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(
-            prefix=f"repair-{current.name}-",
-            dir=self.installer.staging_root,
-        ))
-        replacement = temporary / "replacement" / current.name
-        backup = temporary / "backup" / current.name
-        backup.parent.mkdir(parents=True)
-        cleanup_temporary = True
-        had_target = target.exists()
-        try:
-            write_skill_bundle(replacement, bundle)
-            self.package_reader.read(replacement)
-            if had_target:
-                target.replace(backup)
-            replacement.replace(target)
-            proposed = SkillRecord(
-                name=current.name,
-                description=bundle.description,
-                source=bundle.source,
-                resolved_ref=bundle.resolved_ref,
-                content_hash=bundle.content_hash,
-                enabled=current.enabled,
-                revision=current.revision,
-                created_at=current.created_at,
-            )
-            try:
-                return await self.registry.replace(proposed)
-            except BaseException as registry_error:
-                try:
-                    if target.is_dir():
-                        shutil.rmtree(target)
-                    elif target.exists():
-                        target.unlink()
-                    if had_target:
-                        backup.replace(target)
-                except BaseException as rollback_error:
-                    cleanup_temporary = False
-                    raise BaseExceptionGroup(
-                        f"Skill Registry repair 失败且包回滚失败；"
-                        f"备份保留在 {backup}",
-                        [registry_error, rollback_error],
-                    )
-                raise
-        finally:
-            if cleanup_temporary and temporary.exists():
-                shutil.rmtree(temporary)
-
-    async def remove(self, skill_id: str) -> SkillRecord:
         try:
             validate_skill_id(skill_id)
         except ValueError as exc:
@@ -437,11 +337,13 @@ class SkillApplicationService:
             record = await self.registry.get(skill_id)
             if record is None:
                 raise SkillNotFoundError(f"Skill 未安装: {skill_id}")
+            if expected_revision is not None and (
+                record.revision != expected_revision or record.content_hash != expected_hash
+            ):
+                raise SkillPreconditionError("Skill 已在审批前变化，冻结方案过期")
             target = self._package_directory(skill_id)
-            if not target.is_dir():
-                raise SkillInstalledPackageError(
-                    f"已登记 Skill 包目录丢失: {skill_id}"
-                )
+            if not target.exists():
+                return await self.registry.remove(skill_id)
             self.installer.staging_root.mkdir(parents=True, exist_ok=True)
             temporary_parent = Path(tempfile.mkdtemp(
                 prefix=f"remove-{skill_id}-",
@@ -506,10 +408,3 @@ class SkillApplicationService:
 
     def _package_directory(self, skill_id: str) -> Path:
         return (self.installer.packages_root / skill_id).resolve()
-
-    @staticmethod
-    def _catalog_text(records: tuple[SkillRecord, ...]) -> str:
-        return "\n".join(
-            f"- {record.name}: {record.description}"
-            for record in sorted(records, key=lambda item: item.name)
-        )

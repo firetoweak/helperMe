@@ -28,11 +28,26 @@ LOAD_MANAGEMENT_TOOLS = "load_management_tools"
 
 
 @dataclass(frozen=True, slots=True)
+class ResidentTool:
+    """常驻工具的归属声明。Schema 与绑定留在各自暴露处，这里只认名字。"""
+
+    name: str
+    description: str
+
+    def __post_init__(self) -> None:
+        if type(self.name) is not str or not self.name:
+            raise ValueError("resident tool name must be a non-empty str")
+        if type(self.description) is not str or not self.description:
+            raise ValueError("resident tool description must be a non-empty str")
+
+
+@dataclass(frozen=True, slots=True)
 class ManagementDomain:
     id: str
     description: str
     diagnostic_specs: tuple[ToolSpec, ...]
     control_operations: tuple[ControlOperation, ...]
+    resident_tools: tuple[ResidentTool, ...]
 
     def __post_init__(self) -> None:
         if type(self.id) is not str or not self.id:
@@ -43,12 +58,18 @@ class ManagementDomain:
             raise TypeError("management diagnostic specs must be tuple")
         if type(self.control_operations) is not tuple:
             raise TypeError("management control operations must be tuple")
+        if type(self.resident_tools) is not tuple:
+            raise TypeError("management resident tools must be tuple")
         if any(operation.domain != self.id for operation in self.control_operations):
             raise ValueError("control operation domain does not match management domain")
 
     @property
     def control_names(self) -> tuple[str, ...]:
         return tuple(operation.name for operation in self.control_operations)
+
+    @property
+    def resident_names(self) -> tuple[str, ...]:
+        return tuple(item.name for item in self.resident_tools)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,9 +124,10 @@ def project_management_activations(
             raise ValueError("load_management_tools domain 无效")
         if not isinstance(tools, tuple) or any(
             not isinstance(tool, Mapping)
-            or set(tool) != {"name", "kind"}
+            or set(tool) != {"name", "kind", "description"}
             or type(tool["name"]) is not str
-            or tool["kind"] not in {"diagnostic", "control"}
+            or type(tool["description"]) is not str
+            or tool["kind"] not in {"diagnostic", "control", "resident"}
             for tool in tools
         ):
             raise ValueError("load_management_tools tools 无效")
@@ -187,10 +209,20 @@ class ManagementSurface:
         control_names = tuple(name for domain in domains for name in domain.control_names)
         if len(control_names) != len(set(control_names)):
             raise ValueError("跨管理域控制工具名称重复")
+        resident_names = tuple(name for domain in domains for name in domain.resident_names)
+        if len(resident_names) != len(set(resident_names)):
+            raise ValueError("跨管理域常驻工具名称重复")
         self._loaded: dict[str, dict[str, set[str]]] = {}
 
     def names(self) -> tuple[str, ...]:
         return (LOAD_MANAGEMENT_TOOLS, *self._adapter.names())
+
+    def resident_names(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for domain in self._domains.values()
+            for name in domain.resident_names
+        )
 
     def bindings(self) -> dict[str, ToolBinding]:
         return {
@@ -232,7 +264,10 @@ class ManagementSurface:
             "load_management_tools；具体工具从下一个 Step 开始可用："
         ]
         for domain in self._domains.values():
-            lines.append(f"- {domain.id}: {domain.description}")
+            line = f"- {domain.id}: {domain.description}"
+            if domain.resident_tools:
+                line += f"（本域常驻，已可直接调用：{'、'.join(domain.resident_names)}）"
+            lines.append(line)
         return "\n".join(lines)
 
     async def load(
@@ -338,12 +373,18 @@ class ManagementSurface:
                 "domain": domain.id,
                 "tools": [
                     *(
-                        {"name": spec.name, "kind": "diagnostic"}
+                        {"name": spec.name, "kind": "diagnostic", "description": spec.description}
                         for spec in domain.diagnostic_specs
                     ),
                     *(
-                        {"name": name, "kind": "control"}
-                        for name in domain.control_names
+                        {"name": operation.name, "kind": "control",
+                         "description": operation.proposal_spec.description}
+                        for operation in domain.control_operations
+                    ),
+                    *(
+                        {"name": item.name, "kind": "resident",
+                         "description": item.description}
+                        for item in domain.resident_tools
                     ),
                 ],
             },
