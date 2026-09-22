@@ -49,6 +49,10 @@ class ProcessLlm:
                 calls = (ToolCall("read-one", "read_file", '{"path":"input.txt"}'),)
             else:
                 calls = (ToolCall("report-one", "report", '{"summary":"child done"}'),)
+        elif "BLOCK_TOOL" in text and not any(
+            m["role"] == "assistant" for m in messages
+        ):
+            calls = (ToolCall("read-one", "read_file", '{"path":"input.txt"}'),)
         elif "DELEGATE_CHILDREN" in text and not any(
             m["role"] == "assistant" for m in messages
         ):
@@ -121,6 +125,32 @@ def interrupted_read_config(workspace: Path):
     async def assembly(*args, **kwargs):
         result = await build(*args, **kwargs)
         result.runtime.bind_tool("read_file", ToolBinding(read))
+        return result
+
+    worker.build_assistant_assembly = assembly
+    return config_for(workspace)
+
+
+def blocking_tool_config(workspace: Path):
+    from helperme.assistant.host import worker
+    from helperme.assistant.assembly import _with_tool_progress
+    from helperme.runtime import ToolBinding
+
+    build = worker.build_assistant_assembly
+
+    async def read(context, arguments):
+        (workspace / "tool-started").touch()
+        while not (workspace / "release-tool").exists():
+            await asyncio.sleep(0.02)
+        return {"ok": True, "code": "FILE_READ", "data": "done"}
+
+    async def assembly(*args, **kwargs):
+        result = await build(*args, **kwargs)
+        binding = _with_tool_progress(
+            {"read_file": ToolBinding(read)},
+            kwargs["tool_progress_sink"],
+        )["read_file"]
+        result.runtime.bind_tool("read_file", binding)
         return result
 
     worker.build_assistant_assembly = assembly

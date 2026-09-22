@@ -161,7 +161,7 @@ describe("outputFinalEventSchema", () => {
 });
 
 describe("toolProgressEventSchema", () => {
-  it("identifies a tool card by command_id and a terminal-or-running status", () => {
+  it("identifies transient activity by command_id without claiming a terminal", () => {
     const parsed = toolProgressEventSchema.parse({
       session_id: "session-1",
       command_id: "cmd-1",
@@ -169,6 +169,15 @@ describe("toolProgressEventSchema", () => {
       status: "running",
     });
     expect(parsed.command_id).toBe("cmd-1");
+
+    expect(
+      toolProgressEventSchema.parse({
+        session_id: "session-1",
+        command_id: "cmd-1",
+        name: "read_file",
+        status: "settled",
+      }).status,
+    ).toBe("settled");
   });
 
   it("accepts unknown as a journal tool status", () => {
@@ -201,6 +210,40 @@ describe("toolProgressEventSchema", () => {
     });
     expect(parsed.items[0]).toMatchObject({
       tools: [{ command_id: "cmd-1", status: "unknown" }],
+    });
+  });
+
+  it("accepts queued before an execution attempt exists", () => {
+    const parsed = conversationViewSchema.parse({
+      session_id: "session-1",
+      workspace_id: "workspace-1",
+      revision: 1,
+      items: [
+        {
+          kind: "step",
+          step_id: "step-event",
+          output_id: "user-event",
+          text: null,
+          thinking: null,
+          tools: [
+            {
+              command_id: "cmd-1",
+              name: "read_file",
+              status: "queued",
+              error: null,
+              arguments: {},
+            },
+          ],
+          occurred_at: "2026-09-15T08:00:01+00:00",
+        },
+      ],
+      session,
+      compact_count: 0,
+      compact_phase: null,
+    });
+    expect(parsed.items[0]).toMatchObject({
+      kind: "step",
+      tools: [{ status: "queued" }],
     });
   });
 });

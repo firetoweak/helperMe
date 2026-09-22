@@ -204,9 +204,7 @@ class WebEventHub:
                 "session_id": session_id,
                 "command_id": command_id,
                 "name": name,
-                "status": {"start": "running", "fail": "failed", "finish": "succeeded"}[
-                    phase
-                ],
+                "status": "running" if phase == "start" else "settled",
             },
         )
 

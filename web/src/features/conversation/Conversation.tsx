@@ -219,10 +219,11 @@ export function Conversation() {
   }
 
   async function decideControl(approved: boolean) {
-    if (connectionId === null) {
+    const requestId = conversation?.session.control_approval?.request_id;
+    if (connectionId === null || requestId === undefined) {
       return;
     }
-    await resolveControl({ connectionId, sessionId, approved }).unwrap();
+    await resolveControl({ connectionId, sessionId, requestId, approved }).unwrap();
   }
 
   async function toggleAutoAuthorize(enabled: boolean) {
@@ -284,6 +285,7 @@ export function Conversation() {
                 )}
                 {turn.process.length === 0 ? null : (
                   <ExecutionProcess
+                    authorizationDisabled={connectionId === null}
                     complete={settled}
                     onAuthorize={authorize}
                     steps={turn.process}
@@ -508,7 +510,7 @@ export function Conversation() {
             <Group justify="flex-end" gap="xs">
               <Button
                 color="gray"
-                disabled={authorizing.isLoading}
+                disabled={connectionId === null || authorizing.isLoading}
                 leftSection={<IconX size={14} />}
                 onClick={() => authorize(activeAuthorization.commandId, false)}
               >
@@ -516,7 +518,7 @@ export function Conversation() {
               </Button>
               <Button
                 color="sage"
-                disabled={authorizing.isLoading}
+                disabled={connectionId === null || authorizing.isLoading}
                 leftSection={<IconCheck size={14} />}
                 loading={authorizing.isLoading}
                 onClick={() => authorize(activeAuthorization.commandId, true)}

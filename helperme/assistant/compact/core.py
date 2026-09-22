@@ -20,6 +20,7 @@ from helperme.assistant.context.projection import (
 )
 from helperme.assistant.control import project_pending_approval
 from helperme.assistant.subagent.subagent import project_parent
+from helperme.assistant.workspaces import SESSION_WORKSPACE_FACT
 from helperme.llm.api import InvalidLLMResponse
 from helperme.runtime import DomainFactCommitted, ToolBinding
 from helperme.runtime.state import StateProjector
@@ -84,8 +85,14 @@ def compact_seed(events):
     ]
     if not seeds:
         return None
-    if len(seeds) != 1 or events[0].payload is not seeds[0]:
-        raise ValueError("compact task must be the unique first event")
+    if (
+        len(seeds) != 1
+        or len(events) < 2
+        or not isinstance(events[0].payload, DomainFactCommitted)
+        or events[0].payload.fact_type != SESSION_WORKSPACE_FACT
+        or events[1].payload is not seeds[0]
+    ):
+        raise ValueError("compact task must follow the unique workspace binding")
     data = thaw_value(seeds[0].data)
     if set(data) != {
         "source",
@@ -376,6 +383,55 @@ def projected_tail(records, p, q):
     return [r["message"] for r in records if p < r["sequence"] <= q]
 
 
+def bounded_recent_tail(
+    records,
+    *,
+    before,
+    after,
+    system_prompt,
+    tools,
+    budget,
+    tail_budget_tokens,
+):
+    """Select the largest event-identity suffix that fits the publication budget."""
+
+    required = [
+        {"role": "system", "content": system_prompt},
+        *before,
+        *after,
+    ]
+    assessment = budget.assess(required, tools)
+    if not assessment.allowed:
+        raise ModelContextBudgetExceeded(assessment)
+
+    units = []
+    for record in records:
+        sequence = record["sequence"]
+        if sequence == 0:
+            continue
+        if not units or units[-1][0] != sequence:
+            units.append((sequence, []))
+        units[-1][1].append(record)
+
+    selected = []
+    for _, unit in reversed(units):
+        candidate = [*unit, *selected]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *before,
+            *(record["message"] for record in candidate),
+            *after,
+        ]
+        candidate_assessment = budget.assess(messages, tools)
+        if (
+            not candidate_assessment.allowed
+            or candidate_assessment.estimated_input_tokens > tail_budget_tokens
+        ):
+            break
+        selected = candidate
+    return selected
+
+
 class CompactBoundary:
     def __init__(self, runtime, decision, context, config, control, transport):
         self.runtime, self.decision, self.context = runtime, decision, context
@@ -406,16 +462,13 @@ class CompactBoundary:
             enforce_budget=False,
         )
         if not persist:
+            prepared, _ = self.decision.with_loop_guard(
+                prepared, tools, events, state.journal_position, enforce_budget=False
+            )
             return {"safe": True, "assessment": prepared.assessment}
         bundle = frozen_bundle(
             self.context.projector, events, sid, self.context, prepared
         )
-        # Keep the most recent complete assistant turn before P, without retaining a huge user input.
-        start = len(bundle["records"])
-        for i in range(len(bundle["records"]) - 1, -1, -1):
-            if bundle["records"][i]["message"]["role"] == "assistant":
-                start = i
-                break
         catalog = next(
             (
                 thaw_value(e.payload.data)
@@ -436,17 +489,22 @@ class CompactBoundary:
                 self.context.projector.gateway,
                 sid,
                 {
-                    "catalog": catalog,
                     "model": self.config.model_name,
                     "messages": prepared.messages,
                     "tools": tools,
-                    "recent": bundle["records"][start:],
+                    "recent": [
+                        record
+                        for record in bundle["records"]
+                        if record["sequence"] > 0
+                    ],
                 },
             ),
             "prompt": prompt,
             "tools": tools,
             "context_limit": self.config.model_context_limit,
             "input_ratio": self.config.input_budget_ratio,
+            "compact_threshold_ratio": self.config.compact_threshold_ratio,
+            "catalog": catalog,
         }
 
     async def publish(self, arguments):

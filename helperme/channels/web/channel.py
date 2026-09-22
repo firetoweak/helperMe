@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from uuid import uuid4
 
 from helperme.assistant.attachments import (
@@ -180,19 +180,18 @@ class WebChannel:
         self,
         connection_id: str,
         session_id: str,
+        request_id: str,
         approved: bool,
     ):
         self._require_connection(connection_id)
         if type(session_id) is not str or not session_id:
             raise ValueError("session_id must be a non-empty str")
-        message = await self._sessions.resolve_control(
+        await self._sessions.resolve_control(
             session_id,
+            request_id,
             approved=approved,
         )
-        view = replace(
-            await self._sessions.view(session_id),
-            control_message=message,
-        )
+        view = await self._sessions.view(session_id)
         return await self._queries.conversation(session_id, view=view)
 
     async def set_auto_authorize(

@@ -5,12 +5,13 @@ from pathlib import Path
 import shutil
 import tempfile
 
+from helperme.skills.errors import SkillCandidateNotFoundError
 from helperme.skills.models import SkillBundle, SkillInstallCandidate
 from helperme.skills.package import LocalSkillPackageReader, write_skill_bundle
 
 
 class SkillInstallCandidateStore:
-    """按内容 hash 冻结包；来源身份属于每次安装候选，不参与去重。"""
+    """持久保存内容寻址的安装候选；来源身份不参与包内容去重。"""
 
     def __init__(
         self,
@@ -18,7 +19,7 @@ class SkillInstallCandidateStore:
         package_reader: LocalSkillPackageReader,
     ) -> None:
         self.skills_root = skills_root.resolve()
-        self.root = self.skills_root / ".staging" / "install-candidates"
+        self.root = self.skills_root / ".candidates" / "install"
         self.package_reader = package_reader
 
     def freeze(self, bundle: SkillBundle) -> SkillInstallCandidate:
@@ -64,6 +65,10 @@ class SkillInstallCandidateStore:
         content_hash: str,
     ) -> SkillBundle:
         directory = self._directory(content_hash)
+        if not directory.is_dir():
+            raise SkillCandidateNotFoundError(
+                f"Skill install candidate 不存在: {content_hash}"
+            )
         bundle = self.package_reader.read(
             directory / "package" / skill_id
         )

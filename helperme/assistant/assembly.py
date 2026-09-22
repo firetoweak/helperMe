@@ -41,6 +41,7 @@ from helperme.assistant.cli import CliToolAdapter
 from helperme.assistant.mcp import McpToolsetAdapter
 from helperme.assistant.management import ManagementDomain, ManagementSurface
 from helperme.assistant.skills import SkillToolAdapter
+from helperme.assistant.catalog import CapabilityCatalog
 from helperme.config import AssistantConfig
 from helperme.paths import HelperMeHome, runtime_data_root
 from helperme.cli.composition import CliAssembly, build_cli
@@ -63,6 +64,7 @@ class AssistantAssembly:
     cli: CliAssembly
     control: AssistantControlPlane
     subagents: SubAgentHost
+    catalog: CapabilityCatalog
     compact: CompactBoundary | None = None
 
 
@@ -181,6 +183,12 @@ async def build_assistant_assembly(
         gateway=gateway,
         settings=settings,
     )
+    catalog = CapabilityCatalog(
+        surface,
+        skill_tools,
+        cli_tools,
+        management,
+    )
     compact_context = CompactContext(
         session_id,
         await journal.snapshot(session_id),
@@ -244,8 +252,6 @@ async def build_assistant_assembly(
         compact.scheduler = scheduler
 
         scheduler.propagate_failures = compact_context.is_reader
-    from helperme.assistant.catalog import sync_catalog
-
     subagents.attach(runtime, session_transport)
     sessions = AssistantSessions(
         runtime,
@@ -253,6 +259,7 @@ async def build_assistant_assembly(
         scheduler,
         control=control,
         management=management,
+        catalog=catalog,
         subagents=subagents,
     )
 
@@ -263,9 +270,7 @@ async def build_assistant_assembly(
             return False
         if not compact_context.is_reader and not subagents.is_subagent(session_id):
             if not (await runtime.state(session_id)).waiting_command_ids:
-                await sync_catalog(
-                    runtime, session_id, surface, skill_tools, cli_tools, management
-                )
+                await catalog.sync(runtime, session_id)
         return True if compact is None else await compact.before_advance()
 
     scheduler.before_advance = before_advance
@@ -283,6 +288,7 @@ async def build_assistant_assembly(
         cli=cli,
         control=control,
         subagents=subagents,
+        catalog=catalog,
     )
 
 

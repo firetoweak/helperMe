@@ -6,11 +6,8 @@ from inspect import isawaitable
 import multiprocessing
 import os
 
-from helperme.assistant.auto_authorize import (
-    AutoAuthorizeStore,
-    auto_grant_for_owners,
-)
-from helperme.assistant.control import pending_approval_view
+from helperme.assistant.auto_authorize import AutoAuthorizeStore
+from helperme.assistant.control import pending_approval_view, project_control_message
 from helperme.assistant.session_pause import SessionPauseStore
 from helperme.assistant.compact.host import CompactHost
 from helperme.assistant.delivery import emit_delivery
@@ -21,8 +18,10 @@ from helperme.assistant.sessions import session_view
 from helperme.assistant.subagent.subagent import (
     persist_return,
     project_pending,
+    project_task,
     report_arguments,
     return_data,
+    task_from_arguments,
 )
 from helperme.assistant.workspaces import UnboundSessionError, bound_workspace_id
 from helperme.assistant.host.spawn import start_worker
@@ -48,6 +47,9 @@ class Worker:
     running: bool = False
     returned: tuple[str, dict] | None = None
     reclaimed: bool = False
+    active_preview: str | None = None
+    active_thinking: str | None = None
+    live_tools: dict[str, str] = field(default_factory=dict)
 
 
 class HostSupervisor:
@@ -105,9 +107,10 @@ class HostSupervisor:
             else WorkspaceRegistry.load(home.workspaces_path)
         )
 
-    async def _route(self, operation, session_id, arguments):
+    async def _route(self, operation, session_id, arguments, *, worker=None):
         if operation == "llm_chat":
-            worker = self.workers[session_id]
+            if worker is None:
+                worker = self.workers[session_id]
 
             async def on_delta(text):
                 await worker.peer.send(("delta", worker.peer.active_request_id, text))
@@ -135,12 +138,14 @@ class HostSupervisor:
                 arguments["output_id"],
                 arguments["text"],
             )
+            if worker is not None and worker.active_preview == arguments["output_id"]:
+                worker.active_preview = None
             return None
         if operation == "create_child":
-            # Identity is stable; an existing child is resumed, never replaced.
             initial_fact = dict(arguments)
+            expected_task = task_from_arguments(session_id, initial_fact)
             child_workspace_id = await self.bound_workspace_id(
-                initial_fact["data"]["parent_session_id"]
+                expected_task.parent_session_id
             )
             async with self.locks.setdefault(session_id, asyncio.Lock()):
                 if not self.store.path(session_id).parent.exists():
@@ -149,6 +154,18 @@ class HostSupervisor:
                         workspace_id=child_workspace_id,
                         initial_fact=initial_fact,
                     )
+                else:
+                    events = await SqliteJournal(
+                        self.store.require(session_id)
+                    ).snapshot(session_id)
+                    if project_task(events) != expected_task:
+                        raise ValueError(
+                            "existing child Session does not match delegate intent"
+                        )
+                    if bound_workspace_id(events) != child_workspace_id:
+                        raise ValueError(
+                            "existing child Session workspace does not match parent"
+                        )
             # delegate acknowledges durable creation, not successful initialization.
             activation = asyncio.create_task(
                 self.request("fact", session_id, initial_fact)
@@ -184,6 +201,11 @@ class HostSupervisor:
                         *values
                     )
             elif kind == "tool":
+                _, phase, command_id, name, _ = values
+                if phase == "start":
+                    worker.live_tools[command_id] = name
+                else:
+                    worker.live_tools.pop(command_id, None)
                 if (
                     self.tool_progress_sink is not None
                     and self.compact.store.reader_job(session_id) is None
@@ -200,6 +222,11 @@ class HostSupervisor:
                     if isawaitable(emitted):
                         await emitted
             elif kind == "preview":
+                _, phase, output_id, _ = values
+                if phase == "started":
+                    worker.active_preview = output_id
+                elif phase == "aborted":
+                    worker.active_preview = None
                 if (
                     self.preview_sink is not None
                     and self.compact.store.reader_job(session_id) is None
@@ -208,6 +235,11 @@ class HostSupervisor:
                     if isawaitable(emitted):
                         await emitted
             elif kind == "thinking":
+                _, phase, output_id, _ = values
+                if phase == "started":
+                    worker.active_thinking = output_id
+                elif phase in {"finished", "aborted"}:
+                    worker.active_thinking = None
                 if (
                     self.thinking_sink is not None
                     and self.compact.store.reader_job(session_id) is None
@@ -245,9 +277,15 @@ class HostSupervisor:
             else:
                 raise ValueError(f"Unknown Host signal: {kind}")
 
-        peer = PipePeer(
-            local, self._route, signal, peer_alive=lambda: worker.process.is_alive()
-        )
+        async def route(operation, target, arguments):
+            return await self._route(
+                operation,
+                target,
+                arguments,
+                worker=worker,
+            )
+
+        peer = PipePeer(local, route, signal, peer_alive=lambda: worker.process.is_alive())
         admitted = context.Event()
         process = context.Process(
             target=worker_main,
@@ -327,10 +365,12 @@ class HostSupervisor:
                 )
         finally:
             worker.stopping = True
+            await self._close_generation_display(session_id, worker)
             await worker.peer.close(worker.failure or RuntimeError("Worker exited"))
             worker.peer.connection.close()
             worker.process.close()
-            self.workers.pop(session_id)
+            if self.workers.get(session_id) is worker:
+                self.workers.pop(session_id)
             worker.exited.set()
             worker.transition.set()
             worker.changed.set()
@@ -344,6 +384,44 @@ class HostSupervisor:
         if worker.returned is not None and not self.closed:
             parent, arguments = worker.returned
             await self.request("fact", parent, arguments)
+
+    async def _close_generation_display(self, session_id, worker):
+        """Retire only transient display state owned by this Worker generation."""
+
+        if self.compact.store.reader_job(session_id) is not None:
+            worker.active_preview = None
+            worker.active_thinking = None
+            worker.live_tools.clear()
+            worker.running = False
+            return
+        output_id = worker.active_preview
+        worker.active_preview = None
+        if output_id is not None and self.preview_sink is not None:
+            emitted = self.preview_sink(session_id, "aborted", output_id, None)
+            if isawaitable(emitted):
+                await emitted
+        thinking_id = worker.active_thinking
+        worker.active_thinking = None
+        if thinking_id is not None and self.thinking_sink is not None:
+            emitted = self.thinking_sink(session_id, "aborted", thinking_id, None)
+            if isawaitable(emitted):
+                await emitted
+        live_tools = tuple(worker.live_tools.items())
+        worker.live_tools.clear()
+        if self.tool_progress_sink is not None:
+            for command_id, name in live_tools:
+                emitted = self.tool_progress_sink(
+                    session_id,
+                    "fail",
+                    command_id,
+                    name,
+                    None,
+                )
+                if isawaitable(emitted):
+                    await emitted
+        if worker.running:
+            worker.running = False
+            await self._emit_session_activity(session_id, "idle")
 
     async def _reclaim_child(self, session_id, arguments):
         """Stop the child Worker, persist cancel if needed, then report to parent.
@@ -415,14 +493,11 @@ class HostSupervisor:
                     break
             await worker.transition.wait()
         try:
-            if just_started and operation != "apply_authorization_policy":
+            if just_started and operation != "apply_auto_authorize":
                 await worker.peer.request(
-                    "apply_authorization_policy",
+                    "apply_auto_authorize",
                     session_id,
-                    {
-                        "preference": self.web_auto_authorize(session_id),
-                        "grant": self._auto_grant(session_id),
-                    },
+                    {"enabled": self.auto_authorize(session_id)},
                 )
             return await worker.peer.request(operation, session_id, arguments)
         finally:
@@ -430,40 +505,24 @@ class HostSupervisor:
             if not worker.exited.is_set():
                 await self._stop_idle(session_id, worker)
 
-    def web_auto_authorize(self, session_id):
+    def auto_authorize(self, session_id):
         return self._auto_authorize.get(session_id)
 
     def is_paused(self, session_id):
         return self._pause.get(session_id)
 
-    def _owners_of(self, session_id):
-        return tuple(
-            owner
-            for owner, selected in self.selections.items()
-            if selected == session_id
-        )
-
-    def _auto_grant(self, session_id):
-        return auto_grant_for_owners(
-            self._owners_of(session_id),
-            self.web_auto_authorize(session_id),
-        )
-
-    def _with_preference(self, view, session_id):
+    def _with_host_metadata(self, view, session_id):
         return replace(
             view,
-            auto_authorize=self.web_auto_authorize(session_id),
+            auto_authorize=self.auto_authorize(session_id),
             paused=self.is_paused(session_id),
         )
 
-    async def _push_authorization_policy(self, session_id):
+    async def _push_auto_authorize(self, session_id):
         return await self.request(
-            "apply_authorization_policy",
+            "apply_auto_authorize",
             session_id,
-            {
-                "preference": self.web_auto_authorize(session_id),
-                "grant": self._auto_grant(session_id),
-            },
+            {"enabled": self.auto_authorize(session_id)},
         )
 
     def conversation_status(self, session_id):
@@ -558,7 +617,6 @@ class HostSupervisor:
             if previous is not None and previous != session_id:
                 worker = self.workers.get(previous)
                 if worker is not None:
-                    await self._push_authorization_policy(previous)
                     await self._stop_idle(previous, worker)
             return view
 
@@ -570,10 +628,11 @@ class HostSupervisor:
 
     async def _project_view(self, session_id):
         events, state = await self._journal_state(session_id)
-        return self._with_preference(
+        return self._with_host_metadata(
             session_view(
                 state,
                 control_approval=pending_approval_view(events),
+                control_message=project_control_message(events),
                 has_active_subagents=bool(project_pending(events)),
             ),
             session_id,
@@ -587,11 +646,7 @@ class HostSupervisor:
 
     async def _select_view(self, session_id):
         if await self._should_wake(session_id):
-            if session_id in self.workers:
-                await self._push_authorization_policy(session_id)
             return await self.resume(session_id)
-        if session_id in self.workers:
-            await self._push_authorization_policy(session_id)
         return await self._project_view(session_id)
 
     async def release(self, owner):
@@ -601,12 +656,11 @@ class HostSupervisor:
                 return
             worker = self.workers.get(session_id)
             if worker is not None:
-                await self._push_authorization_policy(session_id)
                 await self._stop_idle(session_id, worker)
 
     async def resume(self, session_id):
         operation = "view" if self.is_paused(session_id) else "resume"
-        return self._with_preference(
+        return self._with_host_metadata(
             await self.compact.application(operation, session_id, {}),
             session_id,
         )
@@ -617,7 +671,7 @@ class HostSupervisor:
         return await self.resume(session_id)
 
     async def view(self, session_id):
-        return self._with_preference(
+        return self._with_host_metadata(
             await self.compact.application("view", session_id, {}),
             session_id,
         )
@@ -635,7 +689,7 @@ class HostSupervisor:
         view = await self.compact.application(
             "accept_input", session_id, dict(content=content, **kwargs)
         )
-        return self._with_preference(view, session_id)
+        return self._with_host_metadata(view, session_id)
 
     async def resolve_authorization(self, session_id, command_id, *, approved):
         await self.compact.application(
@@ -651,25 +705,27 @@ class HostSupervisor:
 
     async def set_auto_authorize(self, session_id, enabled):
         self._auto_authorize.set(session_id, enabled)
-        view = await self._push_authorization_policy(session_id)
-        return self._with_preference(view, session_id)
+        view = await self._push_auto_authorize(session_id)
+        return self._with_host_metadata(view, session_id)
 
     async def set_paused(self, session_id, paused):
         self._pause.set(session_id, bool(paused))
         if paused:
-            return self._with_preference(
+            return self._with_host_metadata(
                 await self.compact.application("view", session_id, {}),
                 session_id,
             )
         return await self.resume(session_id)
 
-    async def resolve_control(self, session_id, *, approved):
+    async def resolve_control(self, session_id, request_id, *, approved):
         return await self.compact.application(
-            "resolve_control", session_id, dict(approved=approved)
+            "resolve_control",
+            session_id,
+            dict(request_id=request_id, approved=approved),
         )
 
     async def cancel_turn(self, session_id):
-        return self._with_preference(
+        return self._with_host_metadata(
             await self.compact.application("cancel_turn", session_id, {}),
             session_id,
         )

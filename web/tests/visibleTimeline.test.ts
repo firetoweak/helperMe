@@ -45,7 +45,7 @@ const conversation: ConversationView = {
         {
           command_id: "cmd-1",
           name: "read_file",
-          status: "running",
+          status: "queued",
           error: null,
           arguments: { path: "a.py" },
         },
@@ -135,16 +135,16 @@ describe("visibleTimeline", () => {
     });
   });
 
-  it("merges live status into the matching tool inside its step", () => {
+  it("overlays exact running activity onto the matching queued tool", () => {
     const visible = visibleTimeline(
       conversation,
       {},
       null,
-      { "cmd-1": { commandId: "cmd-1", name: "read_file", status: "succeeded" } },
+      { "cmd-1": { commandId: "cmd-1", name: "read_file", status: "running" } },
     );
     expect(visible[1]).toMatchObject({
       kind: "step",
-      tools: [{ commandId: "cmd-1", status: "succeeded" }],
+      tools: [{ commandId: "cmd-1", status: "running" }],
     });
   });
 
@@ -176,7 +176,35 @@ describe("visibleTimeline", () => {
     });
   });
 
-  it("lets live progress update an interrupted journal card", () => {
+  it("does not let stale running activity override authorization state", () => {
+    const visible = visibleTimeline(
+      {
+        ...conversation,
+        items: [
+          conversation.items[0],
+          {
+            ...conversation.items[1],
+            tools: [
+              {
+                command_id: "cmd-1",
+                name: "write_file",
+                status: "awaiting_authorization",
+                error: null,
+              },
+            ],
+          },
+        ],
+      },
+      {},
+      null,
+      { "cmd-1": { commandId: "cmd-1", name: "write_file", status: "running" } },
+    );
+    expect(visible[1]).toMatchObject({
+      tools: [{ commandId: "cmd-1", status: "awaiting_authorization" }],
+    });
+  });
+
+  it("lets exact running activity temporarily overlay an unknown journal card", () => {
     const visible = visibleTimeline(
       {
         ...conversation,
@@ -197,10 +225,10 @@ describe("visibleTimeline", () => {
       },
       {},
       null,
-      { "cmd-1": { commandId: "cmd-1", name: "glob", status: "failed" } },
+      { "cmd-1": { commandId: "cmd-1", name: "glob", status: "running" } },
     );
     expect(visible[1]).toMatchObject({
-      tools: [{ commandId: "cmd-1", status: "failed", error: "执行中断，结果未知" }],
+      tools: [{ commandId: "cmd-1", status: "running", error: null }],
     });
   });
 
@@ -579,7 +607,7 @@ function toolOnlyTurn(user: TimelineTurn["user"]): TimelineTurn {
 }
 
 function toolOnlyStep(
-  status: "succeeded" | "running" | "awaiting_authorization",
+  status: "queued" | "succeeded" | "running" | "awaiting_authorization",
 ): TimelineTurn["process"][number] {
   return {
     key: "output:user-1",

@@ -159,7 +159,7 @@ class ConversationProjectionTest(unittest.TestCase):
         )
         self.assertEqual(conversation.items[1].thinking, "先确认目标")
 
-    def test_tool_without_outcome_is_running_and_failed_outcome_keeps_error(self):
+    def test_tool_without_attempt_is_queued_and_failed_outcome_keeps_error(self):
         search = Command("cmd-search", InvokeTool("web_search"))
         events = (
             event(
@@ -170,12 +170,12 @@ class ConversationProjectionTest(unittest.TestCase):
         )
         view = SessionView("waiting", ("user_message",), (), False)
 
-        running = project_conversation(
+        queued = project_conversation(
             "session-1", events, timeline(events), session=view
         )
-        self.assertEqual(running.items[0].kind, "step")
-        self.assertEqual(running.items[0].tools[0].status, "running")
-        self.assertIsNone(running.items[0].tools[0].error)
+        self.assertEqual(queued.items[0].kind, "step")
+        self.assertEqual(queued.items[0].tools[0].status, "queued")
+        self.assertIsNone(queued.items[0].tools[0].error)
 
         ran = events + (
             event(
@@ -201,7 +201,7 @@ class ConversationProjectionTest(unittest.TestCase):
         self.assertEqual(failed.items[0].tools[0].status, "failed")
         self.assertEqual(failed.items[0].tools[0].error, "boom")
 
-    def test_idle_unknown_attempt_is_interrupted_not_running(self):
+    def test_unknown_attempt_never_uses_session_activity_as_terminal_evidence(self):
         search = Command("cmd-search", InvokeTool("web_search"))
         events = (
             event(
@@ -218,21 +218,14 @@ class ConversationProjectionTest(unittest.TestCase):
         )
         view = SessionView("waiting", ("command:cmd-search",), (), False)
 
-        idle = project_conversation(
+        conversation = project_conversation(
             "session-1", events, timeline(events), session=view
         )
-        self.assertEqual(idle.items[0].tools[0].status, "unknown")
-        self.assertEqual(idle.items[0].tools[0].error, UNKNOWN_TOOL_ERROR)
-
-        busy = project_conversation(
-            "session-1",
-            events,
-            timeline(events),
-            session=view,
-            activity="running",
+        self.assertEqual(conversation.items[0].tools[0].status, "unknown")
+        self.assertEqual(
+            conversation.items[0].tools[0].error,
+            UNKNOWN_TOOL_ERROR,
         )
-        self.assertEqual(busy.items[0].tools[0].status, "running")
-        self.assertIsNone(busy.items[0].tools[0].error)
 
     def test_summary_uses_first_user_message_and_last_event_time(self):
         events = (
@@ -325,7 +318,7 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
             def activity(self, session_id):
                 return "idle"
 
-            def web_auto_authorize(self, session_id):
+            def auto_authorize(self, session_id):
                 return session_id == "spoken"
 
             def is_paused(self, session_id):
@@ -365,17 +358,21 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         from tempfile import TemporaryDirectory
 
-        from helperme.assistant.control import CONTROL_PROPOSED, CONTROL_SOURCE
+        from helperme.assistant.control import (
+            CONTROL_PROPOSED,
+            CONTROL_REQUEST_METADATA,
+            CONTROL_SOURCE,
+        )
         from helperme.assistant.conversations import AssistantQueries
         from helperme.assistant.host.session_store import SessionStore
-        from helperme.runtime import DomainFactCommitted, SqliteJournal
+        from helperme.runtime import DomainFactCommitted, SqliteJournal, StepClaimRequest
         from helperme.runtime.events import DeliveryIdentity, EventDraft
 
         class Host:
             def activity(self, session_id):
                 return "idle"
 
-            def web_auto_authorize(self, session_id):
+            def auto_authorize(self, session_id):
                 return None
 
             def is_paused(self, session_id):
@@ -402,6 +399,49 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
                     occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
                     delivery=DeliveryIdentity("web", "d1"),
                 )
+            )
+            frame = StateProjector().project(
+                "spoken", await journal.snapshot("spoken")
+            ).next_decision
+            lease = await journal.acquire_step(
+                StepClaimRequest(
+                    "spoken",
+                    frame.trigger_event.event_id,
+                    frame.decision_cursor,
+                    frame.basis_state_version,
+                    frame.observed_journal_position,
+                ),
+                token="claim-1",
+                owner_id="worker-1",
+                lease_seconds=30,
+            )
+            await journal.commit_step(
+                lease,
+                EventDraft(
+                    event_id="step-event-1",
+                    session_id="spoken",
+                    payload=StepCommitted(
+                        Step(
+                            "step-1",
+                            frame.trigger_event.event_id,
+                            frame.decision_cursor,
+                            frame.basis_state_version,
+                            frame.observed_journal_position,
+                            ModelDecision("准备控制提案"),
+                            (),
+                        ),
+                        {
+                            CONTROL_REQUEST_METADATA: {
+                                "request_id": "req-1",
+                                "tool": "propose_workspace_remove",
+                                "action": "workspace.remove",
+                                "arguments": {"workspace_id": "workspace-1"},
+                            }
+                        },
+                    ),
+                    occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+                    causation_id=frame.trigger_event.event_id,
+                ),
             )
             await journal.accept_delivery(
                 EventDraft(

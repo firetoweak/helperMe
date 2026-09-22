@@ -56,6 +56,7 @@ export const workspaceSchema = z
 export type Workspace = z.infer<typeof workspaceSchema>;
 
 export const toolStatusSchema = z.enum([
+  "queued",
   "running",
   "succeeded",
   "failed",
@@ -166,7 +167,7 @@ export const toolProgressEventSchema = z
     session_id: z.string().min(1),
     command_id: z.string().min(1),
     name: z.string().min(1),
-    status: toolStatusSchema,
+    status: z.enum(["running", "settled"]),
   })
   .strict();
 

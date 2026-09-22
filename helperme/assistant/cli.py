@@ -12,6 +12,7 @@ from helperme.runtime.dispatcher import AttemptContext
 from helperme.assistant.tool_results import runtime_tool_result
 from helperme.tools.spec import ToolArgumentsError
 from helperme.cli.runtime import LOAD_CLI
+from helperme.assistant.catalog import CatalogCli
 
 
 class CliToolAdapter:
@@ -27,22 +28,34 @@ class CliToolAdapter:
         self._catalog = cli.tool_catalog
         self._gateway = gateway
         self._settings = settings
+        self._catalogs: dict[str, dict[str, int]] = {}
 
-    def catalog(self) -> list[dict[str, object]]:
+    def registry_catalog(self) -> list[dict[str, object]]:
+        self._catalog.tool_specs()
         return sorted(
             (
                 {
                     "id": record.name,
                     "description": record.description,
                     "version": record.version,
+                    "revision": record.revision,
                 }
                 for record in self._catalog.registry.snapshot()
             ),
             key=lambda item: item["id"],
         )
 
+    def apply_catalog(
+        self,
+        session_id: str,
+        clis: tuple[CatalogCli, ...],
+    ) -> None:
+        self._catalogs[session_id] = {
+            item.id: item.revision for item in clis
+        }
+
     def schemas(self) -> list[dict[str, object]]:
-        return [spec.to_openai_tool() for spec in self._catalog.tool_specs()]
+        return [spec.to_openai_tool() for spec in self._catalog.tool_specs({})]
 
     def bindings(self) -> dict[str, ToolBinding]:
         return {LOAD_CLI: ToolBinding(self._handler(LOAD_CLI))}
@@ -52,7 +65,12 @@ class CliToolAdapter:
             context: AttemptContext,
             arguments: Mapping[str, object],
         ) -> object:
-            specs = {spec.name: spec for spec in self._catalog.tool_specs()}
+            specs = {
+                spec.name: spec
+                for spec in self._catalog.tool_specs(
+                    self._catalogs[context.session_id]
+                )
+            }
             spec = specs.get(name)
             if spec is None:
                 return {

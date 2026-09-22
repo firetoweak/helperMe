@@ -70,12 +70,23 @@ class FakeEchoProvider:
     def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
         return (ToolsetDescriptor("demo", "echo tools", self.revision),)
 
-    async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
+    def handles(self, toolset_id: str) -> bool:
+        return toolset_id == "demo"
+
+    async def load(
+        self,
+        toolset_id: str,
+        revision: int,
+    ) -> tuple[LoadedTool, ...]:
         self.load_calls += 1
-        if toolset_id != "demo":
+        if toolset_id != "demo" or revision != self.revision:
             raise ToolsetLoadError(
-                "TOOLSET_NOT_FOUND",
-                f"Toolset {toolset_id} not found",
+                "TOOLSET_REVISION_UNAVAILABLE",
+                f"Toolset {toolset_id} revision is unavailable",
+                data={
+                    "expected_revision": revision,
+                    "available_revision": self.revision,
+                },
             )
 
         async def ping(arguments: Mapping[str, object]) -> object:
@@ -101,7 +112,7 @@ class FakeEchoProvider:
         tools: tuple[LoadedToolSnapshot, ...],
     ) -> tuple[LoadedTool, ...]:
         self.restore_calls += 1
-        if toolset_id != "demo" or revision != self.revision:
+        if toolset_id != "demo":
             raise ToolsetLoadError(
                 "TOOLSET_NOT_FOUND",
                 f"Toolset {toolset_id} not found",
@@ -134,7 +145,11 @@ class NestedSchemaProvider(FakeEchoProvider):
         super().__init__()
         self.snapshots: tuple[LoadedToolSnapshot, ...] = ()
 
-    async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
+    async def load(
+        self,
+        toolset_id: str,
+        revision: int,
+    ) -> tuple[LoadedTool, ...]:
         if toolset_id != "demo":
             raise ToolsetLoadError(
                 "TOOLSET_NOT_FOUND",
@@ -183,6 +198,10 @@ def _schema_names(schemas: list[dict[str, object]]) -> set[str]:
     return names
 
 
+def _apply_current_catalog(surface: ToolSurface, session_id: str) -> None:
+    surface.apply_catalog(session_id, surface.registry_descriptors())
+
+
 class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
     SESSION_ID = "toolset-session"
 
@@ -191,6 +210,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         surface = ToolSurface(
             providers=(FakeEchoProvider() if provider is None else provider,),
         )
+        _apply_current_catalog(surface, self.SESSION_ID)
         decisions = ScriptedDecisionMaker(
             (
                 lambda _frame: ModelDecision(
@@ -227,6 +247,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
 
     def test_catalog_does_not_expose_loaded_tools_before_load(self):
         surface = ToolSurface(providers=(FakeEchoProvider(),))
+        _apply_current_catalog(surface, self.SESSION_ID)
         names = _schema_names(surface.schemas(self.SESSION_ID))
         self.assertEqual(names, {LOAD_TOOLSET})
         self.assertIn("demo", surface.catalog_instruction(self.SESSION_ID))
@@ -234,6 +255,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_toolset_is_a_model_correctable_error(self):
         surface = ToolSurface(providers=(FakeEchoProvider(),))
+        _apply_current_catalog(surface, self.SESSION_ID)
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(()),
@@ -249,12 +271,44 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             {LOAD_TOOLSET},
         )
 
+    async def test_load_rejects_registry_revision_newer_than_session_catalog(self):
+        provider = FakeEchoProvider()
+        surface = ToolSurface(providers=(provider,))
+        _apply_current_catalog(surface, self.SESSION_ID)
+        provider.revision = 2
+
+        result = await surface.load(self.SESSION_ID, "demo")
+
+        self.assertEqual(result["code"], "TOOLSET_REVISION_UNAVAILABLE")
+        self.assertEqual(result["data"]["expected_revision"], 1)
+        self.assertEqual(result["data"]["available_revision"], 2)
+
+    async def test_catalog_removal_does_not_remove_loaded_snapshot(self):
+        surface = ToolSurface(providers=(FakeEchoProvider(),))
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            ScriptedDecisionMaker(()),
+            load_toolset_binding(surface),
+            SequentialIds(),
+        )
+        surface.attach(runtime)
+        _apply_current_catalog(surface, self.SESSION_ID)
+        self.assertTrue((await surface.load(self.SESSION_ID, "demo"))["ok"])
+
+        surface.apply_catalog(self.SESSION_ID, ())
+
+        self.assertEqual(
+            _schema_names(surface.schemas(self.SESSION_ID)),
+            {"demo_ping"},
+        )
+
     async def test_load_toolset_makes_tools_visible_on_the_next_step(self):
         delivered: list[str] = []
         surface = ToolSurface(
             providers=(FakeEchoProvider(),),
             reserved_names=(DELIVER_TOOL_NAME,),
         )
+        _apply_current_catalog(surface, self.SESSION_ID)
         seen: list[set[str]] = []
 
         def first(_frame):
@@ -322,6 +376,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         events = await self._committed_load_events()
         provider = FakeEchoProvider()
         surface = ToolSurface(providers=(provider,))
+        _apply_current_catalog(surface, self.SESSION_ID)
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(()),
@@ -347,6 +402,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         events = await self._committed_load_events(NestedSchemaProvider())
         provider = NestedSchemaProvider()
         surface = ToolSurface(providers=(provider,))
+        _apply_current_catalog(surface, self.SESSION_ID)
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(()),
@@ -366,6 +422,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
     async def test_failed_load_outcome_does_not_break_rehydrate(self):
         delivered: list[str] = []
         surface = ToolSurface(providers=(FakeEchoProvider(),))
+        _apply_current_catalog(surface, self.SESSION_ID)
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(
@@ -404,6 +461,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         await settle_session(runtime, self.SESSION_ID)
 
         restored = ToolSurface(providers=(FakeEchoProvider(),))
+        _apply_current_catalog(restored, self.SESSION_ID)
         restored_runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(()),
@@ -422,9 +480,10 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
             {LOAD_TOOLSET},
         )
 
-    async def test_rehydrate_rejects_silent_toolset_revision_upgrade(self):
+    async def test_rehydrate_keeps_loaded_snapshot_across_registry_revision_change(self):
         events = await self._committed_load_events()
         surface = ToolSurface(providers=(FakeEchoProvider(revision=2),))
+        _apply_current_catalog(surface, self.SESSION_ID)
         runtime = AgentRuntime(
             MemoryJournal(),
             ScriptedDecisionMaker(()),
@@ -433,13 +492,12 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
         )
         surface.attach(runtime)
 
-        with self.assertRaises(ToolsetLoadError) as raised:
-            await surface.rehydrate(self.SESSION_ID, events)
+        activations = await surface.rehydrate(self.SESSION_ID, events)
 
-        self.assertEqual(raised.exception.code, "TOOLSET_REVISION_UNAVAILABLE")
+        self.assertEqual(activations[0].revision, 1)
         self.assertEqual(
             _schema_names(surface.schemas(self.SESSION_ID)),
-            {LOAD_TOOLSET},
+            {LOAD_TOOLSET, "demo_ping"},
         )
 
     async def test_dynamic_tool_freezes_host_authorization_requirement(self):
@@ -450,6 +508,7 @@ class ToolsetProgressiveLoadTest(unittest.IsolatedAsyncioTestCase):
                 ),
             )
         )
+        _apply_current_catalog(surface, self.SESSION_ID)
         model = ScriptedDecisionMaker(
             (
                 lambda _frame: ModelDecision(

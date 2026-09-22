@@ -48,7 +48,9 @@ function stepHasLiveWork(step: VisibleStep): boolean {
     step.pending ||
     step.tools.some(
       (tool) =>
-        tool.status === "running" || tool.status === "awaiting_authorization",
+        tool.status === "queued" ||
+        tool.status === "running" ||
+        tool.status === "awaiting_authorization",
     )
   );
 }
@@ -125,7 +127,9 @@ export function turnNeedsThinkingHint(
   return !turn.process.some((step) =>
     step.tools.some(
       (tool) =>
-        tool.status === "running" || tool.status === "awaiting_authorization",
+        tool.status === "queued" ||
+        tool.status === "running" ||
+        tool.status === "awaiting_authorization",
     ),
   );
 }

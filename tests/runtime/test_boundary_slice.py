@@ -106,6 +106,31 @@ def runtime_for(
 class AgentRuntimeBoundarySliceTest(unittest.IsolatedAsyncioTestCase):
     SESSION_ID = "boundary-session"
 
+    async def test_stale_advance_position_does_not_claim_or_consume_decision(self):
+        for persistent in (False, True):
+            with self.subTest(persistent=persistent), tempfile.TemporaryDirectory() as root:
+                journal = SqliteJournal(Path(root) / "journal.sqlite") if persistent else MemoryJournal()
+                model = ScriptedDecisionMaker((lambda _: ModelDecision(content="done"),))
+                runtime = runtime_for(RecordingTool("read"), model, journal)
+                await runtime.receive_user_message(self.SESSION_ID, "first", delivery_id="first")
+                checked = await runtime.snapshot(self.SESSION_ID)
+                await runtime.receive_user_message(self.SESSION_ID, "later", delivery_id="later")
+                current = await runtime.snapshot(self.SESSION_ID)
+
+                deferred = await runtime.advance(
+                    self.SESSION_ID, expected_journal_position=checked[-1].sequence
+                )
+                self.assertIsNone(deferred.step)
+                self.assertEqual(deferred.status, RuntimeStatus.RUNNABLE)
+                self.assertEqual(model.frames, [])
+                self.assertEqual(await runtime.snapshot(self.SESSION_ID), current)
+
+                committed = await runtime.advance(
+                    self.SESSION_ID, expected_journal_position=current[-1].sequence
+                )
+                self.assertIsNotNone(committed.step)
+                self.assertEqual(model.frames[0].observed_journal_position, current[-1].sequence)
+
     async def test_unauthorized_command_is_not_claimed_until_granted(self):
         tool = RecordingTool("transfer", requires_authorization=True)
         runtime = runtime_for(

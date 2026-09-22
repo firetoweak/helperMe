@@ -10,29 +10,33 @@ from helperme.assistant.decision import JournalBackedLlmDecisionMaker
 from helperme.assistant.delivery import deliver_binding
 from helperme.assistant.subagent.subagent import (
     DELEGATE,
-    FACT_SOURCE,
     READONLY_TOOL_NAMES,
     RECLAIM,
     REPORT,
     REPORT_FACT,
     TASK_FACT,
+    DelegateIntent,
     SubAgentHost,
     project_delegations,
+    project_failed_delegations,
     project_parent,
     project_pending,
     project_reclaimed,
     project_report,
+    task_fact_arguments,
 )
 from helperme.llm.api import LLMProviderError
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage
 from helperme.runtime import (
     AgentRuntime,
+    CommandPhase,
     DomainFactCommitted,
     InvokeTool,
     LeaseLostError,
     MemoryJournal,
     ModelDecision,
     RuntimeStatus,
+    ToolBinding,
 )
 from helperme.runtime.dispatcher import AttemptContext
 from helperme.runtime.state import DecisionFrame
@@ -429,10 +433,8 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
         """还有子没交回结论时，父那一帧看到的待回收集合不能是空的。
 
         「还差人没回来」由父在决策时从自己已冻结的事实里投影，而
-        `project_delegations` 读的是 delegate 的 Outcome。Outcome 在
-        `_delegate` handler 返回之后才提交，handler 里却已经唤醒了子。一个
-        极快的子若在兄弟的 Outcome 落库前就回收，父就会看到一个空集合，并
-        据此提前作答。
+        `project_delegations` 必须读 Step 中已经原子提交的 delegate Commands。
+        一个极快的子即使在兄弟 Outcome 落库前回收，父也必须已经知道全部兄弟。
         """
 
         host, model, runtime, scheduler = self._build(
@@ -487,8 +489,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
                     # 一条结论都还没回来，这一帧本来就不欠什么。
                     continue
                 with self.subTest(decision=index):
-                    # 已经有结论回来时，三个子的 delegate Outcome 都必须可见，
-                    # 否则「还差谁」会漏掉尚未落库的兄弟。
+                    # 已经有结论回来时，三个 delegate Command 都必须可见。
                     self.assertEqual(
                         frozenset(project_delegations(visible)),
                         delegated,
@@ -555,21 +556,21 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             child_scripts=(),
         )
         await runtime.create_session(self.PARENT)
-        await runtime.create_session("child")
-        await runtime.receive_domain_fact(
-            "child",
-            TASK_FACT,
-            {"task": "查 A", "parent_session_id": self.PARENT},
-            delivery_id="task",
-            source=FACT_SOURCE,
-            requests_decision=True,
+        intent = DelegateIntent(
+            "manual-command",
+            self.PARENT,
+            f"{self.PARENT}/sub-manual-command",
+            "查 A",
         )
+        child = intent.child_session_id
+        await runtime.create_session(child)
+        await runtime.receive_domain_fact(child, **task_fact_arguments(intent))
         try:
             from helperme.assistant.subagent.subagent import record_unexpected_return
 
             self.assertIsNone(
                 await record_unexpected_return(
-                    runtime._journal, "child", LeaseLostError("stale")
+                    runtime._journal, child, LeaseLostError("stale")
                 )
             )
             self.assertEqual(
@@ -580,7 +581,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("disk vanished")
             except RuntimeError as error:
                 parent, arguments = await record_unexpected_return(
-                    runtime._journal, "child", error
+                    runtime._journal, child, error
                 )
                 await host._transport("fact", parent, arguments)
             reports = _facts(await runtime.snapshot(self.PARENT), REPORT_FACT)
@@ -592,7 +593,7 @@ class SubAgentDelegationTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Traceback", reports[0].data["failure"])
             self.assertEqual(
                 project_reclaimed(await runtime.snapshot(self.PARENT)),
-                frozenset({"child"}),
+                frozenset({child}),
             )
         finally:
             await scheduler.close()
@@ -1192,6 +1193,102 @@ class SubAgentPendingInstructionTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reports[0].data["reason"])
 
 
+class SubAgentUnknownCreationRecoveryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_delegate_replays_only_its_stable_child_creation(self):
+        blocked = asyncio.Event()
+
+        async def interrupted(_context, _arguments):
+            await blocked.wait()
+
+        parent = "parent"
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            _ParentChildDecisions(
+                (
+                    lambda _frame: ModelDecision(
+                        command_requests=(
+                            InvokeTool(DELEGATE, (("task", "查清事实"),)),
+                        ),
+                    ),
+                ),
+                (),
+            ),
+            {
+                DELEGATE: ToolBinding(
+                    interrupted,
+                    decision_on_outcome=False,
+                )
+            },
+            SequentialIds(),
+        )
+        await runtime.receive_user_message(parent, "调查", delivery_id="user-1")
+        await runtime.advance(parent)
+        await asyncio.sleep(0)
+        await runtime.dispatcher.close()
+        state = await runtime.state(parent)
+        self.assertEqual(state.commands[0].phase, CommandPhase.UNKNOWN)
+
+        calls = []
+
+        async def transport(operation, session_id, arguments):
+            calls.append((operation, session_id, arguments))
+
+        host = SubAgentHost()
+        host.attach(runtime, transport)
+        pending = await host.rehydrate(parent)
+
+        intent = project_delegations(await runtime.snapshot(parent))[0]
+        self.assertEqual(pending, (intent,))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "create_child")
+        self.assertEqual(calls[0][1], intent)
+        self.assertEqual(calls[0][2]["data"]["task"], "查清事实")
+        self.assertEqual(
+            calls[0][2]["data"]["delegate_command_id"],
+            state.commands[0].command.command_id,
+        )
+
+    async def test_known_delegate_failure_is_not_left_pending(self):
+        async def reject(_context, _arguments):
+            return {
+                "ok": False,
+                "code": "DELEGATION_NOT_ALLOWED",
+                "data": {"session_id": "parent"},
+                "error": "not allowed",
+            }
+
+        runtime = AgentRuntime(
+            MemoryJournal(),
+            _ParentChildDecisions(
+                (
+                    lambda _frame: ModelDecision(
+                        command_requests=(
+                            InvokeTool(DELEGATE, (("task", "查清事实"),)),
+                        ),
+                    ),
+                ),
+                (),
+            ),
+            {DELEGATE: ToolBinding(reject, decision_on_outcome=False)},
+            SequentialIds(),
+        )
+        scheduler = SettlingScheduler(runtime, "parent")
+        await runtime.receive_user_message("parent", "调查", delivery_id="user-1")
+        try:
+            await scheduler.wake("parent")
+            await scheduler.join()
+            events = await runtime.snapshot("parent")
+            delegated = project_delegations(events)
+            self.assertEqual(len(delegated), 1)
+            self.assertEqual(
+                project_failed_delegations(events),
+                frozenset(delegated),
+            )
+            self.assertEqual(project_pending(events), frozenset())
+        finally:
+            await scheduler.close()
+
+
 class SubAgentPolicyTest(unittest.IsolatedAsyncioTestCase):
     def test_readonly_names_exclude_every_writing_tool(self):
         for name in (
@@ -1218,5 +1315,4 @@ class SubAgentPolicyTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(project_report(()))
 
     def test_nothing_delegated_means_nothing_pending(self):
-        host = SubAgentHost()
         self.assertEqual(project_pending(()), frozenset())

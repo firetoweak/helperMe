@@ -1,7 +1,5 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 
-import type { ToolStatus } from "../api/contracts";
-
 export type SessionActivity = "running" | "idle";
 
 export type ActivePreview = {
@@ -12,8 +10,10 @@ export type ActivePreview = {
 export type LiveTool = {
   commandId: string;
   name: string;
-  status: ToolStatus;
+  status: "running";
 };
+
+export type ToolProgressStatus = "running" | "settled";
 
 export type PendingAuthorization = {
   sessionId: string;
@@ -111,6 +111,9 @@ const runtimeSlice = createSlice({
     disconnected(state) {
       state.connectionId = null;
       state.ownerSessionId = null;
+      for (const session of Object.values(state.sessions)) {
+        session.tools = {};
+      }
     },
     viewing(state, action: PayloadAction<string | null>) {
       state.viewingSessionId = action.payload;
@@ -177,13 +180,17 @@ const runtimeSlice = createSlice({
       session.activity = action.payload.activity;
       if (action.payload.activity === "running") {
         session.lastError = null;
+      } else {
+        session.tools = {};
       }
     },
     sessionFailed(
       state,
       action: PayloadAction<{ sessionId: string; message: string }>,
     ) {
-      runtimeOf(state, action.payload.sessionId).lastError = action.payload.message;
+      const session = runtimeOf(state, action.payload.sessionId);
+      session.lastError = action.payload.message;
+      session.tools = {};
     },
     previewStarted(
       state,
@@ -271,14 +278,18 @@ const runtimeSlice = createSlice({
         sessionId: string;
         commandId: string;
         name: string;
-        status: ToolStatus;
+        status: ToolProgressStatus;
       }>,
     ) {
       const session = runtimeOf(state, action.payload.sessionId);
+      if (action.payload.status === "settled") {
+        delete session.tools[action.payload.commandId];
+        return;
+      }
       session.tools[action.payload.commandId] = {
         commandId: action.payload.commandId,
         name: action.payload.name,
-        status: action.payload.status,
+        status: "running",
       };
     },
     authorizationRequired(

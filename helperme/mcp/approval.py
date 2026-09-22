@@ -4,11 +4,10 @@ import json
 from pathlib import PurePath
 from typing import Any, Literal, Mapping
 from urllib.parse import urlsplit
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from helperme.tools.control import ControlApprovalExecution, ControlApprovalRequest
+from helperme.tools.control import ControlApprovalExecution, ControlApprovalProposal
 from helperme.tools.spec import PydanticParameters, ToolSpec
 from helperme.mcp.application import McpApplicationService
 from helperme.mcp.errors import McpInputError, McpRecoveryPreconditionError
@@ -163,7 +162,7 @@ def create_mcp_install_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: McpInstallProposalInput,
-    ) -> ControlApprovalRequest | dict[str, Any]:
+    ) -> ControlApprovalProposal | dict[str, Any]:
         existing = await service.registry.get(input_data.server_id)
         if existing is not None:
             return {
@@ -177,8 +176,7 @@ def create_mcp_install_proposal_spec(
                 "error": f"MCP Server 已注册: {existing.id}",
                 "hint": "先诊断现有登记；安装不会隐式覆盖配置。",
             }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=MCP_INSTALL_ACTION,
             payload=input_data.frozen_payload(),
             summary=input_data.approval_summary(),
@@ -275,7 +273,7 @@ def create_mcp_update_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: McpInstallProposalInput,
-    ) -> ControlApprovalRequest | dict[str, Any]:
+    ) -> ControlApprovalProposal | dict[str, Any]:
         existing = await service.registry.get(input_data.server_id)
         if existing is None:
             return {
@@ -285,8 +283,7 @@ def create_mcp_update_proposal_spec(
                 "error": f"MCP Server 未注册: {input_data.server_id}",
                 "hint": "新增 Server 应走 propose_mcp_install。",
             }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=MCP_UPDATE_ACTION,
             payload={
                 **input_data.frozen_payload(),
@@ -381,7 +378,7 @@ def create_mcp_recovery_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: McpRecoveryProposalInput,
-    ) -> ControlApprovalRequest | dict[str, Any]:
+    ) -> ControlApprovalProposal | dict[str, Any]:
         record = await service.registry.get(input_data.server_id)
         if record is None:
             return {
@@ -391,8 +388,7 @@ def create_mcp_recovery_proposal_spec(
                 "error": f"未注册 MCP Server `{input_data.server_id}`",
                 "hint": "先调用 list_mcp_servers 核对状态；确需新增时提交安装方案。",
             }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=MCP_RECOVER_ACTION,
             payload={
                 "server_id": record.id,
@@ -495,7 +491,7 @@ def create_mcp_remove_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: McpRemoveProposalInput,
-    ) -> ControlApprovalRequest | dict[str, Any]:
+    ) -> ControlApprovalProposal | dict[str, Any]:
         record = await service.registry.get(input_data.server_id)
         if record is None:
             return {
@@ -505,8 +501,7 @@ def create_mcp_remove_proposal_spec(
                 "error": f"未注册 MCP Server `{input_data.server_id}`",
                 "hint": "先调用 list_mcp_servers 核对精确 ID。",
             }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=MCP_REMOVE_ACTION,
             payload={
                 "server_id": record.id,

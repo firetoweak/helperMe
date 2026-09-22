@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import Mapping
 from types import SimpleNamespace
 
 from pydantic import BaseModel, ConfigDict
@@ -9,22 +8,31 @@ from pydantic import BaseModel, ConfigDict
 from helperme.assistant.artifacts import MemoryArtifactStore
 from helperme.assistant.context.projection import ModelContextProjector
 from helperme.assistant.control import (
+    CONTROL_APPROVED,
     CONTROL_CONCLUDED,
+    CONTROL_EXECUTION_STARTED,
     CONTROL_FAILED,
+    CONTROL_PREPARATION_FAILED,
     CONTROL_PROPOSED,
-    CONTROL_RESOLVED,
+    CONTROL_REJECTED,
+    CONTROL_REQUEST_METADATA,
+    CONTROL_SOURCE,
+    CONTROL_SUCCEEDED,
     AssistantControlPlane,
+    ControlDecisionConflict,
+    pending_approval_view,
+    project_control,
+    project_control_message,
     project_pending_approval,
 )
 from helperme.assistant.decision import JournalBackedLlmDecisionMaker
-from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.delivery import deliver_binding
+from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.toolsets import ToolSurface
 from helperme.llm.types import LLMCallResult, LLMResponse, LLMUsage, ToolCall
 from helperme.runtime import (
     AgentRuntime,
     DomainFactCommitted,
-    Event,
     LeaseLostError,
     MemoryJournal,
     RuntimeStatus,
@@ -33,8 +41,9 @@ from helperme.runtime import (
 from helperme.runtime.json_values import thaw_value
 from helperme.tools.control import (
     ControlApprovalExecution,
-    ControlApprovalRequest,
+    ControlApprovalProposal,
     ControlOperation,
+    ControlPreparationFailure,
 )
 from helperme.tools.spec import PydanticParameters, ToolSpec
 from tests.session_scheduler import settle_session
@@ -55,7 +64,7 @@ class ApprovalHandler:
 
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
-        self.payloads: list[Mapping[str, object]] = []
+        self.payloads: list[object] = []
 
     async def execute(self, payload):
         self.payloads.append(payload)
@@ -71,11 +80,11 @@ class ControlLlm:
 
     async def chat(self, _messages, _model, *, tools=None):
         self.calls += 1
-        names = {tool["function"]["name"] for tool in tools}
-        if PROPOSAL_NAME not in names:
-            raise AssertionError("stale stage hid control schema")
         calls = ()
         if self.calls <= self.control_calls:
+            names = {tool["function"]["name"] for tool in tools}
+            if PROPOSAL_NAME not in names:
+                raise AssertionError("control schema missing")
             calls = (
                 ToolCall("control-1", PROPOSAL_NAME, '{"value":"frozen"}'),
             )
@@ -85,12 +94,7 @@ class ControlLlm:
         )
 
 
-class EmptySkillTools:
-    def schemas(self):
-        return []
-
-
-class EmptyCliTools:
+class EmptyTools:
     def schemas(self):
         return []
 
@@ -140,34 +144,20 @@ class SaveFailingGateway:
         return self.store
 
 
-def _frame(*, trigger: str = "trigger-1", cursor: int = 1, basis: str = "basis-1"):
-    return SimpleNamespace(
-        state=SimpleNamespace(session_id=SESSION_ID),
-        trigger_event=SimpleNamespace(event_id=trigger),
-        decision_cursor=cursor,
-        basis_state_version=basis,
-    )
+class WakeRecorder:
+    def __init__(self) -> None:
+        self.woken: list[str] = []
+
+    async def wake(self, session_id: str) -> None:
+        self.woken.append(session_id)
 
 
-def _step(*, trigger: str = "trigger-1", cursor: int = 1, basis: str = "basis-1"):
-    return SimpleNamespace(
-        trigger_event_id=trigger,
-        decision_cursor=cursor,
-        basis_state_version=basis,
-    )
+class EmptyCatalog:
+    def rehydrate(self, _session_id, _events):
+        return None
 
-
-def _facts(events, fact_type: str) -> list[DomainFactCommitted]:
-    return [
-        event.payload
-        for event in events
-        if isinstance(event.payload, DomainFactCommitted)
-        and event.payload.fact_type == fact_type
-    ]
-
-
-async def _ignore_wake(_session_id: str) -> None:
-    return None
+    async def sync(self, _runtime, _session_id):
+        return None
 
 
 def _operation(propose, handler: ApprovalHandler | None = None) -> ControlOperation:
@@ -191,116 +181,340 @@ def _decision_maker(journal, llm, control, *, projector=None):
         llm,
         "test-model",
         surface=ToolSurface(),
-        skill_tools=EmptySkillTools(),
-        cli_tools=EmptyCliTools(),
+        skill_tools=EmptyTools(),
+        cli_tools=EmptyTools(),
         control=control,
         management=OpenControlManagement(),
         projector=projector,
     )
 
 
-def _event(sequence: int, payload) -> Event:
-    from datetime import datetime, timezone
-
-    return Event(
-        event_id=f"event-{sequence}",
-        session_id=SESSION_ID,
-        sequence=sequence,
-        payload=payload,
-        occurred_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
-        causation_id=None,
-        correlation_id=None,
-        schema_version=5,
-        artifact_refs=(),
+def _runtime(journal, control, *, llm=None, projector=None):
+    return AgentRuntime(
+        journal,
+        _decision_maker(
+            journal,
+            ControlLlm() if llm is None else llm,
+            control,
+            projector=projector,
+        ),
+        deliver_binding(lambda _session_id, _output_id, _text: None),
     )
 
 
-def _proposed(request_id: str = "approval-1") -> DomainFactCommitted:
-    return DomainFactCommitted(
-        CONTROL_PROPOSED,
-        {
-            "request_id": request_id,
-            "action": "test.install",
-            "payload": {"value": "frozen"},
-            "summary": "安装 frozen",
-            "risk": "测试风险",
-        },
+def _facts(events, fact_type: str) -> list[DomainFactCommitted]:
+    return [
+        event.payload
+        for event in events
+        if isinstance(event.payload, DomainFactCommitted)
+        and event.payload.fact_type == fact_type
+    ]
+
+
+async def _proposal(_input: ProposalInput):
+    return ControlApprovalProposal(
+        "test.install",
+        {"value": _input.value},
+        "安装 frozen",
+        "测试风险",
     )
 
 
-class ProjectPendingApprovalTest(unittest.TestCase):
-    def test_proposed_is_pending_until_resolved(self):
-        proposed = _event(1, _proposed())
-        self.assertEqual(project_pending_approval((proposed,)).id, "approval-1")
-        resolved = _event(
-            2,
-            DomainFactCommitted(
-                CONTROL_RESOLVED,
-                {
-                    "request_id": "approval-1",
-                    "approved": True,
-                    "action": "test.install",
-                    "succeeded": True,
-                    "message": "安装完成",
-                    "data": {},
-                },
-            ),
-        )
-        self.assertIsNone(project_pending_approval((proposed, resolved)))
-
-    def test_failed_and_concluded_are_not_pending(self):
-        self.assertIsNone(
-            project_pending_approval(
-                (
-                    _event(
-                        1,
-                        DomainFactCommitted(
-                            CONTROL_FAILED,
-                            {"tool": PROPOSAL_NAME, "error": "probe unreachable"},
-                        ),
-                    ),
-                )
-            )
-        )
-        self.assertIsNone(
-            project_pending_approval(
-                (
-                    _event(
-                        1,
-                        DomainFactCommitted(
-                            CONTROL_CONCLUDED,
-                            {"tool": PROPOSAL_NAME, "result": {"ok": False}},
-                        ),
-                    ),
-                )
-            )
-        )
+async def _build_pending(*, handler=None):
+    journal = MemoryJournal()
+    control = AssistantControlPlane((_operation(_proposal, handler),))
+    runtime = _runtime(journal, control)
+    await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
+    await settle_session(runtime, SESSION_ID, control=control)
+    request = project_pending_approval(await journal.snapshot(SESSION_ID))
+    assert request is not None
+    return journal, runtime, control, request
 
 
 class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
-    @staticmethod
-    def _control_that_must_not_run() -> AssistantControlPlane:
-        async def stale(_input: ProposalInput):
-            raise AssertionError("stale proposal must not execute")
+    async def test_request_is_committed_with_step_before_preparation(self):
+        observed_step = []
+        journal = MemoryJournal()
 
-        return AssistantControlPlane((_operation(stale),))
+        async def propose(input_data: ProposalInput):
+            events = await journal.snapshot(SESSION_ID)
+            observed_step.append(any(isinstance(e.payload, StepCommitted) for e in events))
+            return await _proposal(input_data)
 
-    async def _assert_retry_clears_stage(
-        self,
-        journal: MemoryJournal,
-        *,
-        projector=None,
-        expected_error: str | None = None,
-    ) -> None:
-        control = self._control_that_must_not_run()
-        llm = ControlLlm()
-        runtime = AgentRuntime(
-            journal,
-            _decision_maker(journal, llm, control, projector=projector),
-            deliver_binding(lambda _session_id, _output_id, _text: None),
+        control = AssistantControlPlane((_operation(propose),))
+        runtime = _runtime(journal, control)
+        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
+        await settle_session(runtime, SESSION_ID, control=control)
+
+        events = await journal.snapshot(SESSION_ID)
+        step = next(
+            event.payload for event in events if isinstance(event.payload, StepCommitted)
         )
+        metadata = thaw_value(step.decision_metadata)
+        intent = metadata[CONTROL_REQUEST_METADATA]
+        request = project_pending_approval(events)
+        self.assertEqual(observed_step, [True])
+        self.assertEqual(request.id, intent["request_id"])
+        self.assertEqual(intent["arguments"], {"value": "frozen"})
+        self.assertEqual([c.effect.name for c in step.step.commands], ["deliver"])
+
+    async def test_fresh_control_plane_recovers_preparation_from_step(self):
+        journal = MemoryJournal()
+        operation = _operation(_proposal)
+        original = AssistantControlPlane((operation,))
+        runtime = _runtime(journal, original)
         await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
 
+        advanced = await runtime.advance(SESSION_ID)
+        self.assertIsNotNone(advanced.step)
+        events = await journal.snapshot(SESSION_ID)
+        self.assertIsNone(project_pending_approval(events))
+
+        restarted = AssistantControlPlane((operation,))
+        outcome = await restarted.prepare_pending(events)
+        self.assertEqual(outcome.fact_type, CONTROL_PROPOSED)
+        intent = project_control(events).active.intent
+        self.assertEqual(outcome.data["request_id"], intent.request_id)
+
+    async def test_unknown_preparation_error_bubbles_without_fact(self):
+        async def broken(_input: ProposalInput):
+            raise RuntimeError("probe bug")
+
+        journal = MemoryJournal()
+        control = AssistantControlPlane((_operation(broken),))
+        runtime = _runtime(journal, control)
+        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
+        await runtime.advance(SESSION_ID)
+
+        with self.assertRaisesRegex(RuntimeError, "probe bug"):
+            await control.prepare_pending(await journal.snapshot(SESSION_ID))
+        self.assertEqual(
+            _facts(await journal.snapshot(SESSION_ID), CONTROL_PREPARATION_FAILED),
+            [],
+        )
+
+    async def test_known_preparation_failure_is_distinct_fact(self):
+        async def unavailable(_input: ProposalInput):
+            return ControlPreparationFailure({
+                "ok": False,
+                "code": "SOURCE_UNAVAILABLE",
+            })
+
+        journal = MemoryJournal()
+        control = AssistantControlPlane((_operation(unavailable),))
+        runtime = _runtime(journal, control, llm=ControlLlm(control_calls=1))
+        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
+        await settle_session(runtime, SESSION_ID, control=control)
+
+        facts = _facts(await journal.snapshot(SESSION_ID), CONTROL_PREPARATION_FAILED)
+        self.assertEqual(len(facts), 1)
+        self.assertTrue(facts[0].requests_decision)
+
+    async def test_known_conclusion_is_distinct_fact(self):
+        async def concluded(_input: ProposalInput):
+            return {"ok": False, "code": "ALREADY_INSTALLED"}
+
+        journal = MemoryJournal()
+        control = AssistantControlPlane((_operation(concluded),))
+        runtime = _runtime(journal, control)
+        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
+        await settle_session(runtime, SESSION_ID, control=control)
+
+        facts = _facts(await journal.snapshot(SESSION_ID), CONTROL_CONCLUDED)
+        self.assertEqual(len(facts), 1)
+        self.assertTrue(facts[0].requests_decision)
+
+    async def test_approval_records_decision_start_and_terminal_before_wake(self):
+        handler = ApprovalHandler()
+        journal, runtime, control, request = await _build_pending(handler=handler)
+        scheduler = WakeRecorder()
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            scheduler,
+            control=control,
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+
+        message = await sessions.resolve_control(
+            SESSION_ID,
+            request.id,
+            approved=True,
+        )
+
+        self.assertEqual(message, "安装完成")
+        self.assertEqual(len(handler.payloads), 1)
+        events = await journal.snapshot(SESSION_ID)
+        phases = [
+            event.payload.fact_type
+            for event in events
+            if isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type.startswith(f"{CONTROL_SOURCE}.")
+        ]
+        self.assertEqual(
+            phases,
+            [CONTROL_PROPOSED, CONTROL_APPROVED, CONTROL_EXECUTION_STARTED, CONTROL_SUCCEEDED],
+        )
+        self.assertEqual(scheduler.woken, [SESSION_ID])
+        self.assertEqual(project_control(events).states[-1].phase, "succeeded")
+
+    async def test_rejection_is_terminal_and_idempotent(self):
+        journal, runtime, control, request = await _build_pending()
+        scheduler = WakeRecorder()
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            scheduler,
+            control=control,
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+
+        first = await sessions.resolve_control(SESSION_ID, request.id, approved=False)
+        second = await sessions.resolve_control(SESSION_ID, request.id, approved=False)
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(_facts(await journal.snapshot(SESSION_ID), CONTROL_REJECTED)), 1)
+        self.assertIsNone(project_pending_approval(await journal.snapshot(SESSION_ID)))
+        self.assertEqual(scheduler.woken, [SESSION_ID])
+
+    async def test_unknown_execution_error_leaves_started_and_never_retries(self):
+        handler = ApprovalHandler(fail=True)
+        journal, runtime, control, request = await _build_pending(handler=handler)
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            WakeRecorder(),
+            control=control,
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "approval execution failed"):
+            await sessions.resolve_control(SESSION_ID, request.id, approved=True)
+
+        events = await journal.snapshot(SESSION_ID)
+        self.assertEqual(project_control(events).active.phase, "execution_started")
+        self.assertEqual(_facts(events, CONTROL_FAILED), [])
+        self.assertIn("执行结果未知", project_control_message(events))
+
+        duplicate = await sessions.resolve_control(SESSION_ID, request.id, approved=True)
+        self.assertIn("执行结果未知", duplicate)
+        self.assertEqual(len(handler.payloads), 1)
+
+    async def test_approved_without_started_is_recovered_once(self):
+        handler = ApprovalHandler()
+        journal, runtime, control, request = await _build_pending(handler=handler)
+        await runtime.receive_domain_fact(
+            SESSION_ID,
+            CONTROL_APPROVED,
+            {"request_id": request.id, "action": request.action},
+            delivery_id=f"{request.id}:approved",
+            source=CONTROL_SOURCE,
+            requests_decision=False,
+        )
+        restarted = AssistantControlPlane((_operation(_proposal, handler),))
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            WakeRecorder(),
+            control=restarted,
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+
+        await sessions.recover_control(SESSION_ID)
+        await sessions.recover_control(SESSION_ID)
+
+        self.assertEqual(len(handler.payloads), 1)
+        self.assertEqual(
+            project_control(await journal.snapshot(SESSION_ID)).states[-1].phase,
+            "succeeded",
+        )
+
+    async def test_conflicting_decision_is_rejected(self):
+        _journal, runtime, control, request = await _build_pending()
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            WakeRecorder(),
+            control=control,
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+        await sessions.resolve_control(SESSION_ID, request.id, approved=False)
+
+        with self.assertRaises(ControlDecisionConflict):
+            await sessions.resolve_control(SESSION_ID, request.id, approved=True)
+
+    async def test_control_message_is_rebuilt_from_journal(self):
+        journal, runtime, control, request = await _build_pending()
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            WakeRecorder(),
+            control=control,
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+        await sessions.resolve_control(SESSION_ID, request.id, approved=True)
+
+        restarted = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            WakeRecorder(),
+            control=AssistantControlPlane((_operation(_proposal),)),
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+        self.assertEqual((await restarted.view(SESSION_ID)).control_message, "安装完成")
+
+    async def test_control_message_hides_after_the_next_user_message(self):
+        journal, runtime, control, request = await _build_pending()
+        sessions = AssistantSessions(
+            runtime,
+            ToolSurface(),
+            WakeRecorder(),
+            control=control,
+            management=SimpleNamespace(),
+            catalog=EmptyCatalog(),
+        )
+        await sessions.resolve_control(SESSION_ID, request.id, approved=True)
+        self.assertEqual((await sessions.view(SESSION_ID)).control_message, "安装完成")
+
+        await runtime.receive_user_message(SESSION_ID, "继续", delivery_id="next")
+
+        self.assertIsNone((await sessions.view(SESSION_ID)).control_message)
+        self.assertEqual(
+            project_control(await journal.snapshot(SESSION_ID)).states[-1].phase,
+            "succeeded",
+        )
+
+    async def test_projector_rejects_fact_for_another_request(self):
+        journal, runtime, _control, request = await _build_pending()
+        await runtime.receive_domain_fact(
+            SESSION_ID,
+            CONTROL_APPROVED,
+            {"request_id": "control-request-wrong", "action": request.action},
+            delivery_id="wrong:approved",
+            source=CONTROL_SOURCE,
+            requests_decision=False,
+        )
+        with self.assertRaisesRegex(ValueError, "没有对应请求"):
+            project_control(await journal.snapshot(SESSION_ID))
+
+    async def _assert_retry_clears_uncommitted_stage(
+        self,
+        journal,
+        *,
+        projector=None,
+        expected_error=None,
+    ):
+        control = AssistantControlPlane((_operation(_proposal),))
+        llm = ControlLlm(control_calls=2)
+        runtime = _runtime(journal, control, llm=llm, projector=projector)
+        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
         if expected_error is None:
             first = await runtime.advance(SESSION_ID)
             self.assertIsNone(first.step)
@@ -309,315 +523,26 @@ class ConversationalControlTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, expected_error):
                 await runtime.advance(SESSION_ID)
         await settle_session(runtime, SESSION_ID, control=control)
-
-        events = await journal.snapshot(SESSION_ID)
+        self.assertIsNotNone(project_pending_approval(await journal.snapshot(SESSION_ID)))
         self.assertGreaterEqual(llm.calls, 2)
-        self.assertIsNone(project_pending_approval(events))
-        self.assertEqual(len(control.schemas(SESSION_ID, events)), 1)
 
-    async def test_decision_failure_stage_is_cleared_before_retry(self):
-        await self._assert_retry_clears_stage(
+    async def test_artifact_failure_does_not_leak_stage_into_retry(self):
+        await self._assert_retry_clears_uncommitted_stage(
             MemoryJournal(),
             projector=ModelContextProjector(gateway=SaveFailingGateway()),
             expected_error="evidence save failed",
         )
 
-    async def test_step_commit_failure_stage_is_cleared_before_retry(self):
-        await self._assert_retry_clears_stage(
+    async def test_commit_failure_does_not_leak_stage_into_retry(self):
+        await self._assert_retry_clears_uncommitted_stage(
             FailOnceJournal("commit"),
             expected_error="commit failed",
         )
 
-    async def test_lease_lost_stage_is_cleared_before_retry(self):
-        await self._assert_retry_clears_stage(FailOnceJournal("lease"))
+    async def test_lease_loss_does_not_leak_stage_into_retry(self):
+        await self._assert_retry_clears_uncommitted_stage(FailOnceJournal("lease"))
 
-    async def test_proposal_commits_before_approval_and_consumes_once(self):
-        journal = MemoryJournal()
-        committed: list[bool] = []
-
-        async def propose(input_data: ProposalInput):
-            events = await journal.snapshot(SESSION_ID)
-            committed.append(any(isinstance(e.payload, StepCommitted) for e in events))
-            return ControlApprovalRequest(
-                "approval-1",
-                "test.install",
-                {"value": input_data.value},
-                "安装 frozen",
-                "测试风险",
-            )
-
-        handler = ApprovalHandler()
-        control = AssistantControlPlane((_operation(propose, handler),))
-        delivered: list[str] = []
-        runtime = AgentRuntime(
-            journal,
-            _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(lambda _session_id, _output_id, text: delivered.append(text)),
-        )
-        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
-
-        result = await settle_session(runtime, SESSION_ID, control=control)
-
-        self.assertEqual(committed, [True])
-        self.assertEqual(delivered, ["done"])
-        self.assertIsNone(result.control_message)
-        events = await journal.snapshot(SESSION_ID)
-        request = project_pending_approval(events)
-        self.assertEqual(request.id, "approval-1")
-        self.assertEqual(dict(request.payload), {"value": "frozen"})
-        steps = [
-            event.payload.step
-            for event in events
-            if isinstance(event.payload, StepCommitted)
-        ]
-        self.assertEqual([c.effect.name for c in steps[0].commands], ["deliver"])
-
-        resolved = await control.resolve(request, approved=True)
-        self.assertEqual(resolved.message, "安装完成")
-        self.assertEqual(resolved.action, "test.install")
-        self.assertTrue(resolved.approved)
-        self.assertTrue(resolved.succeeded)
-        self.assertEqual(dict(handler.payloads[0]), {"value": "frozen"})
-
-    async def test_approval_writes_control_fact_and_requests_decision(self):
-        async def propose(input_data: ProposalInput):
-            return ControlApprovalRequest(
-                "approval-1",
-                "test.install",
-                {"value": input_data.value},
-                "安装 frozen",
-                "测试风险",
-            )
-
-        handler = ApprovalHandler()
-        control = AssistantControlPlane((_operation(propose, handler),))
-        journal = MemoryJournal()
-        runtime = AgentRuntime(
-            journal,
-            _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(lambda _session_id, _output_id, _text: None),
-        )
-        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
-        await settle_session(runtime, SESSION_ID, control=control)
-
-        woken: list[str] = []
-
-        async def wake(session_id: str) -> None:
-            woken.append(session_id)
-
-        sessions = AssistantSessions(
-            runtime,
-            ToolSurface(),
-            SimpleNamespace(wake=wake),
-            control=control,
-            management=SimpleNamespace(),
-        )
-        message = await sessions.resolve_control(SESSION_ID, approved=True)
-
-        self.assertEqual(message, "安装完成")
-        self.assertEqual(woken, [SESSION_ID])
-        facts = _facts(await journal.snapshot(SESSION_ID), CONTROL_RESOLVED)
-        self.assertEqual(len(facts), 1)
-        self.assertTrue(facts[0].requests_decision)
-        self.assertEqual(
-            thaw_value(facts[0].data),
-            {
-                "request_id": "approval-1",
-                "approved": True,
-                "action": "test.install",
-                "succeeded": True,
-                "message": "安装完成",
-                "data": {},
-            },
-        )
-        self.assertIs(
-            (await runtime.state(SESSION_ID)).status,
-            RuntimeStatus.RUNNABLE,
-        )
-
-    async def test_cancellation_writes_control_fact(self):
-        async def propose(input_data: ProposalInput):
-            return ControlApprovalRequest(
-                "approval-1",
-                "test.install",
-                {"value": input_data.value},
-                "安装 frozen",
-                "测试风险",
-            )
-
-        control = AssistantControlPlane((_operation(propose),))
-        journal = MemoryJournal()
-        runtime = AgentRuntime(
-            journal,
-            _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(lambda _session_id, _output_id, _text: None),
-        )
-        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
-        await settle_session(runtime, SESSION_ID, control=control)
-
-        async def wake(_session_id: str) -> None:
-            return None
-
-        sessions = AssistantSessions(
-            runtime,
-            ToolSurface(),
-            SimpleNamespace(wake=wake),
-            control=control,
-            management=SimpleNamespace(),
-        )
-        message = await sessions.resolve_control(SESSION_ID, approved=False)
-        self.assertEqual(message, "已取消控制操作：test.install")
-        events = await journal.snapshot(SESSION_ID)
-        facts = _facts(events, CONTROL_RESOLVED)
-        self.assertEqual(thaw_value(facts[0].data)["approved"], False)
-        self.assertTrue(facts[0].requests_decision)
-        self.assertIsNone(project_pending_approval(events))
-
-    async def test_approval_failure_does_not_restore_consumed_request(self):
-        async def propose(input_data: ProposalInput):
-            return ControlApprovalRequest(
-                "approval-1",
-                "test.install",
-                {"value": input_data.value},
-                "安装 frozen",
-                "测试风险",
-            )
-
-        handler = ApprovalHandler(fail=True)
-        control = AssistantControlPlane((_operation(propose, handler),))
-        journal = MemoryJournal()
-        runtime = AgentRuntime(
-            journal,
-            _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(lambda _session_id, _output_id, _text: None),
-        )
-        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
-        await settle_session(runtime, SESSION_ID, control=control)
-
-        sessions = AssistantSessions(
-            runtime,
-            ToolSurface(),
-            SimpleNamespace(wake=_ignore_wake),
-            control=control,
-            management=SimpleNamespace(),
-        )
-        with self.assertRaisesRegex(RuntimeError, "approval execution failed"):
-            await sessions.resolve_control(SESSION_ID, approved=True)
-
-        # 执行可能已经改了世界的一半，裁决照样落成事实：重试不会再执行一次。
-        events = await journal.snapshot(SESSION_ID)
-        self.assertIsNone(project_pending_approval(events))
-        resolved = thaw_value(_facts(events, CONTROL_RESOLVED)[0].data)
-        self.assertFalse(resolved["succeeded"])
-        self.assertIn("approval execution failed", resolved["message"])
-
-    async def test_unconfirmed_approval_survives_a_fresh_control_plane(self):
-        async def propose(_input: ProposalInput):
-            return ControlApprovalRequest(
-                "approval-1", "test.install", {}, "安装 frozen", "测试风险"
-            )
-
-        operation = _operation(propose)
-        control = AssistantControlPlane((operation,))
-        journal = MemoryJournal()
-        runtime = AgentRuntime(
-            journal,
-            _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(lambda _session_id, _output_id, _text: None),
-        )
-        await runtime.receive_user_message(SESSION_ID, "安装它", delivery_id="user-1")
-        await settle_session(runtime, SESSION_ID, control=control)
-
-        events = await journal.snapshot(SESSION_ID)
-        restarted = AssistantControlPlane((operation,))
-
-        self.assertEqual(project_pending_approval(events).id, "approval-1")
-        self.assertEqual(restarted.schemas(SESSION_ID, events), [])
-
-    async def test_unmatched_step_discards_staged_call(self):
-        async def propose(_input: ProposalInput):
-            return {"ok": True, "code": "OK"}
-
-        control = AssistantControlPlane((_operation(propose),))
-        control.stage(_frame(), PROPOSAL_NAME, {"value": "frozen"})
-
-        self.assertIsNone(
-            await control.after_committed_step(
-                SESSION_ID,
-                _step(trigger="trigger-2", cursor=2, basis="basis-2"),
-            )
-        )
-        self.assertIsNone(await control.after_committed_step(SESSION_ID, _step()))
-        self.assertEqual(len(control.schemas(SESSION_ID, ())), 1)
-
-    async def test_proposal_action_must_match_operation(self):
-        async def propose(_input: ProposalInput):
-            return ControlApprovalRequest(
-                "approval-1", "test.wrong", {}, "bad", "bad"
-            )
-
-        control = AssistantControlPlane((_operation(propose),))
-        control.stage(_frame(), PROPOSAL_NAME, {"value": "frozen"})
-
-        with self.assertRaisesRegex(ValueError, "proposal action 不匹配"):
-            await control.after_committed_step(SESSION_ID, _step())
-        self.assertEqual(len(control.schemas(SESSION_ID, ())), 1)
-
-    async def test_proposal_handler_failure_becomes_a_fact(self):
-        async def propose(_input: ProposalInput):
-            raise RuntimeError("probe unreachable")
-
-        control = AssistantControlPlane((_operation(propose),))
-        control.stage(_frame(), PROPOSAL_NAME, {"value": "frozen"})
-
-        outcome = await control.after_committed_step(SESSION_ID, _step())
-
-        self.assertEqual(outcome.fact_type, CONTROL_FAILED)
-        self.assertTrue(outcome.requests_decision)
-        self.assertEqual(outcome.data["error"], "probe unreachable")
-        self.assertIn("RuntimeError", outcome.data["traceback"])
-        self.assertIsNone(project_pending_approval(()))
-
-    async def test_proposal_conclusion_becomes_a_fact(self):
-        async def propose(_input: ProposalInput):
-            return {"ok": False, "code": "ALREADY_REGISTERED"}
-
-        control = AssistantControlPlane((_operation(propose),))
-        control.stage(_frame(), PROPOSAL_NAME, {"value": "frozen"})
-
-        outcome = await control.after_committed_step(SESSION_ID, _step())
-
-        self.assertEqual(outcome.fact_type, CONTROL_CONCLUDED)
-        self.assertTrue(outcome.requests_decision)
-        self.assertEqual(
-            outcome.data["result"], {"ok": False, "code": "ALREADY_REGISTERED"}
-        )
-
-    async def test_proposal_conclusion_is_not_delivered(self):
-        async def propose(_input: ProposalInput):
-            return {"ok": False, "code": "ALREADY_REGISTERED"}
-
-        journal = MemoryJournal()
-        control = AssistantControlPlane((_operation(propose),))
-        delivered: list[str] = []
-        runtime = AgentRuntime(
-            journal,
-            _decision_maker(journal, ControlLlm(), control),
-            deliver_binding(
-                lambda _session_id, _output_id, text: delivered.append(text)
-            ),
-        )
-        await runtime.receive_user_message(
-            SESSION_ID, "安装它", delivery_id="user-1"
-        )
-        await settle_session(runtime, SESSION_ID, control=control)
-
-        facts = [
-            event.payload
-            for event in await journal.snapshot(SESSION_ID)
-            if isinstance(event.payload, DomainFactCommitted)
-            and event.payload.fact_type == CONTROL_CONCLUDED
-        ]
-        self.assertEqual(len(facts), 1)
-        self.assertEqual(facts[0].data["result"]["code"], "ALREADY_REGISTERED")
-        self.assertNotIn("ALREADY_REGISTERED", "".join(delivered))
+    async def test_view_projects_pending_identity(self):
+        journal, _runtime_value, _control, request = await _build_pending()
+        view = pending_approval_view(await journal.snapshot(SESSION_ID))
+        self.assertEqual(view.request_id, request.id)

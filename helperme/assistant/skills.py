@@ -12,6 +12,7 @@ from helperme.runtime.dispatcher import AttemptContext
 from helperme.assistant.tool_results import runtime_tool_result
 from helperme.tools.spec import ToolArgumentsError
 from helperme.skills.runtime import LOAD_SKILL, READ_SKILL_RESOURCE
+from helperme.assistant.catalog import CatalogSkill
 
 
 class SkillToolAdapter:
@@ -27,8 +28,10 @@ class SkillToolAdapter:
         self._catalog = skills.tool_catalog
         self._gateway = gateway
         self._settings = settings
+        self._catalogs: dict[str, dict[str, int]] = {}
 
-    def catalog(self) -> list[dict[str, object]]:
+    def registry_catalog(self) -> list[dict[str, object]]:
+        self._catalog.tool_specs()
         return sorted(
             (
                 {
@@ -42,8 +45,17 @@ class SkillToolAdapter:
             key=lambda item: item["id"],
         )
 
+    def apply_catalog(
+        self,
+        session_id: str,
+        skills: tuple[CatalogSkill, ...],
+    ) -> None:
+        self._catalogs[session_id] = {
+            item.id: item.revision for item in skills
+        }
+
     def schemas(self) -> list[dict[str, object]]:
-        return [spec.to_openai_tool() for spec in self._catalog.tool_specs()]
+        return [spec.to_openai_tool() for spec in self._catalog.tool_specs({})]
 
     def bindings(self) -> dict[str, ToolBinding]:
         return {
@@ -56,7 +68,9 @@ class SkillToolAdapter:
             context: AttemptContext,
             arguments: Mapping[str, object],
         ) -> object:
-            catalog_specs = self._catalog.tool_specs()
+            catalog_specs = self._catalog.tool_specs(
+                self._catalogs[context.session_id]
+            )
             specs = {spec.name: spec for spec in catalog_specs}
             spec = specs.get(name)
             if spec is None:

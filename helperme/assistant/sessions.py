@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from helperme.assistant.control import (
-    CONTROL_RESOLVED,
     CONTROL_SOURCE,
     AssistantControlPlane,
     ControlApprovalView,
-    ControlResolution,
+    ControlDecisionConflict,
+    ControlOutcome,
     NoPendingControlApproval,
     pending_approval_view,
-    project_pending_approval,
+    project_control,
+    project_control_message,
 )
 from helperme.assistant.runner import (
     SessionScheduler,
@@ -20,6 +22,7 @@ from helperme.assistant.runner import (
 )
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.management import ManagementSurface
+from helperme.assistant.catalog import CapabilityCatalog
 from helperme.assistant.subagent.subagent import SubAgentHost, project_pending
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState, CommandPhase
@@ -100,6 +103,7 @@ class AssistantSessions:
         *,
         control: AssistantControlPlane,
         management: ManagementSurface,
+        catalog: CapabilityCatalog,
         subagents: SubAgentHost | None = None,
     ) -> None:
         self._runtime = runtime
@@ -107,24 +111,24 @@ class AssistantSessions:
         self._scheduler = scheduler
         self._control = control
         self._management = management
+        self._catalog = catalog
         self._subagents = subagents
-        self._preference: dict[str, bool] = {}
-        self._auto_grant: dict[str, bool] = {}
+        self._auto_authorize: dict[str, bool] = {}
+        self._control_locks: dict[str, asyncio.Lock] = {}
 
     def _view(
         self,
         state: CanonicalState,
         events,
         *,
-        control_message: str | None = None,
         has_active_subagents: bool = False,
     ) -> SessionView:
         return session_view(
             state,
             control_approval=pending_approval_view(events),
-            control_message=control_message,
+            control_message=project_control_message(events),
             has_active_subagents=has_active_subagents,
-            auto_authorize=self._preference.get(state.session_id, False),
+            auto_authorize=self._auto_authorize.get(state.session_id, False),
         )
 
     async def create(self, session_id: str) -> SessionView:
@@ -134,12 +138,15 @@ class AssistantSessions:
         return await self.view(session_id)
 
     async def resume(self, session_id: str) -> SessionView:
-        state = await resume_session(
+        await resume_session(
             self._runtime,
             self._surface,
             session_id,
             self._management,
+            self._catalog,
         )
+        await self.recover_control(session_id)
+        state = await self._runtime.state(session_id)
         pending_subagents: tuple[str, ...] = ()
         if self._subagents is not None:
             pending_subagents = await self._subagents.rehydrate(session_id)
@@ -171,54 +178,92 @@ class AssistantSessions:
     async def resolve_control(
         self,
         session_id: str,
+        request_id: str,
         *,
         approved: bool,
     ) -> str:
-        request = project_pending_approval(
-            await self._runtime.snapshot(session_id)
-        )
-        if request is None:
-            raise NoPendingControlApproval(session_id)
-        try:
-            resolution = await self._control.resolve(request, approved=approved)
-        except Exception as error:
-            # 执行可能已经改了世界的一半。裁决先落成事实，重试不会再执行一次。
-            await self._commit_resolution(
-                session_id,
-                ControlResolution(
-                    request.id,
-                    request.action,
-                    True,
-                    False,
-                    f"控制操作执行失败：{error}",
-                    {},
-                ),
+        async with self._control_locks.setdefault(session_id, asyncio.Lock()):
+            events = await self._runtime.snapshot(session_id)
+            projection = project_control(events)
+            state = projection.get(request_id)
+            if state is None:
+                raise ControlDecisionConflict(f"未知控制请求: {request_id}")
+            if state.phase == "rejected":
+                if approved:
+                    raise ControlDecisionConflict("控制请求已经被拒绝")
+                assert state.message is not None
+                return state.message
+            if state.phase in {"succeeded", "failed"}:
+                if not approved:
+                    raise ControlDecisionConflict("控制请求已经被批准并执行")
+                assert state.message is not None
+                return state.message
+            if state.phase == "execution_started":
+                if not approved:
+                    raise ControlDecisionConflict("控制请求已经开始执行")
+                assert projection.message is not None
+                return projection.message
+            if state.phase == "approved":
+                if not approved:
+                    raise ControlDecisionConflict("控制请求已经被批准")
+                return await self._execute_approved(session_id)
+            if state.phase != "proposed" or projection.active is not state:
+                raise NoPendingControlApproval(session_id)
+            assert state.request is not None
+            decision = self._control.decision_outcome(
+                state.request,
+                approved=approved,
             )
-            raise
-        await self._commit_resolution(session_id, resolution)
-        await self._scheduler.wake(session_id)
-        return resolution.message
+            await self._commit_control(session_id, decision)
+            if not approved:
+                await self._scheduler.wake(session_id)
+                return decision.data["message"]
+            return await self._execute_approved(session_id)
 
-    async def _commit_resolution(
+    async def _commit_control(
         self,
         session_id: str,
-        resolution: ControlResolution,
+        outcome: ControlOutcome,
     ) -> None:
         await self._runtime.receive_domain_fact(
             session_id,
-            CONTROL_RESOLVED,
-            {
-                "request_id": resolution.request_id,
-                "approved": resolution.approved,
-                "action": resolution.action,
-                "succeeded": resolution.succeeded,
-                "message": resolution.message,
-                "data": dict(resolution.data),
-            },
-            delivery_id=f"{resolution.request_id}:resolved",
+            outcome.fact_type,
+            dict(outcome.data),
+            delivery_id=outcome.delivery_id,
             source=CONTROL_SOURCE,
-            requests_decision=True,
+            requests_decision=outcome.requests_decision,
         )
+
+    async def _execute_approved(self, session_id: str) -> str:
+        projection = project_control(await self._runtime.snapshot(session_id))
+        state = projection.active
+        if state is None or state.phase != "approved" or state.request is None:
+            raise RuntimeError("控制执行没有已批准请求")
+        request = state.request
+        await self._commit_control(
+            session_id,
+            self._control.execution_started_outcome(request),
+        )
+        execution = await self._control.execute(request)
+        terminal = self._control.terminal_outcome(request, execution)
+        await self._commit_control(session_id, terminal)
+        await self._scheduler.wake(session_id)
+        return execution.message
+
+    async def recover_control(self, session_id: str) -> None:
+        async with self._control_locks.setdefault(session_id, asyncio.Lock()):
+            outcome = await self._control.prepare_pending(
+                await self._runtime.snapshot(session_id)
+            )
+            if outcome is not None:
+                await self._commit_control(session_id, outcome)
+                if outcome.requests_decision:
+                    await self._scheduler.wake(session_id)
+            active = project_control(
+                await self._runtime.snapshot(session_id)
+            ).active
+            if active is not None and active.phase == "approved":
+                await self._execute_approved(session_id)
 
     async def receive_user_message(
         self,
@@ -250,11 +295,12 @@ class AssistantSessions:
         view = await self.view(session_id)
         answer = content.strip().lower()
         if view.control_approval is not None and answer in {"yes", "y", "no", "n"}:
-            message = await self.resolve_control(
+            await self.resolve_control(
                 session_id,
+                view.control_approval.request_id,
                 approved=answer in {"yes", "y"},
             )
-            return replace(await self.view(session_id), control_message=message)
+            return await self.view(session_id)
         if view.pending_authorization_ids and answer in {"yes", "y", "no", "n"}:
             await self.resolve_authorizations(
                 session_id,
@@ -297,22 +343,17 @@ class AssistantSessions:
                 await self._runtime.reject_command(session_id, command_id)
         await self._scheduler.wake(session_id)
 
-    def web_auto_authorize(self, session_id: str) -> bool:
-        return self._preference.get(session_id, False)
-
     def is_auto_authorized(self, session_id: str) -> bool:
-        return self._auto_grant.get(session_id, False)
+        return self._auto_authorize.get(session_id, False)
 
-    async def apply_authorization_policy(
+    async def apply_auto_authorize(
         self,
         session_id: str,
         *,
-        preference: bool,
-        grant: bool,
+        enabled: bool,
     ) -> SessionView:
-        self._preference[session_id] = bool(preference)
-        self._auto_grant[session_id] = bool(grant)
-        if grant:
+        self._auto_authorize[session_id] = bool(enabled)
+        if enabled:
             await self._grant_pending(session_id)
         return await self.view(session_id)
 

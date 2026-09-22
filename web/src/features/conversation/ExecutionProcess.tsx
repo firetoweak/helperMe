@@ -32,6 +32,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
 
 const STATUS_LABEL: Record<ToolStatus, string> = {
+  queued: "排队中",
   running: "运行中",
   succeeded: "完成",
   failed: "失败",
@@ -41,6 +42,7 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
 };
 
 const STATUS_COLOR: Record<ToolStatus, string> = {
+  queued: "gray",
   running: "sage",
   succeeded: "gray",
   failed: "red",
@@ -52,12 +54,14 @@ const STATUS_COLOR: Record<ToolStatus, string> = {
 interface ExecutionProcessProps {
   complete: boolean;
   steps: VisibleStep[];
+  authorizationDisabled: boolean;
   onAuthorize: (commandId: string, approved: boolean) => void;
 }
 
 export function ExecutionProcess({
   complete,
   steps,
+  authorizationDisabled,
   onAuthorize,
 }: ExecutionProcessProps) {
   const [opened, setOpened] = useState(!complete);
@@ -96,6 +100,7 @@ export function ExecutionProcess({
         <Stack className="execution-steps" gap={4}>
           {steps.map((step, index) => (
             <StepDisclosure
+              authorizationDisabled={authorizationDisabled}
               index={index}
               key={step.key}
               onAuthorize={onAuthorize}
@@ -111,10 +116,12 @@ export function ExecutionProcess({
 function StepDisclosure({
   index,
   step,
+  authorizationDisabled,
   onAuthorize,
 }: {
   index: number;
   step: VisibleStep;
+  authorizationDisabled: boolean;
   onAuthorize: (commandId: string, approved: boolean) => void;
 }) {
   const status = stepStatus(step);
@@ -169,6 +176,7 @@ function StepDisclosure({
                 <SubagentCallCard key={tool.commandId} tool={tool} />
               ) : (
                 <ToolCard
+                  authorizationDisabled={authorizationDisabled}
                   key={tool.commandId}
                   onAuthorize={onAuthorize}
                   tool={tool}
@@ -184,9 +192,11 @@ function StepDisclosure({
 
 function ToolCard({
   tool,
+  authorizationDisabled,
   onAuthorize,
 }: {
   tool: VisibleTool;
+  authorizationDisabled: boolean;
   onAuthorize: (commandId: string, approved: boolean) => void;
 }) {
   const awaiting = tool.status === "awaiting_authorization";
@@ -246,6 +256,7 @@ function ToolCard({
         <Group gap="xs" mt="xs">
           <Button
             color="sage"
+            disabled={authorizationDisabled}
             leftSection={<IconCheck size={14} />}
             onClick={() => onAuthorize(tool.commandId, true)}
             size="compact-sm"
@@ -255,6 +266,7 @@ function ToolCard({
           </Button>
           <Button
             color="gray"
+            disabled={authorizationDisabled}
             leftSection={<IconX size={14} />}
             onClick={() => onAuthorize(tool.commandId, false)}
             size="compact-sm"
@@ -286,6 +298,9 @@ function stepStatus(step: VisibleStep): ToolStatus {
   if (step.pending || step.tools.some((tool) => tool.status === "running")) {
     return "running";
   }
+  if (step.tools.some((tool) => tool.status === "queued")) {
+    return "queued";
+  }
   if (step.tools.some((tool) => tool.status === "unknown")) {
     return "unknown";
   }
@@ -301,5 +316,9 @@ function stepStatus(step: VisibleStep): ToolStatus {
 
 function stepStatusIsRunning(step: VisibleStep): boolean {
   const status = stepStatus(step);
-  return status === "running" || status === "awaiting_authorization";
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "awaiting_authorization"
+  );
 }

@@ -1,8 +1,9 @@
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from helperme.tools.control import ControlApprovalRequest
+from helperme.tools.control import ControlApprovalProposal
 from helperme.paths import HelperMeHome
 from helperme.skills.application import SkillApplicationService
 from helperme.skills.approval import (
@@ -107,8 +108,8 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
                 locator=str(current_source),
             ))
 
-            self.assertIsInstance(first, ControlApprovalRequest)
-            self.assertIsInstance(current, ControlApprovalRequest)
+            self.assertIsInstance(first, ControlApprovalProposal)
+            self.assertIsInstance(current, ControlApprovalProposal)
             self.assertEqual(
                 first.payload["content_hash"],
                 current.payload["content_hash"],
@@ -142,7 +143,7 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
                 source_kind="local",
                 locator=str(source),
             ))
-            self.assertIsInstance(request, ControlApprovalRequest)
+            self.assertIsInstance(request, ControlApprovalProposal)
             frozen_hash = request.payload["content_hash"]
 
             write_skill(
@@ -163,6 +164,36 @@ class SkillInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.content_hash, frozen_hash)
             self.assertIn("Frozen v1", text)
             self.assertNotIn("Drifted v2", text)
+
+    async def test_missing_frozen_install_candidate_is_known_execution_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = HelperMeHome(root / ".helperme")
+            workspace.initialize()
+            source = root / "source"
+            write_skill(source, name="demo")
+            service = SkillApplicationService(workspace)
+
+            request = await create_skill_install_proposal_spec(service).handler(
+                SkillInstallProposalInput(
+                    source_kind="local",
+                    locator=str(source),
+                )
+            )
+            self.assertIsInstance(request, ControlApprovalProposal)
+            candidate = (
+                service.install_candidates.root
+                / request.payload["content_hash"]
+            )
+            shutil.rmtree(candidate)
+
+            execution = await SkillInstallApprovalHandler(service).execute(
+                request.payload
+            )
+
+            self.assertFalse(execution.succeeded)
+            self.assertIn("candidate 不存在", execution.message)
+            self.assertIsNone(await service.registry.get("demo"))
 
     async def test_install_proposal_is_both_approval_boundary_and_exclusive(self):
         with tempfile.TemporaryDirectory() as directory:

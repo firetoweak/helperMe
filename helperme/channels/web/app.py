@@ -85,6 +85,10 @@ class AuthorizationRequest(BaseModel):
     approved: bool
 
 
+class ControlDecisionRequest(AuthorizationRequest):
+    request_id: str
+
+
 class AutoAuthorizeRequest(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
@@ -305,12 +309,13 @@ def create_web_app(
     @app.post("/api/sessions/{session_id}/control")
     async def resolve_control(
         session_id: str,
-        body: AuthorizationRequest,
+        body: ControlDecisionRequest,
         request: Request,
     ):
         return await _channel(request).resolve_control(
             body.connection_id,
             session_id,
+            body.request_id,
             body.approved,
         )
 

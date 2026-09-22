@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from typing import Literal, Mapping, cast
-from uuid import uuid4
 
 from pydantic import BaseModel, model_validator
 
-from helperme.tools.control import ControlApprovalExecution, ControlApprovalRequest
+from helperme.tools.control import (
+    ControlApprovalExecution,
+    ControlApprovalProposal,
+    ControlPreparationFailure,
+)
 from helperme.tools.spec import PydanticParameters, ToolSpec
 from helperme.skills.application import SkillApplicationService
 from helperme.skills.models import SkillSourceRef
@@ -34,34 +37,36 @@ def create_skill_install_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: SkillInstallProposalInput,
-    ) -> ControlApprovalRequest | dict:
+    ) -> ControlApprovalProposal | ControlPreparationFailure | dict:
         try:
             candidate = await service.prepare_install(SkillSourceRef(
                 input_data.source_kind,
                 input_data.locator,
                 input_data.requested_ref,
             ))
-        except (SkillSourceError, SkillAlreadyInstalledError) as exc:
+        except SkillAlreadyInstalledError as exc:
             return {
                 "ok": False,
-                "code": (
-                    "SKILL_ALREADY_INSTALLED"
-                    if isinstance(exc, SkillAlreadyInstalledError)
-                    else "SKILL_SOURCE_ERROR"
-                ),
+                "code": "SKILL_ALREADY_INSTALLED",
                 "data": {
                     "source_kind": input_data.source_kind,
                     "locator": input_data.locator,
                 },
                 "error": str(exc),
-                "hint": (
-                    "检查已安装目录；更新 Skill 应走独立更新流程。"
-                    if isinstance(exc, SkillAlreadyInstalledError)
-                    else "检查网络、来源地址或本地路径后重试。"
-                ),
+                "hint": "检查已安装目录；更新 Skill 应走独立更新流程。",
             }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        except SkillSourceError as exc:
+            return ControlPreparationFailure({
+                "ok": False,
+                "code": "SKILL_SOURCE_ERROR",
+                "data": {
+                    "source_kind": input_data.source_kind,
+                    "locator": input_data.locator,
+                },
+                "error": str(exc),
+                "hint": "检查网络、来源地址或本地路径后重试。",
+            })
+        return ControlApprovalProposal(
             action=SKILL_INSTALL_ACTION,
             payload={
                 "skill_id": candidate.skill_id,
@@ -123,12 +128,18 @@ class SkillInstallApprovalHandler:
             for value in (skill_id, content_hash, resolved_ref)
         ):
             raise SkillInputError("Skill install approval identity 类型无效")
-        record = await self.service.install_frozen(
-            cast(str, skill_id),
-            cast(str, content_hash),
-            SkillSourceRef.from_dict(dict(source)),
-            cast(str, resolved_ref),
-        )
+        try:
+            record = await self.service.install_frozen(
+                cast(str, skill_id),
+                cast(str, content_hash),
+                SkillSourceRef.from_dict(dict(source)),
+                cast(str, resolved_ref),
+            )
+        except SkillInputError as exc:
+            return ControlApprovalExecution(
+                succeeded=False,
+                message=f"Skill `{skill_id}` 安装未执行：{exc}",
+            )
         return ControlApprovalExecution(
             succeeded=True,
             message=(
@@ -151,13 +162,12 @@ class SkillEnableProposalInput(BaseModel):
 def create_skill_enable_proposal_spec(
     service: SkillApplicationService,
 ) -> ToolSpec:
-    async def propose(input_data: SkillEnableProposalInput) -> ControlApprovalRequest:
+    async def propose(input_data: SkillEnableProposalInput) -> ControlApprovalProposal:
         inspection = await service.test_skill(input_data.skill_id)
         record = inspection.record
         if record.enabled:
             raise ValueError(f"Skill 已启用: {record.name}")
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=SKILL_ENABLE_ACTION,
             payload={
                 "skill_id": record.name,
@@ -259,20 +269,20 @@ def create_skill_update_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: SkillUpdateProposalInput,
-    ) -> ControlApprovalRequest | dict:
+    ) -> ControlApprovalProposal | ControlPreparationFailure | dict:
         try:
             report = await service.check_update(
                 input_data.skill_id,
                 input_data.replacement(),
             )
         except (SkillInputError, SkillSourceError) as exc:
-            return {
+            return ControlPreparationFailure({
                 "ok": False,
                 "code": "SKILL_UPDATE_CHECK_FAILED",
                 "data": {"skill_id": input_data.skill_id},
                 "error": str(exc),
                 "hint": None,
-            }
+            })
         candidate = report.candidate
         if not candidate.diff.changed:
             return {
@@ -282,8 +292,7 @@ def create_skill_update_proposal_spec(
                 "error": None,
                 "hint": None,
             }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=SKILL_UPDATE_ACTION,
             payload={
                 "skill_id": candidate.skill_id,
@@ -351,21 +360,20 @@ def create_skill_repair_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: SkillRepairProposalInput,
-    ) -> ControlApprovalRequest | dict:
+    ) -> ControlApprovalProposal | ControlPreparationFailure | dict:
         try:
             record, candidate = await service.prepare_repair(
                 input_data.skill_id,
             )
         except (SkillInputError, SkillSourceError) as exc:
-            return {
+            return ControlPreparationFailure({
                 "ok": False,
                 "code": "SKILL_REPAIR_PREPARE_FAILED",
                 "data": {"skill_id": input_data.skill_id},
                 "error": str(exc),
                 "hint": None,
-            }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+            })
+        return ControlApprovalProposal(
             action=SKILL_REPAIR_ACTION,
             payload={
                 "skill_id": record.name,

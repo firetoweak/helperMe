@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Mapping, cast
-from uuid import uuid4
 
 from pydantic import BaseModel
 
@@ -13,7 +12,11 @@ from helperme.cli.errors import (
     CliSourceError,
 )
 from helperme.cli.models import CliHealth, CliSourceRef
-from helperme.tools.control import ControlApprovalExecution, ControlApprovalRequest
+from helperme.tools.control import (
+    ControlApprovalExecution,
+    ControlApprovalProposal,
+    ControlPreparationFailure,
+)
 from helperme.tools.spec import PydanticParameters, ToolSpec
 
 
@@ -47,7 +50,7 @@ def create_cli_install_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: CliInstallProposalInput,
-    ) -> ControlApprovalRequest | dict:
+    ) -> ControlApprovalProposal | ControlPreparationFailure | dict:
         try:
             candidate = await service.prepare_install(
                 input_data.name,
@@ -71,15 +74,14 @@ def create_cli_install_proposal_spec(
                 "hint": "检查已登记目录；版本变化应走 propose_cli_update。",
             }
         except (CliInputError, CliSourceError) as exc:
-            return {
+            return ControlPreparationFailure({
                 "ok": False,
                 "code": "CLI_SOURCE_ERROR",
                 "data": {"locator": input_data.locator},
                 "error": str(exc),
                 "hint": "确认该 CLI 已安装且在 PATH 中，或提供显式可执行文件路径。",
-            }
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+            })
+        return ControlApprovalProposal(
             action=CLI_INSTALL_ACTION,
             payload={
                 "name": candidate.name,
@@ -167,12 +169,11 @@ def create_cli_uninstall_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: CliIdProposalInput,
-    ) -> ControlApprovalRequest | dict:
+    ) -> ControlApprovalProposal | dict:
         record = await service.inspect_or_none(input_data.cli_id)
         if record is None:
             return _not_installed(input_data.cli_id)
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=CLI_UNINSTALL_ACTION,
             payload={
                 "cli_id": record.name,
@@ -206,12 +207,11 @@ def create_cli_update_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: CliIdProposalInput,
-    ) -> ControlApprovalRequest | dict:
+    ) -> ControlApprovalProposal | dict:
         record = await service.inspect_or_none(input_data.cli_id)
         if record is None:
             return _not_installed(input_data.cli_id)
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=CLI_UPDATE_ACTION,
             payload={
                 "cli_id": record.name,
@@ -248,12 +248,11 @@ def create_cli_repair_proposal_spec(
 ) -> ToolSpec:
     async def propose(
         input_data: CliIdProposalInput,
-    ) -> ControlApprovalRequest | dict:
+    ) -> ControlApprovalProposal | dict:
         record = await service.inspect_or_none(input_data.cli_id)
         if record is None:
             return _not_installed(input_data.cli_id)
-        return ControlApprovalRequest(
-            id=f"approval-{uuid4().hex}",
+        return ControlApprovalProposal(
             action=CLI_REPAIR_ACTION,
             payload={
                 "cli_id": record.name,

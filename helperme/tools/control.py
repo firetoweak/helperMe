@@ -22,8 +22,7 @@ def _freeze(value: Any) -> Any:
 
 
 @dataclass(frozen=True, slots=True)
-class ControlApprovalRequest:
-    id: str
+class ControlApprovalProposal:
     action: str
     payload: Mapping[str, Any]
     summary: str
@@ -31,6 +30,16 @@ class ControlApprovalRequest:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "payload", _freeze(self.payload))
+
+
+@dataclass(frozen=True, slots=True)
+class ControlPreparationFailure:
+    """准备边界已经识别、可以作为确定事实记录的外部失败。"""
+
+    result: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "result", _freeze(self.result))
 
 
 @dataclass(frozen=True, slots=True)

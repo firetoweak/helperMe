@@ -14,6 +14,7 @@ from helperme.skills.approval import (
     create_skill_install_proposal_spec,
 )
 from helperme.skills.sources import SkillSourceError, SkillSourceRouter
+from helperme.tools.control import ControlPreparationFailure
 from tests.skills.test_package import write_skill
 
 
@@ -192,9 +193,10 @@ class SkillInstallProposalBoundaryTest(unittest.IsolatedAsyncioTestCase):
             locator="https://example.test/SKILL.md",
         ))
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "SKILL_SOURCE_ERROR")
-        self.assertIn("source offline", result["error"])
+        self.assertIsInstance(result, ControlPreparationFailure)
+        self.assertFalse(result.result["ok"])
+        self.assertEqual(result.result["code"], "SKILL_SOURCE_ERROR")
+        self.assertIn("source offline", result.result["error"])
 
     async def test_internal_error_is_not_converted(self):
         service = Mock()

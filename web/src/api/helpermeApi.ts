@@ -47,6 +47,7 @@ type AuthorizeCommand = SelectSession & {
 };
 
 type ResolveControl = SelectSession & {
+  requestId: string;
   approved: boolean;
 };
 
@@ -252,10 +253,10 @@ export const helpermeApi = createApi({
       },
     }),
     resolveControl: build.mutation<ConversationView, ResolveControl>({
-      query: ({ connectionId, sessionId, approved }) => ({
+      query: ({ connectionId, sessionId, requestId, approved }) => ({
         url: `/sessions/${encodeURIComponent(sessionId)}/control`,
         method: "POST",
-        body: { connection_id: connectionId, approved },
+        body: { connection_id: connectionId, request_id: requestId, approved },
       }),
       transformResponse: (value: unknown) => conversationViewSchema.parse(value),
       async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {

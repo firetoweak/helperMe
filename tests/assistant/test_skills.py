@@ -10,6 +10,7 @@ from helperme.assistant.delivery import DELIVER_TOOL_NAME, deliver_binding
 from helperme.assistant.context.projection import ModelContextSettings
 from tests.session_scheduler import settle_session
 from helperme.assistant.skills import SkillToolAdapter
+from helperme.assistant.catalog import CatalogSkill
 from helperme.runtime import (
     AgentRuntime,
     CommandOutcomeReceived,
@@ -102,6 +103,14 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
             MemoryArtifactGateway(),
             ModelContextSettings(),
         )
+        self.adapter.apply_catalog(
+            self.SESSION_ID,
+            tuple(
+                CatalogSkill(record.name, record.description, record.revision)
+                for record in self.service.registry.snapshot()
+                if record.enabled
+            ),
+        )
 
     async def asyncTearDown(self):
         self.temporary.cleanup()
@@ -118,6 +127,12 @@ class SkillToolAdapterTest(unittest.IsolatedAsyncioTestCase):
         before = self.adapter.schemas()
         await self.service.set_enabled("demo", False)
         self.assertEqual(self.adapter.schemas(), before)
+
+        result = await self.adapter.bindings()[LOAD_SKILL].handler(
+            type("Context", (), {"session_id": self.SESSION_ID})(),
+            {"skill_id": "demo"},
+        )
+        self.assertEqual(result["code"], "SKILL_CATALOG_STALE")
 
     async def test_load_skill_returns_main_instructions_as_a_tool_result(self):
         delivered: list[str] = []

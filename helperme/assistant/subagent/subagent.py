@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -44,6 +45,85 @@ REPORT_FACT = "subagent.report"
 RETURN_FACT = "subagent.return"
 
 FACT_SOURCE = "subagent"
+
+
+@dataclass(frozen=True, slots=True)
+class DelegateIntent:
+    command_id: str
+    parent_session_id: str
+    child_session_id: str
+    task: str
+
+
+@dataclass(frozen=True, slots=True)
+class SubAgentTask:
+    child_session_id: str
+    parent_session_id: str
+    delegate_command_id: str
+    task: str
+
+
+def child_session_id(parent_session_id: str, command_id: str) -> str:
+    if type(parent_session_id) is not str or not parent_session_id:
+        raise ValueError("parent Session id must be a non-empty str")
+    if type(command_id) is not str or not command_id:
+        raise ValueError("delegate command id must be a non-empty str")
+    return f"{parent_session_id}/sub-{command_id}"
+
+
+def task_fact_arguments(intent: DelegateIntent) -> dict[str, object]:
+    return {
+        "fact_type": TASK_FACT,
+        "data": {
+            "task": intent.task,
+            "parent_session_id": intent.parent_session_id,
+            "delegate_command_id": intent.command_id,
+        },
+        "delivery_id": f"{intent.command_id}:task",
+        "source": FACT_SOURCE,
+        "requests_decision": True,
+    }
+
+
+def task_from_arguments(
+    child_id: str,
+    arguments: Mapping[str, object],
+) -> SubAgentTask:
+    if set(arguments) != {
+        "fact_type",
+        "data",
+        "delivery_id",
+        "source",
+        "requests_decision",
+    }:
+        raise ValueError("subagent task fact envelope 字段不匹配")
+    if arguments["fact_type"] != TASK_FACT:
+        raise ValueError("subagent task fact_type 无效")
+    if arguments["source"] != FACT_SOURCE:
+        raise ValueError("subagent task source 无效")
+    if arguments["requests_decision"] is not True:
+        raise ValueError("subagent task 必须请求首次决策")
+    data = arguments["data"]
+    if not isinstance(data, Mapping) or set(data) != {
+        "task",
+        "parent_session_id",
+        "delegate_command_id",
+    }:
+        raise ValueError("subagent 任务事实 data 字段不匹配")
+    task = data["task"]
+    parent_session_id = data["parent_session_id"]
+    command_id = data["delegate_command_id"]
+    if type(task) is not str or not task:
+        raise ValueError("subagent 任务事实 task 无效")
+    if type(parent_session_id) is not str or not parent_session_id:
+        raise ValueError("subagent 任务事实 parent_session_id 无效")
+    if type(command_id) is not str or not command_id:
+        raise ValueError("subagent 任务事实 delegate_command_id 无效")
+    if child_id != child_session_id(parent_session_id, command_id):
+        raise ValueError("subagent task 的 child identity 与 delegate Command 不一致")
+    if arguments["delivery_id"] != f"{command_id}:task":
+        raise ValueError("subagent task delivery identity 无效")
+    return SubAgentTask(child_id, parent_session_id, command_id, task)
 
 
 def return_data(
@@ -278,10 +358,12 @@ REPORT_SCHEMA: dict[str, object] = {
 }
 
 
-def project_delegations(events: Sequence[Event]) -> tuple[str, ...]:
-    """从父 Session 的 Journal 重建它创建过的子 Session。"""
+def project_delegate_intents(
+    events: Sequence[Event],
+) -> tuple[DelegateIntent, ...]:
+    """从父 Step 已提交的 delegate Command 冻结全部 child identity。"""
 
-    delegate_commands: set[str] = set()
+    intents: list[DelegateIntent] = []
     for event in events:
         payload = event.payload
         if not isinstance(payload, StepCommitted):
@@ -289,54 +371,136 @@ def project_delegations(events: Sequence[Event]) -> tuple[str, ...]:
         for command in payload.step.commands:
             effect = command.effect
             if isinstance(effect, InvokeTool) and effect.name == DELEGATE:
-                delegate_commands.add(command.command_id)
+                arguments = effect.argument_dict()
+                task = arguments.get("task")
+                if type(task) is not str or not task.strip():
+                    continue
+                intents.append(
+                    DelegateIntent(
+                        command.command_id,
+                        event.session_id,
+                        child_session_id(event.session_id, command.command_id),
+                        task.strip(),
+                    )
+                )
+    return tuple(intents)
 
-    children: list[str] = []
+
+def project_delegations(events: Sequence[Event]) -> tuple[str, ...]:
+    """父 Session 已提交的有效 delegate Command 所确定的 child ids。"""
+
+    return tuple(intent.child_session_id for intent in project_delegate_intents(events))
+
+
+def project_failed_delegations(events: Sequence[Event]) -> frozenset[str]:
+    """已经得到确定失败 Outcome 的 delegate；unknown 不在这里。"""
+
+    by_command = {
+        intent.command_id: intent for intent in project_delegate_intents(events)
+    }
+    failed: set[str] = set()
+
     for event in events:
         payload = event.payload
-        if (
-            not isinstance(payload, CommandOutcomeReceived)
-            or payload.command_id not in delegate_commands
-            or payload.outcome.status is not OutcomeStatus.SUCCEEDED
-        ):
+        if not isinstance(payload, CommandOutcomeReceived):
+            continue
+        intent = by_command.get(payload.command_id)
+        if intent is None:
+            continue
+        if payload.outcome.status is not OutcomeStatus.SUCCEEDED:
+            failed.add(intent.child_session_id)
             continue
         value = payload.outcome.value
-        if not isinstance(value, Mapping) or value.get("ok") is not True:
+        if not isinstance(value, Mapping) or type(value.get("ok")) is not bool:
+            raise ValueError("delegate outcome 必须是带 ok 的 object")
+        if value["ok"] is False:
+            if (
+                set(value) != {"ok", "code", "data", "error"}
+                or type(value["code"]) is not str
+                or not value["code"]
+                or not isinstance(value["data"], Mapping)
+                or type(value["error"]) is not str
+                or not value["error"]
+            ):
+                raise ValueError("delegate failure outcome 字段不匹配")
+            failed.add(intent.child_session_id)
             continue
+        if set(value) != {"ok", "code", "data"} or value["code"] != "DELEGATED":
+            raise ValueError("delegate success outcome 字段不匹配")
         data = value.get("data")
-        if not isinstance(data, Mapping):
+        if not isinstance(data, Mapping) or set(data) != {"child_session_id"}:
             raise ValueError("delegate outcome data 无效")
-        child_session_id = data.get("child_session_id")
-        if type(child_session_id) is not str or not child_session_id:
-            raise ValueError("delegate outcome child_session_id 无效")
-        children.append(child_session_id)
-    return tuple(children)
+        if data["child_session_id"] != intent.child_session_id:
+            raise ValueError("delegate outcome child_session_id 与 Command 不一致")
+    return frozenset(failed)
+
+
+def project_task(events: Sequence[Event]) -> SubAgentTask | None:
+    """从子 Journal 读取并严格校验唯一的委派身份。"""
+
+    tasks = [
+        event
+        for event in events
+        if isinstance(event.payload, DomainFactCommitted)
+        and event.payload.fact_type == TASK_FACT
+    ]
+    if not tasks:
+        return None
+    if len(tasks) != 1:
+        raise ValueError("subagent Journal 必须只有一条 task 事实")
+    event = tasks[0]
+    payload = event.payload
+    if payload.requests_decision is not True:
+        raise ValueError("subagent task 必须请求首次决策")
+    data = payload.data
+    if not isinstance(data, Mapping) or set(data) != {
+        "task",
+        "parent_session_id",
+        "delegate_command_id",
+    }:
+        raise ValueError("subagent 任务事实 data 字段不匹配")
+    task = data["task"]
+    parent_session_id = data["parent_session_id"]
+    command_id = data["delegate_command_id"]
+    if type(task) is not str or not task:
+        raise ValueError("subagent 任务事实 task 无效")
+    if type(parent_session_id) is not str or not parent_session_id:
+        raise ValueError("subagent 任务事实 parent_session_id 无效")
+    if type(command_id) is not str or not command_id:
+        raise ValueError("subagent 任务事实 delegate_command_id 无效")
+    expected_child = child_session_id(parent_session_id, command_id)
+    if event.session_id != expected_child:
+        raise ValueError("subagent task 的 child identity 与 delegate Command 不一致")
+    delivery = event.delivery
+    if (
+        delivery is None
+        or delivery.source != FACT_SOURCE
+        or delivery.delivery_id != f"{command_id}:task"
+    ):
+        raise ValueError("subagent task delivery identity 无效")
+    return SubAgentTask(
+        event.session_id,
+        parent_session_id,
+        command_id,
+        task,
+    )
 
 
 def project_parent(events: Sequence[Event]) -> str | None:
     """从一条 Session 自己的 Journal 判断它是不是子 Session。"""
 
-    for event in events:
-        payload = event.payload
-        if (
-            not isinstance(payload, DomainFactCommitted)
-            or payload.fact_type != TASK_FACT
-        ):
-            continue
-        data = payload.data
-        if not isinstance(data, Mapping):
-            raise ValueError("subagent 任务事实 data 无效")
-        parent_session_id = data.get("parent_session_id")
-        if type(parent_session_id) is not str or not parent_session_id:
-            raise ValueError("subagent 任务事实 parent_session_id 无效")
-        return parent_session_id
-    return None
+    task = project_task(events)
+    return None if task is None else task.parent_session_id
 
 
 def project_pending(events: Sequence[Event]) -> frozenset[str]:
     """父已委派但还没交回结论的子 Session。"""
 
-    return frozenset(project_delegations(events)) - project_reclaimed(events)
+    return (
+        frozenset(project_delegations(events))
+        - project_failed_delegations(events)
+        - project_reclaimed(events)
+    )
 
 
 def project_reclaimed(events: Sequence[Event]) -> frozenset[str]:
@@ -522,15 +686,28 @@ class SubAgentHost:
                         report_arguments(session_id, event.payload.data),
                     )
             return ()
-        reclaimed = project_reclaimed(events)
+        pending_ids = project_pending(events)
+        intents = project_delegate_intents(events)
+        state = await runtime.state(session_id)
+        commands = {
+            command.command.command_id: command for command in state.commands
+        }
         pending: list[str] = []
-        for child_session_id in project_delegations(events):
-            self._parents[child_session_id] = session_id
-            if child_session_id not in reclaimed:
-                pending.append(child_session_id)
+        for intent in intents:
+            self._parents[intent.child_session_id] = session_id
+            if intent.child_session_id not in pending_ids:
+                continue
+            pending.append(intent.child_session_id)
+            command = commands[intent.command_id]
+            if command.phase is CommandPhase.UNKNOWN:
+                await self._transport(
+                    "create_child",
+                    intent.child_session_id,
+                    task_fact_arguments(intent),
+                )
+            elif command.phase is CommandPhase.TERMINAL:
+                await self._transport("resume", intent.child_session_id, {})
         self._visible_pending[session_id] = set(pending)
-        for child_session_id in pending:
-            await self._transport("resume", child_session_id, {})
         self._publish_activity(session_id)
         return tuple(pending)
 
@@ -656,7 +833,10 @@ class SubAgentHost:
             }
         reason_value = reason.strip() if type(reason) is str and reason.strip() else None
         events = await self._require_runtime().snapshot(context.session_id)
-        if child_session_id not in project_delegations(events):
+        if (
+            child_session_id not in project_delegations(events)
+            or child_session_id in project_failed_delegations(events)
+        ):
             return {
                 "ok": False,
                 "code": "UNKNOWN_CHILD",
@@ -703,26 +883,25 @@ class SubAgentHost:
                 "data": {"session_id": context.session_id},
                 "error": "子 Agent 不能再委派",
             }
-        child_session_id = f"{context.session_id}/sub-{context.command_id}"
+        intent = DelegateIntent(
+            context.command_id,
+            context.session_id,
+            child_session_id(context.session_id, context.command_id),
+            task.strip(),
+        )
         await self._transport(
             "create_child",
-            child_session_id,
-            dict(
-                fact_type=TASK_FACT,
-                data={"task": task.strip(), "parent_session_id": context.session_id},
-                delivery_id=f"{context.command_id}:task",
-                source=FACT_SOURCE,
-                requests_decision=True,
-            ),
+            intent.child_session_id,
+            task_fact_arguments(intent),
         )
         self._visible_pending.setdefault(context.session_id, set()).add(
-            child_session_id
+            intent.child_session_id
         )
         self._publish_activity(context.session_id)
         return {
             "ok": True,
             "code": "DELEGATED",
-            "data": {"child_session_id": child_session_id},
+            "data": {"child_session_id": intent.child_session_id},
         }
 
     async def _report(

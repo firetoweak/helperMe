@@ -11,7 +11,12 @@ import pytest
 
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.host.supervisor import HostSupervisor
-from helperme.assistant.subagent.subagent import project_delegations, project_reclaimed
+from helperme.assistant.subagent.subagent import (
+    DelegateIntent,
+    project_delegations,
+    project_reclaimed,
+    task_fact_arguments,
+)
 from helperme.paths import HelperMeHome
 from helperme.runtime import SqliteJournal
 from tests.fixtures.session_worker import (
@@ -26,6 +31,16 @@ from tests.fixtures.session_worker import (
 
 pytestmark = pytest.mark.process
 
+PARENT = "parent"
+MANUAL_CHILD_COMMAND = "manual-child"
+CHILD = f"{PARENT}/sub-{MANUAL_CHILD_COMMAND}"
+
+
+def child_task(task: str) -> dict[str, object]:
+    return task_fact_arguments(
+        DelegateIntent(MANUAL_CHILD_COMMAND, PARENT, CHILD, task)
+    )
+
 
 async def until(predicate, timeout=30):
     async with asyncio.timeout(timeout):
@@ -34,6 +49,41 @@ async def until(predicate, timeout=30):
 
 
 class SupervisorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_web_can_reject_journal_authorization_after_host_restart(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from helperme.assistant.conversations import AssistantQueries
+        from helperme.channels.web.channel import WebChannel
+        from helperme.runtime import AgentRuntime, InvokeTool, ModelDecision, ToolBinding
+
+        sid = "authorization-restart"
+        await self.host.create(sid, self.workspace.workspace_id)
+        journal = SqliteJournal(self.store.require(sid))
+        runtime = AgentRuntime(
+            journal,
+            SimpleNamespace(decide=AsyncMock(return_value=ModelDecision(command_requests=(
+                InvokeTool("write_file", (("path", "probe.md"), ("content", "probe"))),
+            )))),
+            {"write_file": ToolBinding(AsyncMock(), requires_authorization=True)},
+        )
+        await runtime.receive_user_message(sid, "write probe", delivery_id="write")
+        issued = await runtime.advance(sid)
+        command_id = issued.step.commands[0].command_id
+        await self.host.select("web:old", sid)
+        self.assertEqual((await self.host.view(sid)).pending_authorization_ids, (command_id,))
+        await self.host.close()
+        self.host = self.new_host()
+        channel = WebChannel(self.host, AssistantQueries(self.store, self.host))
+        connection = channel.connect()
+        recovered = await channel.select(connection.connection_id, sid)
+        self.assertEqual(recovered.session.pending_authorization_ids, (command_id,))
+        resolved = await channel.authorize_command(connection.connection_id, sid, command_id, False)
+        self.assertEqual(resolved.session.pending_authorization_ids, ())
+        self.assertEqual(resolved.items[1].tools[0].status, "rejected")
+        self.assertFalse((self.root / "probe.md").exists())
+        await until(lambda: (sid, "done") in self.output)
+        self.assertTrue(self.host.failures.empty())
+
     async def test_user_image_refs_cross_the_worker_boundary(self):
         import json
         from PIL import Image
@@ -68,17 +118,22 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
             DeliveryIdentity,
         )
 
-        await self.store.create("child", workspace_id=self.workspace.workspace_id)
-        journal = SqliteJournal(self.store.require("child"))
+        await self.store.create(CHILD, workspace_id=self.workspace.workspace_id)
+        journal = SqliteJournal(self.store.require(CHILD))
         await journal.accept_delivery(
             EventDraft(
                 event_id="task-event",
-                session_id="child",
+                session_id=CHILD,
                 payload=DomainFactCommitted(
-                    "subagent.task", {"task": "read", "parent_session_id": "parent"}
+                    "subagent.task",
+                    child_task("read")["data"],
+                    requests_decision=True,
                 ),
                 occurred_at=datetime.now(timezone.utc),
-                delivery=DeliveryIdentity("subagent", "task"),
+                delivery=DeliveryIdentity(
+                    "subagent",
+                    f"{MANUAL_CHILD_COMMAND}:task",
+                ),
             )
         )
         return journal
@@ -108,7 +163,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.host.config_factory = partial(failing_request_config, self.root)
         with self.assertRaises(WorkerFailed):
             await asyncio.wait_for(
-                self.host.resolve_authorizations("child", approved=True), 30
+                self.host.resolve_authorizations(CHILD, approved=True), 30
             )
         await self.assert_failure_report("application request failed")
 
@@ -118,18 +173,28 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(
             self.host._route(
                 "create_child",
-                "child",
-                dict(
-                    fact_type="subagent.task",
-                    data={"task": "read", "parent_session_id": "parent"},
-                    source="subagent",
-                    delivery_id="task",
-                    requests_decision=True,
-                ),
+                CHILD,
+                child_task("read"),
             ),
             30,
         )
         await self.assert_failure_report("config initialization failed")
+
+    async def test_existing_session_cannot_be_adopted_as_a_child(self):
+        await self.host.create(PARENT, self.workspace.workspace_id)
+        await self.host.create(CHILD, self.workspace.workspace_id)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "does not match delegate intent",
+        ):
+            await self.host._route(
+                "create_child",
+                CHILD,
+                child_task("read"),
+            )
+
+        self.assertNotIn(CHILD, self.host.workers)
 
     async def test_child_startup_failure_does_not_strand_parent_delegate(self):
         from tests.fixtures.session_worker import delegate_startup_failure_config
@@ -157,7 +222,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await self.persist_child()
         self.host.config_factory = partial(failing_startup_config, self.root, stage)
         with self.assertRaises(WorkerFailed):
-            await asyncio.wait_for(self.host.resume("child"), 30)
+            await asyncio.wait_for(self.host.resume(CHILD), 30)
         await self.assert_failure_report(f"{stage} initialization failed")
 
     async def test_config_initialization_failure_is_reported(self):
@@ -182,6 +247,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.output = []
         self.output_ids = []
         self.previews = []
+        self.tools = []
         self.delivery_order = []
         self.activities = []
         self.host = self.new_host()
@@ -199,6 +265,9 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         def session_activity(session_id, activity):
             self.activities.append((session_id, activity))
 
+        def tool_progress(*values):
+            self.tools.append(values)
+
         return HostSupervisor(
             self.store,
             partial(config_for, self.root),
@@ -207,6 +276,7 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
             llm=ProcessLlm(self.root),
             preview_sink=preview,
             session_activity_sink=session_activity,
+            tool_progress_sink=tool_progress,
         )
 
     async def asyncTearDown(self):
@@ -241,6 +311,30 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final[:2], ("final", "one"))
         self.assertEqual(started[3], delta[3])
         self.assertEqual(delta[3], final[2])
+
+    async def test_worker_exit_closes_generation_preview_tools_and_activity(self):
+        from tests.fixtures.session_worker import blocking_tool_config
+
+        self.host.config_factory = partial(blocking_tool_config, self.root)
+        await self.host.create("one", self.workspace.workspace_id)
+        await self.host.receive_user_message(
+            "one", "BLOCK_TOOL", delivery_id="input"
+        )
+        await until(
+            lambda: (self.root / "tool-started").exists()
+            and any(value[1] == "start" for value in self.tools)
+        )
+        worker = self.host.workers["one"]
+        worker.process.terminate()
+
+        failure = await asyncio.wait_for(self.host.wait_failure(), 30)
+        self.assertEqual(failure.session_id, "one")
+        await until(lambda: "one" not in self.host.workers)
+        phases = [value[1] for value in self.previews]
+        self.assertEqual(phases[0], "started")
+        self.assertEqual(phases[-1], "aborted")
+        self.assertEqual([value[1] for value in self.tools], ["start", "fail"])
+        self.assertEqual(self.activities[-1], ("one", "idle"))
 
     async def test_selected_idle_worker_stays_until_owner_releases_it(self):
         await self.host.create("one", self.workspace.workspace_id)
@@ -302,11 +396,24 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await until(lambda: "one" not in self.host.workers)
 
     async def test_failed_selection_keeps_previous_owner_mapping(self):
+        from datetime import datetime, timezone
+
         from helperme.assistant.host.ipc import WorkerFailed
+        from helperme.runtime import UserMessageReceived
+        from helperme.runtime.events import DeliveryIdentity, EventDraft
 
         await self.host.create("old", self.workspace.workspace_id)
         await self.host.select("cli", "old")
         await self.host.create("broken", self.workspace.workspace_id)
+        await SqliteJournal(self.store.require("broken")).accept_delivery(
+            EventDraft(
+                event_id="broken-input",
+                session_id="broken",
+                payload=UserMessageReceived("start"),
+                occurred_at=datetime.now(timezone.utc),
+                delivery=DeliveryIdentity("test", "broken-input"),
+            )
+        )
         self.host.config_factory = partial(
             failing_startup_config, self.root, "config"
         )
@@ -369,10 +476,11 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         await until(lambda: not self.host.workers and not self.host.watchers)
         events = await SqliteJournal(self.store.require("parent")).snapshot("parent")
         self.assertEqual(len(project_reclaimed(events)), 2)
-        self.assertEqual(
-            await SqliteJournal(self.store.require("unrelated")).snapshot("unrelated"),
-            (),
-        )
+        unrelated = await SqliteJournal(
+            self.store.require("unrelated")
+        ).snapshot("unrelated")
+        self.assertEqual(len(project_delegations(unrelated)), 0)
+        self.assertEqual(len(project_reclaimed(unrelated)), 0)
         self.assertTrue(self.host.failures.empty())
 
     async def test_saved_return_is_redelivered_after_host_restart(self):
@@ -420,55 +528,48 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_child_recovery_preserves_unfinished_read_and_reports_once(self):
         from helperme.runtime import DispatchAttemptStarted
-        from helperme.assistant.subagent.subagent import TASK_FACT
 
         self.host.config_factory = partial(interrupted_read_config, self.root)
         (self.root / "release").touch()
         await self.host.create("parent", self.workspace.workspace_id)
         await self.host._route(
             "create_child",
-            "child",
-            dict(
-                fact_type=TASK_FACT,
-                data={"task": "READ_THEN_REPORT", "parent_session_id": "parent"},
-                source="subagent",
-                delivery_id="task",
-                requests_decision=True,
-            ),
+            CHILD,
+            child_task("READ_THEN_REPORT"),
         )
         failure = await asyncio.wait_for(self.host.wait_failure(), 30)
         self.assertEqual(failure.failure.exception_type, "ProcessExit")
         self.assertIn("exit code 1", failure.failure.message)
         await until(lambda: not self.host.workers and not self.host.watchers)
-        journal = SqliteJournal(self.store.require("child"))
-        before = await journal.snapshot("child")
+        journal = SqliteJournal(self.store.require(CHILD))
+        before = await journal.snapshot(CHILD)
         started = next(
             e.event_id for e in before if isinstance(e.payload, DispatchAttemptStarted)
         )
-        await asyncio.wait_for(self.host.resume("child"), 30)
+        await asyncio.wait_for(self.host.resume(CHILD), 30)
         await until(lambda: not self.host.workers and not self.host.watchers)
-        after = await journal.snapshot("child")
+        after = await journal.snapshot(CHILD)
         self.assertEqual(after[:len(before)], before)
         self.assertIn(started, {e.event_id for e in after})
         self.assertFalse((self.root / "read-retried").exists())
         from helperme.runtime import CommandPhase, DomainFactCommitted, StateProjector
         from helperme.assistant.subagent.subagent import REPORT_FACT, RETURN_FACT
-        state = StateProjector().project("child", after).state
+        state = StateProjector().project(CHILD, after).state
         self.assertEqual(state.commands[0].phase, CommandPhase.UNKNOWN)
         self.assertEqual(sum(
             isinstance(e.payload, DomainFactCommitted) and e.payload.fact_type == RETURN_FACT
             for e in after
         ), 1)
         events = await SqliteJournal(self.store.require("parent")).snapshot("parent")
-        self.assertEqual(project_reclaimed(events), frozenset({"child"}))
+        self.assertEqual(project_reclaimed(events), frozenset({CHILD}))
         report = next(e for e in events if isinstance(e.payload, DomainFactCommitted)
                       and e.payload.fact_type == REPORT_FACT)
         self.assertTrue(report.payload.requests_decision)
         self.assertIn("执行结果未知", report.payload.data["failure"])
         self.assertIn(state.commands[0].command.command_id, report.payload.data["failure"])
-        await asyncio.wait_for(self.host.resume("child"), 30)
+        await asyncio.wait_for(self.host.resume(CHILD), 30)
         await until(lambda: not self.host.workers and not self.host.watchers)
-        self.assertEqual(await journal.snapshot("child"), after)
+        self.assertEqual(await journal.snapshot(CHILD), after)
         events = await SqliteJournal(self.store.require("parent")).snapshot("parent")
         self.assertEqual(sum(
             isinstance(e.payload, DomainFactCommitted) and e.payload.fact_type == REPORT_FACT
@@ -478,25 +579,19 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_child_unexpected_crash_is_reported_then_still_exposed(self):
         from helperme.runtime import DomainFactCommitted
-        from helperme.assistant.subagent.subagent import REPORT_FACT, TASK_FACT
+        from helperme.assistant.subagent.subagent import REPORT_FACT
 
         await self.host.create("parent", self.workspace.workspace_id)
         await self.host._route(
             "create_child",
-            "child",
-            dict(
-                fact_type=TASK_FACT,
-                data={"task": "CRASH_PROCESS", "parent_session_id": "parent"},
-                source="subagent",
-                delivery_id="task",
-                requests_decision=True,
-            ),
+            CHILD,
+            child_task("CRASH_PROCESS"),
         )
         failure = await asyncio.wait_for(self.host.wait_failure(), 30)
         self.assertIn("intentional worker crash", failure.failure.message)
         await until(lambda: not self.host.workers and not self.host.watchers)
         events = await SqliteJournal(self.store.require("parent")).snapshot("parent")
-        self.assertEqual(project_reclaimed(events), frozenset({"child"}))
+        self.assertEqual(project_reclaimed(events), frozenset({CHILD}))
         report = next(
             event.payload
             for event in events
@@ -509,32 +604,26 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_parent_reclaim_stops_child_and_does_not_resume_it(self):
         from helperme.runtime import DomainFactCommitted
-        from helperme.assistant.subagent.subagent import REPORT_FACT, RETURN_FACT, TASK_FACT
+        from helperme.assistant.subagent.subagent import REPORT_FACT, RETURN_FACT
 
         await self.host.create("parent", self.workspace.workspace_id)
         await self.host._route(
             "create_child",
-            "child",
-            dict(
-                fact_type=TASK_FACT,
-                data={"task": "read something", "parent_session_id": "parent"},
-                source="subagent",
-                delivery_id="task",
-                requests_decision=True,
-            ),
+            CHILD,
+            child_task("read something"),
         )
         await until(lambda: list(self.root.glob("blocked-*")))
         await self.host._route(
             "reclaim_child",
-            "child",
+            CHILD,
             {"parent_session_id": "parent", "reason": "stop"},
         )
-        await until(lambda: "child" not in self.host.workers)
-        await until(lambda: not self.host.watchers or "child" not in self.host.workers)
+        await until(lambda: CHILD not in self.host.workers)
+        await until(lambda: not self.host.watchers or CHILD not in self.host.workers)
         self.assertTrue(self.host.failures.empty())
 
-        child_events = await SqliteJournal(self.store.require("child")).snapshot(
-            "child"
+        child_events = await SqliteJournal(self.store.require(CHILD)).snapshot(
+            CHILD
         )
         returned = next(
             event.payload
@@ -556,9 +645,9 @@ class SupervisorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(report.requests_decision, False)
         self.assertIs(report.data["cancelled"], True)
-        self.assertEqual(project_reclaimed(parent_events), frozenset({"child"}))
+        self.assertEqual(project_reclaimed(parent_events), frozenset({CHILD}))
 
         await asyncio.wait_for(self.host.resume("parent"), 30)
         await until(lambda: not self.host.workers and not self.host.watchers)
-        self.assertNotIn("child", self.host.workers)
+        self.assertNotIn(CHILD, self.host.workers)
         self.assertTrue(self.host.failures.empty())

@@ -45,13 +45,15 @@ def manifest_diff(
 
 
 class SkillCandidateStore:
+    """持久保存内容寻址的更新候选及其冻结差异。"""
+
     def __init__(
         self,
         skills_root: Path,
         package_reader: LocalSkillPackageReader | None = None,
     ) -> None:
         self.skills_root = skills_root.resolve()
-        self.root = self.skills_root / ".staging" / "candidates"
+        self.root = self.skills_root / ".candidates" / "update"
         self.package_reader = (
             LocalSkillPackageReader()
             if package_reader is None

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from collections.abc import Awaitable, Callable
 from typing import Any, Mapping, Protocol
 
-from helperme.tools.control import ControlApprovalRequest
+from helperme.tools.control import ControlApprovalProposal, ControlPreparationFailure
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema.validators import validator_for
@@ -146,7 +146,9 @@ class ToolSpec:
     parameters: ToolParameters
     handler: Callable[
         [Any],
-        Awaitable[dict[str, Any] | ControlApprovalRequest],
+        Awaitable[
+            dict[str, Any] | ControlApprovalProposal | ControlPreparationFailure
+        ],
     ]
     control_boundary: bool = False
     exclusive_batch: bool = False
@@ -191,7 +193,9 @@ def pydantic_tool_spec(
     input_model: type[BaseModel],
     handler: Callable[
         [BaseModel],
-        Awaitable[dict[str, Any] | ControlApprovalRequest],
+        Awaitable[
+            dict[str, Any] | ControlApprovalProposal | ControlPreparationFailure
+        ],
     ],
     control_boundary: bool = False,
     exclusive_batch: bool = False,

@@ -2,7 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from helperme.tools.control import ControlApprovalRequest
+from helperme.tools.control import ControlApprovalProposal, ControlPreparationFailure
 from helperme.tools.registry import ToolRegistry
 from helperme.tools.spec import ToolArgumentsError, ToolSpec
 
@@ -60,7 +60,7 @@ class ToolsExecutor:
         self,
         tool_name: str,
         tool_arguments: str,
-    ) -> dict[str, Any] | ControlApprovalRequest:
+    ) -> dict[str, Any] | ControlApprovalProposal | ControlPreparationFailure:
         spec = self.registry.get(tool_name)
         if spec is None:
             return _tool_not_found(tool_name)
@@ -102,7 +102,7 @@ class ToolsExecutor:
         self,
         tool_name: str,
         tool_arguments: Mapping[str, object],
-    ) -> dict[str, Any] | ControlApprovalRequest:
+    ) -> dict[str, Any] | ControlApprovalProposal | ControlPreparationFailure:
         """执行已经通过模型协议边界解析的内部参数。"""
 
         spec = self.registry.get(tool_name)
@@ -115,7 +115,7 @@ class ToolsExecutor:
     async def _execute_spec(
         spec: ToolSpec,
         payload: object,
-    ) -> dict[str, Any] | ControlApprovalRequest:
+    ) -> dict[str, Any] | ControlApprovalProposal | ControlPreparationFailure:
         try:
             data = spec.parameters.validate(payload)
         except ToolArgumentsError as exc:
@@ -129,6 +129,6 @@ class ToolsExecutor:
             )
 
         result = await spec.handler(data)
-        if isinstance(result, ControlApprovalRequest):
+        if isinstance(result, (ControlApprovalProposal, ControlPreparationFailure)):
             return result
         return normalize_tool_result(result)

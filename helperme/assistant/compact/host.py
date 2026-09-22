@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from helperme.runtime.json_values import thaw_value
 import asyncio
 import json
 from dataclasses import asdict
@@ -11,15 +10,17 @@ from helperme.assistant.artifacts import FileArtifactGateway
 from helperme.assistant.compact.core import (
     TASK,
     HANDOFF_PREFIX,
+    compact_seed,
     load_document,
     save_document,
+    bounded_recent_tail,
     projected_tail,
 )
 from helperme.assistant.compact.store import CompactStore
 from helperme.assistant.context.budget import InputBudget, TiktokenEstimator
 from helperme.assistant.context.projection import ModelContextBudgetExceeded
 from helperme.assistant.host.ipc import ProcessFailure, WorkerFailed
-from helperme.runtime import DomainFactCommitted, SqliteJournal
+from helperme.runtime import SqliteJournal
 
 
 def seed_fact(kind, data, *, continuing):
@@ -85,12 +86,8 @@ class CompactHost:
             events = await SqliteJournal(self.host.store.require(reader)).snapshot(
                 reader
             )
-            seed = events[0].payload
-            if (
-                not isinstance(seed, DomainFactCommitted)
-                or seed.fact_type != TASK
-                or thaw_value(seed.data) != data
-            ):
+            seed = compact_seed(events)
+            if seed is None or seed[1] != data:
                 raise ValueError("invalid handoff worker seed")
         if reader not in self.host.workers:
             self.activate(reader)
@@ -151,7 +148,7 @@ class CompactHost:
             "upto": p,
             "request": material["inherited"],
         }
-        messages = [
+        before = [
             {
                 "role": "user",
                 "content": HANDOFF_PREFIX
@@ -160,31 +157,40 @@ class CompactHost:
                 + job["summary"],
             }
         ]
-        if inherited["catalog"] is not None:
-            messages.append(
+        if snapshot["catalog"] is not None:
+            before.append(
                 {
                     "role": "user",
                     "content": "<capability_catalog>\n"
                     + json.dumps(
-                        {"fact": "assistant.catalog", "data": inherited["catalog"]},
+                        {"fact": "assistant.catalog", "data": snapshot["catalog"]},
                         ensure_ascii=False,
                     )
                     + "\n</capability_catalog>",
                 }
             )
-        messages.extend(r["message"] for r in inherited["recent"])
-        messages.extend(projected_tail(bundle["records"], p, q))
+        after = projected_tail(bundle["records"], p, q)
         budget = InputBudget(
             TiktokenEstimator(),
             context_limit=snapshot["context_limit"],
             input_ratio=snapshot["input_ratio"],
         )
-        assessment = budget.assess(
-            [{"role": "system", "content": snapshot["prompt"]}, *messages],
-            snapshot["tools"],
+        recent = bounded_recent_tail(
+            inherited["recent"],
+            before=before,
+            after=after,
+            system_prompt=snapshot["prompt"],
+            tools=snapshot["tools"],
+            budget=budget,
+            tail_budget_tokens=int(
+                budget.input_budget_tokens * snapshot["compact_threshold_ratio"]
+            ),
         )
-        if not assessment.allowed:
-            raise ModelContextBudgetExceeded(assessment)
+        messages = [
+            *before,
+            *(record["message"] for record in recent),
+            *after,
+        ]
         context = save_document(self.gateway, source, {"messages": messages})
         handoff = save_document(
             self.gateway, source, {"text": job["summary"], **provenance}
@@ -198,8 +204,8 @@ class CompactHost:
                     "parent": job["window"],
                     "upto": p,
                     "cutover": q,
-                    "recent_tail_start": inherited["recent"][0]["sequence"]
-                    if inherited["recent"]
+                    "recent_tail_start": recent[0]["sequence"]
+                    if recent
                     else p + 1,
                     "context": context,
                     "bundle": snapshot["bundle"],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel
@@ -50,20 +51,27 @@ class CliToolCatalog:
         self.registry = registry
         self.max_catalog_chars = max_catalog_chars
 
-    def tool_specs(self) -> list[ToolSpec]:
+    def tool_specs(
+        self,
+        catalog: Mapping[str, int] | None = None,
+    ) -> list[ToolSpec]:
         records = tuple(
             sorted(self.registry.snapshot(), key=lambda item: item.name)
         )
-        catalog = "\n".join(
+        rendered_catalog = "\n".join(
             f"- {record.name}: {record.description}" for record in records
         )
-        if len(catalog) > self.max_catalog_chars:
+        if len(rendered_catalog) > self.max_catalog_chars:
             raise RuntimeError("CLI_CATALOG_LIMIT: 完整 CLI 目录超出预算")
-        by_id = {record.name: record for record in records}
+        revisions = (
+            {record.name: record.revision for record in records}
+            if catalog is None
+            else dict(catalog)
+        )
 
         async def load_cli(input_data: LoadCliInput) -> dict[str, Any]:
-            captured = by_id.get(input_data.cli_id)
-            if captured is None:
+            revision = revisions.get(input_data.cli_id)
+            if revision is None:
                 return _error_result(CliRuntimeError(
                     "CLI_NOT_FOUND",
                     f"CLI {input_data.cli_id} 不在当前目录中",
@@ -71,7 +79,10 @@ class CliToolCatalog:
                     data={"cli_id": input_data.cli_id},
                 ))
             try:
-                current = await self._require_current_record(captured)
+                current = await self._require_current_record(
+                    input_data.cli_id,
+                    revision,
+                )
             except CliRuntimeError as exc:
                 return _error_result(exc)
             return {
@@ -111,16 +122,20 @@ class CliToolCatalog:
             ),
         ]
 
-    async def _require_current_record(self, captured: CliRecord) -> CliRecord:
-        current = await self.registry.get(captured.name)
-        if current is None or current.revision != captured.revision:
+    async def _require_current_record(
+        self,
+        cli_id: str,
+        revision: int,
+    ) -> CliRecord:
+        current = await self.registry.get(cli_id)
+        if current is None or current.revision != revision:
             raise CliRuntimeError(
                 "CLI_CATALOG_STALE",
-                f"CLI {captured.name} 已在当前目录快照后变化",
+                f"CLI {cli_id} 已在当前 Session 目录快照后变化",
                 hint="在下一个 Step 使用最新 CLI 目录重新选择。",
                 data={
-                    "cli_id": captured.name,
-                    "expected_revision": captured.revision,
+                    "cli_id": cli_id,
+                    "expected_revision": revision,
                     "current_revision": (
                         current.revision if current is not None else None
                     ),

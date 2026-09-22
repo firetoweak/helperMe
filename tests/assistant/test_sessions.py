@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from helperme.assistant.artifacts import MemoryArtifactGateway
@@ -30,6 +31,20 @@ from tests.assistant.test_toolsets import FakeEchoProvider, _schema_names
 from tests.session_scheduler import RecordingScheduler, settle_session
 
 
+class RegistryCatalog:
+    def __init__(self, surface: ToolSurface) -> None:
+        self.surface = surface
+
+    def rehydrate(self, session_id, _events):
+        self.surface.apply_catalog(
+            session_id,
+            self.surface.registry_descriptors(),
+        )
+
+    async def sync(self, _runtime, session_id):
+        self.rehydrate(session_id, ())
+
+
 class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
     SESSION_ID = "resume-session"
 
@@ -53,6 +68,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
                     MemoryArtifactGateway(),
                     ModelContextSettings(),
                 ),
+                catalog=RegistryCatalog(surface),
             ),
             surface,
         )
@@ -100,6 +116,7 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             SequentialIds(),
         )
         surface.attach(runtime)
+        surface.apply_catalog(self.SESSION_ID, surface.registry_descriptors())
         await runtime.create_session(self.SESSION_ID)
         await runtime.receive_user_message(
             self.SESSION_ID,
@@ -257,9 +274,10 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
             root = Path(directory)
             runtime = AgentRuntime(MemoryJournal(), ScriptedDecisionMaker(()), {})
             scheduler = RecordingScheduler(runtime, self.SESSION_ID)
+            surface = ToolSurface()
             sessions = AssistantSessions(
                 runtime,
-                ToolSurface(),
+                surface,
                 scheduler,
                 control=scheduler._control,
                 management=ManagementSurface(
@@ -267,15 +285,15 @@ class AssistantSessionResumeTest(unittest.IsolatedAsyncioTestCase):
                     MemoryArtifactGateway(),
                     ModelContextSettings(),
                 ),
+                catalog=RegistryCatalog(surface),
             )
             try:
                 view = await sessions.create(self.SESSION_ID)
                 self.assertFalse(view.auto_authorize)
                 self.assertFalse(view.paused)
-                updated = await sessions.apply_authorization_policy(
+                updated = await sessions.apply_auto_authorize(
                     self.SESSION_ID,
-                    preference=True,
-                    grant=True,
+                    enabled=True,
                 )
                 self.assertTrue(updated.auto_authorize)
                 self.assertFalse((root / "auto_authorize.json").is_file())
@@ -292,13 +310,14 @@ class AcceptInputTest(unittest.IsolatedAsyncioTestCase):
             waiting_for=(),
             pending_authorization_ids=("command-1",),
             should_wake=False,
-            control_approval=object(),
+            control_approval=SimpleNamespace(request_id="request-1"),
         )
         resolved = SessionView(
             status="waiting",
             waiting_for=("user_message",),
             pending_authorization_ids=("command-1",),
             should_wake=False,
+            control_message="控制操作完成",
         )
         sessions.view = AsyncMock(side_effect=(pending, resolved))
         sessions.resolve_control = AsyncMock(return_value="控制操作完成")
@@ -312,7 +331,7 @@ class AcceptInputTest(unittest.IsolatedAsyncioTestCase):
         )
 
         sessions.resolve_control.assert_awaited_once_with(
-            "session-1", approved=True
+            "session-1", "request-1", approved=True
         )
         sessions.resolve_authorizations.assert_not_awaited()
         sessions.receive_user_message.assert_not_awaited()

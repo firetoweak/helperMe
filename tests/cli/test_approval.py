@@ -14,7 +14,7 @@ from helperme.cli.approval import (
 )
 from helperme.cli.application import CliApplicationService
 from helperme.paths import HelperMeHome
-from helperme.tools.control import ControlApprovalRequest
+from helperme.tools.control import ControlApprovalProposal, ControlPreparationFailure
 from tests.cli.fakes import FakeExecutor, make_result
 
 
@@ -44,7 +44,7 @@ class CliInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             locator=str(self.executable),
         ))
 
-        self.assertIsInstance(request, ControlApprovalRequest)
+        self.assertIsInstance(request, ControlApprovalProposal)
         self.assertEqual(request.action, CLI_INSTALL_ACTION)
         self.assertEqual(
             set(request.payload),
@@ -61,8 +61,9 @@ class CliInstallApprovalTest(unittest.IsolatedAsyncioTestCase):
             description="Fast text search",
             locator="rg",
         ))
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "CLI_SOURCE_ERROR")
+        self.assertIsInstance(result, ControlPreparationFailure)
+        self.assertFalse(result.result["ok"])
+        self.assertEqual(result.result["code"], "CLI_SOURCE_ERROR")
 
     async def test_handler_executes_registration(self):
         request = await self.propose.handler(CliInstallProposalInput(
@@ -123,7 +124,7 @@ class CliUninstallApprovalTest(unittest.IsolatedAsyncioTestCase):
     async def test_propose_and_execute_uninstall(self):
         request = await self.propose.handler(CliIdProposalInput(cli_id="rg"))
 
-        self.assertIsInstance(request, ControlApprovalRequest)
+        self.assertIsInstance(request, ControlApprovalProposal)
         self.assertEqual(request.action, CLI_UNINSTALL_ACTION)
         self.assertEqual(
             request.payload,

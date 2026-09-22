@@ -13,6 +13,7 @@ from helperme.assistant.toolsets import (
 )
 from helperme.assistant.tool_results import runtime_tool_result
 from helperme.mcp.toolsets import ToolsetLoadError as ProviderLoadError
+from helperme.mcp.adapter import parse_toolset_id
 
 
 class McpToolsetAdapter:
@@ -32,8 +33,32 @@ class McpToolsetAdapter:
             for item in self._provider.descriptors()
         )
 
-    async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
+    def handles(self, toolset_id: str) -> bool:
         try:
+            parse_toolset_id(toolset_id)
+        except ProviderLoadError:
+            return False
+        return True
+
+    async def load(
+        self,
+        toolset_id: str,
+        revision: int,
+    ) -> tuple[LoadedTool, ...]:
+        try:
+            current = {item.id: item for item in self.descriptors()}.get(toolset_id)
+            if current is None or current.revision != revision:
+                raise ToolsetLoadError(
+                    "TOOLSET_REVISION_UNAVAILABLE",
+                    f"Toolset {toolset_id} revision is unavailable",
+                    data={
+                        "toolset_id": toolset_id,
+                        "expected_revision": revision,
+                        "available_revision": (
+                            None if current is None else current.revision
+                        ),
+                    },
+                )
             discovered = await self._provider.discover_tools(toolset_id)
         except ProviderLoadError as exc:
             raise ToolsetLoadError(

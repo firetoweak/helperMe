@@ -70,6 +70,7 @@ class SessionStoreListingTest(unittest.IsolatedAsyncioTestCase):
                 SequentialIds(),
             )
             surface.attach(runtime)
+            surface.apply_catalog("source", surface.registry_descriptors())
             await runtime.receive_user_message(
                 "source", "first", delivery_id="first"
             )
@@ -111,6 +112,7 @@ class SessionStoreListingTest(unittest.IsolatedAsyncioTestCase):
                 deliver_binding(lambda *_args: None),
             )
             restored.attach(child_runtime)
+            restored.apply_catalog("child", restored.registry_descriptors())
             await restored.rehydrate("child", child_events)
             self.assertIn("demo_ping", _schema_names(restored.schemas("child")))
             await child_runtime.receive_user_message(

@@ -22,6 +22,14 @@ from tests.assistant.test_runner import ScriptedDecisionMaker, SequentialIds
 from tests.session_scheduler import RecordingScheduler, SettlingScheduler
 
 
+class EmptyCatalog:
+    def rehydrate(self, _session_id, _events):
+        return None
+
+    async def sync(self, _runtime, _session_id):
+        return None
+
+
 class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
     async def test_empty_session_identity_is_idempotent_and_durable(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -236,6 +244,7 @@ class DurableRuntimeSliceTest(unittest.IsolatedAsyncioTestCase):
                     MemoryArtifactGateway(),
                     ModelContextSettings(),
                 ),
+                catalog=EmptyCatalog(),
             )
             try:
                 view = await sessions.resume("session")

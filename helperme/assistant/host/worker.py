@@ -165,7 +165,9 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
                 assembly.surface,
                 session_id,
                 assembly.sessions._management,
+                assembly.catalog,
             )
+            await assembly.sessions.recover_control(session_id)
             parent = project_parent(events)
             if parent is not None:
                 assembly.subagents._parents[session_id] = parent

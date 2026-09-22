@@ -8,15 +8,19 @@ from PIL import Image
 from helperme.assistant.artifacts import MemoryArtifactGateway
 from helperme.assistant.attachments import AttachmentGateway
 from helperme.assistant.compact.core import (
+    bounded_recent_tail,
     CompactBoundary,
     CompactContext,
     TASK,
     frozen_bundle,
     save_document,
 )
+from helperme.assistant.context.budget import BudgetAssessment
+from helperme.assistant.context.projection import ModelContextBudgetExceeded
 from helperme.assistant.context.projection import ModelContextProjector
 from helperme.runtime import AgentRuntime, MemoryJournal, StateProjector
 from helperme.assistant.toolsets import ToolSurface
+from helperme.assistant.workspaces import SESSION_WORKSPACE_FACT
 from tests.assistant.test_toolsets import FakeEchoProvider
 
 
@@ -27,6 +31,62 @@ def _png(color: str) -> bytes:
 
 
 class WindowTest(unittest.IsolatedAsyncioTestCase):
+    def test_recent_tail_uses_complete_sequence_units_within_remaining_budget(self):
+        class CharacterBudget:
+            def __init__(self, limit):
+                self.limit = limit
+
+            def assess(self, messages, tools):
+                used = sum(len(message["content"]) for message in messages)
+                return BudgetAssessment(used, self.limit)
+
+        records = [
+            {"sequence": 1, "message": {"role": "user", "content": "old"}},
+            {
+                "sequence": 2,
+                "message": {"role": "assistant", "content": "12345"},
+            },
+            {"sequence": 2, "message": {"role": "tool", "content": "12345"}},
+            {"sequence": 3, "message": {"role": "user", "content": "new"}},
+        ]
+        selected = bounded_recent_tail(
+            records,
+            before=[{"role": "user", "content": "h"}],
+            after=[{"role": "user", "content": "n"}],
+            system_prompt="s",
+            tools=[],
+            budget=CharacterBudget(15),
+            tail_budget_tokens=15,
+        )
+
+        self.assertEqual([record["sequence"] for record in selected], [3])
+
+    def test_recent_tail_can_be_empty_but_required_publication_must_fit(self):
+        class CharacterBudget:
+            def __init__(self, limit):
+                self.limit = limit
+
+            def assess(self, messages, tools):
+                used = sum(len(message["content"]) for message in messages)
+                return BudgetAssessment(used, self.limit)
+
+        arguments = dict(
+            records=[
+                {"sequence": 1, "message": {"role": "user", "content": "large"}}
+            ],
+            before=[{"role": "user", "content": "h"}],
+            after=[{"role": "user", "content": "n"}],
+            system_prompt="s",
+            tools=[],
+            tail_budget_tokens=3,
+        )
+        self.assertEqual(
+            bounded_recent_tail(**arguments, budget=CharacterBudget(3)),
+            [],
+        )
+        with self.assertRaises(ModelContextBudgetExceeded):
+            bounded_recent_tail(**arguments, budget=CharacterBudget(2))
+
     async def test_frozen_bundle_keeps_user_image_blocks(self):
         with TemporaryDirectory() as directory:
             attachments = AttachmentGateway(Path(directory))
@@ -101,6 +161,13 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
             await runtime.create_session("h")
             await runtime.receive_domain_fact(
                 "h",
+                SESSION_WORKSPACE_FACT,
+                {"workspace_id": "workspace"},
+                source="workspace",
+                delivery_id="binding",
+            )
+            await runtime.receive_domain_fact(
+                "h",
                 TASK,
                 {
                     "source": "b",
@@ -130,6 +197,13 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
         projector = ModelContextProjector(gateway=gateway)
         runtime = AgentRuntime(MemoryJournal(), None, {})
         await runtime.create_session("h")
+        await runtime.receive_domain_fact(
+            "h",
+            SESSION_WORKSPACE_FACT,
+            {"workspace_id": "workspace"},
+            source="workspace",
+            delivery_id="binding",
+        )
         bundle = save_document(
             gateway,
             "b",
@@ -199,6 +273,7 @@ class WindowTest(unittest.IsolatedAsyncioTestCase):
         await runtime.receive_user_message("b", "original", delivery_id="first")
         surface = ToolSurface(providers=(FakeEchoProvider(),))
         surface.attach(runtime)
+        surface.apply_catalog("b", surface.registry_descriptors())
         await surface.load("b", "demo")
         schemas = surface.schemas("b")
         context = CompactContext("b", await runtime.snapshot("b"), projector, None)

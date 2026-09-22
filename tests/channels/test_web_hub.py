@@ -85,7 +85,7 @@ class WebEventHubTest(unittest.IsolatedAsyncioTestCase):
                 "status": "running",
             },
         )
-        self.assertEqual(finished.data["status"], "succeeded")
+        self.assertEqual(finished.data["status"], "settled")
         self.hub.unsubscribe(queue)
 
     async def test_context_usage_is_session_scoped(self):

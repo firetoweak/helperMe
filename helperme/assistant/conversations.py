@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
 
-from helperme.assistant.control import pending_approval_view
+from helperme.assistant.control import pending_approval_view, project_control_message
 from helperme.assistant.delivery import DELIVER_TOOL_NAME
 from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.sessions import SessionView, session_view
@@ -25,7 +25,7 @@ from helperme.runtime import (
 
 
 ToolStatus = Literal[
-    "running",
+    "queued",
     "succeeded",
     "failed",
     "unknown",
@@ -145,7 +145,8 @@ class AssistantQueries:
                 state,
                 has_active_subagents=bool(project_pending(events)),
                 control_approval=pending_approval_view(events),
-                auto_authorize=self._sessions.web_auto_authorize(session_id),
+                control_message=project_control_message(events),
+                auto_authorize=self._sessions.auto_authorize(session_id),
                 paused=self._sessions.is_paused(session_id),
             )
         status = self._sessions.conversation_status(session_id)
@@ -155,7 +156,6 @@ class AssistantQueries:
                 events,
                 state.steps,
                 session=view,
-                activity=self._sessions.activity(session_id),
             ),
             compact_count=status.compact_count,
             compact_phase=status.compact_phase,
@@ -194,7 +194,6 @@ def project_conversation(
     steps: tuple[StepState, ...],
     *,
     session: SessionView,
-    activity: SessionActivity = "idle",
 ) -> ConversationView:
     by_event = {step.committed_event_id: step for step in steps}
     items: list[ConversationItem] = []
@@ -221,7 +220,7 @@ def project_conversation(
             effect = command_state.command.effect
             if effect.name == DELIVER_TOOL_NAME:
                 continue
-            status, error = _tool_status(command_state, activity)
+            status, error = _tool_status(command_state)
             tools.append(
                 ToolItem(
                     command_state.command.command_id,
@@ -267,13 +266,8 @@ def _step_thinking(metadata: object) -> str | None:
 
 def _tool_status(
     state: CommandState,
-    activity: SessionActivity,
 ) -> tuple[ToolStatus, str | None]:
-    """工具在时间线上的状态，除 unknown 外全部来自 Runtime 的确定事实。
-
-    起过 attempt 却没有结果时，Journal 分不出「还在跑」和「已中断」——
-    那是进程事实，只有 activity 知道。
-    """
+    """只从 Journal 投影工具基态；running 由 Channel 按 command_id 叠加。"""
 
     outcome = state.outcome
     if outcome is not None:
@@ -283,9 +277,7 @@ def _tool_status(
     if state.authorization_rejected_by_event_id is not None:
         return ("rejected", None)
     if state.phase is CommandPhase.UNKNOWN:
-        if activity == "idle":
-            return ("unknown", UNKNOWN_TOOL_ERROR)
-        return ("running", None)
+        return ("unknown", UNKNOWN_TOOL_ERROR)
     if state.dispatch_eligible_by_event_id is None:
         return ("awaiting_authorization", None)
-    return ("running", None)
+    return ("queued", None)

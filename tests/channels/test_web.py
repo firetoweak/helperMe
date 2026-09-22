@@ -33,6 +33,7 @@ class _Sessions:
     def __init__(self, queries):
         self.queries = queries
         self.calls = []
+        self.control_message = None
 
     async def create(self, session_id, workspace_id):
         self.calls.append(("create", session_id, workspace_id))
@@ -77,14 +78,21 @@ class _Sessions:
 
     async def view(self, session_id):
         self.calls.append(("view", session_id))
-        return SessionView("waiting", ("user_message",), (), False)
+        return SessionView(
+            "waiting",
+            ("user_message",),
+            (),
+            False,
+            control_message=self.control_message,
+        )
 
     async def resolve_authorization(self, session_id, command_id, *, approved):
         self.calls.append(("resolve_authorization", session_id, command_id, approved))
 
-    async def resolve_control(self, session_id, *, approved):
-        self.calls.append(("resolve_control", session_id, approved))
-        return "MCP Server `demo` 安装、测试并启用成功。能力目录已更新，load_toolset 之后工具从下一个 Step 可见。"
+    async def resolve_control(self, session_id, request_id, *, approved):
+        self.calls.append(("resolve_control", session_id, request_id, approved))
+        self.control_message = "MCP Server `demo` 安装、测试并启用成功。能力目录已更新，load_toolset 之后工具从下一个 Step 可见。"
+        return self.control_message
 
     async def set_auto_authorize(self, session_id, enabled):
         self.calls.append(("set_auto_authorize", session_id, enabled))
@@ -437,6 +445,7 @@ class WebFirstSliceTest(unittest.TestCase):
             "/api/sessions/session-old/control",
             json={
                 "connection_id": self.connection.connection_id,
+                "request_id": "approval-1",
                 "approved": True,
             },
         )
@@ -449,7 +458,7 @@ class WebFirstSliceTest(unittest.TestCase):
         self.assertEqual(
             self.sessions.calls,
             [
-                ("resolve_control", "session-old", True),
+                ("resolve_control", "session-old", "approval-1", True),
                 ("view", "session-old"),
             ],
         )

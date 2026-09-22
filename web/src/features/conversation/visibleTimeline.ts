@@ -64,8 +64,11 @@ export function visibleTimeline(
       pending: false,
       tools: item.tools.map((tool) => {
         const live = tools[tool.command_id];
-        const terminal = tool.status === "succeeded" || tool.status === "failed";
-        const status = terminal ? tool.status : (live?.status ?? tool.status);
+        const status =
+          live !== undefined &&
+          (tool.status === "queued" || tool.status === "unknown")
+            ? live.status
+            : tool.status;
         return {
           commandId: tool.command_id,
           name: tool.name,

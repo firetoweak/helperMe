@@ -8,6 +8,7 @@ from helperme.assistant.delivery import PreviewEmitter
 from helperme.assistant.failures import assistant_failure_message
 from helperme.assistant.management import ManagementSurface
 from helperme.assistant.toolsets import ToolSurface
+from helperme.assistant.catalog import CapabilityCatalog
 from helperme.runtime import AgentRuntime, RuntimeStatus
 from helperme.runtime.model import CanonicalState
 
@@ -21,12 +22,18 @@ async def resume_session(
     surface: ToolSurface,
     session_id: str,
     management: ManagementSurface,
+    catalog: CapabilityCatalog,
 ) -> CanonicalState:
     """Select an existing Session and rebuild Host projections."""
 
     if not await runtime.session_exists(session_id):
         raise SessionNotFoundError(session_id)
     events = await runtime.snapshot(session_id)
+    state = await runtime.state(session_id)
+    if state.waiting_command_ids:
+        catalog.rehydrate(session_id, events)
+    else:
+        await catalog.sync(runtime, session_id)
     await surface.rehydrate(session_id, events)
     await management.rehydrate(session_id, events)
     return await runtime.state(session_id)
@@ -88,10 +95,14 @@ class SessionScheduler:
 
     async def _advance_once(self) -> bool:
         session_id = self._session_id
+        events = await self._runtime.snapshot(session_id)
+        position = events[-1].sequence if events else 0
         if self.before_advance is not None and not await self.before_advance():
             return False
         try:
-            advance = await self._runtime.advance(session_id)
+            advance = await self._runtime.advance(
+                session_id, expected_journal_position=position
+            )
         except Exception as error:
             try:
                 await self._preview.abort(session_id)
@@ -116,22 +127,20 @@ class SessionScheduler:
             await self._preview.abort(session_id)
             await self._preview.abort_thinking(session_id)
         runnable = advance.status is RuntimeStatus.RUNNABLE
-        if advance.step is not None:
-            outcome = await self._control.after_committed_step(
+        # Control 请求随 Step 提交；这里从 Journal 恢复，而不是依赖本轮内存。
+        outcome = await self._control.prepare_pending(
+            await self._runtime.snapshot(session_id)
+        )
+        if outcome is not None:
+            await self._runtime.receive_domain_fact(
                 session_id,
-                advance.step,
+                outcome.fact_type,
+                dict(outcome.data),
+                delivery_id=outcome.delivery_id,
+                source=CONTROL_SOURCE,
+                requests_decision=outcome.requests_decision,
             )
-            if outcome is not None:
-                await self._runtime.receive_domain_fact(
-                    session_id,
-                    outcome.fact_type,
-                    dict(outcome.data),
-                    delivery_id=outcome.delivery_id,
-                    source=CONTROL_SOURCE,
-                    requests_decision=outcome.requests_decision,
-                )
-                # 待裁决的提案要停下等人；另外两种结局是模型必须看到的新事实。
-                runnable = runnable or outcome.requests_decision
+            runnable = runnable or outcome.requests_decision
         if not runnable:
             await self._quiesced(session_id)
         return runnable

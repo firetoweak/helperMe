@@ -50,6 +50,35 @@ class ScriptedDecisionMaker:
 
 
 class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fact_arriving_after_boundary_check_requires_another_check(self):
+        model = ScriptedDecisionMaker(())
+        runtime = AgentRuntime(MemoryJournal(), model, {})
+        scheduler = SessionScheduler(runtime, "session", control=AssistantControlPlane(()))
+        await runtime.receive_user_message("session", "small input", delivery_id="first")
+        checks = 0
+
+        async def boundary():
+            nonlocal checks
+            checks += 1
+            if checks == 1:
+                # A child report arrives while the Host is answering the budget check.
+                await runtime.receive_domain_fact(
+                    "session", "report", {"text": "large report"},
+                    source="child", delivery_id="report", requests_decision=True,
+                )
+                return True
+            return False  # The newly checked input must wait for compaction.
+
+        scheduler.before_advance = boundary
+        try:
+            self.assertTrue(await scheduler._advance_once())
+            self.assertFalse(await scheduler._advance_once())
+            self.assertEqual(checks, 2)
+            self.assertEqual(model.frames, [])
+            self.assertEqual((await runtime.state("session")).decision_cursor, 0)
+        finally:
+            await scheduler.close()
+
     async def test_unexpected_failure_is_observable_without_another_wake(self):
         failure = ValueError("host bug")
 
@@ -96,7 +125,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
             runtime, "session", control=AssistantControlPlane(())
         )
 
-        async def fail_then_wake(session_id):
+        async def fail_then_wake(session_id, **kwargs):
             # Queue wake before asyncio schedules the task's completion callback.
             asyncio.create_task(scheduler.wake(session_id))
             raise failure
@@ -288,7 +317,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         active = 0
         maximum_active = 0
 
-        async def tracked_advance(session_id):
+        async def tracked_advance(session_id, **kwargs):
             nonlocal calls, active, maximum_active
             calls += 1
             call = calls
@@ -298,7 +327,7 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
                 if call == 1:
                     first_started.set()
                     await release_first.wait()
-                return await original_advance(session_id)
+                return await original_advance(session_id, **kwargs)
             finally:
                 active -= 1
                 if call == 2:
@@ -349,11 +378,11 @@ class SessionSchedulerTest(unittest.IsolatedAsyncioTestCase):
         original_advance = runtime.advance
         advance_calls = 0
 
-        async def tracked_advance(session_id):
+        async def tracked_advance(session_id, **kwargs):
             nonlocal advance_calls
             advance_calls += 1
             try:
-                return await original_advance(session_id)
+                return await original_advance(session_id, **kwargs)
             finally:
                 if advance_calls == 2:
                     second_finished.set()

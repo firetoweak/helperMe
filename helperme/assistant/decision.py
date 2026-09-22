@@ -14,6 +14,7 @@ from helperme.assistant.compact.core import (
 from helperme.assistant.artifacts import ArtifactGateway
 from helperme.assistant.loop_guard import LoopGuard, NOTICE
 from helperme.assistant.control import (
+    CONTROL_REQUEST_METADATA,
     AssistantControlPlane,
     ControlArgumentsError,
 )
@@ -304,6 +305,21 @@ class JournalBackedLlmDecisionMaker:
             ),
         )
 
+    def with_loop_guard(
+        self, prepared, schemas, events, position, *, enforce_budget=True
+    ):
+        notice = self._loop_guard.inspect(events, position)
+        if notice is not None:
+            messages = [*prepared.messages, {"role": "user", "content": notice["text"]}]
+            assessment = self._projector.budget.assess(messages, schemas)
+            if enforce_budget and not assessment.allowed:
+                raise ModelContextBudgetExceeded(assessment)
+            prepared = replace(
+                prepared, messages=messages, assessment=assessment,
+                source_sequences=(*prepared.source_sequences, 0),
+            )
+        return prepared, notice
+
     async def decide(self, frame: DecisionFrame) -> RecordedDecision:
         # Journal facts are bounded by the frame position, freezing this Step's
         # visible world. Schemas read the same bounded events: a control proposal
@@ -332,16 +348,9 @@ class JournalBackedLlmDecisionMaker:
                 schemas,
                 prefix=None if self._compact is None else self._compact.prefix,
             )
-        notice = self._loop_guard.inspect(events, frame.observed_journal_position)
-        if notice is not None:
-            messages = [*prepared.messages, {"role": "user", "content": notice["text"]}]
-            assessment = self._projector.budget.assess(messages, schemas)
-            if not assessment.allowed:
-                raise ModelContextBudgetExceeded(assessment)
-            prepared = replace(
-                prepared, messages=messages, assessment=assessment,
-                source_sequences=(*prepared.source_sequences, 0),
-            )
+        prepared, notice = self.with_loop_guard(
+            prepared, schemas, events, frame.observed_journal_position
+        )
         if self._context_usage_sink is not None:
             estimated = self._projector.budget.assess(
                 prepared.messages,
@@ -486,6 +495,9 @@ class JournalBackedLlmDecisionMaker:
             json.dumps(manifest, ensure_ascii=False, sort_keys=True)
         )
         metadata = {}
+        control_request = self._control.take_staged_metadata(frame)
+        if control_request is not None:
+            metadata[CONTROL_REQUEST_METADATA] = control_request
         if result.response.message_extensions:
             metadata[MESSAGE_EXTENSIONS] = result.response.message_extensions
         if notice is not None:

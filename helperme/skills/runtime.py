@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -67,7 +68,10 @@ class SkillToolCatalog:
         self.packages_root = registry.root / "packages"
         self.max_catalog_chars = max_catalog_chars
 
-    def tool_specs(self) -> list[ToolSpec]:
+    def tool_specs(
+        self,
+        catalog: Mapping[str, int] | None = None,
+    ) -> list[ToolSpec]:
         records = tuple(
             sorted(
                 (
@@ -78,17 +82,21 @@ class SkillToolCatalog:
                 key=lambda item: item.name,
             )
         )
-        catalog = "\n".join(
+        rendered_catalog = "\n".join(
             f"- {record.name}: {record.description}"
             for record in records
         )
-        if len(catalog) > self.max_catalog_chars:
+        if len(rendered_catalog) > self.max_catalog_chars:
             raise RuntimeError("SKILL_CATALOG_LIMIT: 完整 Skill 目录超出预算")
-        by_id = {record.name: record for record in records}
+        revisions = (
+            {record.name: record.revision for record in records}
+            if catalog is None
+            else dict(catalog)
+        )
 
         async def load_skill(input_data: LoadSkillInput) -> dict[str, Any]:
-            captured = by_id.get(input_data.skill_id)
-            if captured is None:
+            revision = revisions.get(input_data.skill_id)
+            if revision is None:
                 return _error_result(SkillRuntimeError(
                     "SKILL_NOT_FOUND",
                     f"Skill {input_data.skill_id} 不在当前 Session 目录中",
@@ -96,7 +104,10 @@ class SkillToolCatalog:
                     data={"skill_id": input_data.skill_id},
                 ))
             try:
-                current = await self._require_current_record(captured)
+                current = await self._require_current_record(
+                    input_data.skill_id,
+                    revision,
+                )
                 package_directory, bundle = self._validated_bundle(current)
             except SkillRuntimeError as exc:
                 return _error_result(exc)
@@ -114,8 +125,8 @@ class SkillToolCatalog:
         async def read_resource(
             input_data: ReadSkillResourceInput,
         ) -> dict[str, Any]:
-            captured = by_id.get(input_data.skill_id)
-            if captured is None:
+            revision = revisions.get(input_data.skill_id)
+            if revision is None:
                 return _error_result(SkillRuntimeError(
                     "SKILL_NOT_FOUND",
                     f"Skill {input_data.skill_id} 不在当前 Session 目录中",
@@ -123,7 +134,10 @@ class SkillToolCatalog:
                     data={"skill_id": input_data.skill_id},
                 ))
             try:
-                current = await self._require_current_record(captured)
+                current = await self._require_current_record(
+                    input_data.skill_id,
+                    revision,
+                )
                 return self._read_resource(
                     current,
                     input_data.relative_path,
@@ -160,21 +174,22 @@ class SkillToolCatalog:
 
     async def _require_current_record(
         self,
-        captured: SkillRecord,
+        skill_id: str,
+        revision: int,
     ) -> SkillRecord:
-        current = await self.registry.get(captured.name)
+        current = await self.registry.get(skill_id)
         if (
             current is None
             or not current.enabled
-            or current.revision != captured.revision
+            or current.revision != revision
         ):
             raise SkillRuntimeError(
                 "SKILL_CATALOG_STALE",
-                f"Skill {captured.name} 已在当前 Session 创建后变化",
+                f"Skill {skill_id} 已在当前 Session 目录快照后变化",
                 hint="在下一个 Step 使用最新 Skill 目录重新选择。",
                 data={
-                    "skill_id": captured.name,
-                    "expected_revision": captured.revision,
+                    "skill_id": skill_id,
+                    "expected_revision": revision,
                     "current_revision": (
                         current.revision if current is not None else None
                     ),

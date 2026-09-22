@@ -102,7 +102,7 @@ describe("runtimeSlice", () => {
     expect(state.sessions.s2.unread).toBe(0);
   });
 
-  it("stores tool progress on the owning session without touching the viewed session", () => {
+  it("keeps only exact running activity and clears it when the handler settles", () => {
     let state = reducer(undefined, viewing("s2"));
     state = reducer(
       state,
@@ -119,17 +119,27 @@ describe("runtimeSlice", () => {
         sessionId: "s1",
         commandId: "cmd-1",
         name: "read_file",
-        status: "succeeded",
+        status: "settled",
       }),
     );
 
-    expect(state.sessions.s1.tools["cmd-1"]).toEqual({
-      commandId: "cmd-1",
-      name: "read_file",
-      status: "succeeded",
-    });
+    expect(state.sessions.s1.tools).toEqual({});
     expect(state.sessions.s2.tools).toEqual({});
     expect(state.sessions.s1.unread).toBe(0);
+  });
+
+  it("drops exact tool activity when the session becomes idle", () => {
+    let state = reducer(
+      undefined,
+      toolProgress({
+        sessionId: "s1",
+        commandId: "cmd-1",
+        name: "read_file",
+        status: "running",
+      }),
+    );
+    state = reducer(state, sessionActivity({ sessionId: "s1", activity: "idle" }));
+    expect(state.sessions.s1.tools).toEqual({});
   });
 
   it("keeps a run failure off the timeline and clears it when the session runs again", () => {
@@ -207,10 +217,20 @@ describe("runtimeSlice", () => {
       setDraftSession({ workspaceId: "w1", sessionId: "draft-1" }),
     );
     state = reducer(state, bindOwner("draft-1"));
+    state = reducer(
+      state,
+      toolProgress({
+        sessionId: "draft-1",
+        commandId: "cmd-1",
+        name: "read_file",
+        status: "running",
+      }),
+    );
     state = reducer(state, disconnected());
     expect(state.connectionId).toBeNull();
     expect(state.ownerSessionId).toBeNull();
     expect(state.draftSessions).toEqual({ w1: "draft-1" });
+    expect(state.sessions["draft-1"].tools).toEqual({});
   });
 
   it("follows a fork chain to the live session and marks fork identities", () => {

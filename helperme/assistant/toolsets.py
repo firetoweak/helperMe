@@ -118,7 +118,14 @@ class ToolsetProvider(Protocol):
     def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
         ...
 
-    async def load(self, toolset_id: str) -> tuple[LoadedTool, ...]:
+    def handles(self, toolset_id: str) -> bool:
+        ...
+
+    async def load(
+        self,
+        toolset_id: str,
+        revision: int,
+    ) -> tuple[LoadedTool, ...]:
         ...
 
     def restore(
@@ -290,13 +297,14 @@ class ToolSurface:
             ModelContextSettings() if settings is None else settings
         )
         self._runtime: AgentRuntime | None = None
+        self._catalogs: dict[str, tuple[ToolsetDescriptor, ...]] = {}
         self._loaded: dict[str, dict[str, _LoadedSet]] = {}
         self._tool_owners: dict[str, str] = {}
 
     def attach(self, runtime: AgentRuntime) -> None:
         self._runtime = runtime
 
-    def descriptors(self) -> tuple[ToolsetDescriptor, ...]:
+    def registry_descriptors(self) -> tuple[ToolsetDescriptor, ...]:
         items: list[ToolsetDescriptor] = []
         seen: set[str] = set()
         for provider in self._providers:
@@ -307,14 +315,20 @@ class ToolSurface:
                 items.append(descriptor)
         return tuple(items)
 
+    def apply_catalog(
+        self,
+        session_id: str,
+        descriptors: Sequence[ToolsetDescriptor],
+    ) -> None:
+        self._catalogs[session_id] = tuple(descriptors)
+
     def schemas(
         self,
         session_id: str,
         decision_state: DecisionState | None = None,
     ) -> list[dict[str, object]]:
-        self._drop_unavailable(session_id)
         schemas = list(self._base_schemas)
-        if self.descriptors():
+        if self._catalogs.get(session_id, ()):
             schemas.append(LOAD_TOOLSET_SCHEMA)
         for loaded in self._visible_loaded(session_id, decision_state).values():
             schemas.extend(tool.schema() for tool in loaded.tools)
@@ -325,7 +339,7 @@ class ToolSurface:
         session_id: str,
         decision_state: DecisionState | None = None,
     ) -> str:
-        descriptors = self.descriptors()
+        descriptors = self._catalogs.get(session_id, ())
         if not descriptors:
             return "当前没有可加载的外部 Toolset。"
         lines = [
@@ -351,7 +365,7 @@ class ToolSurface:
                 "data": {"toolset_id": toolset_id},
                 "error": "toolset_id 必须是非空字符串",
             }
-        available = {item.id: item for item in self.descriptors()}
+        available = {item.id: item for item in self._catalogs.get(session_id, ())}
         if toolset_id not in available:
             return {
                 "ok": False,
@@ -366,7 +380,7 @@ class ToolSurface:
             return _loaded_payload(toolset_id, current.revision, existing.tools)
         provider = self._provider_for(toolset_id)
         try:
-            tools = await provider.load(toolset_id)
+            tools = await provider.load(toolset_id, current.revision)
         except ToolsetLoadError as exc:
             return {
                 "ok": False,
@@ -401,26 +415,8 @@ class ToolSurface:
         """用 Journal 投影恢复可丢弃缓存，不向 Runtime 写入领域状态。"""
 
         activations = project_toolset_activations(events)
-        available = {item.id: item for item in self.descriptors()}
         restored: dict[str, _LoadedSet] = {}
         for activation in activations:
-            descriptor = available.get(activation.toolset_id)
-            if descriptor is None:
-                raise ToolsetLoadError(
-                    "TOOLSET_NOT_FOUND",
-                    f"Toolset {activation.toolset_id} is unavailable during restore",
-                    data={"toolset_id": activation.toolset_id},
-                )
-            if descriptor.revision != activation.revision:
-                raise ToolsetLoadError(
-                    "TOOLSET_REVISION_UNAVAILABLE",
-                    f"Toolset {activation.toolset_id} revision is unavailable",
-                    data={
-                        "toolset_id": activation.toolset_id,
-                        "expected_revision": activation.revision,
-                        "available_revision": descriptor.revision,
-                    },
-                )
             tools = self._provider_for(activation.toolset_id).restore(
                 activation.toolset_id,
                 activation.revision,
@@ -503,23 +499,13 @@ class ToolSurface:
 
     def _provider_for(self, toolset_id: str) -> ToolsetProvider:
         for provider in self._providers:
-            ids = {item.id for item in provider.descriptors()}
-            if toolset_id in ids:
+            if provider.handles(toolset_id):
                 return provider
         raise ToolsetLoadError(
             "TOOLSET_NOT_FOUND",
             f"Toolset {toolset_id} not found",
             data={"toolset_id": toolset_id},
         )
-
-    def _drop_unavailable(self, session_id: str) -> None:
-        available = {item.id for item in self.descriptors()}
-        loaded = self._loaded.get(session_id)
-        if loaded is None:
-            return
-        for toolset_id in tuple(loaded):
-            if toolset_id not in available:
-                loaded.pop(toolset_id, None)
 
     def _visible_loaded(
         self,

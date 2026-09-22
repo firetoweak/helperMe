@@ -24,6 +24,7 @@ import {
 import type { VisibleTool } from "./visibleTimeline";
 
 const STATUS_LABEL: Record<ToolStatus, string> = {
+  queued: "排队中",
   running: "运行中",
   succeeded: "完成",
   failed: "失败",
@@ -33,6 +34,7 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
 };
 
 const STATUS_COLOR: Record<ToolStatus, string> = {
+  queued: "gray",
   running: "sage",
   succeeded: "gray",
   failed: "red",

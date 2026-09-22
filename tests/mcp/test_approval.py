@@ -9,7 +9,7 @@ from helperme.mcp.client_manager import McpClientManager
 from helperme.mcp.registry import McpRegistry
 from helperme.mcp.secrets import McpSecretStore
 from helperme.paths import HelperMeHome
-from helperme.tools.control import ControlApprovalRequest
+from helperme.tools.control import ControlApprovalProposal
 from helperme.tools.spec import ToolArgumentsError
 from helperme.mcp.approval import (
     MCP_INSTALL_ACTION,
@@ -56,7 +56,7 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
 
         result = await spec.handler(input_data)
 
-        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertIsInstance(result, ControlApprovalProposal)
         self.assertEqual(result.action, MCP_INSTALL_ACTION)
         self.assertTrue(spec.control_boundary)
         self.assertEqual(
@@ -142,7 +142,7 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
 
         result = await spec.handler(input_data)
 
-        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertIsInstance(result, ControlApprovalProposal)
         self.assertEqual(
             result.payload["transport_config"]["headers"],
             {"X-API-Key": "secret-value"},
@@ -169,7 +169,7 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
 
         result = await spec.handler(input_data)
 
-        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertIsInstance(result, ControlApprovalProposal)
         self.assertEqual(
             result.payload["transport_config"]["env"],
             {"TAVILY_API_KEY": "secret-value"},
@@ -189,7 +189,7 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
 
         result = await spec.handler(input_data)
 
-        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertIsInstance(result, ControlApprovalProposal)
         self.assertEqual(
             result.payload["transport_config"]["url"],
             "https://mcp.tavily.com/mcp/?tavilyApiKey=secret-value",
@@ -276,7 +276,7 @@ class McpInstallProposalTest(unittest.IsolatedAsyncioTestCase):
 
         request = await spec.handler(input_data)
 
-        self.assertIsInstance(request, ControlApprovalRequest)
+        self.assertIsInstance(request, ControlApprovalProposal)
         self.assertEqual(request.payload["expected_revision"], 7)
         self.assertEqual(
             request.payload["transport_config"]["args"],
@@ -374,7 +374,7 @@ class McpRecoveryApprovalTest(unittest.IsolatedAsyncioTestCase):
 
         result = await spec.handler(input_data)
 
-        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertIsInstance(result, ControlApprovalProposal)
         self.assertEqual(result.action, MCP_RECOVER_ACTION)
         self.assertEqual(result.payload["server_id"], "demo")
         self.assertEqual(result.payload["expected_revision"], 4)
@@ -395,7 +395,7 @@ class McpRecoveryApprovalTest(unittest.IsolatedAsyncioTestCase):
             McpRecoveryProposalInput(server_id="demo")
         )
 
-        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertIsInstance(result, ControlApprovalProposal)
         self.assertEqual(result.payload["expected_revision"], 6)
         self.assertIn("enabled", result.summary)
 
@@ -527,7 +527,7 @@ class McpRemoveApprovalTest(unittest.IsolatedAsyncioTestCase):
 
         result = await spec.handler(input_data)
 
-        self.assertIsInstance(result, ControlApprovalRequest)
+        self.assertIsInstance(result, ControlApprovalProposal)
         self.assertEqual(result.action, MCP_REMOVE_ACTION)
         self.assertEqual(
             result.payload,

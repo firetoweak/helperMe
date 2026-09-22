@@ -149,8 +149,17 @@ class LoopGuardIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 frame = assembly.runtime.projector.project("s", prefix).next_decision
                 llm.fail_next = True
                 with patch.object(journal, "snapshot", AsyncMock(return_value=prefix)):
+                    boundary = CompactBoundary(
+                        assembly.runtime, maker, maker._compact, None, None, None
+                    )
+                    checked = await boundary.snapshot(persist=False)
                     with self.assertRaisesRegex(RuntimeError, "provider broke"):
                         await maker.decide(frame)
+                    schemas = maker.schemas_for(frame.state, prefix)[0]
+                    self.assertEqual(
+                        checked["assessment"],
+                        maker._projector.budget.assess(llm.requests[-1], schemas),
+                    )
                 self.assertEqual(LoopGuard().inspect(prefix, first["covered_through"]), first)
                 llm.fail_next = False
                 with (

@@ -52,7 +52,7 @@ class HostAcceptInputPauseTest(unittest.IsolatedAsyncioTestCase):
         host._pause.remember("session-1", True)
         view = SimpleNamespace(paused=True)
         host.compact = SimpleNamespace(application=AsyncMock(return_value=view))
-        host._with_preference = lambda observed, session_id: observed
+        host._with_host_metadata = lambda observed, session_id: observed
 
         result = await host.accept_input("session-1", "hello")
 
@@ -70,7 +70,7 @@ class HostResumePauseTest(unittest.IsolatedAsyncioTestCase):
         host = object.__new__(HostSupervisor)
         host._pause = SessionPauseStore(None)
         host.compact = SimpleNamespace(application=AsyncMock(return_value="view"))
-        host._with_preference = lambda observed, session_id: observed
+        host._with_host_metadata = lambda observed, session_id: observed
 
         self.assertEqual(await host.resume("session-1"), "view")
         host.compact.application.assert_awaited_once_with("resume", "session-1", {})
@@ -84,7 +84,7 @@ class HostResumePauseTest(unittest.IsolatedAsyncioTestCase):
         host = object.__new__(HostSupervisor)
         host._pause = SessionPauseStore(None)
         host.compact = SimpleNamespace(application=AsyncMock(return_value="held"))
-        host._with_preference = lambda observed, session_id: observed
+        host._with_host_metadata = lambda observed, session_id: observed
 
         self.assertEqual(await host.set_paused("session-1", True), "held")
         self.assertTrue(host.is_paused("session-1"))

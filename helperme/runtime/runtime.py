@@ -295,10 +295,15 @@ class AgentRuntime:
             )
         )
 
-    async def advance(self, session_id: str) -> AdvanceResult:
+    async def advance(
+        self, session_id: str, *, expected_journal_position: int | None = None
+    ) -> AdvanceResult:
         lock = self._step_locks.setdefault(session_id, asyncio.Lock())
         async with lock:
             events = await self._journal.snapshot(session_id)
+            position = events[-1].sequence if events else 0
+            if expected_journal_position is not None and position != expected_journal_position:
+                return AdvanceResult(None, RuntimeStatus.RUNNABLE)
             frame = self.projector.project(
                 session_id,
                 events,
