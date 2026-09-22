@@ -139,10 +139,10 @@ class SessionStore:
         )
         state = replay(source_session_id, prefix).state
         if state.status is not RuntimeStatus.WAITING or state.waiting_for != (
-            "user_message",
+            "external_fact",
         ):
             raise SessionForkUnavailableError(
-                "fork prefix must end at a user-message boundary"
+                "fork prefix must end at an external-fact boundary"
             )
 
         staging = self.root / f".creating-{uuid4().hex}"

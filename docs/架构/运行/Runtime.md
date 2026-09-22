@@ -99,7 +99,9 @@ Command 是 Step 提交时冻结的副作用请求。Dispatcher 只执行已经�
 
 ## 状态
 
-`RUNNABLE` 表示存在尚未消费且当前可执行的决策事实，`WAITING` 表示在等用户输入、授权或 Command Outcome。
+`RUNNABLE` 表示存在尚未消费且当前可执行的决策事实，`WAITING` 表示在等外部事实、授权或 Command Outcome。
+
+等待理由说"外部事实"而不是"用户输入"：能成为决策起点的不止人的发言，还有要求决策的领域事实，SubAgent 回传与自动化触发都走这条。对没有人的 Session 断言它在等 user 是不成立的。Runtime 也只能说到这里——**它不知道那条外部事实为什么迟迟不来**，"在等人去做一件事"是领域含义，不进等待理由。
 
 Session 没有绝对终态。"正在跑"是 Scheduler 或 Dispatcher 的瞬时状态，不是 Journal 归约出的 Runtime 状态。任务完成是模型、Judge 或 Host 的业务判断；Worker 退出、Session 归档和数据删除分别属于 Host、产品和存储生命周期。
 

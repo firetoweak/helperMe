@@ -453,7 +453,7 @@ class StateProjector:
                     for command_id in waiting_command_ids
                     if command_id not in unauthorized_pending
                 )
-                or ("user_message",)
+                or ("external_fact",)
             )
         )
         state = CanonicalState(

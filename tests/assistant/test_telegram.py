@@ -283,7 +283,7 @@ def _message(chat_id: int, text: str):
 def _session_view(**overrides) -> SessionView:
     values = {
             "status": "waiting",
-            "waiting_for": ("user_message",),
+            "waiting_for": ("external_fact",),
             "pending_authorization_ids": (),
             "should_wake": False,
     }

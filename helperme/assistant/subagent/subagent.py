@@ -721,9 +721,9 @@ class SubAgentHost:
         parent_session_id = self._parents.get(session_id)
         if parent_session_id is None:
             return
-        # 没有人会来回答，落到等人说话就等于本轮做完了。等授权或等命令都不是。
+        # 子没有人，落到等外部事实就等于本轮做完了。等授权或等命令都不是。
         # 允许递归委派后，这里还要加上「没有未回收的子 Session」。
-        if state.waiting_for != ("user_message",):
+        if state.waiting_for != ("external_fact",):
             return
         runtime = self._require_runtime()
         summary = project_report(await runtime.snapshot(session_id))

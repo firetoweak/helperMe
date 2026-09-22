@@ -13,7 +13,7 @@ import { visibleTimeline } from "../src/features/conversation/visibleTimeline";
 
 const session = {
   status: "waiting",
-  waiting_for: ["user_message"],
+  waiting_for: ["external_fact"],
   pending_authorization_ids: [],
   should_wake: false,
   has_active_subagents: false,

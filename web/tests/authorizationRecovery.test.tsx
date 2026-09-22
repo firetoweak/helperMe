@@ -62,7 +62,7 @@ it("submits a recovered pending command with the new connection without an autho
       view.revision += 1;
       view.session.pending_authorization_ids = [];
       view.session.pending_authorization_commands = [];
-      view.session.waiting_for = ["user_message"];
+      view.session.waiting_for = ["external_fact"];
       const step = view.items[1];
       if (step.kind === "step") step.tools[0].status = "rejected";
     }

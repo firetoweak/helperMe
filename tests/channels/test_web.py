@@ -42,16 +42,16 @@ class _Sessions:
         self.calls.append(("select", owner, session_id))
         if session_id == "session-missing":
             raise SessionNotFoundError(session_id)
-        return SessionView("waiting", ("user_message",), (), False)
+        return SessionView("waiting", ("external_fact",), (), False)
 
     async def accept_input(self, session_id, content, **kwargs):
         self.calls.append(("accept_input", session_id, content, kwargs))
         self.queries.record(session_id, content)
-        return SessionView("waiting", ("user_message",), (), False)
+        return SessionView("waiting", ("external_fact",), (), False)
 
     async def cancel_turn(self, session_id):
         self.calls.append(("cancel_turn", session_id))
-        return SessionView("waiting", ("user_message",), (), False)
+        return SessionView("waiting", ("external_fact",), (), False)
 
     async def retry(self, session_id):
         self.calls.append(("retry", session_id))
@@ -80,7 +80,7 @@ class _Sessions:
         self.calls.append(("view", session_id))
         return SessionView(
             "waiting",
-            ("user_message",),
+            ("external_fact",),
             (),
             False,
             control_message=self.control_message,
@@ -96,11 +96,11 @@ class _Sessions:
 
     async def set_auto_authorize(self, session_id, enabled):
         self.calls.append(("set_auto_authorize", session_id, enabled))
-        return SessionView("waiting", ("user_message",), (), False, auto_authorize=enabled)
+        return SessionView("waiting", ("external_fact",), (), False, auto_authorize=enabled)
 
     async def set_paused(self, session_id, paused):
         self.calls.append(("set_paused", session_id, paused))
-        return SessionView("waiting", ("user_message",), (), False, paused=paused)
+        return SessionView("waiting", ("external_fact",), (), False, paused=paused)
 
 
 class _Queries:
@@ -131,7 +131,7 @@ class _Queries:
             "workspace-old",
             len(items),
             items,
-            view or SessionView("waiting", ("user_message",), (), False),
+            view or SessionView("waiting", ("external_fact",), (), False),
         )
 
 

@@ -60,4 +60,4 @@ class RuntimeLiveModelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("StepCommitted", kinds)
         self.assertTrue(delivered, kinds)
         self.assertEqual(state.status, RuntimeStatus.WAITING)
-        self.assertEqual(state.waiting_for, ("user_message",))
+        self.assertEqual(state.waiting_for, ("external_fact",))

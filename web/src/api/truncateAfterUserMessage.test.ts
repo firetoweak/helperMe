@@ -43,7 +43,7 @@ const conversation: ConversationView = {
   ],
   session: {
     status: "waiting",
-    waiting_for: ["user_message"],
+    waiting_for: ["external_fact"],
     pending_authorization_ids: [],
     pending_authorization_commands: [],
     should_wake: false,

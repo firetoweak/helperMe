@@ -61,4 +61,4 @@ Step 原子提交后，Assistant 正文通过产品拥有的 `deliver` Command �
 
 Channel 关闭时释放 owner。Runtime 的 `WAITING` 不决定 Worker 是否退出——Host 在 Worker 静止后根据 owner 选择决定是否继续驻留。
 
-一次回答结束后 Session 回到 `WAITING(user_message)`，后续文本进入同一 Session。compact 可以在两次决策之间切换 ContextWindow，Session、用户入口和 Reply route 不变。Session 没有绝对终态。
+一次回答结束后 Session 回到 `WAITING(external_fact)`，后续文本进入同一 Session。compact 可以在两次决策之间切换 ContextWindow，Session、用户入口和 Reply route 不变。Session 没有绝对终态。

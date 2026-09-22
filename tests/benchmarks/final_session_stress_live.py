@@ -92,7 +92,7 @@ async def main() -> None:
                 state = await runtime.state(session_id)
                 if state.status is not RuntimeStatus.WAITING:
                     raise AssertionError(f"task {index} stopped in {state.status}")
-                if state.waiting_for != ("user_message",):
+                if state.waiting_for != ("external_fact",):
                     raise AssertionError(
                         f"task {index} waits for {state.waiting_for}"
                     )

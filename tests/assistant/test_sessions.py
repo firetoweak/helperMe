@@ -314,7 +314,7 @@ class AcceptInputTest(unittest.IsolatedAsyncioTestCase):
         )
         resolved = SessionView(
             status="waiting",
-            waiting_for=("user_message",),
+            waiting_for=("external_fact",),
             pending_authorization_ids=("command-1",),
             should_wake=False,
             control_message="控制操作完成",

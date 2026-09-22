@@ -94,7 +94,7 @@ class ConversationProjectionTest(unittest.TestCase):
                 causation_id="attempt-1",
             ),
         )
-        view = SessionView("waiting", ("user_message",), (), False)
+        view = SessionView("waiting", ("external_fact",), (), False)
 
         conversation = project_conversation(
             "session-1", events, timeline(events), session=view
@@ -123,7 +123,7 @@ class ConversationProjectionTest(unittest.TestCase):
             "session-1",
             events,
             timeline(events),
-            session=SessionView("waiting", ("user_message",), (), False),
+            session=SessionView("waiting", ("external_fact",), (), False),
         )
         self.assertEqual(conversation.workspace_id, "workspace-demo")
 
@@ -155,7 +155,7 @@ class ConversationProjectionTest(unittest.TestCase):
             "session-1",
             events,
             timeline(events),
-            session=SessionView("waiting", ("user_message",), (), False),
+            session=SessionView("waiting", ("external_fact",), (), False),
         )
         self.assertEqual(conversation.items[1].thinking, "先确认目标")
 
@@ -168,7 +168,7 @@ class ConversationProjectionTest(unittest.TestCase):
                 committed_step("decision-1", "user-1", "", (search,)),
             ),
         )
-        view = SessionView("waiting", ("user_message",), (), False)
+        view = SessionView("waiting", ("external_fact",), (), False)
 
         queued = project_conversation(
             "session-1", events, timeline(events), session=view
@@ -258,7 +258,7 @@ class ConversationProjectionTest(unittest.TestCase):
             "session-1",
             events,
             timeline(events),
-            session=SessionView("waiting", ("user_message",), (), False),
+            session=SessionView("waiting", ("external_fact",), (), False),
         )
 
         self.assertEqual(conversation.items[0].kind, "user")
@@ -299,7 +299,7 @@ class ConversationProjectionTest(unittest.TestCase):
             "session-1",
             turned_down,
             timeline(turned_down),
-            session=SessionView("waiting", ("user_message",), (), False),
+            session=SessionView("waiting", ("external_fact",), (), False),
         )
         self.assertEqual(rejected.items[0].tools[0].status, "rejected")
 
