@@ -1,7 +1,7 @@
 """附件：工具带回的二进制外置物，按内容寻址存放在 Session 目录。
 
 文本 Artifact 因超长而外置、按字符分页；附件因二进制天然写不进 Journal 而外置、
-整件取回。两者共用 Session 目录，不共用 API。见 docs/架构/多模态附件.md。
+整件取回。两者共用 Session 目录，不共用 API。见 docs/架构/上下文/多模态附件.md。
 """
 
 from __future__ import annotations

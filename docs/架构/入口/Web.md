@@ -1,0 +1,74 @@
+# Web
+
+Web 是与 TUI、ACP、Satori 平级的原生 Channel。浏览器只经 Web 后端使用 Assistant 应用操作与查询，不直接读 Journal，也不承担 Session 恢复。
+
+状态归类与所有权按[运行语义规约](../运行语义规约.md)，入口通用约束见 [Channel 接入契约](Channel接入契约.md)。本文只记 Web 特有的边界决策。
+
+## 三层前端状态
+
+服务端投影、Session 瞬时活动（preview、live tool、`lastError`、未读）、纯 UI 本地态（输入框、滚动、折叠）分开存放，不互相冒充。
+
+瞬时活动必须可丢：刷新后由 Journal 投影补齐，不跨重启恢复。它只能临时叠加在正式投影之上，不能把 Journal 的 `unknown` 推成终态，也不能覆盖已提交的终态。
+
+## 实时事件只叠加，不裁决
+
+工具终态一律来自已提交的 `CommandOutcomeReceived`。Worker 报告"执行函数返回了"不产生成功或失败，只提示前端重拉。
+
+`running` 必须来自 Worker 精确报告的同一个 `command_id`，且只盖在 Journal 的等待态上；Session 级 activity 不参与单个工具的状态判断。精确活动一旦丢失，回到 Journal 的 `unknown`。
+
+Host 是对外 activity 的唯一所有者。Worker 正常静止、已识别失败、未知崩溃或 generation 被接管，都必须由 Host 结束旧 generation 的 running、中止活动 preview、清掉 live tool 叠加并要求前端重拉；这些是展示清理，不能补写 Command Outcome。
+
+已识别的模型失败和 `ProcessFailure` 都只进瞬时 `lastError`，不写 Journal，不自动重启 Worker。压缩 reader 进程的失败不冒充用户会话失败。
+
+## 页面连接与 Session 选择解耦
+
+页面 SSE 分配瞬时 connection identity，映射为 Host owner。切换会话只改 owner 选择和中间栏，不取消仍在运行的 Session，也不打断后台工具。断开只释放 owner，不影响投递。
+
+## 草稿与工作区
+
+每条会话必须绑一个工作区，没有归属的存量会话不出现在列表里。草稿按工作区各留一份，发出第一条用户消息才锁定并进侧栏。
+
+这样做是为了让"新建会话"不制造大量空 Session，而不是引入新的 Runtime 概念——草稿在 Journal 里早就是一条已创建的 Session，只是尚无 `UserMessageReceived`。
+
+## 暂停、继续与停放，都不是取消
+
+- **暂停**：当前 Step 与已派发 Command 跑完，之后 Scheduler 不再因 outcome 自动进下一拍。人拨过暂停、或 Worker 已不在而 Journal 仍可推进，共用同一颗"继续"按钮，只 wake，不写用户消息。
+- **停放**：运行中的第一次发送先停在输入框上方，当前轮回到 idle 后按顺序发出，也可以立刻发或退回编辑栏。这只是前端呈现次序，不另建后端队列，刷新即丢。
+
+三者都不是 `cancel_turn`。Agent 自然停在等用户输入时两个按钮都不出现。
+
+`auto_authorize` 与 `paused` 是 Host 持有的 Session 级产品元数据，不进 Journal。Web 只是当前的设置入口，owner 换到别的 Channel 或暂时无人选择时这条 Session 的策略不变，语义见 [Command 授权](Command授权.md)。
+
+## 时间线的两层归约
+
+前端按机械事实分两层：有工具的已提交 Step 属于执行过程，可独立折叠；无工具的 Step 原地成为最终回复。
+
+Step 标题回答"这一步在做什么"，优先用该步的意图正文，没有才退回调用预览。默认全部折叠——执行细节由想分析的人自己展开，只有等待授权这类需要用户操作的状态才自动展开。
+
+一轮是否收口看机械事实：Session idle、没有进行中或待授权的工具、没有未决 control approval。不要求必须出现最终气泡；有工具却没有正文时画一句说明，不写 Journal，也不假装成 `deliver`。
+
+preview、committed cache 和 Journal Step 共用同一个显示身份，没有 Journal 身份的文字不得走 `deliver`。思考增量走独立通道，与正文分开，刷新后从已提交的决策元数据恢复。
+
+控制提案不进时间线，用不能关闭的确认框出示。裁决后的执行说明必须由同一 `request_id` 的 Journal 控制事实投影，Application 不另推一份权威结果。批准、拒绝、执行开始与终态是不同事实，执行已开始却无终态时显示"结果未知"，不再次执行。
+
+## 编辑消息是分支，不是改写
+
+用户消息不原地修改 Journal。编辑后发送会以目标消息之前的完整事件前缀创建新 Session，把编辑后的文本作为新事实写入。原文重发与改字是同一条 fork，不是第二条协议。
+
+源 Session 不需要停止：已提交的历史前缀本就不可变，它可以继续独立运行。前端路由停在原处，新输出在原地开始；新 identity 不作为独立会话出现在顶层列表。
+
+分支物化完整事件前缀并重建 Step basis，同时复制前缀引用的 Artifact 与附件。因此上下文、ToolSurface、已加载 Toolset、管理域、Skill 使用记录和 Compact 历史都从同一份 Journal 恢复，不存在只继承消息的旁路。截止点之后的一切不进新分支，历史 Command 只作为事实重放，不重新执行。
+
+## SubAgent 入口
+
+`delegate` / `reclaim` 从普通工具卡分出，作为 SubAgent 调用入口；`delegate` 的终态仍是派出回执，不改写成子生命线。父 idle 且有活跃子会话时画一个活动指示，不把父标成 `running`，也不改变"父可以先退、报告再唤醒父"的生命周期。当前不展示子会话过程正文。
+
+## 技术选型
+
+React + TypeScript + Vite + Mantine + RTK Query。Mantine 只提供布局与视觉组件；聊天界面可参考 assistant-ui 的交互样例，但不接入其 Runtime、Thread 或 Adapter 模型——那会引入第二套会话状态机。
+
+## 不做
+
+- 不把 Command Authorization 与 Control Approval 抽象成通用审批框架，两者变化原因不同。
+- 不让前端缓存参与后端恢复、调度或授权判断。
+- 不为停放发送建后端队列。

@@ -28,7 +28,7 @@ Event → State → Step → Command → Outcome → Event
 
 MCP、Skill、SubAgent 等能力也不会侵入 Runtime。它们各自通过窄边界接入，并按需进入模型上下文，使助手不断增长时，基础执行内核仍然保持稳定和可理解。
 
-完整设计见[架构总览](docs/架构/总览.md)和[Runtime](docs/架构/Runtime.md)。
+完整设计见[架构总览](docs/架构/总览.md)和[Runtime](docs/架构/运行/Runtime.md)。
 
 ## 运行
 
@@ -83,5 +83,4 @@ python web_chat.py
 - [文档索引](docs/README.md)
 - [项目架构方向](docs/项目架构方向.md)
 - [架构总览](docs/架构/总览.md)
-- [Runtime](docs/架构/Runtime.md)
-- [计划](docs/计划.md)
+- [Runtime](docs/架构/运行/Runtime.md)

@@ -1,6 +1,6 @@
 # SubAgent 委派实测（2026-09-18）
 
-实验笔记，不是当前实现准绳。现行 SubAgent 设计读 [SubAgent](../架构/SubAgent.md)。
+实验笔记，不是当前实现准绳。现行 SubAgent 设计读 [SubAgent](../架构/运行/SubAgent.md)。
 
 ## 目的
 
@@ -15,7 +15,7 @@
 - 子 Agent 模型输入预算：180000（由越界报错读出）
 - 委派 8 次，分 3 批；同批在同一决策内并行发出
 - 全程未使用 `reclaim`：8 个子 Agent 全部自行成功或自行失败
-- 子 id 形如 `session-<parent>/sub-<command_id>`，与 [SubAgent](../架构/SubAgent.md) 一致
+- 子 id 形如 `session-<parent>/sub-<command_id>`，与 [SubAgent](../架构/运行/SubAgent.md) 一致
 
 ## 方法
 
