@@ -143,6 +143,11 @@ class LoopGuardIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(LoopGuard().inspect(events, events[-1].sequence))
                 prefix = tuple(e for e in events if e.sequence <= first["covered_through"])
                 self.assertEqual(LoopGuard().inspect(prefix, first["covered_through"]), first)
+                # covered_through 是决策观测位置，可决策不等于已静默，它可能落在一个 Step
+                # 的两条命令结果之间。CompactBoundary 只受理命令全部终局的边界，所以往后
+                # 延到最近一个静默点；inspect 自己按 position 过滤，延长不影响上面的断言。
+                while assembly.runtime.projector.project("s", prefix).state.waiting_command_ids:
+                    prefix = events[: len(prefix) + 1]
 
                 # Re-run the fourth decision against the historical frozen frame.
                 maker = assembly.runtime.step_runner._decision_maker
