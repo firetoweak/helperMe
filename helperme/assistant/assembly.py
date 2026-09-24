@@ -40,6 +40,14 @@ from helperme.assistant.toolsets import (
     load_toolset_binding,
 )
 from helperme.runtime import AgentRuntime, ToolBinding
+from helperme.automation.tool import (
+    CANCEL_SCHEDULE,
+    CANCEL_SCHEDULE_SCHEMA,
+    SCHEDULE_ONCE,
+    SCHEDULE_ONCE_SCHEMA,
+    cancel_schedule_binding,
+    schedule_once_binding,
+)
 from helperme.assistant.builtin_tools import build_builtin_tools
 from helperme.sandbox.registry import WorkspaceRecord
 from helperme.assistant.cli import CliToolAdapter
@@ -178,11 +186,17 @@ async def build_assistant_assembly(
         providers=(McpToolsetAdapter(mcp, attachments),),
         base_schemas=[
             *builtin_tools.schemas,
+            *(
+                [SCHEDULE_ONCE_SCHEMA, CANCEL_SCHEDULE_SCHEMA]
+                if session_transport is not None else []
+            ),
             READ_ARTIFACT_SCHEMA,
             READ_IMAGE_SCHEMA,
         ],
         reserved_names=(
             *builtin_tools.names(),
+            SCHEDULE_ONCE,
+            CANCEL_SCHEDULE,
             "read_artifact",
             "read_image",
             DELIVER_TOOL_NAME,
@@ -218,6 +232,12 @@ async def build_assistant_assembly(
         )
     bindings = {
         **bind_executor_tools(builtin_tools, gateway, settings),
+        **(
+            {
+                SCHEDULE_ONCE: schedule_once_binding(session_transport),
+                CANCEL_SCHEDULE: cancel_schedule_binding(session_transport),
+            } if session_transport is not None else {}
+        ),
         **read_artifact_binding(gateway),
         **read_image_binding(journal, attachments),
         **deliver_binding(delivery_sink, preview),

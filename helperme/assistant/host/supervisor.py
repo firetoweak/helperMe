@@ -5,7 +5,16 @@ from dataclasses import asdict, dataclass, field, replace
 from inspect import isawaitable
 import multiprocessing
 import os
+from datetime import datetime, timezone
 
+from helperme.automation.once import (
+    SOURCE as AUTOMATION_SOURCE,
+    TIME_REACHED,
+    OneShotClock,
+    OneShotSchedules,
+    ScheduleDeliveryUnavailable,
+    ScheduledCheck,
+)
 from helperme.assistant.auto_authorize import AutoAuthorizeStore
 from helperme.assistant.control import pending_approval_view, project_control_message
 from helperme.assistant.session_pause import SessionPauseStore
@@ -72,6 +81,7 @@ class HostSupervisor:
         thinking_sink=None,
         session_activity_sink=None,
         session_failed_sink=None,
+        schedule_changed_sink=None,
         workspaces=None,
     ):
         self.store = store
@@ -88,6 +98,7 @@ class HostSupervisor:
         self.thinking_sink = thinking_sink
         self.session_activity_sink = session_activity_sink
         self.session_failed_sink = session_failed_sink
+        self.schedule_changed_sink = schedule_changed_sink
         self.workers: dict[str, Worker] = {}
         self.watchers: set[asyncio.Task] = set()
         self.locks: dict[str, asyncio.Lock] = {}
@@ -101,6 +112,10 @@ class HostSupervisor:
         self.job = WindowsJob.create() if os.name == "nt" else None
         self._auto_authorize = AutoAuthorizeStore(store.root)
         self._pause = SessionPauseStore(store.root)
+        self.automation = OneShotClock(
+            OneShotSchedules(home.state_root / "automation.sqlite")
+        )
+        self._automation_task: asyncio.Task[None] | None = None
         self.workspaces = (
             workspaces
             if workspaces is not None
@@ -108,6 +123,32 @@ class HostSupervisor:
         )
 
     async def _route(self, operation, session_id, arguments, *, worker=None):
+        if operation == "cancel_schedule":
+            code = self.automation.cancel(
+                arguments["command_id"], session_id, arguments["schedule_id"],
+            )
+            if code == "CANCELLED":
+                await self._emit_schedule_changed(session_id)
+            return code
+        if operation == "schedule_once":
+            started_at = arguments.get("started_at")
+            if started_at is not None:
+                started_at = datetime.fromisoformat(started_at)
+                if started_at.tzinfo is not timezone.utc:
+                    raise ValueError("schedule started_at must use UTC")
+            schedule = self.automation.register(
+                arguments["schedule_id"],
+                session_id,
+                arguments["delay_seconds"],
+                arguments["purpose"],
+                started_at=started_at,
+            )
+            await self._emit_schedule_changed(session_id)
+            return {
+                "schedule_id": schedule.schedule_id,
+                "due_at": schedule.due_at.isoformat(),
+                "purpose": schedule.purpose,
+            }
         if operation == "llm_chat":
             if worker is None:
                 worker = self.workers[session_id]
@@ -176,6 +217,46 @@ class HostSupervisor:
             await self._reclaim_child(session_id, arguments)
             return None
         return await self.request(operation, session_id, arguments)
+
+    def start_automation(self, group: asyncio.TaskGroup) -> None:
+        self._automation_task = group.create_task(
+            self.automation.run(self._deliver_scheduled, self._emit_schedule_changed),
+            name="assistant-one-shot-clock",
+        )
+
+    async def _emit_schedule_changed(self, session_id: str) -> None:
+        if self.schedule_changed_sink is None:
+            return
+        emitted = self.schedule_changed_sink(session_id)
+        if isawaitable(emitted):
+            await emitted
+
+    async def _deliver_scheduled(
+        self, schedule: ScheduledCheck, fired_at
+    ) -> None:
+        try:
+            await self.request(
+                "fact",
+                schedule.session_id,
+                {
+                    "fact_type": TIME_REACHED,
+                    "data": {
+                        "schedule_id": schedule.schedule_id,
+                        "purpose": schedule.purpose,
+                        "planned_at": schedule.due_at.isoformat(),
+                        "fired_at": fired_at.isoformat(),
+                    },
+                    "delivery_id": schedule.schedule_id,
+                    "source": AUTOMATION_SOURCE,
+                    "requests_decision": True,
+                    "causation_id": schedule.schedule_id,
+                },
+            )
+        except WorkerFailed as error:
+            raise ScheduleDeliveryUnavailable(schedule.schedule_id) from error
+
+    def next_scheduled_check(self, session_id: str) -> ScheduledCheck | None:
+        return self.automation.schedules.next_pending(session_id)
 
     async def _start(self, session_id):
         path = self.store.require(session_id)
@@ -748,6 +829,9 @@ class HostSupervisor:
         return await self.failures.get()
 
     async def close(self):
+        if self._automation_task is not None:
+            self._automation_task.cancel()
+            await asyncio.gather(self._automation_task, return_exceptions=True)
         self.closed = True
         workers = tuple(self.workers.values())
         for worker in workers:

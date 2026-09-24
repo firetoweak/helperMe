@@ -46,6 +46,7 @@ import { Composer } from "./Composer";
 import { EditableUserMessage } from "./EditableUserMessage";
 import { ExecutionProcess } from "./ExecutionProcess";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { ScheduledWait } from "./ScheduledWait";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { turnNeedsSubagentHint } from "./subagent";
 import {
@@ -339,6 +340,9 @@ export function Conversation() {
         </ScrollArea>
       )}
       <Box className="composer-dock">
+        {conversation.waiting_until === null ? null : (
+          <ScheduledWait dueAt={conversation.waiting_until} />
+        )}
         {items.length === 0 || followOutput.following ? null : (
           <Button
             className="jump-to-latest"

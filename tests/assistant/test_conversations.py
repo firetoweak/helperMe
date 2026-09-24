@@ -329,6 +329,9 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
 
                 return ConversationStatus(session_id, session_id, 0, None)
 
+            def next_scheduled_check(self, session_id):
+                return None
+
             async def view(self, session_id):
                 raise AssertionError("读会话不得唤醒 Worker")
 
@@ -382,6 +385,9 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
                 from helperme.assistant.compact.store import ConversationStatus
 
                 return ConversationStatus(session_id, session_id, 2, "failed")
+
+            def next_scheduled_check(self, session_id):
+                return None
 
             async def view(self, session_id):
                 raise AssertionError("读会话不得唤醒 Worker")
