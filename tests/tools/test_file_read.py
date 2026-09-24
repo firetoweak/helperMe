@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 from helperme.sandbox.api import EnvironmentBinding, ExecutionAttachment
 from helperme.sandbox.workspace import (
     FilesystemPermission,
@@ -17,8 +19,6 @@ from helperme.tools.builtin.file_read import (
     GlobInput,
     GrepInput,
     _glob_relative_entries,
-    _rg_scope_args,
-    _rg_scope_hint,
     create_file_read_specs,
 )
 
@@ -46,50 +46,6 @@ def _handlers(root: Path):
 
 
 class RgScopeContractTest(unittest.TestCase):
-    def test_default_scope_leaves_rg_filters_in_place(self):
-        root = Path("/tmp/project")
-        self.assertEqual(
-            _rg_scope_args(root, include_hidden=False, include_ignored=False),
-            [],
-        )
-
-    def test_include_hidden_still_prunes_git_unless_searching_inside_it(self):
-        root = Path("/tmp/project")
-        self.assertEqual(
-            _rg_scope_args(root, include_hidden=True, include_ignored=False),
-            ["--hidden", "--glob", "!.git/"],
-        )
-        self.assertEqual(
-            _rg_scope_args(
-                root / ".git",
-                include_hidden=True,
-                include_ignored=False,
-            ),
-            ["--hidden"],
-        )
-
-    def test_include_ignored_disables_gitignore(self):
-        self.assertEqual(
-            _rg_scope_args(
-                Path("/tmp/project"),
-                include_hidden=False,
-                include_ignored=True,
-            ),
-            ["--no-ignore"],
-        )
-
-    def test_hint_names_skipped_filters_and_escape_hatches(self):
-        hint = _rg_scope_hint(
-            Path("/tmp/project"),
-            include_hidden=False,
-            include_ignored=False,
-        )
-        assert hint is not None
-        self.assertIn("隐藏文件/目录", hint)
-        self.assertIn("gitignore", hint)
-        self.assertIn("include_hidden=true", hint)
-        self.assertIn("include_ignored=true", hint)
-
     def test_descriptions_explain_hidden_and_gitignore_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
             specs = _handlers(Path(directory))
@@ -110,6 +66,7 @@ class RgScopeContractTest(unittest.TestCase):
         self.assertEqual(entries, [("src", "dir")])
 
 
+@pytest.mark.process
 class FileSearchIgnoreTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
@@ -160,6 +117,8 @@ class FileSearchIgnoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(".git" in path for path in paths))
         self.assertIn("隐藏文件/目录", result["hint"])
         self.assertIn("gitignore", result["hint"])
+        self.assertIn("include_hidden=true", result["hint"])
+        self.assertIn("include_ignored=true", result["hint"])
 
     async def test_glob_include_hidden_finds_dot_files_but_not_git(self):
         result = await self.glob(
@@ -182,13 +141,26 @@ class FileSearchIgnoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ignored/secret.py", paths)
         self.assertIn("src/keep.py", paths)
 
-    async def test_glob_explicit_path_enters_hidden_directory(self):
-        result = await self.glob(
-            GlobInput(pattern="*", path=".github", max_results=100),
-        )
+    async def test_explicit_path_searches_hidden_directories(self):
+        for path, filename, query, include_hidden in (
+            (".github", ".github/README.md", "workflow", False),
+            (".git", ".git/objects/pack/pack-token", "git-object", True),
+        ):
+            with self.subTest(path=path):
+                result = await self.glob(
+                    GlobInput(
+                        pattern="*", path=path, include_hidden=include_hidden,
+                        max_results=100,
+                    ),
+                )
+                self.assertTrue(result["ok"])
+                self.assertIn(filename, self._match_paths(result))
 
-        self.assertTrue(result["ok"])
-        self.assertIn(".github/README.md", self._match_paths(result))
+                matches = await self.grep(
+                    GrepInput(query=query, path=path, include_hidden=include_hidden)
+                )
+                self.assertTrue(matches["ok"])
+                self.assertEqual({hit["file"] for hit in matches["hits"]}, {filename})
 
     async def test_grep_skips_hidden_and_gitignore_by_default(self):
         result = await self.grep(GrepInput(query="token", max_results=100))
