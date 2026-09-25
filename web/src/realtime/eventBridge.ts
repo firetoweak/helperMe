@@ -7,6 +7,7 @@ import {
   previewAbortedEventSchema,
   previewDeltaEventSchema,
   previewStartedEventSchema,
+  scheduleChangedEventSchema,
   sessionActivityEventSchema,
   sessionFailedEventSchema,
   thinkingDeltaEventSchema,
@@ -60,6 +61,14 @@ export function openEventBridge(dispatch: AppDispatch): () => void {
       helpermeApi.util.invalidateTags([
         { type: "Conversation", id: payload.session_id },
         "Sessions",
+      ]),
+    );
+  });
+  source.addEventListener("schedule_changed", (event) => {
+    const payload = scheduleChangedEventSchema.parse(JSON.parse(event.data));
+    dispatch(
+      helpermeApi.util.invalidateTags([
+        { type: "Conversation", id: payload.session_id },
       ]),
     );
   });

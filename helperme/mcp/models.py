@@ -208,10 +208,6 @@ class McpServerRecord:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "McpServerRecord":
-        payload = dict(payload)
-        payload.setdefault("last_status", "unknown")
-        payload.setdefault("last_checked_at", None)
-        payload.setdefault("last_error_summary", "")
         _require_exact_keys(
             payload,
             {
@@ -247,8 +243,6 @@ class McpServerRecord:
                 env_refs=_require_string_map(raw_config["env_refs"], "env_refs"),
             )
         else:
-            raw_config = dict(raw_config)
-            raw_config.setdefault("query_refs", {})
             _require_exact_keys(
                 raw_config,
                 {"url", "header_refs", "query_refs", "timeout_seconds"},

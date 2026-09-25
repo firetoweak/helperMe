@@ -55,6 +55,7 @@ const conversation: ConversationView = {
   },
   compact_count: 0,
   compact_phase: null,
+  waiting_until: null,
 };
 
 describe("truncateAfterUserMessage", () => {

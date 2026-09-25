@@ -107,6 +107,7 @@ export const conversationViewSchema = z
     session: sessionViewSchema,
     compact_count: z.number().int().nonnegative(),
     compact_phase: z.enum(["running", "ready", "failed"]).nullable(),
+    waiting_until: z.string().datetime({ offset: true }).nullable(),
   })
   .strict();
 
@@ -119,6 +120,10 @@ export const sessionActivityEventSchema = z
     session_id: z.string().min(1),
     activity: z.enum(["running", "idle"]),
   })
+  .strict();
+
+export const scheduleChangedEventSchema = z
+  .object({ session_id: z.string().min(1) })
   .strict();
 
 export const sessionFailedEventSchema = z

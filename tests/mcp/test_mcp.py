@@ -209,12 +209,34 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await registry.list_servers()
 
-            record.pop("enabled")
+            for field in (
+                "enabled", "last_status", "last_checked_at", "last_error_summary"
+            ):
+                with self.subTest(missing=field):
+                    incomplete = dict(record)
+                    del incomplete[field]
+                    registry.path.write_text(
+                        json.dumps({"version": 1, "servers": [incomplete]}),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, field):
+                        await registry.list_servers()
+
+            http_record = McpServerRecord(
+                id="http-demo",
+                display_name="HTTP Demo",
+                description="",
+                transport=TransportKind.STREAMABLE_HTTP,
+                transport_config=StreamableHttpTransportConfig(
+                    url="https://example.com/mcp"
+                ),
+            ).to_dict()
+            del http_record["transport_config"]["query_refs"]
             registry.path.write_text(
-                json.dumps({"version": 1, "servers": [record]}),
+                json.dumps({"version": 1, "servers": [http_record]}),
                 encoding="utf-8",
             )
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "query_refs"):
                 await registry.list_servers()
 
     async def test_secret_store_requires_current_version_and_string_values(self):
@@ -595,18 +617,6 @@ class McpRegistrySecretTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reloaded.last_error_summary, "connection failed")
             self.assertIsNotNone(reloaded.last_checked_at)
             self.assertEqual(reloaded.revision, 1)
-
-    async def test_from_dict_compat_without_last_status_fields(self):
-        data = _stdio_record("demo").to_dict()
-        del data["last_status"]
-        del data["last_checked_at"]
-        del data["last_error_summary"]
-
-        restored = McpServerRecord.from_dict(data)
-
-        self.assertEqual(restored.last_status, RuntimeAvailability.UNKNOWN)
-        self.assertIsNone(restored.last_checked_at)
-        self.assertEqual(restored.last_error_summary, "")
 
     async def test_assembly_exposes_agent_management_and_recovery_specs(self):
         with TemporaryDirectory() as directory:

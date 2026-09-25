@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import threading
 
+from helperme.automation.recovery import recover_schedule_attempts
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure
 from helperme.assistant.host.llm_port import WorkerLlmPort
@@ -160,6 +161,7 @@ async def _run_session(connection, session_id, journal, config_factory, home_roo
             # Rebuild only this Session. An explicit resume separately resumes its children.
             from helperme.assistant.runner import resume_session
 
+            await recover_schedule_attempts(journal, session_id, peer.request)
             await resume_session(
                 assembly.runtime,
                 assembly.surface,

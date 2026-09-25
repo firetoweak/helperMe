@@ -135,6 +135,7 @@ def create_web_app(
             thinking_sink=events.thinking,
             session_activity_sink=events.session_activity,
             session_failed_sink=events.session_failed,
+            schedule_changed_sink=events.schedule_changed,
             tool_progress_sink=events.tool_progress,
             authorization_required_sink=events.authorization_required,
             context_usage_sink=events.context_usage,

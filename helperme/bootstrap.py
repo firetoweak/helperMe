@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -57,6 +58,7 @@ async def bootstrap_assistant(
     thinking_sink=None,
     session_activity_sink=None,
     session_failed_sink=None,
+    schedule_changed_sink=None,
 ) -> AsyncIterator[BootstrappedAssistant]:
     install_host_environment()
     config = load_app_config() if app_config is None else app_config
@@ -86,12 +88,14 @@ async def bootstrap_assistant(
         thinking_sink=thinking_sink,
         session_activity_sink=session_activity_sink,
         session_failed_sink=session_failed_sink,
+        schedule_changed_sink=schedule_changed_sink,
     )
     mcp = build_mcp(home)
     skills = build_skills(
         home, diff_summarizer=LlmSkillDiffSummarizer(llm, config.model.active)
     )
-    async with llm, mcp.client_manager:
+    async with llm, mcp.client_manager, asyncio.TaskGroup() as tasks:
+        host.start_automation(tasks)
         try:
             yield BootstrappedAssistant(
                 config,

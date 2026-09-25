@@ -86,6 +86,7 @@ class ConversationView:
     session: SessionView
     compact_count: int = 0
     compact_phase: str | None = None
+    waiting_until: datetime | None = None
 
 
 class AssistantQueries:
@@ -150,6 +151,7 @@ class AssistantQueries:
                 paused=self._sessions.is_paused(session_id),
             )
         status = self._sessions.conversation_status(session_id)
+        scheduled = self._sessions.next_scheduled_check(session_id)
         return replace(
             project_conversation(
                 session_id,
@@ -159,6 +161,7 @@ class AssistantQueries:
             ),
             compact_count=status.compact_count,
             compact_phase=status.compact_phase,
+            waiting_until=None if scheduled is None else scheduled.due_at,
         )
 
 

@@ -58,6 +58,7 @@ describe("conversationViewSchema", () => {
       session,
       compact_count: 0,
       compact_phase: null,
+      waiting_until: null,
     });
 
     expect(parsed.items[1]).toMatchObject({
@@ -113,6 +114,7 @@ describe("conversationViewSchema", () => {
       session,
       compact_count: 0,
       compact_phase: null,
+      waiting_until: null,
     });
     expect(parsed.items[0]).toMatchObject({
       kind: "user",
@@ -141,6 +143,7 @@ describe("conversation thinking field", () => {
       session,
       compact_count: 0,
       compact_phase: null,
+      waiting_until: null,
     });
     expect(parsed.items[0]).toMatchObject({
       text: "world",
@@ -207,6 +210,7 @@ describe("toolProgressEventSchema", () => {
       session,
       compact_count: 0,
       compact_phase: null,
+      waiting_until: null,
     });
     expect(parsed.items[0]).toMatchObject({
       tools: [{ command_id: "cmd-1", status: "unknown" }],
@@ -240,6 +244,7 @@ describe("toolProgressEventSchema", () => {
       session,
       compact_count: 0,
       compact_phase: null,
+      waiting_until: null,
     });
     expect(parsed.items[0]).toMatchObject({
       kind: "step",

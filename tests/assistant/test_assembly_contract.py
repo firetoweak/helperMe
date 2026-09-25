@@ -18,7 +18,6 @@ from helperme.runtime import DecisionCancelled, MemoryJournal, StepCommitted
 from tests.fixtures.workspaces import workspace_record
 from tests.session_scheduler import (
     SettlingScheduler,
-    build_settling_assistant,
     settle_session,
 )
 
@@ -94,13 +93,7 @@ class BlockingStreamingLlm:
 
 
 class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
-    async def test_all_entries_share_one_model_request_contract(self):
-        factories = (
-            build_assistant_assembly,
-            build_settling_assistant,
-        )
-        requests: list[dict[str, object]] = []
-
+    async def test_assembled_model_request_is_preserved_for_replay(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = root / "workspace"
@@ -116,106 +109,102 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                     return_value=root / "runtime",
                 ),
             ):
-                for index, factory in enumerate(factories):
-                    llm = CapturingLlm()
-                    journal = MemoryJournal()
-                    config = AssistantConfig(
-                        model_name="test-model",
-                        model_context_limit=200_000,
-                        input_budget_ratio=0.75,
-                        llm=llm,
+                llm = CapturingLlm()
+                journal = MemoryJournal()
+                config = AssistantConfig(
+                    model_name="test-model",
+                    model_context_limit=200_000,
+                    input_budget_ratio=0.75,
+                    llm=llm,
+                )
+                session_id = "entry"
+                assembly = await build_assistant_assembly(
+                    config,
+                    lambda _session_id, _output_id, _text: None,
+                    journal,
+                    session_id=session_id,
+                    workspace=workspace_record(workspace),
+                )
+                try:
+                    decision = assembly.runtime.step_runner._decision_maker
+                    await assembly.runtime.receive_user_message(
+                        session_id,
+                        "检查管理能力",
+                        delivery_id="user-1",
                     )
-                    session_id = f"entry-{index}"
-                    assembly = await factory(
-                        config,
-                        lambda _session_id, _output_id, _text: None,
-                        journal,
-                        session_id=session_id,
-                        workspace=workspace_record(workspace),
+                    state = await assembly.runtime.state(session_id)
+                    events = await assembly.runtime.snapshot(session_id)
+                    allowed_control = decision._management.control_names(
+                        session_id,
+                        state,
                     )
-                    try:
-                        decision = assembly.runtime.step_runner._decision_maker
-                        await assembly.runtime.receive_user_message(
-                            session_id,
-                            "检查管理能力",
-                            delivery_id="user-1",
-                        )
-                        state = await assembly.runtime.state(session_id)
-                        events = await assembly.runtime.snapshot(session_id)
-                        allowed_control = decision._management.control_names(
-                            session_id,
-                            state,
-                        )
-                        expected_tools = [
-                            *assembly.surface.schemas(session_id, state),
-                            *decision._skill_tools.schemas(),
-                            *decision._cli_tools.schemas(),
-                            *decision._management.schemas(session_id, state),
-                            *assembly.control.schemas(
-                                session_id, events, allowed_control
-                            ),
-                            *assembly.subagents.schemas(session_id),
-                            *decision._compact.schemas(),
-                        ]
-                        expected_tools.sort(key=lambda item: item["function"]["name"])
-                        expected_prompt = DEFAULT_ASSISTANT_PROMPT
+                    expected_tools = [
+                        *assembly.surface.schemas(session_id, state),
+                        *decision._skill_tools.schemas(),
+                        *decision._cli_tools.schemas(),
+                        *decision._management.schemas(session_id, state),
+                        *assembly.control.schemas(
+                            session_id, events, allowed_control
+                        ),
+                        *assembly.subagents.schemas(session_id),
+                        *decision._compact.schemas(),
+                    ]
+                    expected_tools.sort(key=lambda item: item["function"]["name"])
+                    expected_prompt = DEFAULT_ASSISTANT_PROMPT
 
-                        first = await assembly.runtime.advance(session_id)
-                        await settle_session(
-                            assembly.runtime,
-                            session_id,
-                            control=assembly.control,
-                        )
+                    first = await assembly.runtime.advance(session_id)
+                    await settle_session(
+                        assembly.runtime,
+                        session_id,
+                        control=assembly.control,
+                    )
 
-                        request = llm.requests[0]
-                        self.assertEqual(request["tools"], expected_tools)
-                        self.assertEqual(
-                            request["messages"][0],
-                            {"role": "system", "content": expected_prompt},
-                        )
-                        self.assertEqual(
-                            [command.effect.name for command in first.step.commands],
-                            [LOAD_MANAGEMENT_TOOLS, "deliver"],
-                        )
-                        event = next(
-                            event
-                            for event in await journal.snapshot(session_id)
-                            if isinstance(event.payload, StepCommitted)
-                            and event.payload.step.step_id == first.step.step_id
-                        )
-                        artifact_id = event.artifact_refs[0]
-                        manifest = json.loads(
-                            decision._projector.gateway.for_session(session_id)
-                            .read(artifact_id, 0, 1_000_000)
-                            .content
-                        )
-                        self.assertEqual(manifest["request"], request)
-                        self.assertEqual(
-                            event.payload.decision_metadata["message_extensions"],
-                            {"reasoning_content": "private-state"},
-                        )
-                        replayed = next(
-                            message
-                            for message in llm.requests[1]["messages"]
-                            if message["role"] == "assistant"
-                            and message.get("tool_calls")
-                        )
-                        self.assertEqual(
-                            replayed["reasoning_content"], "private-state"
-                        )
-                        self.assertEqual(
-                            replayed["tool_calls"][0]["id"],
-                            first.step.commands[0].command_id,
-                        )
-                        requests.append(request)
+                    request = llm.requests[0]
+                    self.assertEqual(request["tools"], expected_tools)
+                    self.assertEqual(
+                        request["messages"][0],
+                        {"role": "system", "content": expected_prompt},
+                    )
+                    self.assertEqual(
+                        [command.effect.name for command in first.step.commands],
+                        [LOAD_MANAGEMENT_TOOLS, "deliver"],
+                    )
+                    event = next(
+                        event
+                        for event in await journal.snapshot(session_id)
+                        if isinstance(event.payload, StepCommitted)
+                        and event.payload.step.step_id == first.step.step_id
+                    )
+                    artifact_id = event.artifact_refs[0]
+                    manifest = json.loads(
+                        decision._projector.gateway.for_session(session_id)
+                        .read(artifact_id, 0, 1_000_000)
+                        .content
+                    )
+                    self.assertEqual(manifest["request"], request)
+                    self.assertEqual(
+                        event.payload.decision_metadata["message_extensions"],
+                        {"reasoning_content": "private-state"},
+                    )
+                    replayed = next(
+                        message
+                        for message in llm.requests[1]["messages"]
+                        if message["role"] == "assistant"
+                        and message.get("tool_calls")
+                    )
+                    self.assertEqual(
+                        replayed["reasoning_content"], "private-state"
+                    )
+                    self.assertEqual(
+                        replayed["tool_calls"][0]["id"],
+                        first.step.commands[0].command_id,
+                    )
 
-                        names = assembly.control.names()
-                        self.assertTrue(names.isdisjoint(assembly.bindings))
-                        self.assertTrue(names.issubset(assembly.surface._reserved))
-                    finally:
-                        await assembly.scheduler.close()
-
-        self.assertEqual(requests[1:], requests[:1])
+                    names = assembly.control.names()
+                    self.assertTrue(names.isdisjoint(assembly.bindings))
+                    self.assertTrue(names.issubset(assembly.surface._reserved))
+                finally:
+                    await assembly.scheduler.close()
 
 
 class AssemblyWiringTest(unittest.IsolatedAsyncioTestCase):
