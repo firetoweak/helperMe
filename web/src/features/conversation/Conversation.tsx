@@ -340,6 +340,17 @@ export function Conversation() {
         </ScrollArea>
       )}
       <Box className="composer-dock">
+        {conversation.workspace_version === null ? null : (
+          <Text
+            size="xs"
+            c={conversation.workspace_version.error === null ? "dimmed" : "red"}
+            title={conversation.workspace_version.version ?? undefined}
+          >
+            {conversation.workspace_version.error === null
+              ? `文件版本 ${conversation.workspace_version.version?.slice(0, 12)} · 可在对话中要求回退`
+              : `文件版本未记录：${conversation.workspace_version.error}`}
+          </Text>
+        )}
         {conversation.waiting_until === null ? null : (
           <ScheduledWait dueAt={conversation.waiting_until} />
         )}

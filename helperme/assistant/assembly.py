@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from hashlib import sha256
 
 from helperme.assistant.artifacts import (
     READ_ARTIFACT_SCHEMA,
@@ -31,6 +32,8 @@ from helperme.assistant.decision import (
     bind_executor_tools,
 )
 from helperme.assistant.runner import SessionScheduler
+from helperme.assistant.workspace_versions import WorkspaceVersionBoundary
+from helperme.sandbox.versions import WorkspaceVersions
 from helperme.assistant.sessions import AssistantSessions
 from helperme.assistant.subagent.subagent import DELEGATE, REPORT, SubAgentHost
 from helperme.assistant.toolsets import (
@@ -48,7 +51,7 @@ from helperme.automation.tool import (
     cancel_schedule_binding,
     schedule_once_binding,
 )
-from helperme.assistant.builtin_tools import build_builtin_tools
+from helperme.assistant.builtin_tools import build_builtin_tools, workspace_restore_tool
 from helperme.sandbox.registry import WorkspaceRecord
 from helperme.assistant.cli import CliToolAdapter
 from helperme.assistant.mcp import McpToolsetAdapter
@@ -108,9 +111,26 @@ async def build_assistant_assembly(
     session_transport=None,
     home: HelperMeHome | None = None,
 ) -> AssistantAssembly:
-    builtin_tools = await build_builtin_tools(workspace)
-    settings = _model_context_settings(config)
     sessions_root = runtime_data_root() if home is None else home.runtime_sessions_root
+    home = HelperMeHome.default() if home is None else home
+    versions = WorkspaceVersions(
+        workspace.task_root,
+        home.state_root / "workspace_versions" / sha256(
+            workspace.workspace_id.encode("utf-8")
+        ).hexdigest(),
+        # Journal/产品资源属于 Host，即使数据目录位于任务根内也不能随文件回退。
+        excluded_roots=(home.root,),
+    )
+    builtin_tools = await build_builtin_tools(workspace)
+
+    async def restore_workspace(command_id, target):
+        events = await runtime.snapshot(session_id)
+        state = runtime.projector.project_visible(session_id, events)
+        visible = compact_context.visible(events, state)
+        return await version_boundary.restore(command_id, target, events, visible)
+
+    restore_schema, restore_binding, exclusive_tools = workspace_restore_tool(restore_workspace)
+    settings = _model_context_settings(config)
     gateway = FileArtifactGateway(sessions_root)
     attachment_gateway = AttachmentGateway(sessions_root)
     attachments = attachment_gateway.for_session(session_id)
@@ -119,7 +139,6 @@ async def build_assistant_assembly(
         attachments=attachment_gateway,
         settings=settings,
     )
-    home = HelperMeHome.default() if home is None else home
     home.initialize()
     mcp = build_mcp(home)
     skills = build_skills(
@@ -186,6 +205,7 @@ async def build_assistant_assembly(
         providers=(McpToolsetAdapter(mcp, attachments),),
         base_schemas=[
             *builtin_tools.schemas,
+            restore_schema,
             *(
                 [SCHEDULE_ONCE_SCHEMA, CANCEL_SCHEDULE_SCHEMA]
                 if session_transport is not None else []
@@ -195,6 +215,7 @@ async def build_assistant_assembly(
         ],
         reserved_names=(
             *builtin_tools.names(),
+            restore_schema["function"]["name"],
             SCHEDULE_ONCE,
             CANCEL_SCHEDULE,
             "read_artifact",
@@ -232,6 +253,7 @@ async def build_assistant_assembly(
         )
     bindings = {
         **bind_executor_tools(builtin_tools, gateway, settings),
+        restore_schema["function"]["name"]: restore_binding,
         **(
             {
                 SCHEDULE_ONCE: schedule_once_binding(session_transport),
@@ -262,6 +284,7 @@ async def build_assistant_assembly(
         context_usage_sink=context_usage_sink,
         subagents=subagents,
         compact=compact_context,
+        exclusive_tool_names=exclusive_tools,
         loop_guard=LoopGuard((ConsecutiveActions(config.loop_guard_repeat_threshold),)),
         preview=preview,
     )
@@ -308,6 +331,13 @@ async def build_assistant_assembly(
         return True if compact is None else await compact.before_advance()
 
     scheduler.before_advance = before_advance
+    version_boundary = WorkspaceVersionBoundary(runtime, session_id, workspace.workspace_id, versions)
+
+    async def record_workspace_versions():
+        if not compact_context.is_reader and not subagents.is_subagent(session_id):
+            await version_boundary.sync()
+
+    scheduler.record_workspace_versions = record_workspace_versions
     scheduler.auto_authorize = sessions.is_auto_authorized
     scheduler.authorization_required = authorization_required_sink
     return AssistantAssembly(

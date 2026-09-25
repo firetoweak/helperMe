@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from helperme.assistant.tool_results import runtime_tool_result
@@ -9,8 +9,8 @@ from helperme.sandbox.api import EnvironmentSelection
 from helperme.sandbox.local.provider import create_local_environment_provider
 from helperme.sandbox.registry import WorkspaceRecord, workspace_view
 from helperme.tools.executor import ToolsExecutor
-from helperme.tools.registry import BUILTIN_TOOL_REGISTRY
-from helperme.tools.builtin import create_environment_tool_specs
+from helperme.tools.registry import BUILTIN_TOOL_REGISTRY, ToolRegistry
+from helperme.tools.builtin import create_environment_tool_specs, create_workspace_restore_spec
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +46,9 @@ class BuiltinToolRunner:
         return spec.requires_authorization
 
 
-async def build_builtin_tools(workspace: WorkspaceRecord) -> BuiltinToolRunner:
+async def build_builtin_tools(
+    workspace: WorkspaceRecord,
+) -> BuiltinToolRunner:
     view = workspace_view(workspace)
     provider = create_local_environment_provider()
     binding = await provider.attach(EnvironmentSelection(
@@ -61,3 +63,27 @@ async def build_builtin_tools(workspace: WorkspaceRecord) -> BuiltinToolRunner:
         schemas=tuple(registry.get_tools()),
         _executor=ToolsExecutor(registry),
     )
+
+
+def workspace_restore_tool(operation: Callable[[str, str], Awaitable[dict]]):
+    """声明来自 ToolSpec；每次执行绑定 Runtime 提供的调用身份。"""
+    from helperme.runtime import ToolBinding
+
+    def executor(command_id):
+        async def restore(target):
+            return await operation(command_id, target)
+        spec = create_workspace_restore_spec(restore)
+        registry = ToolRegistry()
+        registry.register(spec)
+        return spec, ToolsExecutor(registry)
+
+    # 这里只取声明；执行器在收到实际 AttemptContext 时构造。
+    spec, _ = executor(None)
+
+    async def handler(context, arguments):
+        bound, tools = executor(context.command_id)
+        return runtime_tool_result(await tools.execute_parsed(bound.name, arguments))
+
+    binding = ToolBinding(handler, requires_authorization=spec.requires_authorization)
+    exclusive = frozenset({spec.name}) if spec.exclusive_batch else frozenset()
+    return spec.to_openai_tool(), binding, exclusive

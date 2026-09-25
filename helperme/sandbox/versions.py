@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+import asyncio
+from contextlib import closing
+from dataclasses import dataclass
+import os
+import json
+from pathlib import Path
+import re
+import sqlite3
+import subprocess
+from tempfile import TemporaryDirectory
+
+
+class VersionBackendError(OSError):
+    """已识别的 Git 执行环境错误。"""
+
+
+class UnknownWorkspaceVersion(ValueError):
+    pass
+
+
+class WorkspaceRestoreFailed(VersionBackendError):
+    def __init__(self, before_version: str, error: OSError) -> None:
+        super().__init__(str(error))
+        self.before_version = before_version
+
+
+@dataclass(frozen=True)
+class WorkspaceRestore:
+    before_version: str
+    version: str
+
+
+class WorkspaceVersions:
+    """独立 Git 对象库；只操作任务根，永不使用用户的索引或引用。"""
+
+    def __init__(self, root: Path, storage: Path, *,
+                 excluded_roots: tuple[Path, ...] = ()) -> None:
+        self.root = root.resolve()
+        self.storage = storage.resolve()
+        self.repository = self.storage / "repository.git"
+        self.excluded_roots = (self.storage, *(path.resolve() for path in excluded_roots))
+
+    async def record(self) -> str:
+        return await self._run(self._record)
+
+    async def restore(self, version: str) -> WorkspaceRestore:
+        if re.fullmatch(r"[0-9a-f]{40}", version) is None:
+            raise UnknownWorkspaceVersion(version)
+        return await self._run(lambda index: self._restore(index, version))
+
+    async def _run(self, operation):
+        task = asyncio.create_task(asyncio.to_thread(self._locked, operation))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as cancelled:
+            # 不让后台线程在 Worker 关闭后继续改文件。
+            try:
+                await task
+            except BaseException as error:
+                raise BaseExceptionGroup("workspace operation failed during cancellation",
+                                         [cancelled, error]) from None
+            raise
+
+    def _locked(self, operation):
+        self.storage.mkdir(parents=True, exist_ok=True)
+        # 只串行化版本库事务，不协调 Session 对工作树的普通写入。
+        try:
+            with closing(sqlite3.connect(self.storage / "lock.sqlite", timeout=30)) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if not self.repository.exists():
+                    self._git(None, "init", "--bare", "--template=", str(self.repository))
+                (self.repository / "info").mkdir(exist_ok=True)
+                (self.repository / "info" / "attributes").write_text(
+                    "* -text -filter -ident -working-tree-encoding\n", encoding="utf-8",
+                )
+                with TemporaryDirectory(dir=self.storage) as temporary:
+                    return operation(Path(temporary) / "index")
+        except sqlite3.OperationalError as error:
+            if error.sqlite_errorcode in {
+                sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_CANTOPEN,
+                sqlite3.SQLITE_READONLY, sqlite3.SQLITE_FULL,
+            }:
+                raise VersionBackendError(str(error)) from error
+            raise
+
+    def _git(self, index: Path | None, *args: str, data: bytes | None = None,
+             accepted: tuple[int, ...] = (0,)) -> bytes:
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update({
+            "LC_ALL": "C",
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_AUTHOR_NAME": "HelperMe", "GIT_AUTHOR_EMAIL": "helperme@local",
+            "GIT_COMMITTER_NAME": "HelperMe", "GIT_COMMITTER_EMAIL": "helperme@local",
+        })
+        command = ["git"]
+        if index is not None:
+            env["GIT_INDEX_FILE"] = str(index)
+            command += [
+                f"--git-dir={self.repository}", f"--work-tree={self.root}",
+                "-c", "core.bare=false", "-c", "core.autocrlf=false",
+                "-c", "core.safecrlf=false", "-c", "core.quotePath=false",
+                "-c", "core.symlinks=true",
+                "-c", f"core.excludesFile={self.root / '.git' / 'info' / 'exclude'}",
+            ]
+        result = subprocess.run(
+            [*command, *args], input=data, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, cwd=self.root, env=env,
+        )
+        if result.returncode not in accepted:
+            message = result.stderr.decode("utf-8", errors="replace").strip()
+            # 损坏和未知 Git 错误不是可继续的「记录不可用」。
+            known = ("Permission denied", "Access is denied", "No space left on device",
+                     "Read-only file system", "unable to access", "could not open",
+                     "Unable to create", "unable to create", "cannot stat",
+                     "unable to unlink", "unable to write", "could not write",
+                     "cannot create directory", "File name too long", "Filename too long")
+            if any(fragment in message for fragment in known):
+                raise VersionBackendError(message)
+            raise RuntimeError(f"workspace Git {args[0]} failed: {message}")
+        return result.stdout
+
+    def _head(self, index: Path) -> str | None:
+        value = self._git(index, "rev-parse", "--verify", "--quiet", "HEAD", accepted=(0, 1))
+        return value.decode().strip() or None
+
+    def _record(self, index: Path, *, force: bool = False) -> str:
+        previous = self._head(index)
+        self._git(index, "read-tree", "--empty")
+        paths: list[bytes] = []
+        def walk_error(error):
+            raise error
+        for directory, dirs, files in os.walk(self.root, onerror=walk_error):
+            base = Path(directory)
+            dirs[:] = [name for name in dirs
+                       if name.casefold() != ".git" and base / name not in self.excluded_roots]
+            links = [name for name in dirs if (base / name).is_symlink()]
+            dirs[:] = [name for name in dirs if name not in links]
+            paths.extend(
+                (base / name).relative_to(self.root).as_posix().encode("utf-8")
+                for name in [*files, *links] if name.casefold() != ".git"
+            )
+        if paths:
+            ignored = set(self._git(
+                index, "check-ignore", "--no-index", "-z", "--stdin",
+                data=b"\0".join(paths) + b"\0", accepted=(0, 1),
+            ).split(b"\0"))
+            included = [path for path in paths if path not in ignored]
+            if included:
+                # Plumbing 按原始字节存储；不执行工作树的 filter，也不把嵌套仓库变成 gitlink。
+                regular = [path for path in included
+                           if not (self.root / path.decode("utf-8")).is_symlink()]
+                hashes = self._git(
+                    index, "hash-object", "-w", "--no-filters", "--stdin-paths",
+                    data="".join(json.dumps(path.decode("utf-8"), ensure_ascii=False) + "\n"
+                                 for path in regular).encode("utf-8"),
+                ).splitlines() if regular else []
+                objects = dict(zip(regular, hashes, strict=True))
+                entries = []
+                for path in included:
+                    native = self.root / path.decode("utf-8")
+                    if native.is_symlink():
+                        mode = b"120000"
+                        oid = self._git(index, "hash-object", "-w", "--stdin",
+                                        data=os.fsencode(os.readlink(native))).strip()
+                    else:
+                        mode = b"100755" if native.stat().st_mode & 0o111 else b"100644"
+                        oid = objects[path]
+                    entries.append(mode + b" " + oid + b"\t" + path + b"\0")
+                self._git(index, "update-index", "-z", "--index-info", data=b"".join(entries))
+        tree = self._git(index, "write-tree").decode().strip()
+        if previous is not None and not force:
+            old_tree = self._git(index, "rev-parse", f"{previous}^{{tree}}").decode().strip()
+            if tree == old_tree:
+                return previous
+        parent = [] if previous is None else ["-p", previous]
+        version = self._git(index, "commit-tree", tree, *parent,
+                            data=b"Workspace snapshot\n").decode().strip()
+        self._git(index, "update-ref", "HEAD", version, previous or "0" * 40)
+        return version
+
+    def _restore(self, index: Path, version: str) -> WorkspaceRestore:
+        head = self._head(index)
+        if head is None:
+            raise UnknownWorkspaceVersion(version)
+        history = self._git(index, "rev-list", "HEAD").decode().splitlines()
+        if version not in history:
+            raise UnknownWorkspaceVersion(version)
+        before = self._record(index)
+        # 当前 index 是刚记录的完整工作树，新建文件也因此能被 read-tree 删除。
+        try:
+            self._git(index, "read-tree", "--reset", "-u", version)
+            restored = self._record(index, force=True)
+        except OSError as error:
+            raise WorkspaceRestoreFailed(before, error) from error
+        return WorkspaceRestore(before, restored)

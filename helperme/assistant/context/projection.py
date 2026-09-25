@@ -22,6 +22,7 @@ from helperme.assistant.context.budget import (
     TokenEstimator,
 )
 from helperme.assistant.delivery import DELIVER_TOOL_NAME
+from helperme.assistant.workspace_versions import WORKSPACE_RESTORE_FACT, WORKSPACE_VERSION_FACT, WorkspaceVersionFact
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.runtime.events import (
     DomainFactCommitted,
@@ -244,6 +245,13 @@ def _translate_visible_events(
     attachments: AttachmentStore | None = None,
 ) -> list[_Projected]:
     visible = set(state.visible_event_ids)
+    # 记录失败可能在触发本次 Decision 的 Outcome 之后提交；不重加 Compact 已移出的事实。
+    visible_tail = max((e.sequence for e in events if e.event_id in visible), default=0)
+    for event in events:
+        if isinstance(event.payload, DomainFactCommitted) and event.payload.fact_type == WORKSPACE_VERSION_FACT:
+            fact = WorkspaceVersionFact.parse(event.payload.data)
+            if fact.error is not None and event.sequence > visible_tail:
+                visible.add(event.event_id)
     steps = {step.committed_event_id: step for step in state.steps}
     items: list[_Projected] = [
         _Projected(
@@ -270,6 +278,12 @@ def _translate_visible_events(
             )
             continue
         if isinstance(payload, DomainFactCommitted):
+            if payload.fact_type == WORKSPACE_RESTORE_FACT:
+                continue
+            if payload.fact_type == WORKSPACE_VERSION_FACT:
+                fact = WorkspaceVersionFact.parse(payload.data)
+                if fact.error is None:
+                    continue
             # Protocol has four roles; identify application facts explicitly.
             content = json.dumps(
                 {"fact": payload.fact_type, "data": thaw_value(payload.data)},

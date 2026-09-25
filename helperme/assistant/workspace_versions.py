@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+import re
+
+from helperme.runtime import DomainFactCommitted
+from helperme.runtime.model import CommandPhase
+from helperme.sandbox.versions import WorkspaceRestoreFailed, WorkspaceVersions
+
+
+WORKSPACE_VERSION_FACT = "assistant.workspace_version"
+WORKSPACE_RESTORE_FACT = "assistant.workspace_restore"
+
+
+@dataclass(frozen=True)
+class WorkspaceVersionFact:
+    workspace_id: str
+    step_id: str | None
+    version: str | None
+    error: str | None
+
+    @classmethod
+    def parse(cls, data) -> WorkspaceVersionFact:
+        if not isinstance(data, Mapping) or set(data) != {
+            "workspace_id", "step_id", "version", "error"
+        }:
+            raise ValueError("workspace version fact fields invalid")
+        if type(data["workspace_id"]) is not str or not data["workspace_id"]:
+            raise ValueError("workspace version workspace_id invalid")
+        for key in ("step_id", "version", "error"):
+            if data[key] is not None and (type(data[key]) is not str or not data[key]):
+                raise ValueError(f"workspace version {key} invalid")
+        _validate_version_result(data["version"], data["error"])
+        return cls(**data)
+
+
+def _validate_version_result(version, error):
+    if (version is None) == (error is None):
+        raise ValueError("workspace version must contain either version or error")
+    if version is not None and (type(version) is not str or re.fullmatch(r"[0-9a-f]{40}", version) is None):
+        raise ValueError("workspace version identity invalid")
+    if error is not None and (type(error) is not str or not error):
+        raise ValueError("workspace version error invalid")
+
+
+def project_workspace_versions(events) -> tuple[WorkspaceVersionFact, ...]:
+    return tuple(
+        WorkspaceVersionFact.parse(event.payload.data)
+        for event in events
+        if isinstance(event.payload, DomainFactCommitted)
+        and event.payload.fact_type == WORKSPACE_VERSION_FACT
+    )
+
+
+def project_workspace_restores(events):
+    restores = {}
+    for event in events:
+        payload = event.payload
+        if not isinstance(payload, DomainFactCommitted) or payload.fact_type != WORKSPACE_RESTORE_FACT:
+            continue
+        data = payload.data
+        if not isinstance(data, Mapping) or set(data) != {
+            "command_id", "tool_call_id", "before_version", "version", "error"
+        }:
+            raise ValueError("workspace restore fact fields invalid")
+        for key in ("command_id", "tool_call_id", "before_version"):
+            if type(data[key]) is not str or not data[key]:
+                raise ValueError(f"workspace restore {key} invalid")
+        if re.fullmatch(r"[0-9a-f]{40}", data["before_version"]) is None:
+            raise ValueError("workspace restore rescue version invalid")
+        _validate_version_result(data["version"], data["error"])
+        restores[data["command_id"]] = data
+    return restores
+
+
+class WorkspaceVersionBoundary:
+    def __init__(self, runtime, session_id: str, workspace_id: str,
+                 versions: WorkspaceVersions) -> None:
+        self.runtime = runtime
+        self.session_id = session_id
+        self.workspace_id = workspace_id
+        self.versions = versions
+
+    async def sync(self) -> None:
+        events = await self.runtime.snapshot(self.session_id)
+        recorded = {fact.step_id for fact in project_workspace_versions(events)}
+        state = self.runtime.projector.project_visible(self.session_id, events)
+        completed = [
+            step for step in state.steps
+            if step.step.step_id not in recorded
+            and all(command.phase is CommandPhase.TERMINAL
+                    or command.authorization_rejected_by_event_id is not None
+                    for command in step.commands)
+        ]
+        if None not in recorded:
+            await self._record(None, None)
+        for step in completed:
+            await self._record(step.step.step_id, step.committed_event_id)
+
+    async def _record(self, step_id: str | None, cause: str | None) -> None:
+        try:
+            version = await self.versions.record()
+        except OSError as exc:
+            fact = WorkspaceVersionFact(self.workspace_id, step_id, None, str(exc))
+        else:
+            fact = WorkspaceVersionFact(self.workspace_id, step_id, version, None)
+        await self.runtime.receive_domain_fact(
+            self.session_id, WORKSPACE_VERSION_FACT, asdict(fact),
+            delivery_id=step_id or "initial", source=WORKSPACE_VERSION_FACT,
+            causation_id=cause,
+        )
+
+
+    async def restore(self, command_id, target, events, visible):
+        target_step = next((step for step in visible.steps
+                            if any(c.command.command_id == target for c in step.commands)), None)
+        if target_step is None:
+            return {"ok": False, "code": "UNKNOWN_TOOL_CALL", "error": "当前上下文没有该调用。"}
+        all_steps = self.runtime.projector.project_visible(self.session_id, events).steps
+        position = next(i for i, step in enumerate(all_steps)
+                        if step.step.step_id == target_step.step.step_id)
+        previous_id = None if position == 0 else all_steps[position - 1].step.step_id
+        facts = {fact.step_id: fact for fact in project_workspace_versions(events)}
+        previous = facts.get(previous_id)
+        if previous is None or previous.version is None:
+            return {"ok": False, "code": "WORKSPACE_VERSION_UNAVAILABLE",
+                    "error": "该调用前一步没有成功的版本记录，无法回退。"}
+        version = previous.version
+        # 回退调用自身有精确的执行前救援快照，包含两步之间的手工修改。
+        restore = project_workspace_restores(events).get(target)
+        if restore is not None:
+            version = restore["before_version"]
+        try:
+            restored = await self.versions.restore(version)
+        except WorkspaceRestoreFailed as error:
+            await self._record_restore(command_id, target, error.before_version, None, str(error))
+            return {"ok": False, "code": "WORKSPACE_RESTORE_FAILED", "error": str(error),
+                    "hint": "恢复前的文件已保存，可引用本次回退调用 id 撤销这次恢复。"}
+        except OSError as error:
+            return {"ok": False, "code": "WORKSPACE_RESTORE_FAILED", "error": str(error)}
+        await self._record_restore(command_id, target, restored.before_version, restored.version, None)
+        return {"ok": True, "code": "WORKSPACE_RESTORED", "tool_call_id": target}
+
+    async def _record_restore(self, command_id, target, before, version, error):
+        await self.runtime.receive_domain_fact(
+            self.session_id, WORKSPACE_RESTORE_FACT,
+            {"command_id": command_id, "tool_call_id": target, "before_version": before,
+             "version": version, "error": error},
+            delivery_id=command_id, source=WORKSPACE_RESTORE_FACT,
+        )

@@ -108,6 +108,12 @@ export const conversationViewSchema = z
     compact_count: z.number().int().nonnegative(),
     compact_phase: z.enum(["running", "ready", "failed"]).nullable(),
     waiting_until: z.string().datetime({ offset: true }).nullable(),
+    workspace_version: z.object({
+      workspace_id: z.string().min(1),
+      step_id: z.string().min(1).nullable(),
+      version: z.string().regex(/^[0-9a-f]{40}$/).nullable(),
+      error: z.string().min(1).nullable(),
+    }).strict().nullable(),
   })
   .strict();
 

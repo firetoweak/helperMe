@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+import pytest
 
 from helperme.assistant.assembly import build_assistant_assembly
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
@@ -20,6 +21,13 @@ from tests.session_scheduler import (
     SettlingScheduler,
     settle_session,
 )
+
+
+@pytest.fixture(autouse=True)
+def version_backend():
+    # 本层验证装配；真实 Git 的文件恢复契约在 sandbox process 测试中。
+    with patch("helperme.sandbox.versions.WorkspaceVersions.record", return_value="a" * 40):
+        yield
 
 
 class CapturingLlm:
@@ -126,7 +134,11 @@ class AssistantAssemblyContractTest(unittest.IsolatedAsyncioTestCase):
                     workspace=workspace_record(workspace),
                 )
                 try:
+                    self.assertIn("restore_workspace", assembly.bindings)
+                    self.assertFalse(assembly.bindings["restore_workspace"].requires_authorization)
+                    self.assertIsNotNone(assembly.scheduler.record_workspace_versions)
                     decision = assembly.runtime.step_runner._decision_maker
+                    self.assertIn("restore_workspace", decision._exclusive_tool_names)
                     await assembly.runtime.receive_user_message(
                         session_id,
                         "检查管理能力",

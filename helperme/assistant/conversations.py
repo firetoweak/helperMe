@@ -11,6 +11,7 @@ from helperme.assistant.host.session_store import SessionStore
 from helperme.assistant.sessions import SessionView, session_view
 from helperme.assistant.subagent.subagent import project_parent, project_pending
 from helperme.assistant.workspaces import bound_workspace_id
+from helperme.assistant.workspace_versions import WorkspaceVersionFact, project_workspace_versions
 from helperme.runtime import (
     CommandPhase,
     CommandState,
@@ -87,6 +88,7 @@ class ConversationView:
     compact_count: int = 0
     compact_phase: str | None = None
     waiting_until: datetime | None = None
+    workspace_version: WorkspaceVersionFact | None = None
 
 
 class AssistantQueries:
@@ -245,12 +247,14 @@ def project_conversation(
                     thinking,
                 )
             )
+    versions = project_workspace_versions(events)
     return ConversationView(
         session_id=session_id,
         workspace_id=bound_workspace_id(events),
         revision=events[-1].sequence if events else 0,
         items=tuple(items),
         session=session,
+        workspace_version=versions[-1] if versions else None,
     )
 
 

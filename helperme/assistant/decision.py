@@ -68,12 +68,14 @@ class ToolRunner(Protocol):
 def decision_from_llm(
     response: LLMResponse,
     allowed_tool_names: AbstractSet[str],
+    exclusive_tool_names: AbstractSet[str] = frozenset(),
 ) -> ModelDecision:
     return ModelDecision(
         content=response.content,
         command_requests=_invoke_requests(
             response.calls,
             allowed_tool_names,
+            exclusive_tool_names,
         ),
     )
 
@@ -81,7 +83,12 @@ def decision_from_llm(
 def _invoke_requests(
     calls: Sequence[ToolCall],
     allowed_tool_names: AbstractSet[str],
+    exclusive_tool_names: AbstractSet[str] = frozenset(),
 ) -> tuple[InvokeTool, ...]:
+    if len(calls) != 1 and any(call.name in exclusive_tool_names for call in calls):
+        raise InvalidLLMResponse(
+            "invalid_tool_batch", "an exclusive tool must be the only tool call",
+        )
     requests: list[InvokeTool] = []
     for call in calls:
         if call.name == DELIVER_TOOL_NAME:
@@ -185,7 +192,9 @@ class JournalBackedLlmDecisionMaker:
         compact: CompactContext | None = None,
         loop_guard: LoopGuard | None = None,
         preview: PreviewEmitter | None = None,
+        exclusive_tool_names: AbstractSet[str] = frozenset(),
     ) -> None:
+        self._exclusive_tool_names = exclusive_tool_names
         self._journal = journal
         self._llm = llm
         self._model = model
@@ -302,6 +311,7 @@ class JournalBackedLlmDecisionMaker:
             command_requests=_invoke_requests(
                 response.calls,
                 allowed_tool_names,
+                self._exclusive_tool_names,
             ),
         )
 
