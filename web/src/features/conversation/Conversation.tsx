@@ -21,7 +21,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useEffect } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import {
   useAuthorizeCommandMutation,
@@ -33,12 +33,12 @@ import {
   useSetAutoAuthorizeMutation,
   useSetPausedMutation,
   useRetryTurnMutation,
+  useRewindWorkspaceMutation,
 } from "../../api/helpermeApi";
 import { useAppDispatch, useAppSelector } from "../../app/hooks";
 import {
   authorizationResolved,
   controlNotice,
-  liveSessionId,
   lockDraft,
   viewing,
 } from "../../realtime/runtimeSlice";
@@ -62,13 +62,13 @@ import { visibleTimeline } from "./visibleTimeline";
 
 export function Conversation() {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const { sessionId: routeSessionId } = useParams();
   const routeId = routeSessionId ?? "";
   const connectionId = useAppSelector((state) => state.runtime.connectionId);
   const ownerSessionId = useAppSelector((state) => state.runtime.ownerSessionId);
   const draftSessions = useAppSelector((state) => state.runtime.draftSessions);
-  const superseded = useAppSelector((state) => state.runtime.supersededSessions);
-  const sessionId = liveSessionId(routeId, superseded);
+  const sessionId = routeId;
   const runtime = useAppSelector((state) => state.runtime.sessions[sessionId]);
   const selected = useGetConversationQuery(sessionId, {
     skip: routeSessionId === undefined,
@@ -88,6 +88,7 @@ export function Conversation() {
   const [setAutoAuthorize, autoAuthorizing] = useSetAutoAuthorizeMutation();
   const [setPaused, pausing] = useSetPausedMutation();
   const [retryTurn, retrying] = useRetryTurnMutation();
+  const [rewindWorkspace, rewinding] = useRewindWorkspaceMutation();
 
   useEffect(() => {
     dispatch(viewing(sessionId === "" ? null : sessionId));
@@ -190,17 +191,39 @@ export function Conversation() {
     dispatch(lockDraft(sessionId));
   }
 
-  async function edit(messageId: string, text: string) {
+  async function edit(
+    messageId: string,
+    text: string,
+    listed: boolean,
+    restoreFiles: boolean,
+  ) {
     if (connectionId === null) {
       throw new Error("Web connection is not active");
     }
-    await editAndFork({
+    const view = await editAndFork({
       connectionId,
       sessionId,
       messageId,
       deliveryId: `web-${crypto.randomUUID()}`,
       text,
+      listed,
+      restoreFiles,
     }).unwrap();
+    navigate(`/sessions/${encodeURIComponent(view.session_id)}`, {
+      replace: !listed,
+    });
+  }
+
+  function rewind(stepId: string) {
+    if (connectionId === null) {
+      return;
+    }
+    void rewindWorkspace({
+      connectionId,
+      sessionId,
+      stepId,
+      deliveryId: `web-${crypto.randomUUID()}`,
+    });
   }
 
   async function authorize(commandId: string, approved: boolean) {
@@ -277,7 +300,10 @@ export function Conversation() {
                     <EditableUserMessage
                       disabled={connectionId === null}
                       images={turn.user.images}
-                      onSave={(text) => edit(turn.user!.key, text)}
+                      hasLaterWork={turn.key !== lastTurnKey || turn.process.length > 0}
+                      onSave={(text, listed, restoreFiles) =>
+                        edit(turn.user!.key, text, listed, restoreFiles)
+                      }
                       saving={editing.isLoading}
                       sessionId={sessionId}
                       text={turn.user.text}
@@ -289,6 +315,8 @@ export function Conversation() {
                     authorizationDisabled={connectionId === null}
                     complete={settled}
                     onAuthorize={authorize}
+                    onRewind={rewind}
+                    rewindDisabled={connectionId === null || rewinding.isLoading}
                     steps={turn.process}
                   />
                 )}

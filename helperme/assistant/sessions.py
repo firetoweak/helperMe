@@ -105,6 +105,7 @@ class AssistantSessions:
         management: ManagementSurface,
         catalog: CapabilityCatalog,
         subagents: SubAgentHost | None = None,
+        workspace_versions=None,
     ) -> None:
         self._runtime = runtime
         self._surface = surface
@@ -113,6 +114,7 @@ class AssistantSessions:
         self._management = management
         self._catalog = catalog
         self._subagents = subagents
+        self._workspace_versions = workspace_versions
         self._auto_authorize: dict[str, bool] = {}
         self._control_locks: dict[str, asyncio.Lock] = {}
 
@@ -369,3 +371,13 @@ class AssistantSessions:
     async def cancel_turn(self, session_id: str) -> SessionView:
         await self._scheduler.cancel_turn(session_id)
         return await self.view(session_id)
+
+    async def rewind_workspace(self, session_id: str, step_id: str, delivery_id: str):
+        assert self._workspace_versions is not None
+        return await self._workspace_versions.rewind(step_id, delivery_id)
+
+    async def settle_forked_workspace(
+        self, session_id: str, restore: bool, delivery_id: str
+    ) -> None:
+        assert self._workspace_versions is not None
+        await self._workspace_versions.settle_fork(restore, delivery_id)

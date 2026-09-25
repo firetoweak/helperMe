@@ -6,7 +6,7 @@ import pytest
 
 from helperme.assistant.context.projection import project_chat_messages
 from helperme.assistant.workspace_versions import (
-    WorkspaceVersionBoundary, project_workspace_versions,
+    WORKSPACE_CARRYOVER_FACT, WorkspaceVersionBoundary, project_workspace_versions,
 )
 from helperme.runtime import AgentRuntime, InvokeTool, MemoryJournal, ModelDecision, ToolBinding
 from tests.assistant.test_runner import ScriptedDecisionMaker
@@ -173,6 +173,70 @@ def test_partial_restore_retains_rescue_fact_without_exposing_version_addresses(
         versions.restore.side_effect = RuntimeError("corrupt")
         with pytest.raises(RuntimeError, match="corrupt"):
             await boundary.restore("other", target, events, visible)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("step_index,expected", [(0, "b"), (1, "c")])
+def test_human_rewind_lands_on_the_step_itself_and_tells_the_model(step_index, expected):
+    """人指的是「回到这一刻」，比模型的「撤销这次调用」晚一格。
+
+    人的回退没有工具返回值，所以这条事实必须进模型上下文——否则模型会
+    照着已经不存在的文件状态往下走。
+    """
+    async def scenario():
+        runtime, boundary, versions, _, visible = await restore_history(
+            ["a" * 40, "b" * 40, "c" * 40, "c" * 40]
+        )
+        step_id = visible.steps[step_index].step.step_id
+        result = await boundary.rewind(step_id, "web-1")
+        assert result == {"ok": True, "code": "WORKSPACE_REWOUND", "step_id": step_id}
+        versions.restore.assert_awaited_once_with(expected * 40)
+        events = await runtime.snapshot("s")
+        messages = project_chat_messages(events, runtime.projector.project_visible("s", events))
+        assert "assistant.workspace_rewind" in json.dumps(messages)
+    asyncio.run(scenario())
+
+
+def test_rewind_to_a_step_without_a_recorded_version_does_not_guess():
+    async def scenario():
+        _, boundary, versions, _, visible = await restore_history(
+            ["a" * 40, OSError("snapshot failed"), "c" * 40, "c" * 40]
+        )
+        result = await boundary.rewind(visible.steps[0].step.step_id, "web-1")
+        assert result["code"] == "WORKSPACE_VERSION_UNAVAILABLE"
+        versions.restore.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_fork_only_speaks_up_when_the_files_actually_diverged():
+    """分支点之后没动过文件时，退与不退没有区别，不该往上下文里塞话。
+
+    真有改动而用户选了不退，模型必须知道磁盘上有本分支历史看不到的东西。
+    """
+    async def scenario():
+        runtime, boundary, versions, events, _ = await restore_history(
+            ["a" * 40, "b" * 40, "c" * 40, "c" * 40]
+        )
+        branch_point = project_workspace_versions(events)[-1].version
+        versions.record.side_effect = None
+
+        versions.record.return_value = branch_point
+        await boundary.settle_fork(False, "edit-1-workspace")
+        assert (await runtime.snapshot("s"))[-1].payload.fact_type != WORKSPACE_CARRYOVER_FACT
+
+        versions.record.return_value = "d" * 40
+        await boundary.settle_fork(False, "edit-2-workspace")
+        saved = (await runtime.snapshot("s"))[-1].payload
+        assert saved.fact_type == WORKSPACE_CARRYOVER_FACT
+        versions.restore.assert_not_awaited()
+        all_events = await runtime.snapshot("s")
+        messages = project_chat_messages(
+            all_events, runtime.projector.project_visible("s", all_events)
+        )
+        assert WORKSPACE_CARRYOVER_FACT in json.dumps(messages)
+
+        await boundary.settle_fork(True, "edit-3-workspace")
+        versions.restore.assert_awaited_once_with(branch_point)
     asyncio.run(scenario())
 
 

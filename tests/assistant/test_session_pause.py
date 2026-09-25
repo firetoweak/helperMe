@@ -8,31 +8,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from helperme.assistant.host.supervisor import HostSupervisor
-from helperme.assistant.session_pause import SessionPauseStore
-
-
-class SessionPauseStoreTest(unittest.TestCase):
-    def test_missing_key_is_false_and_only_explicit_toggle_is_written(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            store = SessionPauseStore(root)
-
-            self.assertFalse(store.get("session-1"))
-            self.assertFalse((root / "paused.json").is_file())
-
-            store.remember("session-1", False)
-            self.assertFalse((root / "paused.json").is_file())
-
-            store.set("session-1", True)
-            raw = json.loads((root / "paused.json").read_text(encoding="utf-8"))
-            self.assertEqual(raw, {"session-1": True})
-            self.assertTrue(SessionPauseStore(root).get("session-1"))
+from helperme.assistant.session_metadata import SessionFlagStore
 
 
 class HostRetryTest(unittest.IsolatedAsyncioTestCase):
     async def test_retry_clears_pause_otherwise_resumes(self):
         host = object.__new__(HostSupervisor)
-        host._pause = SessionPauseStore(None)
+        host._pause = SessionFlagStore(None, "paused.json")
         host.set_paused = AsyncMock(return_value="unpaused")
         host.resume = AsyncMock(return_value="resumed")
 
@@ -48,7 +30,7 @@ class HostRetryTest(unittest.IsolatedAsyncioTestCase):
 class HostAcceptInputPauseTest(unittest.IsolatedAsyncioTestCase):
     async def test_accept_input_clears_host_pause_without_copying_worker(self):
         host = object.__new__(HostSupervisor)
-        host._pause = SessionPauseStore(None)
+        host._pause = SessionFlagStore(None, "paused.json")
         host._pause.remember("session-1", True)
         view = SimpleNamespace(paused=True)
         host.compact = SimpleNamespace(application=AsyncMock(return_value=view))
@@ -68,7 +50,7 @@ class HostAcceptInputPauseTest(unittest.IsolatedAsyncioTestCase):
 class HostResumePauseTest(unittest.IsolatedAsyncioTestCase):
     async def test_resume_views_when_paused_otherwise_resumes(self):
         host = object.__new__(HostSupervisor)
-        host._pause = SessionPauseStore(None)
+        host._pause = SessionFlagStore(None, "paused.json")
         host.compact = SimpleNamespace(application=AsyncMock(return_value="view"))
         host._with_host_metadata = lambda observed, session_id: observed
 
@@ -82,7 +64,7 @@ class HostResumePauseTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_set_paused_does_not_forward_to_worker(self):
         host = object.__new__(HostSupervisor)
-        host._pause = SessionPauseStore(None)
+        host._pause = SessionFlagStore(None, "paused.json")
         host.compact = SimpleNamespace(application=AsyncMock(return_value="held"))
         host._with_host_metadata = lambda observed, session_id: observed
 
@@ -99,7 +81,7 @@ class HostResumePauseTest(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             host = object.__new__(HostSupervisor)
-            host._pause = SessionPauseStore(root)
+            host._pause = SessionFlagStore(root, "paused.json")
             host.compact = SimpleNamespace(application=AsyncMock())
 
             await host.receive_user_message("session-1", "hello")

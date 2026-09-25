@@ -47,6 +47,9 @@ class _IdleSessions:
     def activity(self, session_id: str) -> str:
         return "idle"
 
+    def is_superseded(self, session_id: str) -> bool:
+        return False
+
 
 class SessionWorkspaceBindingTest(unittest.IsolatedAsyncioTestCase):
     async def test_create_writes_the_binding_as_the_first_event(self):

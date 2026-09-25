@@ -22,6 +22,7 @@ from helperme.assistant.host.session_store import (
 )
 from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.assistant.runner import SessionNotFoundError
+from helperme.assistant.workspace_versions import WorkspaceRewindFailed
 from helperme.bootstrap import bootstrap_assistant
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
@@ -76,6 +77,16 @@ class InputRequest(BaseModel):
 
 class EditRequest(InputRequest):
     message_id: str
+    listed: bool = False
+    restore_files: bool = False
+
+
+class RewindRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    connection_id: str
+    delivery_id: str
+    step_id: str
 
 
 class AuthorizationRequest(BaseModel):
@@ -176,6 +187,12 @@ def create_web_app(
     @app.exception_handler(SessionForkUnavailableError)
     async def fork_unavailable(
         _request: Request, error: SessionForkUnavailableError
+    ):
+        return JSONResponse(status_code=409, content={"detail": str(error)})
+
+    @app.exception_handler(WorkspaceRewindFailed)
+    async def workspace_rewind_failed(
+        _request: Request, error: WorkspaceRewindFailed
     ):
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
@@ -331,6 +348,21 @@ def create_web_app(
             session_id,
             body.message_id,
             body.text,
+            body.delivery_id,
+            body.listed,
+            body.restore_files,
+        )
+
+    @app.post("/api/sessions/{session_id}/workspace/rewind")
+    async def rewind_workspace(
+        session_id: str,
+        body: RewindRequest,
+        request: Request,
+    ):
+        return await _channel(request).rewind_workspace(
+            body.connection_id,
+            session_id,
+            body.step_id,
             body.delivery_id,
         )
 

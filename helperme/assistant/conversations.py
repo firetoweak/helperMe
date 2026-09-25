@@ -73,6 +73,8 @@ class StepItem:
     tools: tuple[ToolItem, ...]
     occurred_at: datetime
     thinking: str | None = None
+    # 这一步跑完时的文件状态还记得住，人点它就能退回来。
+    rewindable: bool = False
 
 
 ConversationItem = UserItem | StepItem
@@ -112,6 +114,8 @@ class AssistantQueries:
                 continue
             workspace_id = bound_workspace_id(events)
             if workspace_id is None:
+                continue
+            if self._sessions.is_superseded(session_id):
                 continue
             summaries.append(
                 project_session_summary(
@@ -201,6 +205,8 @@ def project_conversation(
     session: SessionView,
 ) -> ConversationView:
     by_event = {step.committed_event_id: step for step in steps}
+    versions = project_workspace_versions(events)
+    rewindable = {fact.step_id for fact in versions if fact.version is not None}
     items: list[ConversationItem] = []
     for event in events:
         payload = event.payload
@@ -245,9 +251,9 @@ def project_conversation(
                     tuple(tools),
                     event.occurred_at,
                     thinking,
+                    payload.step.step_id in rewindable,
                 )
             )
-    versions = project_workspace_versions(events)
     return ConversationView(
         session_id=session_id,
         workspace_id=bound_workspace_id(events),

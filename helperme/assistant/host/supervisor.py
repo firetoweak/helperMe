@@ -15,9 +15,9 @@ from helperme.automation.once import (
     ScheduleDeliveryUnavailable,
     ScheduledCheck,
 )
-from helperme.assistant.auto_authorize import AutoAuthorizeStore
 from helperme.assistant.control import pending_approval_view, project_control_message
-from helperme.assistant.session_pause import SessionPauseStore
+from helperme.assistant.session_metadata import SessionFlagStore, SessionLineageStore
+from helperme.assistant.workspace_versions import WorkspaceRewindFailed
 from helperme.assistant.compact.host import CompactHost
 from helperme.assistant.delivery import emit_delivery
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
@@ -110,8 +110,9 @@ class HostSupervisor:
         self.closed = False
         self.compact = CompactHost(self)
         self.job = WindowsJob.create() if os.name == "nt" else None
-        self._auto_authorize = AutoAuthorizeStore(store.root)
-        self._pause = SessionPauseStore(store.root)
+        self._auto_authorize = SessionFlagStore(store.root, "auto_authorize.json")
+        self._pause = SessionFlagStore(store.root, "paused.json")
+        self._lineage = SessionLineageStore(store.root, "lineage.json")
         self.automation = OneShotClock(
             OneShotSchedules(home.state_root / "automation.sqlite")
         )
@@ -592,6 +593,9 @@ class HostSupervisor:
     def is_paused(self, session_id):
         return self._pause.get(session_id)
 
+    def is_superseded(self, session_id):
+        return self._lineage.is_superseded(session_id)
+
     def _with_host_metadata(self, view, session_id):
         return replace(
             view,
@@ -636,7 +640,7 @@ class HostSupervisor:
             await emitted
 
     async def bound_workspace_id(self, session_id: str) -> str:
-        """会话自己的归属；派生子会话与压缩 reader 都继承它。"""
+        """ä¼è¯èªå·±çå½å±ï¼æ´¾çå­ä¼è¯ä¸åç¼© reader é½ç»§æ¿å®ã"""
         events = await SqliteJournal(self.store.require(session_id)).snapshot(
             session_id
         )
@@ -660,6 +664,8 @@ class HostSupervisor:
         child_session_id,
         delivery_id,
         source="user",
+        listed=False,
+        restore_files=False,
     ):
         async with self.locks.setdefault(source_session_id, asyncio.Lock()):
             original = await self.store.fork_before_message(
@@ -667,7 +673,16 @@ class HostSupervisor:
                 message_id,
                 child_session_id,
             )
+        # ???????????????????????????????
+        if not listed:
+            self._lineage.supersede(child_session_id, source_session_id)
         await self.select(owner, child_session_id)
+        # ????????????????????????????????
+        await self.compact.application(
+            "settle_forked_workspace",
+            child_session_id,
+            dict(restore=bool(restore_files), delivery_id=f"{delivery_id}-workspace"),
+        )
         return await self.accept_input(
             child_session_id,
             edited_text,
@@ -808,6 +823,29 @@ class HostSupervisor:
     async def cancel_turn(self, session_id):
         return self._with_host_metadata(
             await self.compact.application("cancel_turn", session_id, {}),
+            session_id,
+        )
+
+    async def rewind_workspace(self, session_id, step_id, delivery_id):
+        """??????????
+
+        ????????????????????????????????
+        ???????????????????????????????
+        ????????????????????????????????
+        ?????????????
+        """
+        self._pause.set(session_id, True)
+        await self.compact.application("cancel_turn", session_id, {})
+        await self.wait_quiescent(session_id)
+        result = await self.compact.application(
+            "rewind_workspace",
+            session_id,
+            dict(step_id=step_id, delivery_id=delivery_id),
+        )
+        if not result["ok"]:
+            raise WorkspaceRewindFailed(result["error"])
+        return self._with_host_metadata(
+            await self.compact.application("view", session_id, {}),
             session_id,
         )
 

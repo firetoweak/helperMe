@@ -1,4 +1,5 @@
 import {
+  ActionIcon,
   Alert,
   Badge,
   Button,
@@ -9,11 +10,13 @@ import {
   Stack,
   Text,
   ThemeIcon,
+  Tooltip,
   UnstyledButton,
 } from "@mantine/core";
 import {
   IconAlertCircle,
   IconAlertTriangle,
+  IconArrowBackUp,
   IconCheck,
   IconChevronDown,
   IconChevronRight,
@@ -56,6 +59,8 @@ interface ExecutionProcessProps {
   steps: VisibleStep[];
   authorizationDisabled: boolean;
   onAuthorize: (commandId: string, approved: boolean) => void;
+  onRewind: (stepId: string) => void;
+  rewindDisabled: boolean;
 }
 
 export function ExecutionProcess({
@@ -63,6 +68,8 @@ export function ExecutionProcess({
   steps,
   authorizationDisabled,
   onAuthorize,
+  onRewind,
+  rewindDisabled,
 }: ExecutionProcessProps) {
   const [opened, setOpened] = useState(!complete);
   const running = steps.some(stepStatusIsRunning);
@@ -104,6 +111,8 @@ export function ExecutionProcess({
               index={index}
               key={step.key}
               onAuthorize={onAuthorize}
+              onRewind={onRewind}
+              rewindDisabled={rewindDisabled}
               step={step}
             />
           ))}
@@ -118,11 +127,15 @@ function StepDisclosure({
   step,
   authorizationDisabled,
   onAuthorize,
+  onRewind,
+  rewindDisabled,
 }: {
   index: number;
   step: VisibleStep;
   authorizationDisabled: boolean;
   onAuthorize: (commandId: string, approved: boolean) => void;
+  onRewind: (stepId: string) => void;
+  rewindDisabled: boolean;
 }) {
   const status = stepStatus(step);
   const awaiting = step.tools.some(
@@ -139,26 +152,46 @@ function StepDisclosure({
 
   return (
     <div className="step-panel">
-      <UnstyledButton
-        aria-expanded={opened}
-        className="step-toggle"
-        onClick={() => setOpened((value) => !value)}
-      >
-        <Group justify="space-between" wrap="nowrap" gap="xs">
-          <Group gap={8} wrap="nowrap" maw="100%" style={{ minWidth: 0 }}>
-            {opened ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
-            <Text c="dimmed" fz={11} w={16} ta="right">
-              {index + 1}
-            </Text>
-            <Text className="step-heading" size="sm" truncate>
-              {stepHeading(step)}
-            </Text>
+      <Group gap={4} wrap="nowrap">
+        <UnstyledButton
+          aria-expanded={opened}
+          className="step-toggle"
+          onClick={() => setOpened((value) => !value)}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          <Group justify="space-between" wrap="nowrap" gap="xs">
+            <Group gap={8} wrap="nowrap" maw="100%" style={{ minWidth: 0 }}>
+              {opened ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+              <Text c="dimmed" fz={11} w={16} ta="right">
+                {index + 1}
+              </Text>
+              <Text className="step-heading" size="sm" truncate>
+                {stepHeading(step)}
+              </Text>
+            </Group>
+            {/* 「完成」不带信息，每一步跑完都是它；让位给回退控件。 */}
+            {status === "succeeded" ? null : (
+              <Badge color={STATUS_COLOR[status]} size="xs" variant="light">
+                {STATUS_LABEL[status]}
+              </Badge>
+            )}
           </Group>
-          <Badge color={STATUS_COLOR[status]} size="xs" variant="light">
-            {STATUS_LABEL[status]}
-          </Badge>
-        </Group>
-      </UnstyledButton>
+        </UnstyledButton>
+        {step.rewindable && step.stepId !== null ? (
+          <Tooltip label="把文件退回这一步之后，并暂停">
+            <ActionIcon
+              aria-label="退回这一步之后的文件状态"
+              disabled={rewindDisabled}
+              onClick={() => onRewind(step.stepId!)}
+              radius="xl"
+              size="sm"
+              variant="subtle"
+            >
+              <IconArrowBackUp size={14} />
+            </ActionIcon>
+          </Tooltip>
+        ) : null}
+      </Group>
       <Collapse expanded={opened}>
         {opened ? (
           <Stack className="step-content" gap="xs">

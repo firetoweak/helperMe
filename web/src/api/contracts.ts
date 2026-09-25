@@ -100,6 +100,7 @@ export const conversationViewSchema = z
             thinking: z.string().min(1).nullable(),
             tools: z.array(toolItemSchema),
             occurred_at: z.string().datetime({ offset: true }),
+            rewindable: z.boolean(),
           })
           .strict(),
       ]),

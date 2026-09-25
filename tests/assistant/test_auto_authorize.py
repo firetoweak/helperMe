@@ -7,32 +7,14 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
-from helperme.assistant.auto_authorize import AutoAuthorizeStore
 from helperme.assistant.host.supervisor import HostSupervisor
-
-
-class AutoAuthorizeStoreTest(unittest.TestCase):
-    def test_missing_key_is_false_and_only_explicit_toggle_is_written(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            store = AutoAuthorizeStore(root)
-
-            self.assertFalse(store.get("session-1"))
-            self.assertFalse((root / "auto_authorize.json").is_file())
-
-            store.remember("session-1", False)
-            self.assertFalse((root / "auto_authorize.json").is_file())
-
-            store.set("session-1", True)
-            raw = json.loads((root / "auto_authorize.json").read_text(encoding="utf-8"))
-            self.assertEqual(raw, {"session-1": True})
-            self.assertTrue(AutoAuthorizeStore(root).get("session-1"))
+from helperme.assistant.session_metadata import SessionFlagStore
 
 
 class HostAutoAuthorizeTest(unittest.IsolatedAsyncioTestCase):
     async def test_worker_policy_comes_only_from_session_store(self):
         host = object.__new__(HostSupervisor)
-        host._auto_authorize = AutoAuthorizeStore(None)
+        host._auto_authorize = SessionFlagStore(None, "auto_authorize.json")
         host._auto_authorize.remember("enabled", True)
         host.selections = {
             "tui": "enabled",
@@ -63,7 +45,7 @@ class HostAutoAuthorizeTest(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             host = object.__new__(HostSupervisor)
-            host._auto_authorize = AutoAuthorizeStore(root)
+            host._auto_authorize = SessionFlagStore(root, "auto_authorize.json")
             host._push_auto_authorize = AsyncMock(
                 return_value=SimpleNamespace(auto_authorize=False)
             )

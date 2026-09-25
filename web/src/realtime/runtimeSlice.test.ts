@@ -17,9 +17,6 @@ import reducer, {
   thinkingDelta,
   thinkingStarted,
   setDraftSession,
-  supersedeSession,
-  liveSessionId,
-  isForkIdentity,
   clearLiveOutput,
   toolProgress,
   viewing,
@@ -231,18 +228,6 @@ describe("runtimeSlice", () => {
     expect(state.ownerSessionId).toBeNull();
     expect(state.draftSessions).toEqual({ w1: "draft-1" });
     expect(state.sessions["draft-1"].tools).toEqual({});
-  });
-
-  it("follows a fork chain to the live session and marks fork identities", () => {
-    let state = reducer(
-      undefined,
-      supersedeSession({ from: "parent", to: "child" }),
-    );
-    state = reducer(state, supersedeSession({ from: "child", to: "grandchild" }));
-    expect(liveSessionId("parent", state.supersededSessions)).toBe("grandchild");
-    expect(isForkIdentity("parent", state.supersededSessions)).toBe(false);
-    expect(isForkIdentity("child", state.supersededSessions)).toBe(true);
-    expect(isForkIdentity("grandchild", state.supersededSessions)).toBe(true);
   });
 
   it("keeps a control notice after idle so install results survive refetch", () => {

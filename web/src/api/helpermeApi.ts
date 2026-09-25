@@ -6,7 +6,6 @@ import {
   bindOwner,
   clearLiveOutput,
   controlNotice,
-  supersedeSession,
 } from "../realtime/runtimeSlice";
 import { truncateAfterUserMessage } from "./truncateAfterUserMessage";
 import {
@@ -35,6 +34,14 @@ type EditAndFork = SelectSession & {
   deliveryId: string;
   text: string;
   messageId: string;
+  // 改写顶掉原身份，新分支自己成一条会话线。
+  listed: boolean;
+  restoreFiles: boolean;
+};
+
+type RewindWorkspace = SelectSession & {
+  stepId: string;
+  deliveryId: string;
 };
 
 type UploadAttachment = SelectSession & {
@@ -175,7 +182,15 @@ export const helpermeApi = createApi({
       },
     }),
     editAndFork: build.mutation<ConversationView, EditAndFork>({
-      query: ({ connectionId, sessionId, messageId, deliveryId, text }) => ({
+      query: ({
+        connectionId,
+        sessionId,
+        messageId,
+        deliveryId,
+        text,
+        listed,
+        restoreFiles,
+      }) => ({
         url: `/sessions/${encodeURIComponent(sessionId)}/forks`,
         method: "POST",
         body: {
@@ -183,6 +198,8 @@ export const helpermeApi = createApi({
           message_id: messageId,
           delivery_id: deliveryId,
           text,
+          listed,
+          restore_files: restoreFiles,
         },
       }),
       transformResponse: (value: unknown) => conversationViewSchema.parse(value),
@@ -205,9 +222,6 @@ export const helpermeApi = createApi({
         dispatch(clearLiveOutput(arg.sessionId));
         try {
           const { data } = await queryFulfilled;
-          dispatch(
-            supersedeSession({ from: arg.sessionId, to: data.session_id }),
-          );
           dispatch(bindOwner(data.session_id));
           putConversation(dispatch, getState, data.session_id, data);
         } catch {
@@ -306,6 +320,22 @@ export const helpermeApi = createApi({
         putConversation(dispatch, getState, arg.sessionId, data);
       },
     }),
+    rewindWorkspace: build.mutation<ConversationView, RewindWorkspace>({
+      query: ({ connectionId, sessionId, stepId, deliveryId }) => ({
+        url: `/sessions/${encodeURIComponent(sessionId)}/workspace/rewind`,
+        method: "POST",
+        body: {
+          connection_id: connectionId,
+          delivery_id: deliveryId,
+          step_id: stepId,
+        },
+      }),
+      transformResponse: (value: unknown) => conversationViewSchema.parse(value),
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        putConversation(dispatch, getState, arg.sessionId, data);
+      },
+    }),
   }),
 });
 
@@ -326,4 +356,5 @@ export const {
   useSetAutoAuthorizeMutation,
   useSetPausedMutation,
   useRetryTurnMutation,
+  useRewindWorkspaceMutation,
 } = helpermeApi;

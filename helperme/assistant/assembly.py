@@ -317,6 +317,7 @@ async def build_assistant_assembly(
 
         scheduler.propagate_failures = compact_context.is_reader
     subagents.attach(runtime, session_transport)
+    version_boundary = WorkspaceVersionBoundary(runtime, session_id, workspace.workspace_id, versions)
     sessions = AssistantSessions(
         runtime,
         surface,
@@ -325,6 +326,7 @@ async def build_assistant_assembly(
         management=management,
         catalog=catalog,
         subagents=subagents,
+        workspace_versions=version_boundary,
     )
 
     async def before_advance():
@@ -338,7 +340,6 @@ async def build_assistant_assembly(
         return True if compact is None else await compact.before_advance()
 
     scheduler.before_advance = before_advance
-    version_boundary = WorkspaceVersionBoundary(runtime, session_id, workspace.workspace_id, versions)
 
     async def record_workspace_versions():
         if not compact_context.is_reader and not subagents.is_subagent(session_id):

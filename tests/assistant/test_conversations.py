@@ -350,6 +350,33 @@ class ConversationProjectionTest(unittest.TestCase):
         self.assertEqual(rejected.items[0].tools[0].status, "rejected")
 
 
+class Idle:
+    superseded: frozenset[str] = frozenset()
+
+    def activity(self, session_id):
+        return "idle"
+
+    def auto_authorize(self, session_id):
+        return session_id == "spoken"
+
+    def is_paused(self, session_id):
+        return session_id == "spoken"
+
+    def is_superseded(self, session_id):
+        return session_id in self.superseded
+
+    def conversation_status(self, session_id):
+        from helperme.assistant.compact.store import ConversationStatus
+
+        return ConversationStatus(session_id, session_id, 0, None)
+
+    def next_scheduled_check(self, session_id):
+        return None
+
+    async def view(self, session_id):
+        raise AssertionError("读会话不得唤醒 Worker")
+
+
 class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
     async def test_omits_journals_without_user_messages(self):
         from pathlib import Path
@@ -359,27 +386,6 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
         from helperme.assistant.host.session_store import SessionStore
         from helperme.runtime import SqliteJournal
         from helperme.runtime.events import DeliveryIdentity, EventDraft
-
-        class Idle:
-            def activity(self, session_id):
-                return "idle"
-
-            def auto_authorize(self, session_id):
-                return session_id == "spoken"
-
-            def is_paused(self, session_id):
-                return session_id == "spoken"
-
-            def conversation_status(self, session_id):
-                from helperme.assistant.compact.store import ConversationStatus
-
-                return ConversationStatus(session_id, session_id, 0, None)
-
-            def next_scheduled_check(self, session_id):
-                return None
-
-            async def view(self, session_id):
-                raise AssertionError("读会话不得唤醒 Worker")
 
         with TemporaryDirectory() as directory:
             store = SessionStore(Path(directory))
@@ -402,6 +408,36 @@ class ListSessionsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed[0].title, "你好")
         self.assertTrue(spoken.session.auto_authorize)
         self.assertTrue(spoken.session.paused)
+
+    async def test_superseded_identities_stay_out_of_the_top_level_list(self):
+        """被改写顶掉的身份照常可读，只是不再作为一条会话出现在列表里。"""
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from helperme.assistant.conversations import AssistantQueries
+        from helperme.assistant.host.session_store import SessionStore
+        from helperme.runtime import SqliteJournal
+        from helperme.runtime.events import DeliveryIdentity, EventDraft
+
+        class Rewritten(Idle):
+            superseded = frozenset({"spoken"})
+
+        with TemporaryDirectory() as directory:
+            store = SessionStore(Path(directory))
+            queries = AssistantQueries(store, Rewritten())
+            await store.create("spoken", workspace_id="workspace-1")
+            await SqliteJournal(store.require("spoken")).accept_delivery(
+                EventDraft(
+                    event_id="user-1",
+                    session_id="spoken",
+                    payload=UserMessageReceived("你好"),
+                    occurred_at=datetime(2026, 9, 16, tzinfo=timezone.utc),
+                    delivery=DeliveryIdentity("web", "d1"),
+                )
+            )
+
+            self.assertEqual(await queries.list_sessions(), ())
+            self.assertEqual((await queries.conversation("spoken")).items[0].text, "你好")
 
     async def test_conversation_projects_control_approval_from_journal(self):
         from pathlib import Path

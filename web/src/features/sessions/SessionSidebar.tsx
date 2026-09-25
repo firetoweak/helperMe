@@ -31,7 +31,6 @@ import {
   useGetWorkspacesQuery,
 } from "../../api/helpermeApi";
 import { useAppSelector } from "../../app/hooks";
-import { isForkIdentity, liveSessionId } from "../../realtime/runtimeSlice";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import {
   draftSessionId,
@@ -57,7 +56,6 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
     Record<string, boolean>
   >({});
   const runtimes = useAppSelector((state) => state.runtime.sessions);
-  const superseded = useAppSelector((state) => state.runtime.supersededSessions);
   const { data: sessions = [], isLoading } = useGetSessionsQuery();
   const { data: workspaces = [], isLoading: workspacesLoading } =
     useGetWorkspacesQuery();
@@ -68,14 +66,11 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState(
     readCollapsedWorkspaces,
   );
-  const visibleSessions = sessions.filter(
-    (session) => !isForkIdentity(session.session_id, superseded),
-  );
-  const workspaceGroups = groupSessions(visibleSessions, workspaces);
+  const workspaceGroups = groupSessions(sessions, workspaces);
   const fallbackWorkspaceId = defaultWorkspaceId(workspaceGroups, workspaces);
   const currentWorkspaceId = workspaceOfSession(
     sessionId,
-    visibleSessions,
+    sessions,
     draftSessions,
   );
   const defaultDraftId = draftSessionId(draftSessions, fallbackWorkspaceId);
@@ -237,11 +232,7 @@ export function SessionSidebar({ onNavigate }: SessionSidebarProps) {
                   <Collapse expanded={!collapsed}>
                     <Stack className="workspace-sessions" gap={3}>
                       {shownSessions.map((session) => {
-                        const liveId = liveSessionId(
-                          session.session_id,
-                          superseded,
-                        );
-                        const runtime = runtimes[liveId];
+                        const runtime = runtimes[session.session_id];
                         const activity = runtime?.activity ?? session.activity;
                         const unread = runtime?.unread ?? 0;
                         const updatedAt = formatRelativeTime(session.updated_at);

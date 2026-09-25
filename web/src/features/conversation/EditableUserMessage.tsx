@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Checkbox,
   Group,
   Paper,
   Stack,
@@ -7,7 +8,12 @@ import {
   Textarea,
   Tooltip,
 } from "@mantine/core";
-import { IconArrowUp, IconPencil, IconX } from "@tabler/icons-react";
+import {
+  IconArrowUp,
+  IconGitBranch,
+  IconPencil,
+  IconX,
+} from "@tabler/icons-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
 
 import { AttachmentTile, attachmentUrl } from "./AttachmentTile";
@@ -20,7 +26,13 @@ type EditableUserMessageProps = {
   images: string[];
   disabled: boolean;
   saving: boolean;
-  onSave: (text: string) => Promise<void>;
+  // 这条消息之后还跑过东西，文件就可能和这一刻对不上。
+  hasLaterWork: boolean;
+  onSave: (
+    text: string,
+    listed: boolean,
+    restoreFiles: boolean,
+  ) => Promise<void>;
 };
 
 export function EditableUserMessage({
@@ -29,10 +41,12 @@ export function EditableUserMessage({
   images,
   disabled,
   saving,
+  hasLaterWork,
   onSave,
 }: EditableUserMessageProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
+  const [restoreFiles, setRestoreFiles] = useState(false);
   const displayText = text.replace(IMAGE_TOKEN, "").trim();
   const canSend = !disabled && !saving && draft.trim() !== "";
 
@@ -50,12 +64,12 @@ export function EditableUserMessage({
     setDraft(text);
   }
 
-  async function save() {
+  async function save(listed: boolean) {
     const content = draft.trim();
     if (!canSend) {
       return;
     }
-    await onSave(content);
+    await onSave(content, listed, hasLaterWork && restoreFiles);
     setEditing(false);
   }
 
@@ -70,7 +84,7 @@ export function EditableUserMessage({
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      void save();
+      void save(false);
     }
   }
 
@@ -117,12 +131,26 @@ export function EditableUserMessage({
                   <IconX size={16} />
                 </ActionIcon>
               </Tooltip>
-              <Tooltip label="从这里创建分支并执行">
+              <Tooltip label="作为新分支执行">
                 <ActionIcon
-                  aria-label="从这里创建分支并执行"
+                  aria-label="作为新分支执行"
                   disabled={!canSend}
                   loading={saving}
-                  onClick={() => void save()}
+                  onClick={() => void save(true)}
+                  radius="xl"
+                  size={32}
+                  type="button"
+                  variant="subtle"
+                >
+                  <IconGitBranch size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="改写并执行">
+                <ActionIcon
+                  aria-label="改写并执行"
+                  disabled={!canSend}
+                  loading={saving}
+                  onClick={() => void save(false)}
                   radius="xl"
                   size={32}
                   type="button"
@@ -134,8 +162,17 @@ export function EditableUserMessage({
             </Group>
           </Group>
         </Paper>
+        {hasLaterWork ? (
+          <Checkbox
+            checked={restoreFiles}
+            disabled={saving}
+            label="同时把工作区文件退回这条消息之前"
+            onChange={(event) => setRestoreFiles(event.currentTarget.checked)}
+            size="xs"
+          />
+        ) : null}
         <Text c="dimmed" size="xs" ta="right">
-          当前会话会保留；发送后从这条消息之前创建新分支。
+          改写就地接着这条会话走；作为新分支会在侧栏多出一条，原会话留在原处。
         </Text>
       </Stack>
     );

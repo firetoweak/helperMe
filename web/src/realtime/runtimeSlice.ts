@@ -45,7 +45,6 @@ type RuntimeState = {
   viewingSessionId: string | null;
   ownerSessionId: string | null;
   draftSessions: Record<string, string>;
-  supersededSessions: Record<string, string>;
   sessions: Record<string, SessionRuntime>;
 };
 
@@ -54,7 +53,6 @@ const initialState: RuntimeState = {
   viewingSessionId: null,
   ownerSessionId: null,
   draftSessions: {},
-  supersededSessions: {},
   sessions: {},
 };
 
@@ -79,26 +77,6 @@ function runtimeOf(state: RuntimeState, sessionId: string): SessionRuntime {
   };
   state.sessions[sessionId] = created;
   return created;
-}
-
-export function liveSessionId(
-  sessionId: string,
-  superseded: Record<string, string>,
-): string {
-  let current = sessionId;
-  const seen = new Set<string>();
-  while (superseded[current] !== undefined && !seen.has(current)) {
-    seen.add(current);
-    current = superseded[current];
-  }
-  return current;
-}
-
-export function isForkIdentity(
-  sessionId: string,
-  superseded: Record<string, string>,
-): boolean {
-  return Object.values(superseded).includes(sessionId);
 }
 
 const runtimeSlice = createSlice({
@@ -142,15 +120,6 @@ const runtimeSlice = createSlice({
     },
     bindOwner(state, action: PayloadAction<string>) {
       state.ownerSessionId = action.payload;
-    },
-    hydrateSuperseded(state, action: PayloadAction<Record<string, string>>) {
-      state.supersededSessions = action.payload;
-    },
-    supersedeSession(
-      state,
-      action: PayloadAction<{ from: string; to: string }>,
-    ) {
-      state.supersededSessions[action.payload.from] = action.payload.to;
     },
     clearLiveOutput(state, action: PayloadAction<string>) {
       const session = runtimeOf(state, action.payload);
@@ -348,8 +317,6 @@ export const {
   setDraftSession,
   lockDraft,
   bindOwner,
-  hydrateSuperseded,
-  supersedeSession,
   clearLiveOutput,
   controlNotice,
   sessionActivity,
