@@ -9,8 +9,15 @@ from helperme.assistant.failures import assistant_failure_message
 from helperme.assistant.management import ManagementSurface
 from helperme.assistant.toolsets import ToolSurface
 from helperme.assistant.catalog import CapabilityCatalog
-from helperme.runtime import AgentRuntime, RuntimeStatus
+from helperme.runtime import (
+    AgentRuntime,
+    CommandOutcome,
+    DispatchAttemptStarted,
+    OutcomeStatus,
+    RuntimeStatus,
+)
 from helperme.runtime.model import CanonicalState
+from helperme.tools.builtin import CommandInterrupts, LiveCommand
 
 
 class SessionNotFoundError(LookupError):
@@ -66,6 +73,7 @@ class SessionScheduler:
         self.record_workspace_versions = None
         self.auto_authorize = None
         self.authorization_required = None
+        self.command_interrupts: CommandInterrupts | None = None
         self.propagate_failures = False
         self._task: asyncio.Task[bool] | None = None
         self._pending_wake = False
@@ -242,8 +250,37 @@ class SessionScheduler:
 
     async def cancel_turn(self, session_id: str) -> None:
         assert session_id == self._session_id
+        interrupts = self.command_interrupts
         await self._runtime.cancel_turn(session_id)
+        if interrupts is not None:
+            interrupted, errors = await interrupts.wait(interrupts.signal())
+            for live, result in interrupted:
+                await self._record_command_interrupt(live, result)
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup("打断命令失败", list(errors))
         self.changed.set()
+
+    async def _record_command_interrupt(
+        self,
+        live: LiveCommand,
+        result: object,
+    ) -> None:
+        events = await self._runtime.snapshot(self._session_id)
+        dispatch = next(
+            event
+            for event in events
+            if isinstance(event.payload, DispatchAttemptStarted)
+            and event.payload.attempt_id == live.attempt_id
+        )
+        await self._runtime.dispatcher.accept_outcome(
+            self._session_id,
+            live.command_id,
+            live.attempt_id,
+            dispatch.event_id,
+            CommandOutcome(OutcomeStatus.SUCCEEDED, value=result),
+        )
 
     async def close(self) -> None:
         await self._runtime.dispatcher.close()

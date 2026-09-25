@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 import subprocess
 
@@ -78,6 +79,32 @@ def test_plain_directory_and_nested_repository_files(tmp_path):
         assert (nested / ".git" / "HEAD").is_file()
         with pytest.raises(UnknownWorkspaceVersion):
             await versions.restore("0" * 40)
+    asyncio.run(scenario())
+
+
+def test_ignored_directories_are_not_read_but_recorded_ones_must_be(tmp_path, monkeypatch):
+    """剪枝在前，失败在后：忽略的目录不必可读，要记录的读不动就是记不成。"""
+    async def scenario():
+        root = tmp_path / "workspace"
+        (root / "cache").mkdir(parents=True)
+        (root / "src").mkdir()
+        (root / ".gitignore").write_text("cache/\n", encoding="utf-8")
+        denied = {root / "cache"}
+        scandir = os.scandir
+
+        def guarded(path=".", *args, **kwargs):
+            if Path(path) in denied:
+                raise PermissionError(13, "denied", str(path))
+            return scandir(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "scandir", guarded)
+        versions = WorkspaceVersions(root, tmp_path / "versions")
+        version = await versions.record()
+        tracked = git(root, f"--git-dir={versions.repository}", "ls-tree", "-r", "--name-only", version)
+        assert sorted(tracked.split()) == [b".gitignore"]
+        denied.add(root / "src")
+        with pytest.raises(OSError):
+            await versions.record()
     asyncio.run(scenario())
 
 

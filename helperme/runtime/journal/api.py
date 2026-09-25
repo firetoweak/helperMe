@@ -31,6 +31,14 @@ class DeliveryConflictError(ValueError):
     pass
 
 
+class AttemptTerminalConflict(ValueError):
+    """同一 Attempt 已有终局，且后到的内容不同。先写入的那条保持不变。"""
+
+    def __init__(self, attempt_id: str) -> None:
+        self.attempt_id = attempt_id
+        super().__init__(f"attempt terminal conflict: {attempt_id}")
+
+
 class LeaseLostError(RuntimeError):
     pass
 
@@ -586,7 +594,7 @@ class MemoryJournal:
             terminal = self._attempt_terminal_events.get(attempt_id)
             if terminal is not None:
                 if terminal.payload != payload:
-                    raise ValueError(f"attempt terminal conflict: {attempt_id}")
+                    raise AttemptTerminalConflict(attempt_id)
                 return terminal
             attempt_event = self._attempt_ids.get(attempt_id)
             if attempt_event is None:
@@ -652,7 +660,7 @@ class MemoryJournal:
             terminal = self._attempt_terminal_events.get(payload.attempt_id)
             if terminal is not None:
                 if terminal.payload != payload:
-                    raise ValueError(f"attempt terminal conflict: {payload.attempt_id}")
+                    raise AttemptTerminalConflict(payload.attempt_id)
                 return AppendResult(terminal, False)
         session_events = self._events.setdefault(draft.session_id, [])
         event = Event(

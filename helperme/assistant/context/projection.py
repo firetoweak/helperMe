@@ -488,6 +488,12 @@ def _stub_content(
     outcome = json.loads(outcome_content)
     if not isinstance(outcome, dict):
         raise TypeError("projected tool content must be a JSON object")
+    if outcome["ok"] is None:
+        error: object = outcome["error"]
+    elif outcome["ok"]:
+        error = None
+    else:
+        error = "完整错误信息见外置结果。"
     stub: dict[str, object] = {
         "ok": outcome["ok"],
         "code": outcome["code"],
@@ -497,7 +503,7 @@ def _stub_content(
             "size_chars": size_chars,
             "preview": preview,
         },
-        "error": None if outcome["ok"] else "完整错误信息见外置结果。",
+        "error": error,
         "hint": "需要更多内容时调用 read_artifact 分页读取。",
     }
     if outcome.get("images"):
@@ -825,6 +831,9 @@ def _tool_succeeded(message: Mapping[str, object]) -> bool:
     payload = json.loads(content)
     if not isinstance(payload, dict):
         raise TypeError("projected tool content must be a JSON object")
-    if type(payload["ok"]) is not bool:
+    ok = payload["ok"]
+    if ok is None:
+        return False
+    if type(ok) is not bool:
         raise TypeError("projected tool ok must be bool")
-    return payload["ok"]
+    return ok

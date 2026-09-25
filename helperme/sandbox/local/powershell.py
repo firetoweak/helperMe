@@ -14,6 +14,7 @@ from helperme.sandbox.command import (
     CommandResult,
     CommandStartError,
     ShellNotFoundError,
+    wait_process,
 )
 from helperme.sandbox.local.child_env import (
     CHILD_ENV_OVERLAY,
@@ -117,6 +118,8 @@ class PowerShellCommandRunner:
         command: str,
         cwd: Path,
         timeout_seconds: int,
+        *,
+        interrupt: asyncio.Event | None = None,
     ) -> CommandResult:
         executable = shutil.which(self.executable)
         if executable is None:
@@ -193,6 +196,8 @@ class PowerShellCommandRunner:
             await asyncio.gather(*readers)
 
         timed_out = False
+        interrupted = False
+        kind = "stdin_failed"
         try:
             try:
                 proc.stdin.write(b"\n")
@@ -201,10 +206,7 @@ class PowerShellCommandRunner:
             except OSError as exc:
                 io_errors.append(f"stdin: {type(exc).__name__}: {exc}")
             else:
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout_seconds)
-                except TimeoutError:
-                    timed_out = True
+                kind = await wait_process(proc, timeout_seconds, interrupt)
         except BaseException as run_error:
             cleanup = asyncio.create_task(terminate_and_drain())
             try:
@@ -220,13 +222,16 @@ class PowerShellCommandRunner:
                 raise
             raise
         else:
+            timed_out = kind == "timed_out"
+            interrupted = kind == "interrupted"
             await terminate_and_drain()
 
         return CommandResult(
-            exit_code=None if timed_out else proc.returncode,
+            exit_code=None if timed_out or interrupted else proc.returncode,
             stdout=stdout_capture.finish(),
             stderr=stderr_capture.finish(),
             duration_ms=round((time.perf_counter() - started) * 1_000),
             timed_out=timed_out,
             io_errors=tuple(io_errors),
+            interrupted=interrupted,
         )

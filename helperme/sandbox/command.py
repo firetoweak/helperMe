@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +98,7 @@ class CommandResult:
     duration_ms: int
     timed_out: bool
     io_errors: tuple[str, ...] = ()
+    interrupted: bool = False
 
 
 class ShellNotFoundError(FileNotFoundError):
@@ -118,5 +120,56 @@ class EnvironmentCommandExecutor(Protocol):
         command: str,
         cwd: Path,
         timeout_seconds: int,
+        *,
+        interrupt: asyncio.Event | None = None,
     ) -> CommandResult:
         ...
+
+
+async def wait_process(
+    proc: asyncio.subprocess.Process,
+    timeout_seconds: float,
+    interrupt: asyncio.Event | None,
+) -> str:
+    """等待进程退出、超时，或打断。进程已经退出时，已知结果优先于打断。"""
+
+    exit_task = asyncio.create_task(proc.wait())
+    interrupt_task = (
+        asyncio.create_task(interrupt.wait()) if interrupt is not None else None
+    )
+    try:
+        waiters = {exit_task}
+        if interrupt_task is not None:
+            waiters.add(interrupt_task)
+        done, _pending = await asyncio.wait(
+            waiters,
+            timeout=timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        cleanup = asyncio.create_task(_consume_waits(exit_task, interrupt_task))
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            await cleanup
+        raise
+    if proc.returncode is not None or exit_task in done:
+        await _consume_waits(exit_task, interrupt_task)
+        return "exited"
+    if interrupt_task is not None and interrupt_task in done:
+        await _consume_waits(exit_task, interrupt_task)
+        return "interrupted"
+    await _consume_waits(exit_task, interrupt_task)
+    return "timed_out"
+
+
+async def _consume_waits(*tasks: asyncio.Task[object] | None) -> None:
+    for task in tasks:
+        if task is None:
+            continue
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            continue

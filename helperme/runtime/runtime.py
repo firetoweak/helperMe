@@ -193,7 +193,11 @@ class AgentRuntime:
         )
 
     async def cancel_turn(self, session_id: str) -> tuple[Event, ...]:
-        """Stop the current automatic decision chain without stopping Commands."""
+        """关闭当前自动决策链。
+
+        必须早于 Assistant 终止进程：否则中断终局会在续步权还开着时落库，
+        模型不知道本轮已被取消就多走一步。
+        """
 
         recorded: list[Event] = []
         while True:

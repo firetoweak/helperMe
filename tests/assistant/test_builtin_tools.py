@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from helperme.assistant.builtin_tools import BuiltinToolRunner
 from helperme.runtime import InvokeTool
+from helperme.tools.builtin import CommandInterrupts
 from helperme.tools.executor import ToolsExecutor
 from helperme.tools.registry import ToolRegistry
 from helperme.tools.spec import pydantic_tool_spec
@@ -35,6 +36,7 @@ class BuiltinToolRunnerTest(unittest.IsolatedAsyncioTestCase):
         )
         runner = BuiltinToolRunner(
             tuple(registry.get_tools()),
+            CommandInterrupts(),
             ToolsExecutor(registry),
         )
         arguments = InvokeTool(

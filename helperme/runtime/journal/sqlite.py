@@ -36,6 +36,7 @@ from helperme.runtime.events import (
 )
 from helperme.runtime.journal.api import (
     AppendResult,
+    AttemptTerminalConflict,
     DeliveryConflictError,
     LeaseLostError,
     StepClaimRequest,
@@ -700,7 +701,7 @@ class SqliteJournal:
             if row is not None:
                 terminal = self._event_from_row(row)
                 if terminal.payload != payload:
-                    raise ValueError(f"attempt terminal conflict: {payload.attempt_id}")
+                    raise AttemptTerminalConflict(payload.attempt_id)
                 return AppendResult(terminal, False)
 
         fingerprint: str | None = None
@@ -1229,7 +1230,7 @@ class SqliteJournal:
         if existing is not None:
             event = self._event_from_row(existing)
             if event.payload != payload:
-                raise ValueError(f"attempt terminal conflict: {attempt_id}")
+                raise AttemptTerminalConflict(attempt_id)
             return event
 
         attempt = connection.execute(

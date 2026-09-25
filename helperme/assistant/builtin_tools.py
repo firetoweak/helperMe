@@ -10,12 +10,17 @@ from helperme.sandbox.local.provider import create_local_environment_provider
 from helperme.sandbox.registry import WorkspaceRecord, workspace_view
 from helperme.tools.executor import ToolsExecutor
 from helperme.tools.registry import BUILTIN_TOOL_REGISTRY, ToolRegistry
-from helperme.tools.builtin import create_environment_tool_specs, create_workspace_restore_spec
+from helperme.tools.builtin import (
+    CommandInterrupts,
+    create_environment_tool_specs,
+    create_workspace_restore_spec,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class BuiltinToolRunner:
     schemas: tuple[dict[str, object], ...]
+    command_interrupts: CommandInterrupts
     _executor: ToolsExecutor
 
     async def execute(self, name: str, arguments: Mapping[str, object]) -> object:
@@ -56,11 +61,13 @@ async def build_builtin_tools(
         workspace_view=view,
         cwd=str(workspace.task_root),
     ))
+    interrupts = CommandInterrupts()
     registry = BUILTIN_TOOL_REGISTRY.clone()
-    for spec in create_environment_tool_specs(binding):
+    for spec in create_environment_tool_specs(binding, interrupts):
         registry.register(spec)
     return BuiltinToolRunner(
         schemas=tuple(registry.get_tools()),
+        command_interrupts=interrupts,
         _executor=ToolsExecutor(registry),
     )
 

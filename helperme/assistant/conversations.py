@@ -271,6 +271,17 @@ def _step_thinking(metadata: object) -> str | None:
     return stripped or None
 
 
+def _indeterminate_error(value: object) -> str | None:
+    """`ok is None` 是结果不确定的既有约定，不认具体工具的结果码。"""
+
+    if not isinstance(value, Mapping) or "ok" not in value or value["ok"] is not None:
+        return None
+    error = value["error"]
+    if type(error) is not str or not error:
+        raise ValueError("结果不确定的 outcome 必须带 error")
+    return error
+
+
 def _tool_status(
     state: CommandState,
 ) -> tuple[ToolStatus, str | None]:
@@ -279,6 +290,9 @@ def _tool_status(
     outcome = state.outcome
     if outcome is not None:
         if outcome.status is OutcomeStatus.SUCCEEDED:
+            indeterminate = _indeterminate_error(outcome.value)
+            if indeterminate is not None:
+                return ("unknown", indeterminate)
             return ("succeeded", None)
         return ("failed", outcome.error_message)
     if state.authorization_rejected_by_event_id is not None:

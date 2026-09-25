@@ -122,6 +122,7 @@ async def build_assistant_assembly(
         excluded_roots=(home.root,),
     )
     builtin_tools = await build_builtin_tools(workspace)
+    command_interrupts = builtin_tools.command_interrupts
 
     async def restore_workspace(command_id, target):
         events = await runtime.snapshot(session_id)
@@ -252,7 +253,12 @@ async def build_assistant_assembly(
             else attachments.read
         )
     bindings = {
-        **bind_executor_tools(builtin_tools, gateway, settings),
+        **bind_executor_tools(
+            builtin_tools,
+            gateway,
+            settings,
+            command_interrupts,
+        ),
         restore_schema["function"]["name"]: restore_binding,
         **(
             {
@@ -301,6 +307,7 @@ async def build_assistant_assembly(
         session_failed=report_session_failed,
         preview=preview,
     )
+    scheduler.command_interrupts = command_interrupts
     compact = None
     if session_transport is not None:
         compact = CompactBoundary(

@@ -11,7 +11,11 @@ from helperme.runtime.events import (
     Event,
     EventDraft,
 )
-from helperme.runtime.journal.api import Journal, LeaseLostError
+from helperme.runtime.journal.api import (
+    AttemptTerminalConflict,
+    Journal,
+    LeaseLostError,
+)
 from helperme.runtime.model import (
     AuthorizationPolicy,
     Command,
@@ -190,16 +194,12 @@ class Dispatcher:
                 if isinstance(result, ToolTerminal)
                 else CommandOutcome(OutcomeStatus.SUCCEEDED, value=result)
             )
-            await self._journal.record_attempt_fact(
-                EventDraft(
-                    event_id=self._id_factory("event"),
-                    session_id=session_id,
-                    payload=CommandOutcomeReceived(
-                        command.command_id, payload.attempt_id, outcome
-                    ),
-                    occurred_at=datetime.now(timezone.utc),
-                    causation_id=dispatch_event.event_id,
-                )
+            await self.accept_outcome(
+                session_id,
+                command.command_id,
+                payload.attempt_id,
+                dispatch_event.event_id,
+                outcome,
             )
         finally:
             await _stop_heartbeat(heartbeat)
@@ -214,6 +214,37 @@ class Dispatcher:
                 attempt_id, claim_token, lease_seconds=self._attempt_lease_seconds
             ):
                 raise LeaseLostError(claim_token)
+
+    async def accept_outcome(
+        self,
+        session_id: str,
+        command_id: str,
+        attempt_id: str,
+        causation_event_id: str,
+        outcome: CommandOutcome,
+    ) -> Event | None:
+        """接纳 Attempt 终局。同一 Attempt 只保留先写入的那条。"""
+
+        try:
+            return await self._journal.record_attempt_fact(
+                EventDraft(
+                    event_id=self._id_factory("event"),
+                    session_id=session_id,
+                    payload=CommandOutcomeReceived(command_id, attempt_id, outcome),
+                    occurred_at=datetime.now(timezone.utc),
+                    causation_id=causation_event_id,
+                )
+            )
+        except AttemptTerminalConflict:
+            events = await self._journal.snapshot(session_id)
+            for event in reversed(events):
+                payload = event.payload
+                if (
+                    isinstance(payload, CommandOutcomeReceived)
+                    and payload.attempt_id == attempt_id
+                ):
+                    return event
+            raise
 
     async def close(self) -> None:
         tasks = tuple(self._tasks.values())

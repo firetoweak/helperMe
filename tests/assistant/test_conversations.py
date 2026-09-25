@@ -227,6 +227,52 @@ class ConversationProjectionTest(unittest.TestCase):
             UNKNOWN_TOOL_ERROR,
         )
 
+    def test_interrupted_command_is_unknown_with_its_own_error(self):
+        search = Command("cmd-search", InvokeTool("execute_command"))
+        events = (
+            event(
+                1,
+                "step-1",
+                committed_step("decision-1", "user-1", "", (search,)),
+            ),
+            event(
+                2,
+                "attempt-1",
+                DispatchAttemptStarted("att-1", "cmd-search"),
+                causation_id="step-1",
+            ),
+            event(
+                3,
+                "out-1",
+                CommandOutcomeReceived(
+                    "cmd-search",
+                    "att-1",
+                    CommandOutcome(
+                        OutcomeStatus.SUCCEEDED,
+                        value={
+                            "ok": None,
+                            "code": "COMMAND_INTERRUPTED",
+                            "data": None,
+                            "error": "命令已被打断，执行结果未知。",
+                            "hint": "证据",
+                        },
+                    ),
+                ),
+                causation_id="attempt-1",
+            ),
+        )
+        conversation = project_conversation(
+            "session-1",
+            events,
+            timeline(events),
+            session=SessionView("waiting", ("external_fact",), (), False),
+        )
+        self.assertEqual(conversation.items[0].tools[0].status, "unknown")
+        self.assertEqual(
+            conversation.items[0].tools[0].error,
+            "命令已被打断，执行结果未知。",
+        )
+
     def test_summary_uses_first_user_message_and_last_event_time(self):
         events = (
             event(1, "user-1", UserMessageReceived("第一行\n第二行")),

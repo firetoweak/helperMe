@@ -125,50 +125,72 @@ class WorkspaceVersions:
         value = self._git(index, "rev-parse", "--verify", "--quiet", "HEAD", accepted=(0, 1))
         return value.decode().strip() or None
 
+    def _walk(self, index: Path) -> list[bytes]:
+        """逐层收集要记录的路径；忽略的目录在下降之前就被剪掉。
+
+        忽略规则必须先于遍历生效：被忽略的目录不进快照，它读不读得动都
+        与记录无关。反过来，要记录的内容读不动就是真的记不成，异常照常
+        上抛。每层一次判定，深度决定调用次数，不随文件数增长。
+        """
+        included: list[bytes] = []
+        level = [self.root]
+        while level:
+            entries: list[tuple[bytes, bool]] = []
+            for parent in level:
+                with os.scandir(parent) as scan:
+                    for entry in scan:
+                        if entry.name.casefold() == ".git":
+                            continue
+                        native = Path(entry.path)
+                        if native in self.excluded_roots:
+                            continue
+                        entries.append((
+                            native.relative_to(self.root).as_posix().encode("utf-8"),
+                            # 符号链接目录记成条目本身，不跟进去。
+                            entry.is_dir(follow_symlinks=False),
+                        ))
+            if not entries:
+                break
+            ignored = set(self._git(
+                index, "check-ignore", "--no-index", "-z", "--stdin",
+                data=b"\0".join(path for path, _ in entries) + b"\0", accepted=(0, 1),
+            ).split(b"\0"))
+            level = []
+            for path, descend in entries:
+                if path in ignored:
+                    continue
+                if descend:
+                    level.append(self.root / path.decode("utf-8"))
+                else:
+                    included.append(path)
+        return included
+
     def _record(self, index: Path, *, force: bool = False) -> str:
         previous = self._head(index)
         self._git(index, "read-tree", "--empty")
-        paths: list[bytes] = []
-        def walk_error(error):
-            raise error
-        for directory, dirs, files in os.walk(self.root, onerror=walk_error):
-            base = Path(directory)
-            dirs[:] = [name for name in dirs
-                       if name.casefold() != ".git" and base / name not in self.excluded_roots]
-            links = [name for name in dirs if (base / name).is_symlink()]
-            dirs[:] = [name for name in dirs if name not in links]
-            paths.extend(
-                (base / name).relative_to(self.root).as_posix().encode("utf-8")
-                for name in [*files, *links] if name.casefold() != ".git"
-            )
-        if paths:
-            ignored = set(self._git(
-                index, "check-ignore", "--no-index", "-z", "--stdin",
-                data=b"\0".join(paths) + b"\0", accepted=(0, 1),
-            ).split(b"\0"))
-            included = [path for path in paths if path not in ignored]
-            if included:
-                # Plumbing 按原始字节存储；不执行工作树的 filter，也不把嵌套仓库变成 gitlink。
-                regular = [path for path in included
-                           if not (self.root / path.decode("utf-8")).is_symlink()]
-                hashes = self._git(
-                    index, "hash-object", "-w", "--no-filters", "--stdin-paths",
-                    data="".join(json.dumps(path.decode("utf-8"), ensure_ascii=False) + "\n"
-                                 for path in regular).encode("utf-8"),
-                ).splitlines() if regular else []
-                objects = dict(zip(regular, hashes, strict=True))
-                entries = []
-                for path in included:
-                    native = self.root / path.decode("utf-8")
-                    if native.is_symlink():
-                        mode = b"120000"
-                        oid = self._git(index, "hash-object", "-w", "--stdin",
-                                        data=os.fsencode(os.readlink(native))).strip()
-                    else:
-                        mode = b"100755" if native.stat().st_mode & 0o111 else b"100644"
-                        oid = objects[path]
-                    entries.append(mode + b" " + oid + b"\t" + path + b"\0")
-                self._git(index, "update-index", "-z", "--index-info", data=b"".join(entries))
+        included = self._walk(index)
+        if included:
+            # Plumbing 按原始字节存储；不执行工作树的 filter，也不把嵌套仓库变成 gitlink。
+            regular = [path for path in included
+                       if not (self.root / path.decode("utf-8")).is_symlink()]
+            hashes = self._git(
+                index, "hash-object", "-w", "--no-filters", "--stdin-paths",
+                data="".join(json.dumps(path.decode("utf-8"), ensure_ascii=False) + "\n"
+                             for path in regular).encode("utf-8"),
+            ).splitlines() if regular else []
+            objects = dict(zip(regular, hashes, strict=True))
+            entries = []
+            for path in included:
+                native = self.root / path.decode("utf-8")
+                if native.is_symlink():
+                    mode = b"120000"
+                    oid = self._git(index, "hash-object", "-w", "--stdin",
+                                    data=os.fsencode(os.readlink(native))).strip()
+                else:
+                    mode = b"100755" if native.stat().st_mode & 0o111 else b"100644"
+                    oid = objects[path]
+                entries.append(mode + b" " + oid + b"\t" + path + b"\0")
+            self._git(index, "update-index", "-z", "--index-info", data=b"".join(entries))
         tree = self._git(index, "write-tree").decode().strip()
         if previous is not None and not force:
             old_tree = self._git(index, "rev-parse", f"{previous}^{{tree}}").decode().strip()

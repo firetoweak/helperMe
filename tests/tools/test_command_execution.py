@@ -374,6 +374,41 @@ class PowerShellCommandRunnerTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(2.5)
             self.assertFalse(marker.exists())
 
+    async def test_interrupt_terminates_child_process_tree_and_keeps_output(self):
+        runner = PowerShellCommandRunner()
+        executable = str(runner.executable).replace("'", "''")
+        interrupt = asyncio.Event()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "child-finished.txt"
+            script = root / "child.ps1"
+            script.write_text(
+                "Write-Output started\n"
+                "Start-Sleep -Seconds 2\n"
+                f"Set-Content -LiteralPath '{marker}' -Value done\n",
+                encoding="utf-8",
+            )
+            task = asyncio.create_task(
+                runner.run(
+                    "[Console]::Out.WriteLine('started'); "
+                    "[Console]::Out.Flush(); "
+                    f"& '{executable}' -NoProfile -File '{script}'",
+                    root,
+                    30,
+                    interrupt=interrupt,
+                )
+            )
+            await asyncio.sleep(1)
+            interrupt.set()
+            result = await task
+            await asyncio.sleep(2.5)
+
+            self.assertTrue(result.interrupted)
+            self.assertFalse(result.timed_out)
+            self.assertIsNone(result.exit_code)
+            self.assertIn("started", result.stdout.content)
+            self.assertFalse(marker.exists())
+
     async def test_normal_completion_terminates_background_process_tree(self):
         runner = PowerShellCommandRunner()
         executable = str(runner.executable).replace("'", "''")

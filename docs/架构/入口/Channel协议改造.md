@@ -67,7 +67,7 @@ ACP 没有 HelperMe 的 Step，也没有「步骤上下文」方法。一次 pro
 
 初始化、新建会话、prompt、取消四个方法已映射。`cwd` 必须是已存在的绝对目录，按最深匹配复用已登记工作区，找不到则隐式登记；一条会话只绑一个工作区，不能用环境变量改执行环境。客户端注入的 MCP 配置不接受——HelperMe 继续拥有自己的 Registry 与渐进加载。
 
-取消映射为 `cancel_turn`：不停止 Command，不终止 Session，不映射成用户消息。
+取消映射为 `cancel_turn`：终止该 Step 正在执行的 `execute_command`，不终止 Session，不映射成用户消息。
 
 对外推送模型正文、用量和工具调用。正文 preview 与提交后的 `deliver` 共用同一输出身份，`deliver` 不重复全文，也不重复报工具。**工具终态信号只能在对应 Runtime Outcome 已经提交后发送**——执行函数返回、IPC 中断或 Worker 退出本身不能让 ACP 把 unknown 画成完成或失败。
 

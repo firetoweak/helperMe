@@ -22,6 +22,7 @@ from helperme.runtime.events import (
 )
 from helperme.runtime.journal.api import (
     AppendResult,
+    AttemptTerminalConflict,
     DeliveryConflictError,
     Journal,
     LeaseLostError,
@@ -64,6 +65,7 @@ __all__ = [
     "AgentRuntime",
     "AdvanceResult",
     "AppendResult",
+    "AttemptTerminalConflict",
     "ArtifactResolution",
     "AttemptContext",
     "AttemptPhase",

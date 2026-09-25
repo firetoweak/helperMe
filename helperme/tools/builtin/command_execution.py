@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -24,6 +26,7 @@ EXECUTE_COMMAND_DESCRIPTION = """
 关键限制：相对 cwd 基于当前 Environment cwd，绝对 cwd 使用 Environment 原生语义；cwd 只决定启动位置，当前本地实现尚无进程级 Sandbox；command 使用 {shell_name} 语义；Shell 路径为 {shell_path}；workspace_effect 必须按预期副作用声明；仅支持有超时的前台非交互命令。
 CLI 发现：对陌生 CLI 或遇到 unknown option 时，先执行当前层级的 `<cli> --help`（如 `<cli> <子命令> --help`）逐层现查，不要继续猜 flag。
 失败/截断后：检查 exit_code、stdout、stderr、timed_out、io_errors 和各流的 truncated；io_errors 非空表示管道失败，采集结果可能不完整；超时或失败时不能假定命令成功，也不要无条件重试可能产生副作用的命令；命令产生的文件变化需通过文件工具或 Git diff 重新验证。
+被用户打断时 code 为 COMMAND_INTERRUPTED，ok 为空，已捕获的 stdout/stderr 只是证据（output_is_result 为 false），执行结果未知，不要按失败重试，也不会自动撤销已经发生的副作用。
 """.strip()
 
 
@@ -48,6 +51,9 @@ class ExecuteCommandInput(BaseModel):
     )
 
 
+COMMAND_INTERRUPTED = "COMMAND_INTERRUPTED"
+
+
 def _result_data(result: CommandResult) -> dict[str, Any]:
     return {
         "exit_code": result.exit_code,
@@ -61,7 +67,10 @@ def _result_data(result: CommandResult) -> dict[str, Any]:
 
 def create_command_execution_spec(
     binding: EnvironmentBinding,
+    interrupt_source: Callable[[], asyncio.Event | None] = lambda: None,
 ) -> ToolSpec:
+    """`interrupt_source` 由调用方显式提供，默认不可打断。"""
+
     runner = binding.execution_attachment.command_executor
     async def execute_command(raw: ExecuteCommandInput) -> dict[str, Any]:
         if not raw.command.strip():
@@ -106,7 +115,16 @@ def create_command_execution_spec(
             }
 
         try:
-            result = await runner.run(raw.command, cwd, raw.timeout_seconds)
+            interrupt = interrupt_source()
+            if interrupt is None:
+                result = await runner.run(raw.command, cwd, raw.timeout_seconds)
+            else:
+                result = await runner.run(
+                    raw.command,
+                    cwd,
+                    raw.timeout_seconds,
+                    interrupt=interrupt,
+                )
         except ShellNotFoundError as exc:
             return {
                 "ok": False,
@@ -139,6 +157,17 @@ def create_command_execution_spec(
             "workspace_effect": raw.workspace_effect,
             **_result_data(result),
         }
+        if result.interrupted:
+            return {
+                "ok": None,
+                "code": COMMAND_INTERRUPTED,
+                "data": {**data, "output_is_result": False},
+                "error": "命令已被打断，执行结果未知。",
+                "hint": (
+                    "已捕获的 stdout/stderr 只是打断前的输出证据，不构成命令结果。"
+                    "外部副作用可能已经发生，不会自动撤销。"
+                ),
+            }
         if result.timed_out:
             return {
                 "ok": False,

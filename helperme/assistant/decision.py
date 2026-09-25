@@ -42,6 +42,7 @@ from helperme.runtime import (
 )
 from helperme.runtime.model import AuthorizationPolicy
 from helperme.runtime.dispatcher import AttemptContext
+from helperme.tools.builtin import CommandInterrupts, run_interruptible
 from helperme.runtime.state import DecisionFrame
 from helperme.assistant.cli import CliToolAdapter
 from helperme.assistant.skills import SkillToolAdapter
@@ -142,11 +143,12 @@ def bind_executor_tools(
     runner: ToolRunner,
     gateway: ArtifactGateway,
     settings: ModelContextSettings,
+    command_interrupts: CommandInterrupts | None = None,
 ) -> dict[str, ToolBinding]:
     bindings: dict[str, ToolBinding] = {}
     for name in runner.names():
         bindings[name] = ToolBinding(
-            _executor_handler(runner, name, gateway, settings),
+            _executor_handler(runner, name, gateway, settings, command_interrupts),
             requires_authorization=runner.requires_authorization(name),
         )
     return bindings
@@ -157,18 +159,30 @@ def _executor_handler(
     name: str,
     gateway: ArtifactGateway,
     settings: ModelContextSettings,
+    command_interrupts: CommandInterrupts | None,
 ):
     async def handler(
         context: AttemptContext,
         arguments: Mapping[str, object],
     ) -> object:
-        result = await runner.execute(name, arguments)
-        return externalize_tool_result(
-            result,
-            context.session_id,
-            gateway,
-            settings,
-        )
+        async def execute() -> object:
+            result = await runner.execute(name, arguments)
+            return externalize_tool_result(
+                result,
+                context.session_id,
+                gateway,
+                settings,
+            )
+
+        if command_interrupts is not None and name == "execute_command":
+            return await run_interruptible(
+                command_interrupts,
+                session_id=context.session_id,
+                command_id=context.command_id,
+                attempt_id=context.attempt_id,
+                execute=execute,
+            )
+        return await execute()
 
     return handler
 
