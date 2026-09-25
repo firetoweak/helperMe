@@ -22,7 +22,7 @@ from helperme.assistant.conversations import (
 )
 from helperme.assistant.runner import SessionNotFoundError
 from helperme.assistant.sessions import SessionView
-from helperme.assistant.workspace_versions import WorkspaceRewindFailed
+from helperme.assistant.workspace_versions import StepNotRewindable
 from helperme.channels.web import app as web_app
 from helperme.channels.web.app import create_web_app, report_worker_failures
 from helperme.channels.web.channel import WebChannel
@@ -58,11 +58,16 @@ class _Sessions:
         self.calls.append(("retry", session_id))
         return SessionView("runnable", (), (), True)
 
-    async def rewind_workspace(self, session_id, step_id, delivery_id):
-        self.calls.append(("rewind_workspace", session_id, step_id, delivery_id))
+    async def restart_from_step(
+        self, owner, session_id, step_id, child_session_id, delivery_id
+    ):
+        self.calls.append(
+            ("restart_from_step", owner, session_id, step_id, child_session_id, delivery_id)
+        )
         if step_id == "step-unrecorded":
-            raise WorkspaceRewindFailed("这一步没有成功的版本记录，无法回退。")
-        return SessionView("waiting", ("external_fact",), (), False, paused=True)
+            raise StepNotRewindable(step_id)
+        self.queries.record(child_session_id, "重开前说过的话")
+        return SessionView("runnable", (), (), False, paused=True)
 
     async def fork_and_accept_input(
         self, owner, source_session_id, message_id, content, **kwargs
@@ -372,21 +377,23 @@ class WebFirstSliceTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.sessions.calls, [("retry", "session-old")])
 
-    def test_rewinding_a_step_without_a_version_is_refused_not_guessed(self):
-        """回退不成不是「什么都没发生」：这条路径必须让用户看到失败。"""
+    def test_restarting_from_a_step_answers_with_the_new_identity(self):
+        """从一步重开产生新身份，源会话留在原处；没有版本的一步直接拒绝。"""
         done = self.client.post(
-            "/api/sessions/session-old/workspace/rewind",
+            "/api/sessions/session-old/restarts",
             json={
                 "connection_id": self.connection.connection_id,
                 "delivery_id": "web-1",
                 "step_id": "step-1",
             },
         )
-        self.assertEqual(done.status_code, 200)
+        self.assertEqual(done.status_code, 201)
+        child_session_id = done.json()["session_id"]
+        self.assertNotEqual(child_session_id, "session-old")
         self.assertTrue(done.json()["session"]["paused"])
 
         refused = self.client.post(
-            "/api/sessions/session-old/workspace/rewind",
+            "/api/sessions/session-old/restarts",
             json={
                 "connection_id": self.connection.connection_id,
                 "delivery_id": "web-2",
@@ -396,10 +403,10 @@ class WebFirstSliceTest(unittest.TestCase):
         self.assertEqual(refused.status_code, 409)
         self.assertIn("没有成功的版本记录", refused.json()["detail"])
         self.assertEqual(
-            self.sessions.calls,
+            [(call[0], call[3], call[4]) for call in self.sessions.calls],
             [
-                ("rewind_workspace", "session-old", "step-1", "web-1"),
-                ("rewind_workspace", "session-old", "step-unrecorded", "web-2"),
+                ("restart_from_step", "step-1", child_session_id),
+                ("restart_from_step", "step-unrecorded", self.sessions.calls[1][4]),
             ],
         )
 

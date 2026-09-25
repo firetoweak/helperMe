@@ -39,7 +39,7 @@ type EditAndFork = SelectSession & {
   restoreFiles: boolean;
 };
 
-type RewindWorkspace = SelectSession & {
+type RestartFromStep = SelectSession & {
   stepId: string;
   deliveryId: string;
 };
@@ -320,9 +320,9 @@ export const helpermeApi = createApi({
         putConversation(dispatch, getState, arg.sessionId, data);
       },
     }),
-    rewindWorkspace: build.mutation<ConversationView, RewindWorkspace>({
+    restartFromStep: build.mutation<ConversationView, RestartFromStep>({
       query: ({ connectionId, sessionId, stepId, deliveryId }) => ({
-        url: `/sessions/${encodeURIComponent(sessionId)}/workspace/rewind`,
+        url: `/sessions/${encodeURIComponent(sessionId)}/restarts`,
         method: "POST",
         body: {
           connection_id: connectionId,
@@ -331,9 +331,11 @@ export const helpermeApi = createApi({
         },
       }),
       transformResponse: (value: unknown) => conversationViewSchema.parse(value),
-      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+      invalidatesTags: ["Sessions"],
+      async onQueryStarted(_arg, { dispatch, getState, queryFulfilled }) {
         const { data } = await queryFulfilled;
-        putConversation(dispatch, getState, arg.sessionId, data);
+        dispatch(bindOwner(data.session_id));
+        putConversation(dispatch, getState, data.session_id, data);
       },
     }),
   }),
@@ -356,5 +358,5 @@ export const {
   useSetAutoAuthorizeMutation,
   useSetPausedMutation,
   useRetryTurnMutation,
-  useRewindWorkspaceMutation,
+  useRestartFromStepMutation,
 } = helpermeApi;

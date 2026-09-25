@@ -144,7 +144,39 @@ class SessionStore:
             raise SessionForkUnavailableError(
                 "fork prefix must end at an external-fact boundary"
             )
+        await self._materialize(source_path, prefix, child_session_id, child_path)
+        return ForkedMessage(target.payload.content, target.artifact_refs)
 
+    async def fork_after_event(
+        self,
+        source_session_id: str,
+        boundary_event_id: str,
+        child_session_id: str,
+    ) -> None:
+        """在某条事件之后切一条分支，含这条事件本身。
+
+        不要求前缀停在外部事实边界。从 Step 边界重开时前缀是 RUNNABLE，
+        这正是想要的：新身份带着完整历史停在那一刻，等人给下一句话。挡住
+        自动续步的是暂停，不是这里的边界形状。
+        """
+        source_path = self.require(source_session_id)
+        child_path = self.path(child_session_id)
+        if child_path.parent.exists():
+            raise ValueError(f"Session 已存在: {child_session_id}")
+
+        source_events = await SqliteJournal(source_path).snapshot(source_session_id)
+        target = next(
+            (event for event in source_events if event.event_id == boundary_event_id),
+            None,
+        )
+        if target is None:
+            raise ForkMessageNotFoundError(boundary_event_id)
+        prefix = tuple(
+            event for event in source_events if event.sequence <= target.sequence
+        )
+        await self._materialize(source_path, prefix, child_session_id, child_path)
+
+    async def _materialize(self, source_path, prefix, child_session_id, child_path):
         staging = self.root / f".creating-{uuid4().hex}"
         staging.mkdir()
         try:
@@ -160,4 +192,3 @@ class SessionStore:
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
-        return ForkedMessage(target.payload.content, target.artifact_refs)

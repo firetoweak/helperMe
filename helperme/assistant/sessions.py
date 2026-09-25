@@ -372,10 +372,6 @@ class AssistantSessions:
         await self._scheduler.cancel_turn(session_id)
         return await self.view(session_id)
 
-    async def rewind_workspace(self, session_id: str, step_id: str, delivery_id: str):
-        assert self._workspace_versions is not None
-        return await self._workspace_versions.rewind(step_id, delivery_id)
-
     async def settle_forked_workspace(
         self, session_id: str, restore: bool, delivery_id: str
     ) -> None:

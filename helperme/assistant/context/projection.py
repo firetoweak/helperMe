@@ -22,7 +22,9 @@ from helperme.assistant.context.budget import (
     TokenEstimator,
 )
 from helperme.assistant.delivery import DELIVER_TOOL_NAME
-from helperme.assistant.workspace_versions import WORKSPACE_RESTORE_FACT, WORKSPACE_VERSION_FACT, WorkspaceVersionFact
+from helperme.assistant.workspace_versions import (
+    WORKSPACE_RESCUE_FACT, WORKSPACE_RESTORE_FACT, WORKSPACE_VERSION_FACT, WorkspaceVersionFact,
+)
 from helperme.assistant.context.prompt import DEFAULT_ASSISTANT_PROMPT
 from helperme.runtime.events import (
     DomainFactCommitted,
@@ -279,6 +281,8 @@ def _translate_visible_events(
             continue
         if isinstance(payload, DomainFactCommitted):
             if payload.fact_type == WORKSPACE_RESTORE_FACT:
+                continue
+            if payload.fact_type == WORKSPACE_RESCUE_FACT and payload.data["error"] is None:
                 continue
             if payload.fact_type == WORKSPACE_VERSION_FACT:
                 fact = WorkspaceVersionFact.parse(payload.data)

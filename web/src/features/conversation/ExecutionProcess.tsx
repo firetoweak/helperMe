@@ -59,8 +59,8 @@ interface ExecutionProcessProps {
   steps: VisibleStep[];
   authorizationDisabled: boolean;
   onAuthorize: (commandId: string, approved: boolean) => void;
-  onRewind: (stepId: string) => void;
-  rewindDisabled: boolean;
+  onRestart: (stepId: string) => void;
+  restartDisabled: boolean;
 }
 
 export function ExecutionProcess({
@@ -68,8 +68,8 @@ export function ExecutionProcess({
   steps,
   authorizationDisabled,
   onAuthorize,
-  onRewind,
-  rewindDisabled,
+  onRestart,
+  restartDisabled,
 }: ExecutionProcessProps) {
   const [opened, setOpened] = useState(!complete);
   const running = steps.some(stepStatusIsRunning);
@@ -111,8 +111,8 @@ export function ExecutionProcess({
               index={index}
               key={step.key}
               onAuthorize={onAuthorize}
-              onRewind={onRewind}
-              rewindDisabled={rewindDisabled}
+              onRestart={onRestart}
+              restartDisabled={restartDisabled}
               step={step}
             />
           ))}
@@ -127,15 +127,15 @@ function StepDisclosure({
   step,
   authorizationDisabled,
   onAuthorize,
-  onRewind,
-  rewindDisabled,
+  onRestart,
+  restartDisabled,
 }: {
   index: number;
   step: VisibleStep;
   authorizationDisabled: boolean;
   onAuthorize: (commandId: string, approved: boolean) => void;
-  onRewind: (stepId: string) => void;
-  rewindDisabled: boolean;
+  onRestart: (stepId: string) => void;
+  restartDisabled: boolean;
 }) {
   const status = stepStatus(step);
   const awaiting = step.tools.some(
@@ -169,7 +169,7 @@ function StepDisclosure({
                 {stepHeading(step)}
               </Text>
             </Group>
-            {/* 「完成」不带信息，每一步跑完都是它；让位给回退控件。 */}
+            {/* 「完成」不带信息，每一步跑完都是它；让位给重开控件。 */}
             {status === "succeeded" ? null : (
               <Badge color={STATUS_COLOR[status]} size="xs" variant="light">
                 {STATUS_LABEL[status]}
@@ -178,11 +178,11 @@ function StepDisclosure({
           </Group>
         </UnstyledButton>
         {step.rewindable && step.stepId !== null ? (
-          <Tooltip label="把文件退回这一步之后，并暂停">
+          <Tooltip label="从这一步之后重开：截断对话，文件一起退回">
             <ActionIcon
-              aria-label="退回这一步之后的文件状态"
-              disabled={rewindDisabled}
-              onClick={() => onRewind(step.stepId!)}
+              aria-label="从这一步之后重开"
+              disabled={restartDisabled}
+              onClick={() => onRestart(step.stepId!)}
               radius="xl"
               size="sm"
               variant="subtle"

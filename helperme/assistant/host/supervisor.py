@@ -17,7 +17,11 @@ from helperme.automation.once import (
 )
 from helperme.assistant.control import pending_approval_view, project_control_message
 from helperme.assistant.session_metadata import SessionFlagStore, SessionLineageStore
-from helperme.assistant.workspace_versions import WorkspaceRewindFailed
+from helperme.assistant.workspace_versions import (
+    StepNotRewindable,
+    WorkspaceVersionFact,
+    workspace_version_event,
+)
 from helperme.assistant.compact.host import CompactHost
 from helperme.assistant.delivery import emit_delivery
 from helperme.assistant.host.ipc import PipePeer, ProcessFailure, WorkerFailed
@@ -826,27 +830,42 @@ class HostSupervisor:
             session_id,
         )
 
-    async def rewind_workspace(self, session_id, step_id, delivery_id):
-        """??????????
+    async def restart_from_step(
+        self, owner, session_id, step_id, child_session_id, delivery_id
+    ):
+        """人点时间线上的一步：从那一刻重开。
 
-        ????????????????????????????????
-        ???????????????????????????????
-        ????????????????????????????????
-        ?????????????
+        只退文件是残缺的——会话照样停在第十步，那七步基于旧世界的推理还在
+        上下文里，模型下次读文件会发现和自己的历史对不上。所以回退的载体是
+        会话本身：截到那一步，文件跟着回去，两边描述同一个世界。
+
+        先停源会话再切。跑着的命令会往共享工作树里写，也会继续往源 Journal
+        追加事件。停下来不是副作用，是这个动作的一部分——人接着通常要换一条
+        走法。
         """
+        events = await SqliteJournal(self.store.require(session_id)).snapshot(session_id)
+        boundary = workspace_version_event(events, step_id)
+        if boundary is None or WorkspaceVersionFact.parse(boundary.payload.data).version is None:
+            raise StepNotRewindable(step_id)
+
         self._pause.set(session_id, True)
         await self.compact.application("cancel_turn", session_id, {})
         await self.wait_quiescent(session_id)
-        result = await self.compact.application(
-            "rewind_workspace",
-            session_id,
-            dict(step_id=step_id, delivery_id=delivery_id),
+
+        async with self.locks.setdefault(session_id, asyncio.Lock()):
+            await self.store.fork_after_event(session_id, boundary.event_id, child_session_id)
+        self._lineage.supersede(child_session_id, session_id)
+        # 新身份带着完整历史停在那一刻，不许自己往下走，等人给下一句话。
+        self._pause.set(child_session_id, True)
+        await self.select(owner, child_session_id)
+        await self.compact.application(
+            "settle_forked_workspace",
+            child_session_id,
+            dict(restore=True, delivery_id=f"{delivery_id}-workspace"),
         )
-        if not result["ok"]:
-            raise WorkspaceRewindFailed(result["error"])
         return self._with_host_metadata(
-            await self.compact.application("view", session_id, {}),
-            session_id,
+            await self.compact.application("view", child_session_id, {}),
+            child_session_id,
         )
 
     async def wait_quiescent(self, session_id):

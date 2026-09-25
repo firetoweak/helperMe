@@ -153,14 +153,14 @@ class WebChannel:
         view = await self._sessions.cancel_turn(session_id)
         return await self._queries.conversation(session_id, view=view)
 
-    async def rewind_workspace(
+    async def restart_from_step(
         self,
         connection_id: str,
         session_id: str,
         step_id: str,
         delivery_id: str,
     ):
-        self._require_connection(connection_id)
+        connection = self._require_connection(connection_id)
         for label, value in (
             ("session_id", session_id),
             ("step_id", step_id),
@@ -168,8 +168,15 @@ class WebChannel:
         ):
             if type(value) is not str or not value:
                 raise ValueError(f"{label} must be a non-empty str")
-        view = await self._sessions.rewind_workspace(session_id, step_id, delivery_id)
-        return await self._queries.conversation(session_id, view=view)
+        child_session_id = f"session-{uuid4().hex}"
+        view = await self._sessions.restart_from_step(
+            connection.owner,
+            session_id,
+            step_id,
+            child_session_id,
+            delivery_id,
+        )
+        return await self._queries.conversation(child_session_id, view=view)
 
     async def retry(self, connection_id: str, session_id: str):
         self._require_connection(connection_id)

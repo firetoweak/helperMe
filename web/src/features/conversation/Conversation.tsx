@@ -33,7 +33,7 @@ import {
   useSetAutoAuthorizeMutation,
   useSetPausedMutation,
   useRetryTurnMutation,
-  useRewindWorkspaceMutation,
+  useRestartFromStepMutation,
 } from "../../api/helpermeApi";
 import { useAppDispatch, useAppSelector } from "../../app/hooks";
 import {
@@ -88,7 +88,7 @@ export function Conversation() {
   const [setAutoAuthorize, autoAuthorizing] = useSetAutoAuthorizeMutation();
   const [setPaused, pausing] = useSetPausedMutation();
   const [retryTurn, retrying] = useRetryTurnMutation();
-  const [rewindWorkspace, rewinding] = useRewindWorkspaceMutation();
+  const [restartFromStep, restarting] = useRestartFromStepMutation();
 
   useEffect(() => {
     dispatch(viewing(sessionId === "" ? null : sessionId));
@@ -214,16 +214,18 @@ export function Conversation() {
     });
   }
 
-  function rewind(stepId: string) {
+  async function restart(stepId: string) {
     if (connectionId === null) {
       return;
     }
-    void rewindWorkspace({
+    const view = await restartFromStep({
       connectionId,
       sessionId,
       stepId,
       deliveryId: `web-${crypto.randomUUID()}`,
-    });
+    }).unwrap();
+    // 原地改写：新身份顶掉旧的，后退不该停在一个已经不代表这条线的 URL 上。
+    navigate(`/sessions/${encodeURIComponent(view.session_id)}`, { replace: true });
   }
 
   async function authorize(commandId: string, approved: boolean) {
@@ -315,8 +317,8 @@ export function Conversation() {
                     authorizationDisabled={connectionId === null}
                     complete={settled}
                     onAuthorize={authorize}
-                    onRewind={rewind}
-                    rewindDisabled={connectionId === null || rewinding.isLoading}
+                    onRestart={(stepId) => void restart(stepId)}
+                    restartDisabled={connectionId === null || restarting.isLoading}
                     steps={turn.process}
                   />
                 )}

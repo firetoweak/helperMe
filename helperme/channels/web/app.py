@@ -22,7 +22,7 @@ from helperme.assistant.host.session_store import (
 )
 from helperme.assistant.host.supervisor import HostSupervisor
 from helperme.assistant.runner import SessionNotFoundError
-from helperme.assistant.workspace_versions import WorkspaceRewindFailed
+from helperme.assistant.workspace_versions import StepNotRewindable
 from helperme.bootstrap import bootstrap_assistant
 from helperme.channels.web.channel import WebChannel
 from helperme.channels.web.hub import WebEventHub
@@ -81,7 +81,7 @@ class EditRequest(InputRequest):
     restore_files: bool = False
 
 
-class RewindRequest(BaseModel):
+class RestartRequest(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     connection_id: str
@@ -190,11 +190,12 @@ def create_web_app(
     ):
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
-    @app.exception_handler(WorkspaceRewindFailed)
-    async def workspace_rewind_failed(
-        _request: Request, error: WorkspaceRewindFailed
-    ):
-        return JSONResponse(status_code=409, content={"detail": str(error)})
+    @app.exception_handler(StepNotRewindable)
+    async def step_not_rewindable(_request: Request, error: StepNotRewindable):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": f"这一步没有成功的版本记录，无法从它之后重开：{error}"},
+        )
 
     @app.exception_handler(AttachmentRejected)
     async def attachment_rejected(_request: Request, error: AttachmentRejected):
@@ -353,13 +354,13 @@ def create_web_app(
             body.restore_files,
         )
 
-    @app.post("/api/sessions/{session_id}/workspace/rewind")
-    async def rewind_workspace(
+    @app.post("/api/sessions/{session_id}/restarts", status_code=201)
+    async def restart_from_step(
         session_id: str,
-        body: RewindRequest,
+        body: RestartRequest,
         request: Request,
     ):
-        return await _channel(request).rewind_workspace(
+        return await _channel(request).restart_from_step(
             body.connection_id,
             session_id,
             body.step_id,

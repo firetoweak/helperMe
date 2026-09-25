@@ -11,12 +11,12 @@ from helperme.sandbox.versions import WorkspaceRestoreFailed, WorkspaceVersions
 
 WORKSPACE_VERSION_FACT = "assistant.workspace_version"
 WORKSPACE_RESTORE_FACT = "assistant.workspace_restore"
-WORKSPACE_REWIND_FACT = "assistant.workspace_rewind"
+WORKSPACE_RESCUE_FACT = "assistant.workspace_rescue"
 WORKSPACE_CARRYOVER_FACT = "assistant.workspace_carryover"
 
 
-class WorkspaceRewindFailed(Exception):
-    """人点的回退没做成。失败本身已经写进 Journal，这里只负责回话。"""
+class StepNotRewindable(Exception):
+    """这一步没有成功的版本记录，从它之后重开会让文件与历史对不上。"""
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,22 @@ def project_workspace_versions(events) -> tuple[WorkspaceVersionFact, ...]:
         if isinstance(event.payload, DomainFactCommitted)
         and event.payload.fact_type == WORKSPACE_VERSION_FACT
     )
+
+
+def workspace_version_event(events, step_id):
+    """某一步的版本事实落在哪条事件上。
+
+    从 Step 边界重开时前缀必须含这条事实，否则新身份的最后一版停在上一步，
+    文件会比历史多退一格。版本记录在 Step 提交之后单独落库，不是同一条事件。
+    """
+    for event in events:
+        if (
+            isinstance(event.payload, DomainFactCommitted)
+            and event.payload.fact_type == WORKSPACE_VERSION_FACT
+            and WorkspaceVersionFact.parse(event.payload.data).step_id == step_id
+        ):
+            return event
+    return None
 
 
 def project_workspace_restores(events):
@@ -118,27 +134,6 @@ class WorkspaceVersionBoundary:
         )
 
 
-    async def rewind(self, step_id, delivery_id):
-        """人点某个 Step：退回到这一步跑完时的文件状态。
-
-        比模型的 restore_workspace 晚一格。模型说的是「撤销这次调用」，
-        取前一步的版本；人指着时间轴上的一个点说「回到这一刻」，取的就是
-        这一步自己的版本。差这一格是故意的。
-        """
-        events = await self.runtime.snapshot(self.session_id)
-        facts = {fact.step_id: fact for fact in project_workspace_versions(events)}
-        fact = facts.get(step_id)
-        if fact is None or fact.version is None:
-            return {"ok": False, "code": "WORKSPACE_VERSION_UNAVAILABLE",
-                    "error": "这一步没有成功的版本记录，无法回退。"}
-        try:
-            restored = await self.versions.restore(fact.version)
-        except WorkspaceRestoreFailed as error:
-            await self._record_rewind(delivery_id, step_id, error.before_version, None, str(error))
-            return {"ok": False, "code": "WORKSPACE_RESTORE_FAILED", "error": str(error)}
-        await self._record_rewind(delivery_id, step_id, restored.before_version, restored.version, None)
-        return {"ok": True, "code": "WORKSPACE_REWOUND", "step_id": step_id}
-
     async def settle_fork(self, restore, delivery_id):
         """新分支要不要连文件一起退回分支点。
 
@@ -161,18 +156,28 @@ class WorkspaceVersionBoundary:
                 delivery_id=delivery_id, source=WORKSPACE_CARRYOVER_FACT,
             )
             return
-        restored = await self.versions.restore(target.version)
-        await self._record_rewind(
+        try:
+            restored = await self.versions.restore(target.version)
+        except WorkspaceRestoreFailed as error:
+            await self._record_rescue(
+                delivery_id, target.step_id, error.before_version, None, str(error)
+            )
+            return
+        await self._record_rescue(
             delivery_id, target.step_id, restored.before_version, restored.version, None
         )
 
-    async def _record_rewind(self, delivery_id, step_id, before, version, error):
-        # 人的回退没有工具返回值，模型只能从这条事实知道文件被挪过。
+    async def _record_rescue(self, delivery_id, step_id, before, version, error):
+        """这条分支开始之前工作区是什么样。
+
+        成功时不渲染：分支自己就是载体，历史和文件停在同一刻，没有可说的。
+        失败时必须渲染——那时历史说在这一刻、文件不在，模型要知道这件事。
+        """
         await self.runtime.receive_domain_fact(
-            self.session_id, WORKSPACE_REWIND_FACT,
+            self.session_id, WORKSPACE_RESCUE_FACT,
             {"step_id": step_id, "before_version": before,
              "version": version, "error": error},
-            delivery_id=delivery_id, source=WORKSPACE_REWIND_FACT,
+            delivery_id=delivery_id, source=WORKSPACE_RESCUE_FACT,
         )
 
     async def restore(self, command_id, target, events, visible):

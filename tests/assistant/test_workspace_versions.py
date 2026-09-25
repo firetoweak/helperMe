@@ -6,7 +6,8 @@ import pytest
 
 from helperme.assistant.context.projection import project_chat_messages
 from helperme.assistant.workspace_versions import (
-    WORKSPACE_CARRYOVER_FACT, WorkspaceVersionBoundary, project_workspace_versions,
+    WORKSPACE_CARRYOVER_FACT, WorkspaceVersionBoundary, WorkspaceVersionFact,
+    project_workspace_versions, workspace_version_event,
 )
 from helperme.runtime import AgentRuntime, InvokeTool, MemoryJournal, ModelDecision, ToolBinding
 from tests.assistant.test_runner import ScriptedDecisionMaker
@@ -177,34 +178,31 @@ def test_partial_restore_retains_rescue_fact_without_exposing_version_addresses(
 
 
 @pytest.mark.parametrize("step_index,expected", [(0, "b"), (1, "c")])
-def test_human_rewind_lands_on_the_step_itself_and_tells_the_model(step_index, expected):
-    """人指的是「回到这一刻」，比模型的「撤销这次调用」晚一格。
+def test_the_restart_boundary_is_the_steps_own_version_fact(step_index, expected):
+    """从第 N 步重开，前缀要含这一步自己的版本事实。
 
-    人的回退没有工具返回值，所以这条事实必须进模型上下文——否则模型会
-    照着已经不存在的文件状态往下走。
+    版本是在 Step 提交之后单独落库的。切在提交那条事件上，新身份记住的
+    最后一版是上一步的，文件会比历史多退一格——人指的是「回到这一刻」，
+    比模型的「撤销这次调用」晚一格。
     """
     async def scenario():
-        runtime, boundary, versions, _, visible = await restore_history(
+        _, _, _, events, visible = await restore_history(
             ["a" * 40, "b" * 40, "c" * 40, "c" * 40]
         )
-        step_id = visible.steps[step_index].step.step_id
-        result = await boundary.rewind(step_id, "web-1")
-        assert result == {"ok": True, "code": "WORKSPACE_REWOUND", "step_id": step_id}
-        versions.restore.assert_awaited_once_with(expected * 40)
-        events = await runtime.snapshot("s")
-        messages = project_chat_messages(events, runtime.projector.project_visible("s", events))
-        assert "assistant.workspace_rewind" in json.dumps(messages)
+        step = visible.steps[step_index].step
+        boundary = workspace_version_event(events, step.step_id)
+        prefix = [e for e in events if e.sequence <= boundary.sequence]
+        assert project_workspace_versions(prefix)[-1].version == expected * 40
     asyncio.run(scenario())
 
 
-def test_rewind_to_a_step_without_a_recorded_version_does_not_guess():
+def test_a_step_whose_version_was_never_taken_has_no_boundary_to_guess_at():
     async def scenario():
-        _, boundary, versions, _, visible = await restore_history(
+        _, _, _, events, visible = await restore_history(
             ["a" * 40, OSError("snapshot failed"), "c" * 40, "c" * 40]
         )
-        result = await boundary.rewind(visible.steps[0].step.step_id, "web-1")
-        assert result["code"] == "WORKSPACE_VERSION_UNAVAILABLE"
-        versions.restore.assert_not_awaited()
+        boundary = workspace_version_event(events, visible.steps[0].step.step_id)
+        assert WorkspaceVersionFact.parse(boundary.payload.data).version is None
     asyncio.run(scenario())
 
 
